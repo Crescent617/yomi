@@ -11,6 +11,7 @@
   },
   "app": {
     "withGlobalTauri": true,
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "Yomi",
@@ -26,7 +27,7 @@
       "csp": null,
       "capabilities": [
         {
-          "identifier": "default",
+          "identifier": "main",
           "windows": ["main"],
           "permissions": [
             "core:default",
@@ -51,6 +52,18 @@
             "notification:default",
             "core:window:allow-close",
             "core:window:allow-destroy"
+          ]
+        },
+        {
+          "identifier": "pet",
+          "windows": ["pet"],
+          "permissions": [
+            "core:default",
+            "pilot:default",
+            "core:window:allow-hide",
+            "core:window:allow-show",
+            "core:window:allow-set-size",
+            "core:window:allow-start-dragging"
           ]
         }
       ]

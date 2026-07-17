@@ -82,10 +82,7 @@
 
     try {
       await api.respondPermission(sessionId, requestId, allow, remember);
-      activeSession.pending_permissions =
-        activeSession.pending_permissions.filter(
-          (item) => item.req_id !== requestId,
-        );
+      // Keep the request visible until PermissionAck confirms the agent received it.
     } catch (e: unknown) {
       showNotification(
         `${allow ? "Approval" : "Denial"} failed: ${api.errorMessage(e)}`,

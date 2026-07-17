@@ -592,6 +592,11 @@ impl AgentError {
         }
     }
 
+    /// Check if this is a provider context-window overflow.
+    pub fn is_context_overflow(&self) -> bool {
+        matches!(self, AgentError::Provider(error) if error.is_context_overflow())
+    }
+
     /// Check if this is a cancellation error (terminal, not a failure)
     pub fn is_cancelled(&self) -> bool {
         matches!(self, AgentError::Cancelled(_))

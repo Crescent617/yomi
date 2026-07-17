@@ -39,6 +39,11 @@
           "description": "Context compaction settings for managing long conversations.",
           "type": "object",
           "properties": {
+            "micro_compact_enabled": {
+              "description": "Enable client-side micro-compaction before full compaction. Disabled by default to preserve prompt-cache reuse.",
+              "type": "boolean",
+              "default": false
+            },
             "threshold_ratio": {
               "description": "Ratio (0.0–1.0) of the context window at which compaction is triggered.",
               "type": "number",

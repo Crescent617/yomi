@@ -48,7 +48,24 @@ impl JsonlMessageStore {
             if line.trim().is_empty() {
                 continue;
             }
-            if let Ok(msg) = serde_json::from_str::<Message>(&line) {
+            if let Ok(mut msg) = serde_json::from_str::<Message>(&line) {
+                for block in &mut msg.content {
+                    if let crate::types::ContentBlock::ImageUrl { image_url } = block {
+                        if image_url.url.starts_with("asset://") {
+                            image_url.url = crate::utils::asset::resolve_asset_url(
+                                &image_url.url,
+                                &self.data_dir,
+                            )
+                            .await
+                            .ok_or_else(|| {
+                                storage_err(format!(
+                                    "failed to resolve stored asset: {}",
+                                    image_url.url
+                                ))
+                            })?;
+                        }
+                    }
+                }
                 messages.push(msg);
             }
         }

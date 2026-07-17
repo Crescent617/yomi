@@ -241,9 +241,13 @@ impl KernelServer {
                     res = rx.recv() => {
                         match res {
                             Ok(noti) => {
-                                if let Err(e) = notification_send_tx.send(WireMsg::Noti(noti)).await {
-                                    tracing::debug!("Notification send error: {e}");
-                                    break;
+                                if let Err(e) = notification_send_tx.try_send(WireMsg::Noti(noti)) {
+                                    match e {
+                                        mpsc::error::TrySendError::Full(_) => {
+                                            tracing::debug!("Outbound channel full, dropping notification");
+                                        }
+                                        mpsc::error::TrySendError::Closed(_) => break,
+                                    }
                                 }
                             }
                             Err(broadcast::error::RecvError::Lagged(n)) => {

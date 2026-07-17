@@ -37,6 +37,7 @@
     "echarts": "^6.1.0",
     "lucide-svelte": "^0.475.0",
     "mermaid": "^11.16.0",
+    "phaser": "^3.90.0",
     "shiki": "^1.0.0",
     "streaming-markdown": "^0.2.15"
   },

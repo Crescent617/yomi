@@ -2,6 +2,10 @@
 mod commands;
 mod daemon;
 mod error;
+mod pet;
+mod pet_runtime;
+#[cfg(test)]
+mod pet_test;
 mod state;
 
 use state::AppState;
@@ -20,7 +24,26 @@ pub fn run() {
             let (kernel, data_dir) = tauri::async_runtime::block_on(daemon::get_kernel())
                 .map_err(|e| format!("failed to get kernel: {e}"))?;
             let gui_log_dir = commands::debug::configured_log_dir();
-            app.manage(AppState::new(kernel.clone(), data_dir, gui_log_dir));
+            let state = AppState::new(kernel.clone(), data_dir, gui_log_dir);
+            app.manage(state.clone());
+            app.add_capability(
+                tauri::ipc::CapabilityBuilder::new("pet-window")
+                    .window("pet")
+                    .permission("core:event:allow-listen")
+                    .permission("core:event:allow-unlisten")
+                    .permission("core:window:allow-set-ignore-cursor-events")
+                    .permission("core:window:allow-show")
+                    .permission("core:window:allow-hide")
+                    .permission("core:window:allow-start-dragging")
+                    .permission("core:window:allow-set-size"),
+            )?;
+
+            let pet_app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = pet_runtime::start_pet_runtime(&state, &pet_app_handle).await {
+                    tracing::warn!("Failed to start desktop pet runtime: {error}");
+                }
+            });
 
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -79,6 +102,8 @@ pub fn run() {
             commands::chat::continue_session,
             commands::chat::send_steer,
             commands::chat::stop_goal,
+            commands::pet::get_pet_state,
+            commands::pet::set_pet_enabled,
             commands::automation::list_cron_jobs,
             commands::automation::create_cron_job,
             commands::automation::update_cron_job,
@@ -120,6 +145,14 @@ pub fn run() {
     let app = builder
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
+
+    let app_handle = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+        let process_shutdown = tokio_util::sync::CancellationToken::new();
+        let _signal_handle = kernel::utils::signal::spawn_signal_listener(process_shutdown.clone());
+        process_shutdown.cancelled().await;
+        app_handle.exit(0);
+    });
 
     app.run(|_app_handle, event| {
         if let tauri::RunEvent::Exit = event {

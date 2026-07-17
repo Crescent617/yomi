@@ -211,6 +211,7 @@ fn test_convert_tools_flat_format() {
         name: "read".into(),
         description: "Read a file".into(),
         parameters: serde_json::json!({"type": "object"}),
+        estimated_tokens: 0,
     })];
     let converted = OpenAIResponseProvider::convert_tools(&tools);
     assert_eq!(converted.len(), 1);
@@ -786,6 +787,47 @@ fn test_assembler_unknown_events_ignored() {
         let items = assembler.process(data).unwrap();
         assert!(items.is_empty(), "event should be ignored: {data}");
     }
+}
+
+#[test]
+fn test_assembler_wrapped_context_error_is_normalized() {
+    let mut assembler = ResponseAssembler::new();
+    let err = assembler
+        .process_stream_data(
+            r#"{"message":"received error while streaming: {\"type\":\"invalid_request_error\",\"code\":\"context_length_exceeded\",\"message\":\"Your input exceeds the context window of this model.\",\"param\":\"input\"}"}"#,
+        )
+        .unwrap_err();
+
+    assert!(err.is_context_overflow());
+    assert!(!err.is_retryable());
+    assert!(matches!(
+        err,
+        ProviderError::Api {
+            code: Some(ref code),
+            retryable: false,
+            ..
+        } if code == "context_length_exceeded"
+    ));
+}
+
+#[test]
+fn test_assembler_typed_wrapped_context_error_is_normalized() {
+    let mut assembler = ResponseAssembler::new();
+    let err = assembler
+        .process_stream_data(
+            r#"{"type":"error","message":"received error while streaming: {\"code\":\"input_too_long\",\"message\":\"input tokens exceed the model's maximum\"}"}"#,
+        )
+        .unwrap_err();
+
+    assert!(err.is_context_overflow());
+    assert!(matches!(
+        err,
+        ProviderError::Api {
+            code: Some(ref code),
+            retryable: false,
+            ..
+        } if code == "input_too_long"
+    ));
 }
 
 #[test]

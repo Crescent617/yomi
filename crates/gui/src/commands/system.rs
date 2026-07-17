@@ -179,6 +179,9 @@ pub async fn get_config(_state: State<'_, AppState>) -> Result<serde_json::Value
     };
     config.apply_env_overrides();
     config.finalize();
+    config
+        .validate()
+        .map_err(|e| GuiError::unknown(format!("Invalid config: {e}")))?;
 
     // `finalize()` is supposed to guarantee a valid default model; if it's
     // still missing, surface a real error instead of silently returning

@@ -589,14 +589,14 @@ async fn dispatch_command(
             approved,
             remember,
         } => {
-            kernel.send_permission_response(sid, &req_id, approved, remember);
+            kernel.send_permission_response(sid, &req_id, approved, remember)?;
             Ok(serde_json::Value::Null)
         }
         Command::AskUserResponse { req_id, answers } => {
             let response = crate::tools::AskUserResponse {
                 answers: answers.into_iter().collect(),
             };
-            kernel.send_ask_user_response(sid, &req_id, response);
+            kernel.send_ask_user_response(sid, &req_id, response)?;
             Ok(serde_json::Value::Null)
         }
         Command::SetLevel(level) => {

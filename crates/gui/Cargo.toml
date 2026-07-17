@@ -7,7 +7,7 @@ license.workspace = true
 
 [dependencies]
 # Tauri v2
-tauri = { workspace = true, features = ["devtools"] }
+tauri = { workspace = true, features = ["devtools", "macos-private-api"] }
 tauri-plugin-dialog = { workspace = true }
 tauri-plugin-opener = { workspace = true }
 tauri-plugin-fs = { workspace = true }

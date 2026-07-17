@@ -10,7 +10,7 @@ use crate::compactor::CompactionError;
 use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason};
 use crate::permission::Checker;
 use crate::prompt::SystemPromptBuilder;
-use crate::tools::{ToolFlags, ToolRegistry, ToolRegistryConfig, UPDATE_GOAL_TOOL_NAME};
+use crate::tools::{ToolFlags, ToolRegistry, ToolRegistryConfig};
 use crate::types::{ContentBlock, Message, MessageId, MessageTokenUsage, Role, SessionId};
 use crate::FinishReason;
 use futures::TryStreamExt;
@@ -751,19 +751,6 @@ impl Agent {
 
         // 2. Prepare streaming
         let tools = self.tool_registry.definitions();
-        let has_goal = if let Some(store) = &self.shared.goal_store {
-            store.load(&self.session_id).await.ok().flatten().is_some()
-        } else {
-            false
-        };
-        let tools = if has_goal {
-            tools
-        } else {
-            tools
-                .into_iter()
-                .filter(|t| t.name != UPDATE_GOAL_TOOL_NAME)
-                .collect()
-        };
         tracing::debug!(
             "iteration {}/{}",
             self.context.iteration_count(),
@@ -781,18 +768,20 @@ impl Agent {
 
         // Clone messages and tools for the spawned task (needs 'static)
         let messages: Vec<Arc<Message>> = self.message_buffer.messages().to_vec();
-        let resolved_messages: Vec<Arc<Message>> = messages
+        let provider_messages: Vec<Arc<Message>> = messages
             .into_iter()
             .filter(|m| !matches!(m.role, Role::Internal))
             .collect();
-        let resolved_messages =
-            crate::utils::asset::resolve_messages(&resolved_messages, &self.shared.data_dir).await;
+
+        let request_config =
+            crate::provider::resolve_request_config(&provider_messages, &tools, &model_config)
+                .map_err(AgentError::Provider)?;
 
         // Spawn provider request in a separate task to allow cancellation
         let stream_task = tokio::spawn(
             async move {
                 provider
-                    .stream(&resolved_messages, &tools, &model_config)
+                    .stream(&provider_messages, &tools, &request_config)
                     .await
             }
             .instrument(tracing::Span::current()),
@@ -823,7 +812,12 @@ impl Agent {
 
         let end_content = result.content_blocks.clone();
 
-        if !result.content_blocks.is_empty() || !result.tool_calls.is_empty() {
+        let has_assistant_result = !result.content_blocks.is_empty()
+            || !result.tool_calls.is_empty()
+            || result.token_usage.is_some()
+            || result.response_id.is_some()
+            || result.finish_reason.is_some();
+        if has_assistant_result {
             let mut msg = Message::with_blocks(Role::Assistant, result.content_blocks);
             msg.id = assistant_msg_id.clone();
             if !result.tool_calls.is_empty() {
@@ -982,6 +976,7 @@ impl Agent {
             .as_ref()
             .ok_or("No compactor configured")?;
         let old_count = self.message_buffer.len();
+        let tools = self.tool_registry.definitions();
         let prev_state = self.context.current_state();
         if !self.context.transition_to(AgentState::Compacting) {
             tracing::warn!("Failed to transition to Compacting from {:?}", prev_state);
@@ -992,6 +987,7 @@ impl Agent {
             compactor
                 .full_compact(
                     self.message_buffer.messages(),
+                    &tools,
                     provider,
                     &model_config,
                     Some(self.cancel_token.runtime_token()),
@@ -1002,6 +998,7 @@ impl Agent {
             compactor
                 .auto_compact(
                     self.message_buffer.messages(),
+                    &tools,
                     provider,
                     &model_config,
                     Some(self.cancel_token.runtime_token()),
@@ -1020,8 +1017,7 @@ impl Agent {
             .await
     }
 
-    /// Handle compaction result, update state, and return user message.
-    /// Clears file state store only if messages were actually reduced (real compaction).
+    /// Handle compaction result, persist every rewrite, and clear derived file state.
     async fn handle_compaction_result(
         &mut self,
         result: Result<Option<crate::compactor::CompactionResult>, CompactionError>,
@@ -1035,16 +1031,16 @@ impl Agent {
                 self.record_compactor_token_usage(compaction_result.token_usage, model_config)
                     .await;
 
-                self.apply_compacted_messages(compaction_result.messages)
+                let rewritten = self
+                    .apply_compacted_messages(compaction_result.messages)
                     .await;
                 let new_count = self.message_buffer.len();
                 let compacted_count = old_count.saturating_sub(new_count);
 
-                // Clear file state only if messages were actually reduced (real compaction)
-                if compacted_count > 0 {
+                if rewritten {
                     if let Some(ref file_state_store) = self.shared.file_state_store {
                         tracing::info!(
-                            "clearing file state due to compaction ({} -> {} messages)",
+                            "clearing file state after conversation compaction ({} -> {} messages)",
                             old_count,
                             new_count
                         );
@@ -1052,14 +1048,16 @@ impl Agent {
                     }
                 }
 
-                Ok(if compacted_count > 0 {
+                Ok(if !rewritten {
+                    "No compaction needed".to_string()
+                } else if compacted_count > 0 {
                     info!(
                         "compaction completed: {} -> {} messages (compacted {})",
                         old_count, new_count, compacted_count
                     );
                     format!("Compacted {compacted_count} messages")
                 } else {
-                    "Micro-compaction completed".to_string()
+                    "Compaction rewrite completed".to_string()
                 })
             }
             Err(CompactionError::Cancelled) => {
@@ -1067,7 +1065,7 @@ impl Agent {
                 self.emit_operation_cancelled("compaction");
                 Err("Compaction was cancelled".to_string())
             }
-            Err(CompactionError::Api(e)) => {
+            Err(CompactionError::Api(e) | CompactionError::ContextOverflow(e)) => {
                 tracing::warn!("compaction failed: {}", e);
                 self.emit_error(crate::event::ErrorPhase::Compaction, &e.clone(), false);
                 Err(format!("Compaction failed: {e}"))
@@ -1105,29 +1103,38 @@ impl Agent {
         }
     }
 
-    /// Apply compacted messages: update buffer and persist to storage.
-    /// Note: Preserves the system message at the beginning of the buffer.
-    async fn apply_compacted_messages(&mut self, messages: Vec<Arc<Message>>) {
-        let pre_len = self.message_buffer.len();
-
-        // Reconstruct buffer: keep system messages + compacted messages (filter out any system msgs from compactor)
+    /// Apply compacted messages and persist every actual history rewrite.
+    async fn apply_compacted_messages(&mut self, messages: Vec<Arc<Message>>) -> bool {
         let new_messages: Vec<Arc<Message>> = self
             .message_buffer
             .messages()
             .iter()
-            .filter(|m| m.role == Role::System)
-            .take(1) // Only keep the first system message (the original prompt)
+            .filter(|message| message.role == Role::System)
+            .take(1)
             .cloned()
-            .chain(messages.iter().filter(|m| m.role != Role::System).cloned())
+            .chain(
+                messages
+                    .iter()
+                    .filter(|message| !matches!(message.role, Role::System | Role::Internal))
+                    .cloned(),
+            )
+            .collect();
+        if self.message_buffer.messages() == new_messages {
+            return false;
+        }
+
+        let replacement = new_messages
+            .iter()
+            .filter(|message| message.role != Role::System)
+            .cloned()
             .collect();
         *self.message_buffer.messages_mut() = new_messages;
-
-        // only full compact persist messages
-        if pre_len > self.message_buffer.len() {
-            self.emit(Event::Internal(
-                crate::event::InternalEvent::MessageReplaced { messages },
-            ));
-        }
+        self.emit(Event::Internal(
+            crate::event::InternalEvent::MessageReplaced {
+                messages: replacement,
+            },
+        ));
+        true
     }
 
     /// Check and run compaction if needed
@@ -1139,13 +1146,12 @@ impl Agent {
         let Some(compactor) = self.shared.compactor.as_ref() else {
             return false; // No compactor configured, skip
         };
-        let should_compact =
-            compactor.should_compact(self.message_buffer.messages(), model_config.context_window);
-        if !should_compact {
+        let tools = self.tool_registry.definitions();
+        if !compactor.should_compact(self.message_buffer.messages(), &tools, model_config) {
             return false;
         }
-        // force_compact handles its own start/end events
-        match self.force_compact().await {
+        // The centralized threshold check already used the provider-facing input.
+        match self.do_force_compact(true).await {
             Ok(_) => true,
             Err(e) => {
                 tracing::warn!("auto-compaction failed: {}", e);
@@ -1284,11 +1290,32 @@ impl Agent {
     async fn handle_streaming_with_retry(&mut self) -> Result<(), AgentError> {
         let max_retries = 10;
         let mut attempt = 0;
+        let mut context_recovery_attempted = false;
 
         loop {
             match self.handle_streaming().await {
                 Ok(()) => return Ok(()),
                 Err(e) if e.is_cancelled() => return Err(e),
+                Err(e) if e.is_context_overflow() && !context_recovery_attempted => {
+                    context_recovery_attempted = true;
+                    tracing::warn!(
+                        "streaming input exceeded the provider context window; forcing compaction"
+                    );
+                    if let Err(compaction_error) = self.do_force_compact(true).await {
+                        return self
+                            .fail_agent(
+                                "Context overflow recovery compaction failed",
+                                AgentError::Other(compaction_error),
+                            )
+                            .await;
+                    }
+                    tracing::info!("context overflow recovery compaction completed; retrying");
+                }
+                Err(e) if e.is_context_overflow() => {
+                    return self
+                        .fail_agent("Context overflow persisted after compaction", e)
+                        .await;
+                }
                 Err(e) if attempt >= max_retries => {
                     return self
                         .fail_agent("Streaming failed after max retries", e)

@@ -22,7 +22,7 @@
 </script>
 
 <div class="relative flex gap-1">
-  <div class="relative w-3 shrink-0" aria-hidden="true">
+  <div class="relative w-3 shrink-0 pt-1" aria-hidden="true">
     {#if !(isFirst && isLast)}
       <span
         class="absolute left-1/2 w-px -translate-x-1/2 bg-border/70 {isFirst
@@ -32,20 +32,24 @@
             : 'inset-y-0'}"
       ></span>
     {/if}
-    <span
-      class="absolute left-1/2 top-[18px] z-10 flex size-3 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground"
-    >
-      {#if isRunning}
-        <span class="relative flex size-1.5 items-center justify-center">
-          <span class="absolute size-2 animate-ping rounded-full bg-primary/70"
-          ></span>
-          <span class="absolute size-2.5 rounded-full bg-primary/25 blur-[2px]"
-          ></span>
-          <span class="relative size-1.5 rounded-full bg-primary"></span>
-        </span>
-      {:else}
-        <span class="size-1 rounded-full bg-muted-foreground/60"></span>
-      {/if}
+    <span class="relative z-10 flex h-7 items-center justify-center">
+      <span
+        class="flex size-3 items-center justify-center rounded-full border border-border bg-background text-muted-foreground"
+      >
+        {#if isRunning}
+          <span class="relative flex size-1.5 items-center justify-center">
+            <span
+              class="absolute size-2 animate-ping rounded-full bg-primary/70"
+            ></span>
+            <span
+              class="absolute size-2.5 rounded-full bg-primary/25 blur-[2px]"
+            ></span>
+            <span class="relative size-1.5 rounded-full bg-primary"></span>
+          </span>
+        {:else}
+          <span class="size-1 rounded-full bg-muted-foreground/60"></span>
+        {/if}
+      </span>
     </span>
   </div>
 

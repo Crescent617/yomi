@@ -153,6 +153,8 @@ impl Provider for OpenAIProvider {
                 .any(|c| matches!(c, crate::types::ContentBlock::ImageUrl { .. }))
         });
 
+        // Calls from Agent/Compactor resolve this before entering the provider.
+        // The provider itself only serializes the supplied config.
         let request_body = OpenAIRequest {
             model: config.model_id.clone(),
             messages: Self::convert_messages(messages),
@@ -165,7 +167,7 @@ impl Provider for OpenAIProvider {
             stream_options: Some(StreamOptions {
                 include_usage: true,
             }),
-            max_tokens: config.max_tokens.or(Some(8192)),
+            max_tokens: config.max_tokens,
             temperature: config.temperature,
             reasoning_effort: if config.thinking.enabled {
                 Some(

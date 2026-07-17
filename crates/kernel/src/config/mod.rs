@@ -340,6 +340,41 @@ impl Config {
         }
     }
 
+    /// Validate configuration after file and environment overrides are applied.
+    pub fn validate(&self) -> std::result::Result<(), KernelError> {
+        let compactor = &self.agent.compactor;
+        if !(compactor.threshold_ratio.is_finite()
+            && 0.0 < compactor.threshold_ratio
+            && compactor.threshold_ratio <= 1.0)
+        {
+            return Err(KernelError::config(format!(
+                "agent.compactor.threshold_ratio must be finite and in (0, 1], got {}",
+                compactor.threshold_ratio
+            )));
+        }
+        if compactor.summary_max_tokens == 0 {
+            return Err(KernelError::config(
+                "agent.compactor.summary_max_tokens must be greater than 0",
+            ));
+        }
+
+        for model in &self.models {
+            if model.context_window == 0 {
+                return Err(KernelError::config(format!(
+                    "models.{}.context_window must be greater than 0",
+                    model.name
+                )));
+            }
+            if model.max_tokens == Some(0) {
+                return Err(KernelError::config(format!(
+                    "models.{}.max_tokens must be greater than 0 when set",
+                    model.name
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Get the log directory (defaults to `data_dir/logs`)
     pub fn log_dir(&self) -> PathBuf {
         self.log_dir
@@ -467,9 +502,9 @@ impl Config {
             }
         }
 
-        // Compactor threshold ratio (0.0–1.0, default 0.8)
+        // Compactor threshold ratio; validated after all overrides are applied.
         if let Some(ratio) = env_parse::<f32>(env_names::COMPACTOR_RATIO) {
-            self.agent.compactor.threshold_ratio = ratio.clamp(0.0, 1.0);
+            self.agent.compactor.threshold_ratio = ratio;
         }
 
         // Maximum checkpoints per session

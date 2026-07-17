@@ -151,6 +151,7 @@ pub struct RunningSessionResponse {
     pub title: Option<String>,
     pub project_id: Option<ProjectId>,
     pub phase: String,
+    pub background_task_count: usize,
     pub background_shells: Vec<crate::agent::BackgroundShellTask>,
 }
 
@@ -731,9 +732,25 @@ pub struct ToolDefinition {
     pub name: String,
     pub description: String,
     pub parameters: serde_json::Value,
+    /// Cached estimate of this tool's serialized input tokens.
+    #[serde(skip, default)]
+    pub estimated_tokens: u32,
 }
 
-/// Specific session-level error variants.
+impl ToolDefinition {
+    /// Conservative estimate used before a request is sent. JSON schemas are
+    /// denser than prose, so they use roughly two bytes per token.
+    pub fn estimated_tokens(&self) -> u32 {
+        let text_tokens = crate::utils::tokens::estimate_tokens(&self.name)
+            .saturating_add(crate::utils::tokens::estimate_tokens(&self.description));
+        let schema_tokens =
+            crate::utils::tokens::estimate_tokens_for_json(&self.parameters.to_string());
+        u32::try_from(text_tokens.saturating_add(schema_tokens))
+            .unwrap_or(u32::MAX)
+            .saturating_add(16)
+    }
+}
+
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionError {

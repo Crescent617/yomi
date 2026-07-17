@@ -1,5 +1,5 @@
 use crate::event::ContentChunk;
-use crate::types::{FinishReason, Message, ToolDefinition};
+use crate::types::{FinishReason, Message, Role, ToolDefinition};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -13,6 +13,159 @@ pub mod openai_response;
 pub use anthropic::AnthropicProvider;
 pub use openai::OpenAIProvider;
 pub use openai_response::OpenAIResponseProvider;
+
+/// Default output budget when the model config does not specify one.
+pub const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 8_192;
+/// Headroom for provider formatting and local token-estimation error.
+pub const CONTEXT_SAFETY_BUFFER_TOKENS: u32 = 4_096;
+
+fn estimate_text_tokens(text: &str) -> u32 {
+    crate::utils::tokens::estimate_tokens(text) as u32
+}
+
+fn estimate_json_tokens(value: &serde_json::Value) -> u32 {
+    crate::utils::tokens::estimate_tokens_for_json(&value.to_string()) as u32
+}
+
+fn estimate_message_tokens(message: &Message) -> u32 {
+    let content_tokens = message.content.iter().fold(0u32, |total, block| {
+        let tokens = match block {
+            crate::types::ContentBlock::Text { text } => estimate_text_tokens(text),
+            crate::types::ContentBlock::Thinking {
+                thinking,
+                signature,
+            } => estimate_text_tokens(thinking)
+                .saturating_add(signature.as_deref().map_or(0, estimate_text_tokens)),
+            crate::types::ContentBlock::RedactedThinking { data } => estimate_text_tokens(data),
+            crate::types::ContentBlock::ImageUrl { image_url } => {
+                // Provider image tokenization depends on decoded dimensions. Use a
+                // conservative per-image floor and charge inline data by encoded
+                // size so large payloads cannot hide behind a fixed estimate.
+                4_096u32.max(estimate_text_tokens(&image_url.url))
+            }
+            // No current provider serializes Audio blocks; do not budget content
+            // that is omitted from the actual request.
+            crate::types::ContentBlock::Audio { .. } => 0,
+        };
+        total.saturating_add(tokens)
+    });
+    let tool_call_tokens = message
+        .tool_calls
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .fold(0u32, |total, call| {
+            total
+                .saturating_add(estimate_text_tokens(&call.id))
+                .saturating_add(estimate_text_tokens(&call.name))
+                .saturating_add(estimate_json_tokens(&call.arguments))
+                .saturating_add(8)
+        });
+
+    content_tokens
+        .saturating_add(tool_call_tokens)
+        .saturating_add(
+            message
+                .tool_call_id
+                .as_deref()
+                .map_or(0, estimate_text_tokens),
+        )
+        .saturating_add(10)
+}
+
+/// Estimate the input tokens for a request using only messages providers serialize.
+pub fn estimate_request_input_tokens(
+    messages: &[Arc<Message>],
+    tools: &[Arc<ToolDefinition>],
+    _config: &ModelConfig,
+) -> u32 {
+    let last_assistant_usage = messages
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, message)| {
+            (message.role == Role::Assistant)
+                .then(|| message.token_usage.as_ref().map(|usage| (index, usage)))
+                .flatten()
+        });
+
+    if let Some((index, usage)) = last_assistant_usage {
+        return messages[index + 1..]
+            .iter()
+            .filter(|message| message.role != Role::Internal)
+            .fold(usage.total_tokens, |total, message| {
+                total.saturating_add(estimate_message_tokens(message))
+            });
+    }
+
+    let message_tokens = messages
+        .iter()
+        .filter(|message| message.role != Role::Internal)
+        .fold(0u32, |total, message| {
+            total.saturating_add(estimate_message_tokens(message))
+        });
+    message_tokens.saturating_add(estimate_tools_tokens(tools))
+}
+
+fn estimate_tools_tokens(tools: &[Arc<ToolDefinition>]) -> u32 {
+    tools.iter().fold(0u32, |total, tool| {
+        total.saturating_add(if tool.estimated_tokens > 0 {
+            tool.estimated_tokens
+        } else {
+            tool.estimated_tokens()
+        })
+    })
+}
+
+/// Resolve a request-specific model config at the call site.
+///
+/// Providers must not mutate or infer output limits. Callers resolve the limit
+/// once from the exact messages/tools they are about to send, then pass the
+/// returned config unchanged to the provider.
+pub fn resolve_request_config(
+    messages: &[Arc<Message>],
+    tools: &[Arc<ToolDefinition>],
+    config: &ModelConfig,
+) -> Result<ModelConfig, ProviderError> {
+    let input_tokens = estimate_request_input_tokens(messages, tools, config);
+    let available_output = config
+        .context_window
+        .saturating_sub(input_tokens)
+        .saturating_sub(CONTEXT_SAFETY_BUFFER_TOKENS);
+    if available_output == 0 {
+        return Err(ProviderError::Config(format!(
+            "Insufficient context for model output: context_window={}, estimated_input={}, safety_buffer={}",
+            config.context_window, input_tokens, CONTEXT_SAFETY_BUFFER_TOKENS
+        )));
+    }
+
+    let resolved_max_tokens = config
+        .max_tokens
+        .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
+        .min(available_output);
+    if resolved_max_tokens == 0 {
+        return Err(ProviderError::Config(
+            "Resolved max_tokens must be greater than 0".to_string(),
+        ));
+    }
+    if config.provider == crate::config::ModelProvider::Anthropic
+        && config.thinking.enabled
+        && config.thinking.budget_tokens >= resolved_max_tokens
+    {
+        return Err(ProviderError::Config(format!(
+            "Anthropic thinking budget ({}) must be smaller than resolved max_tokens ({resolved_max_tokens})",
+            config.thinking.budget_tokens
+        )));
+    }
+
+    let mut resolved = config.clone();
+    resolved.max_tokens = Some(resolved_max_tokens);
+    Ok(resolved)
+}
+
+#[cfg(test)]
+#[path = "provider_test.rs"]
+mod tests;
 
 /// Global shared HTTP client for all providers.
 static HTTP_CLIENT: std::sync::LazyLock<std::sync::Arc<reqwest::Client>> =
@@ -222,6 +375,36 @@ pub enum ProviderError {
 }
 
 impl ProviderError {
+    /// Returns true when the provider rejected the request because the input exceeded its context window.
+    pub fn is_context_overflow(&self) -> bool {
+        let contains_overflow = |message: &str| {
+            let message = message.to_ascii_lowercase();
+            message.contains("context_length_exceeded")
+                || message.contains("input_too_long")
+                || message.contains("context window")
+                || message.contains("context length")
+                || message.contains("maximum context")
+                || message.contains("max context")
+                || message.contains("input tokens exceed")
+                || message.contains("input exceeds")
+                || message.contains("prompt is too long")
+                || message.contains("insufficient context")
+        };
+        match self {
+            ProviderError::Api { code, message, .. } => {
+                code.as_deref().is_some_and(|code| {
+                    code.eq_ignore_ascii_case("context_length_exceeded")
+                        || code.eq_ignore_ascii_case("input_too_long")
+                        || code.eq_ignore_ascii_case("prompt_too_long")
+                }) || contains_overflow(message)
+            }
+            ProviderError::Parse(message) | ProviderError::Config(message) => {
+                contains_overflow(message)
+            }
+            _ => false,
+        }
+    }
+
     /// Returns true if this error is retryable
     pub const fn is_retryable(&self) -> bool {
         match self {

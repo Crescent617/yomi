@@ -264,8 +264,7 @@ impl KernelApi for Kernel {
         approved: bool,
         _remember: bool,
     ) -> Result<()> {
-        Self::send_permission_response(self, session_id, req_id, approved, _remember);
-        Ok(())
+        Self::send_permission_response(self, session_id, req_id, approved, _remember)
     }
 
     async fn set_permission_level(&self, session_id: &SessionId, level: Level) -> Result<()> {
@@ -409,8 +408,7 @@ impl KernelApi for Kernel {
         req_id: &str,
         response: crate::tools::AskUserResponse,
     ) -> Result<()> {
-        Self::send_ask_user_response(self, session_id, req_id, response);
-        Ok(())
+        Self::send_ask_user_response(self, session_id, req_id, response)
     }
 
     async fn send_steer(&self, session_id: &SessionId, content: Vec<ContentBlock>) -> Result<()> {

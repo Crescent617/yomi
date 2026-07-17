@@ -108,6 +108,7 @@ pub async fn init_kernel(
     config.inject_env()?;
     config.apply_env_overrides();
     config.finalize();
+    config.validate()?;
 
     let kernel = build_kernel(&config, enable_cron).await?;
     Ok((kernel, config, config_file))

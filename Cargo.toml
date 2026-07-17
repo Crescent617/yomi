@@ -95,7 +95,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
-tauri-plugin-pilot = { git = "https://github.com/mpiton/tauri-pilot", default-features = false }
+tauri-plugin-pilot = { git = "https://github.com/mpiton/tauri-pilot", rev = "a6c5baa", default-features = false }
 tauri-plugin-store = "2"
 dotenvy = "0.15"
 lark-websocket-protobuf = "0.1.1"

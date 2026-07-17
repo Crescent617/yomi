@@ -8,9 +8,9 @@ fn test_estimate_tokens_empty() {
 #[test]
 fn test_estimate_tokens_ascii() {
     // ~4 chars per token
-    assert_eq!(estimate_tokens("hello"), 1); // 5 / 4 = 1
-    assert_eq!(estimate_tokens("hello world"), 2); // 11 / 4 = 2
-    assert_eq!(estimate_tokens("this is a test string"), 5); // 21 / 4 = 5
+    assert_eq!(estimate_tokens("hello"), 2); // ceil(5 / 4) = 2
+    assert_eq!(estimate_tokens("hello world"), 3); // ceil(11 / 4) = 3
+    assert_eq!(estimate_tokens("this is a test string"), 6); // ceil(21 / 4) = 6
 }
 
 #[test]
@@ -37,10 +37,10 @@ fn test_format_estimated_tokens() {
 #[test]
 fn test_estimate_tokens_boundary() {
     // Test boundary conditions (4 chars per token)
-    assert_eq!(estimate_tokens("a"), 0); // 1 / 4 = 0
-    assert_eq!(estimate_tokens("abcd"), 1); // 4 / 4 = 1
-    assert_eq!(estimate_tokens("abcde"), 1); // 5 / 4 = 1
-    assert_eq!(estimate_tokens("abcdefgh"), 2); // 8 / 4 = 2
+    assert_eq!(estimate_tokens("a"), 1); // ceil(1 / 4) = 1
+    assert_eq!(estimate_tokens("abcd"), 1); // ceil(4 / 4) = 1
+    assert_eq!(estimate_tokens("abcde"), 2); // ceil(5 / 4) = 2
+    assert_eq!(estimate_tokens("abcdefgh"), 2); // ceil(8 / 4) = 2
 }
 
 #[test]
@@ -49,7 +49,7 @@ fn test_estimate_tokens_unicode() {
     // ASCII: 1 byte, CJK: 3 bytes, Emoji: 4 bytes
     assert_eq!(estimate_tokens("🎉"), 1); // 4 bytes
     assert_eq!(estimate_tokens("🎉🎊"), 2); // 8 bytes
-    assert_eq!(estimate_tokens("α"), 0); // Greek 2 bytes
+    assert_eq!(estimate_tokens("α"), 1); // ceil(2 / 4) = 1
     assert_eq!(estimate_tokens("αβγδ"), 2); // Greek 8 bytes = 2 tokens
 }
 
@@ -59,7 +59,7 @@ fn test_estimate_tokens_for_json_boundary() {
     assert_eq!(estimate_tokens_for_json("{}"), 1); // 2 / 2 = 1
     assert_eq!(estimate_tokens_for_json("[]"), 1); // 2 / 2 = 1
                                                    // "{\"a\":1}" is 7 bytes: { (1) + " (1) + a (1) + " (1) + : (1) + 1 (1) + } (1)
-    assert_eq!(estimate_tokens_for_json("{\"a\":1}"), 3); // 7 / 2 = 3
+    assert_eq!(estimate_tokens_for_json("{\"a\":1}"), 4); // ceil(7 / 2) = 4
 }
 
 #[test]
