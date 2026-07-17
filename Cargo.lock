@@ -3823,16 +3823,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "objc2-javascript-core"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a1e6550c4caed348956ce3370c9ffeca70bb1dbed4fa96112e7c6170e074586"
-dependencies = [
- "objc2",
- "objc2-core-foundation",
-]
-
-[[package]]
 name = "objc2-quartz-core"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3842,17 +3832,6 @@ dependencies = [
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",
-]
-
-[[package]]
-name = "objc2-security"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "709fe137109bd1e8b5a99390f77a7d8b2961dafc1a1c5db8f2e60329ad6d895a"
-dependencies = [
- "bitflags 2.11.0",
- "objc2",
- "objc2-core-foundation",
 ]
 
 [[package]]
@@ -3898,8 +3877,6 @@ dependencies = [
  "objc2-app-kit",
  "objc2-core-foundation",
  "objc2-foundation",
- "objc2-javascript-core",
- "objc2-security",
 ]
 
 [[package]]
@@ -6451,17 +6428,13 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-pilot"
-version = "0.6.0"
-source = "git+https://github.com/mpiton/tauri-pilot#916e329e1aa14585949312a4c32ea706ce093c7b"
+version = "0.7.2"
+source = "git+https://github.com/mpiton/tauri-pilot?rev=a6c5baa#a6c5baa3f280fe75e75220be8e7689785a200d13"
 dependencies = [
- "block2",
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
  "image",
  "libc",
- "objc2",
- "objc2-foundation",
- "objc2-web-kit",
  "serde",
  "serde_json",
  "tauri",

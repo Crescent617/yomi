@@ -7,6 +7,7 @@
     Monitor,
     Moon,
     PanelLeft,
+    Rabbit,
     RotateCcw,
     Save,
     Sun,
@@ -23,6 +24,7 @@
     type ActivityGroupExpansionPreference,
   } from "../../settings.svelte";
   import { showNotification } from "../../state.svelte";
+  import * as api from "../../api";
 
   interface Props {
     onDirtyChange?: (dirty: boolean) => void;
@@ -63,6 +65,8 @@
     { id: "while_running", label: "While running" },
   ];
 
+  let petSync = Promise.resolve();
+
   const dirty = $derived(
     JSON.stringify($state.snapshot(draft)) !==
       JSON.stringify($state.snapshot(saved)),
@@ -74,15 +78,30 @@
 
   onMount(() => {
     return () => {
-      if (dirty) replaceGuiPreferences(saved);
+      if (dirty) {
+        const original = $state.snapshot(saved);
+        replaceGuiPreferences(original);
+        void syncPetEnabled(original.desktop_pet.enabled).catch(() => {});
+      }
       onDirtyChange?.(false);
     };
   });
 
+  function syncPetEnabled(enabled: boolean): Promise<void> {
+    petSync = petSync.catch(() => {}).then(() => api.setPetEnabled(enabled));
+    return petSync;
+  }
+
   function preview(update: (value: GuiPreferences) => void) {
+    const wasPetEnabled = draft.desktop_pet.enabled;
     update(draft);
     replaceGuiPreferences(draft);
     error = null;
+    if (draft.desktop_pet.enabled !== wasPetEnabled) {
+      void syncPetEnabled(draft.desktop_pet.enabled).catch((syncError) => {
+        error = `Desktop pet preview failed: ${api.errorMessage(syncError)}`;
+      });
+    }
   }
 
   function restore(target: GuiPreferences) {
@@ -90,9 +109,13 @@
     Object.assign(draft.appearance, copy.appearance);
     Object.assign(draft.layout, copy.layout);
     Object.assign(draft.notifications, copy.notifications);
+    Object.assign(draft.desktop_pet, copy.desktop_pet);
     Object.assign(draft.chat, copy.chat);
     replaceGuiPreferences(copy);
     error = null;
+    void syncPetEnabled(copy.desktop_pet.enabled).catch((syncError) => {
+      error = `Desktop pet preview failed: ${api.errorMessage(syncError)}`;
+    });
   }
 
   async function save() {
@@ -292,6 +315,41 @@
               >
             </div>
           </div>
+        </div>
+      </section>
+
+      <section
+        class="overflow-hidden rounded-xl border border-border bg-card/45"
+      >
+        <div class="border-b border-border px-4 py-3">
+          <div class="flex items-center gap-2 text-sm font-medium">
+            <Rabbit size={15} class="text-muted-foreground" /> Desktop pet
+          </div>
+          <p class="mt-0.5 text-xs text-muted-foreground">
+            Keep a compact companion nearby for session status and requests.
+          </p>
+        </div>
+        <div class="divide-y divide-border">
+          <label
+            class="flex cursor-pointer items-center justify-between gap-4 px-4 py-3.5"
+          >
+            <div>
+              <div class="text-sm text-foreground">Enable desktop pet</div>
+              <div class="text-xs text-muted-foreground">
+                Preview the always-on-top pet window immediately.
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              checked={draft.desktop_pet.enabled}
+              onchange={(event) =>
+                preview(
+                  (value) =>
+                    (value.desktop_pet.enabled = event.currentTarget.checked),
+                )}
+              class="h-4 w-4 accent-primary"
+            />
+          </label>
         </div>
       </section>
 

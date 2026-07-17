@@ -1,6 +1,4 @@
-use crate::types::Message;
 use std::path::Path;
-use std::sync::Arc;
 use tokio::fs;
 
 /// Parse a base64 data URL: `data:image/png;base64,xxxxx`
@@ -96,31 +94,4 @@ pub async fn read_asset(url: &str, data_dir: &Path) -> Option<Vec<u8>> {
 pub fn asset_path(url: &str, data_dir: &Path) -> Option<std::path::PathBuf> {
     let hash_ext = url.strip_prefix("asset://")?;
     Some(data_dir.join("assets").join(hash_ext))
-}
-
-/// Resolve asset URLs in a slice of messages for provider requests.
-/// Clones only messages that contain `asset://` images.
-pub async fn resolve_messages(messages: &[Arc<Message>], data_dir: &Path) -> Vec<Arc<Message>> {
-    let mut result = Vec::with_capacity(messages.len());
-    for m in messages {
-        let needs_resolve = m.content.iter().any(|c| {
-            matches!(c, crate::types::ContentBlock::ImageUrl { image_url } if image_url.url.starts_with("asset://"))
-        });
-        if !needs_resolve {
-            result.push(Arc::clone(m));
-            continue;
-        }
-        let mut resolved = (**m).clone();
-        for block in &mut resolved.content {
-            if let crate::types::ContentBlock::ImageUrl { image_url } = block {
-                if image_url.url.starts_with("asset://") {
-                    if let Some(data_url) = resolve_asset_url(&image_url.url, data_dir).await {
-                        image_url.url = data_url;
-                    }
-                }
-            }
-        }
-        result.push(Arc::new(resolved));
-    }
-    result
 }

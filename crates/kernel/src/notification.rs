@@ -1,4 +1,5 @@
 use crate::agent::AgentState;
+use crate::event::StopReason;
 use crate::types::SessionId;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -24,6 +25,31 @@ pub enum Notification {
     },
     ConnectionLost {
         session_id: SessionId,
+    },
+    AgentActivity {
+        session_id: SessionId,
+        event_id: String,
+        activity: AgentActivity,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentActivity {
+    PermissionRequested {
+        req_id: String,
+        target_session_id: String,
+    },
+    AskUserRequested {
+        req_id: String,
+        target_session_id: String,
+    },
+    RequestResolved {
+        req_id: String,
+    },
+    Started,
+    Stopped {
+        reason: StopReason,
     },
 }
 
@@ -56,3 +82,7 @@ impl Default for NotificationBus {
         Self::new()
     }
 }
+
+#[cfg(test)]
+#[path = "notification_test.rs"]
+mod tests;

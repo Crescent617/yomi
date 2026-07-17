@@ -228,11 +228,9 @@ impl Provider for AnthropicProvider {
             serde_json::to_string_pretty(&messages).unwrap_or_default()
         );
 
-        // Set a default max_tokens if not provided
-        let max_tokens = config.max_tokens.or(Some(8192));
         let mut request_body = AnthropicRequest {
             model: config.model_id.clone(),
-            max_tokens,
+            max_tokens: config.max_tokens,
             messages,
             system,
             tools: if tools.is_empty() {
@@ -378,6 +376,7 @@ struct AnthropicStreamState {
     accumulated_thinking: String,
     input_tokens: Option<u32>,
     cache_read_input_tokens: Option<u32>,
+    cache_creation_input_tokens: Option<u32>,
     output_tokens: Option<u32>,
     /// API response ID (from `message_start` event)
     response_id: Option<String>,
@@ -401,6 +400,7 @@ impl AnthropicStreamState {
             accumulated_thinking: String::new(),
             input_tokens: None,
             cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             output_tokens: None,
             response_id: None,
             stop_reason: None,
@@ -425,6 +425,7 @@ impl AnthropicStreamState {
                 // Store input tokens and cache read tokens from message_start event
                 self.input_tokens = Some(message.usage.input_tokens);
                 self.cache_read_input_tokens = Some(message.usage.cache_read_input_tokens);
+                self.cache_creation_input_tokens = Some(message.usage.cache_creation_input_tokens);
                 // Capture response ID from message_start
                 self.response_id = Some(message.id);
                 // Capture stop_reason if already set (usually null at start)
@@ -505,8 +506,12 @@ impl AnthropicStreamState {
                     let cache_read = self
                         .cache_read_input_tokens
                         .unwrap_or(usage.cache_read_input_tokens);
-                    // Total input = uncached input + cache read
-                    let prompt_tokens = input_tokens + cache_read;
+                    let cache_creation = self
+                        .cache_creation_input_tokens
+                        .unwrap_or(usage.cache_creation_input_tokens);
+                    let prompt_tokens = input_tokens
+                        .saturating_add(cache_read)
+                        .saturating_add(cache_creation);
                     let cached_tokens = if cache_read > 0 {
                         Some(cache_read)
                     } else {
@@ -522,7 +527,12 @@ impl AnthropicStreamState {
                 } else if self.input_tokens.is_some() {
                     // message_delta without usage - fallback to stored values
                     let cache_read = self.cache_read_input_tokens.unwrap_or(0);
-                    let prompt_tokens = self.input_tokens.unwrap_or(0) + cache_read;
+                    let cache_creation = self.cache_creation_input_tokens.unwrap_or(0);
+                    let prompt_tokens = self
+                        .input_tokens
+                        .unwrap_or(0)
+                        .saturating_add(cache_read)
+                        .saturating_add(cache_creation);
                     let cached_tokens = if cache_read > 0 {
                         Some(cache_read)
                     } else {
@@ -735,6 +745,8 @@ struct AnthropicUsage {
     output_tokens: u32,
     #[serde(default)]
     cache_read_input_tokens: u32,
+    #[serde(default)]
+    cache_creation_input_tokens: u32,
 }
 
 #[derive(Debug, Deserialize)]

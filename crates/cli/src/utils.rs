@@ -29,6 +29,7 @@ pub fn load_config(config_path: Option<&PathBuf>) -> Result<Config> {
     config.inject_env()?;
     config.apply_env_overrides();
     config.finalize();
+    config.validate()?;
     Ok(config)
 }
 

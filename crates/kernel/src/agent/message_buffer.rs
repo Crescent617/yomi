@@ -85,6 +85,20 @@ impl MessageBuffer {
         self.messages.clone()
     }
 
+    /// Return the provider-facing message view: internal metadata removed and
+    /// incomplete assistant/tool groups sanitized without mutating stored history.
+    pub fn sanitized_model_messages(messages: &[Arc<Message>]) -> Vec<Arc<Message>> {
+        let mut buffer = Self {
+            messages: messages
+                .iter()
+                .filter(|message| message.role != crate::types::Role::Internal)
+                .cloned()
+                .collect(),
+        };
+        buffer.sanitize();
+        buffer.messages
+    }
+
     /// Sanitize the message buffer by removing inconsistent tool call/response pairs.
     /// Removes assistant messages with `tool_calls` that don't have corresponding tool responses,
     /// and removes tool responses that are not immediately after their corresponding assistant.

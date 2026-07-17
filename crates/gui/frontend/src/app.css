@@ -128,6 +128,13 @@ body {
     "calt" 1;
 }
 
+html.pet-window,
+html.pet-window body,
+body.pet-window {
+  background: transparent !important;
+  overflow: hidden;
+}
+
 /* Mermaid leaves an empty body-level tooltip after rendering. Keep it from
    extending the document until it has content to show. */
 .mermaidTooltip:empty {

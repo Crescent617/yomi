@@ -6,6 +6,7 @@ pub use conductor::Conductor;
 
 use crate::agent::{AgentConfig, AgentInput, AgentShared, AgentState};
 use crate::comms::InputBus;
+use crate::notification::{AgentActivity, Notification};
 use crate::permission::Level;
 use crate::storage::usage::{DailyUsage, ModelUsage, UsageSummary};
 use crate::storage::{MessageStore, ProjectStore, SessionStore, StorageSet, UsageStore};
@@ -668,8 +669,9 @@ impl Kernel {
             .into_iter()
             .map(|snapshot| (snapshot.session_id, snapshot.state))
             .collect();
-        for session_id in shell_tasks_by_session.keys() {
-            states.entry(session_id.clone()).or_insert(AgentState::Idle);
+        let background_session_ids = self.agent_shared.background_tasks.active_session_ids();
+        for session_id in background_session_ids {
+            states.entry(session_id).or_insert(AgentState::Idle);
         }
 
         let store = self.session_store().await;
@@ -683,12 +685,20 @@ impl Kernel {
                 .get(&info.id)
                 .cloned()
                 .unwrap_or_default();
+            let background_task_count = [
+                crate::agent::BackgroundTaskKind::Subagent,
+                crate::agent::BackgroundTaskKind::Shell,
+            ]
+            .into_iter()
+            .map(|kind| self.agent_shared.background_tasks.count(&info.id, kind))
+            .sum();
             sessions.push(crate::types::RunningSessionResponse {
                 id: info.id,
                 parent_id: info.parent_id,
                 title: info.title,
                 project_id: info.project_id,
                 phase: agent_state_phase(state).to_string(),
+                background_task_count,
                 background_shells,
             });
         }
@@ -967,24 +977,29 @@ impl Kernel {
             })
     }
 
-    #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub fn send_permission_response(
         &self,
         session_id: &SessionId,
         req_id: &str,
         approved: bool,
         remember: bool,
-    ) {
-        if let Err(e) = self.input_bus.publish(
-            session_id.clone(),
-            AgentInput::PermissionResponse {
-                req_id: req_id.to_string(),
-                approved,
-                remember,
-            },
-        ) {
-            tracing::warn!("Failed to publish permission response: {}", e);
-        }
+    ) -> Result<()> {
+        self.input_bus
+            .publish(
+                session_id.clone(),
+                AgentInput::PermissionResponse {
+                    req_id: req_id.to_string(),
+                    approved,
+                    remember,
+                },
+            )
+            .map_err(|error| {
+                KernelError::Session(SessionError::Other(format!(
+                    "Failed to publish permission response: {error}"
+                )))
+            })?;
+        self.publish_request_resolved(session_id, req_id);
+        Ok(())
     }
 
     #[tracing::instrument(skip(self, response), fields(session_id = %session_id.0))]
@@ -993,16 +1008,32 @@ impl Kernel {
         session_id: &SessionId,
         req_id: &str,
         response: AskUserResponse,
-    ) {
-        if let Err(e) = self.input_bus.publish(
-            session_id.clone(),
-            AgentInput::AskUserResponse {
+    ) -> Result<()> {
+        self.input_bus
+            .publish(
+                session_id.clone(),
+                AgentInput::AskUserResponse {
+                    req_id: req_id.to_string(),
+                    response,
+                },
+            )
+            .map_err(|error| {
+                KernelError::Session(SessionError::Other(format!(
+                    "Failed to publish ask_user response: {error}"
+                )))
+            })?;
+        self.publish_request_resolved(session_id, req_id);
+        Ok(())
+    }
+
+    fn publish_request_resolved(&self, session_id: &SessionId, req_id: &str) {
+        let _ = self.notification_bus.send(Notification::AgentActivity {
+            session_id: session_id.clone(),
+            event_id: format!("response:{req_id}"),
+            activity: AgentActivity::RequestResolved {
                 req_id: req_id.to_string(),
-                response,
             },
-        ) {
-            tracing::warn!("Failed to publish ask_user response: {}", e);
-        }
+        });
     }
 
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]

@@ -211,4 +211,58 @@ describe("tool event streaming", () => {
 
     expect(count).toBe(2);
   });
+  test("deduplicates permission requests and removes all copies on ack", () => {
+    const sessionId = "permission-ack-regression";
+    const session = createSessionState({ id: sessionId });
+    sessionState.sessions.push(session);
+
+    const request = {
+      agent: {
+        permission_request: {
+          req_id: "permission-1",
+          session_id: sessionId,
+          tool_name: "shell",
+          tool_args: "echo hi",
+          tool_level: "caution",
+          reason: "test",
+        },
+      },
+    };
+    handleEvent(sessionId, "permission-1", request);
+    handleEvent(sessionId, "permission-1-replay", request);
+    expect(session.pending_permissions).toHaveLength(1);
+
+    handleEvent(sessionId, "permission-ack", {
+      agent: {
+        permission_ack: { req_id: "permission-1" },
+      },
+    });
+    expect(session.pending_permissions).toHaveLength(0);
+  });
+
+  test("deduplicates ask user requests and removes all copies on ack", () => {
+    const sessionId = "ask-user-ack-regression";
+    const session = createSessionState({ id: sessionId });
+    sessionState.sessions.push(session);
+
+    const request = {
+      agent: {
+        ask_user_question: {
+          req_id: "ask-1",
+          session_id: sessionId,
+          questions: [],
+        },
+      },
+    };
+    handleEvent(sessionId, "ask-1", request);
+    handleEvent(sessionId, "ask-1-replay", request);
+    expect(session.pending_ask_users).toHaveLength(1);
+
+    handleEvent(sessionId, "ask-ack", {
+      agent: {
+        ask_user_ack: { req_id: "ask-1" },
+      },
+    });
+    expect(session.pending_ask_users).toHaveLength(0);
+  });
 });

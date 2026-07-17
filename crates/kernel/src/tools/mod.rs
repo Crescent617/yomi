@@ -243,11 +243,16 @@ impl ToolRegistry {
             .tools
             .values()
             .map(|tool| {
-                Arc::new(ToolDefinition {
+                // Calculate once when the registry builds its cached definitions;
+                // requests clone the Arc values and reuse the estimate.
+                let mut definition = ToolDefinition {
                     name: tool.name().to_string(),
                     description: tool.desc().to_string(),
                     parameters: tool.schema(),
-                })
+                    estimated_tokens: 0,
+                };
+                definition.estimated_tokens = definition.estimated_tokens();
+                Arc::new(definition)
             })
             .collect();
 

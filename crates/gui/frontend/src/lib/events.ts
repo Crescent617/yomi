@@ -501,23 +501,31 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
     return true;
   } else if (event.permission_request) {
     const req = event.permission_request;
-    session.pending_permissions.push({
-      req_id: req.req_id,
-      session_id: req.session_id,
-      tool_name: req.tool_name,
-      tool_args: req.tool_args ?? "",
-      tool_level: req.tool_level ?? "safe",
-      reason: req.reason ?? "",
-    });
+    session.pending_permissions = [
+      ...session.pending_permissions.filter(
+        (item) => item.req_id !== req.req_id,
+      ),
+      {
+        req_id: req.req_id,
+        session_id: req.session_id,
+        tool_name: req.tool_name,
+        tool_args: req.tool_args ?? "",
+        tool_level: req.tool_level ?? "safe",
+        reason: req.reason ?? "",
+      },
+    ];
     showNotification(`${req.tool_name} needs approval`, "warning");
     return true;
   } else if (event.ask_user_question) {
     const req = event.ask_user_question;
-    session.pending_ask_users.push({
-      req_id: req.req_id,
-      session_id: req.session_id,
-      questions: req.questions,
-    });
+    session.pending_ask_users = [
+      ...session.pending_ask_users.filter((item) => item.req_id !== req.req_id),
+      {
+        req_id: req.req_id,
+        session_id: req.session_id,
+        questions: req.questions,
+      },
+    ];
     showNotification("Agent has a question for you", "info");
     sendDesktopNotification("Yomi", "Agent has a question for you", session.id);
     return true;
@@ -527,9 +535,8 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
       (p) => p.req_id === req_id,
     );
     if (idx >= 0) {
-      session.pending_permissions = session.pending_permissions.toSpliced(
-        idx,
-        1,
+      session.pending_permissions = session.pending_permissions.filter(
+        (item) => item.req_id !== req_id,
       );
     }
     return true;
@@ -537,7 +544,9 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
     const req_id = event.ask_user_ack.req_id;
     const idx = session.pending_ask_users.findIndex((a) => a.req_id === req_id);
     if (idx >= 0) {
-      session.pending_ask_users = session.pending_ask_users.toSpliced(idx, 1);
+      session.pending_ask_users = session.pending_ask_users.filter(
+        (item) => item.req_id !== req_id,
+      );
     }
     return true;
   } else if (event.message_replaced !== undefined) {

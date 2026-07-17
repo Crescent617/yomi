@@ -506,7 +506,7 @@
   {:else if files.length > 0}
     <div class="flex h-10 shrink-0 border-b border-border/70 bg-card/40">
       <div
-        class="scrollbar-none flex min-w-0 flex-1 overflow-x-auto"
+        class="scrollbar-hidden flex min-w-0 flex-1 overflow-x-auto"
         bind:this={fileTabsElement}
         role="tablist"
         aria-label="Changed files"

@@ -7,8 +7,8 @@ use tracing::Instrument;
 use crate::agent::AgentShared;
 use crate::agent::{Agent, AgentConfig, AgentInput, AgentSpawnArgs, AgentState};
 use crate::comms::{EventBus, InputBus, InputBusSubscriber, Mailbox};
-use crate::event::{AgentEvent, Event, InternalEvent};
-use crate::notification::{Notification, NotificationBus};
+use crate::event::{AgentEvent, AgentStatus, Event, InternalEvent};
+use crate::notification::{AgentActivity, Notification, NotificationBus};
 use crate::types::SessionId;
 
 /// 唯一管理 Agent 生命周期的地方。
@@ -94,6 +94,16 @@ impl Conductor {
                     });
                 }
                 Some((sid, envelope)) = subscriber.recv() => {
+                    let event_id = envelope.event_id.to_string();
+                    if let Event::Agent(event) = &envelope.event {
+                        if let Some(activity) = pet_activity(event) {
+                            let _ = self.notification_bus.send(Notification::AgentActivity {
+                                session_id: sid.clone(),
+                                event_id,
+                                activity,
+                            });
+                        }
+                    }
                     match envelope.event {
                         Event::Agent(AgentEvent::StateChanged { state }) => {
                             if let Some(agent) = self.active.get(&sid) {
@@ -106,14 +116,20 @@ impl Conductor {
                         }
                         Event::Internal(InternalEvent::MessageAdded { message }) => {
                             if let Some(ref store) = self.agent_shared.message_store {
-                                if let Err(e) = store.append(&sid.0, &[(*message).clone()]).await {
-                                    tracing::warn!("Failed to persist message for session={sid}: {e}");
+                                if message.role != crate::types::Role::System {
+                                    if let Err(e) = store.append(&sid.0, &[(*message).clone()]).await {
+                                        tracing::warn!("Failed to persist message for session={sid}: {e}");
+                                    }
                                 }
                             }
                         }
                         Event::Internal(InternalEvent::MessageReplaced { messages }) => {
                             if let Some(ref store) = self.agent_shared.message_store {
-                                let to_persist: Vec<crate::types::Message> = messages.iter().map(|m| (**m).clone()).collect();
+                                let to_persist: Vec<crate::types::Message> = messages
+                                    .iter()
+                                    .map(|m| (**m).clone())
+                                    .filter(|m| m.role != crate::types::Role::System)
+                                    .collect();
                                 if let Err(e) = store.replace(&sid.0, &to_persist).await {
                                     tracing::warn!("Failed to replace messages for session={sid}: {e}");
                                 }
@@ -442,3 +458,38 @@ impl Conductor {
         Ok(Arc::new(file_state_store))
     }
 }
+
+fn pet_activity(event: &AgentEvent) -> Option<AgentActivity> {
+    match event {
+        AgentEvent::PermissionRequest {
+            req_id, session_id, ..
+        } => Some(AgentActivity::PermissionRequested {
+            req_id: req_id.clone(),
+            target_session_id: session_id.clone(),
+        }),
+        AgentEvent::AskUserQuestion {
+            req_id, session_id, ..
+        } => Some(AgentActivity::AskUserRequested {
+            req_id: req_id.clone(),
+            target_session_id: session_id.clone(),
+        }),
+        AgentEvent::PermissionAck { req_id } | AgentEvent::AskUserAck { req_id } => {
+            Some(AgentActivity::RequestResolved {
+                req_id: req_id.clone(),
+            })
+        }
+        AgentEvent::Lifecycle {
+            state: AgentStatus::Running,
+        } => Some(AgentActivity::Started),
+        AgentEvent::Lifecycle {
+            state: AgentStatus::Stopped { reason },
+        } => Some(AgentActivity::Stopped {
+            reason: reason.clone(),
+        }),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+#[path = "conductor_test.rs"]
+mod tests;

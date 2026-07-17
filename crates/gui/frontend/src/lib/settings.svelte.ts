@@ -29,6 +29,9 @@ export interface GuiPreferences {
   notifications: {
     enabled: boolean;
   };
+  desktop_pet: {
+    enabled: boolean;
+  };
   chat: {
     homeModel: string | null;
     autoScroll: boolean;
@@ -58,6 +61,9 @@ export const defaultGuiPreferences: GuiPreferences = {
   notifications: {
     enabled: true,
   },
+  desktop_pet: {
+    enabled: false,
+  },
   chat: {
     homeModel: null,
     autoScroll: true,
@@ -80,6 +86,7 @@ function cloneGuiPreferences(value: GuiPreferences): GuiPreferences {
     appearance: { ...value.appearance },
     layout: { ...value.layout },
     notifications: { ...value.notifications },
+    desktop_pet: { ...value.desktop_pet },
     chat: { ...value.chat },
   };
 }
@@ -133,6 +140,11 @@ function normalizeGuiPreferences(
         value?.notifications?.enabled ??
         defaultGuiPreferences.notifications.enabled,
     },
+    desktop_pet: {
+      enabled:
+        value?.desktop_pet?.enabled ??
+        defaultGuiPreferences.desktop_pet.enabled,
+    },
     chat: {
       homeModel: value?.chat?.homeModel ?? defaultGuiPreferences.chat.homeModel,
       autoScroll:
@@ -152,6 +164,7 @@ function assignGuiPreferences(value: GuiPreferences): void {
   Object.assign(guiPreferences.appearance, value.appearance);
   Object.assign(guiPreferences.layout, value.layout);
   Object.assign(guiPreferences.notifications, value.notifications);
+  Object.assign(guiPreferences.desktop_pet, value.desktop_pet);
   Object.assign(guiPreferences.chat, value.chat);
 }
 
@@ -182,6 +195,9 @@ async function loadLegacyPreferences(s: Store): Promise<GuiPreferences> {
       enabled:
         legacySettings.notificationsEnabled ??
         defaultGuiPreferences.notifications.enabled,
+    },
+    desktop_pet: {
+      enabled: defaultGuiPreferences.desktop_pet.enabled,
     },
     chat: {
       homeModel: legacyHomeModel,

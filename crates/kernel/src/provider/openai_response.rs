@@ -201,6 +201,8 @@ impl Provider for OpenAIResponseProvider {
             config.temperature
         };
 
+        // Calls from Agent/Compactor resolve this before entering the provider.
+        // The provider itself only serializes the supplied config.
         let request_body = ResponsesRequest {
             model: config.model_id.clone(),
             input: Self::convert_messages(messages),
@@ -373,13 +375,53 @@ impl ResponseAssembler {
         if data == "[DONE]" {
             return Err(Self::unexpected_end("[DONE]"));
         }
+        if let Some(error) = Self::parse_wrapped_stream_error(data) {
+            return Err(error);
+        }
         self.process(data)
+    }
+
+    fn parse_wrapped_stream_error(data: &str) -> Option<ProviderError> {
+        let payload: Value = serde_json::from_str(data).ok()?;
+        let event_type = payload.get("type").and_then(Value::as_str);
+        if event_type
+            .is_some_and(|event_type| !matches!(event_type, "error" | "invalid_request_error"))
+        {
+            return None;
+        }
+
+        let outer_message = payload.get("message").and_then(Value::as_str)?;
+        let inner = outer_message
+            .find('{')
+            .and_then(|start| serde_json::from_str::<Value>(&outer_message[start..]).ok());
+        let code = inner
+            .as_ref()
+            .and_then(|value| value.get("code"))
+            .and_then(Value::as_str)
+            .or_else(|| payload.get("code").and_then(Value::as_str))
+            .map(str::to_string);
+        let message = inner
+            .as_ref()
+            .and_then(|value| value.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or(outer_message)
+            .to_string();
+        if code.is_none() && !ProviderError::Parse(message.clone()).is_context_overflow() {
+            return None;
+        }
+        let retryable = Self::is_transient_error_code(code.as_deref());
+        Some(ProviderError::Api {
+            code,
+            message,
+            retryable,
+        })
     }
 
     /// Process one SSE event's data payload.
     fn process(&mut self, data: &str) -> std::result::Result<Vec<ModelStreamItem>, ProviderError> {
-        let event: ResponsesStreamEvent = serde_json::from_str(data)
-            .map_err(|e| ProviderError::Parse(format!("invalid Responses SSE JSON: {e}")))?;
+        let event: ResponsesStreamEvent = serde_json::from_str(data).map_err(|e| {
+            ProviderError::Parse(format!("invalid Responses SSE JSON: {e}. raw: {data}"))
+        })?;
 
         let mut items = Vec::new();
 

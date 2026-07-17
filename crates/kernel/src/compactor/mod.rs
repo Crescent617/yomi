@@ -4,7 +4,10 @@
 //! 1. Micro-compaction: Clear old tool result content (fast, no API call)
 //! 2. Full summarization: Use API to generate conversation summary
 
-use crate::provider::{ModelConfig, ModelStreamItem, Provider};
+use crate::provider::{
+    estimate_request_input_tokens, ModelConfig, ModelStreamItem, Provider,
+    CONTEXT_SAFETY_BUFFER_TOKENS,
+};
 use crate::types::{ContentBlock, FinishReason, Message, Role};
 use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
@@ -12,15 +15,24 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 /// Default threshold ratio to trigger compaction (80% of context window)
-pub const DEFAULT_THRESHOLD_RATIO: f32 = 0.8;
+pub const DEFAULT_THRESHOLD_RATIO: f32 = 0.9;
+
+/// Hard upper bound for the message-token threshold. Either this cap or the
+/// user-configured ratio can trigger compaction; the earlier threshold wins.
+pub const DEFAULT_THRESHOLD_TOKENS: u32 = 110_000;
 /// Default context window size
 pub const DEFAULT_CONTEXT_WINDOW: u32 = 131_072; // 128k
-/// Number of recent messages to keep during full compaction
 const KEEP_RECENT_MESSAGES: usize = 0;
 /// Number of recent messages whose tool results survive micro-compaction
 const KEEP_RECENT_TOOL_RESULTS: usize = 5;
 /// Max tokens for summary generation
 const SUMMARY_MAX_TOKENS: u32 = 8192; // 8k tokens for summary
+/// Minimum useful summary output reserved before compaction is triggered.
+const MIN_SUMMARY_OUTPUT_TOKENS: u32 = 2_048;
+/// Maximum retries after a provider reports that the summary input is too large.
+const MAX_CONTEXT_OVERFLOW_RETRIES: usize = 3;
+/// Fraction of the oldest conversation rounds removed for each overflow retry.
+const CONTEXT_OVERFLOW_TRIM_PERCENT: usize = 20;
 
 /// Compaction result containing compacted messages and token usage
 #[derive(Debug, Clone)]
@@ -46,65 +58,82 @@ const SUMMARY_PROMPT: &str = include_str!("summary_prompt.txt");
 pub enum CompactionError {
     #[error("Compaction was cancelled")]
     Cancelled,
+    #[error("Context overflow: {0}")]
+    ContextOverflow(String),
     #[error("API error: {0}")]
     Api(String),
 }
 
+impl CompactionError {
+    fn is_context_overflow(&self) -> bool {
+        matches!(self, Self::ContextOverflow(_))
+    }
+}
+
 impl From<crate::provider::ProviderError> for CompactionError {
-    fn from(e: crate::provider::ProviderError) -> Self {
-        CompactionError::Api(e.to_string())
+    fn from(error: crate::provider::ProviderError) -> Self {
+        if error.is_context_overflow() {
+            Self::ContextOverflow(error.to_string())
+        } else {
+            Self::Api(error.to_string())
+        }
     }
 }
 
-/// Helper to estimate tokens for Arc-wrapped messages
-fn estimate_tokens_for_arc_messages(messages: &[Arc<Message>]) -> u32 {
-    messages
-        .iter()
-        .map(|m| estimate_tokens_for_message(m))
-        .sum()
+fn clear_stale_token_usage(messages: &mut [Arc<Message>]) {
+    for message in messages {
+        if message.token_usage.is_some() {
+            Arc::make_mut(message).token_usage = None;
+        }
+    }
 }
 
-/// Estimate tokens for a single message
-fn estimate_tokens_for_message(msg: &Message) -> u32 {
-    // Simple estimation: ~4 characters per token
-    let content_len: usize = msg
-        .content
-        .iter()
-        .map(|c| match c {
-            crate::types::ContentBlock::Text { text } => text.len(),
-            _ => 0,
-        })
-        .sum();
-    // Use saturating arithmetic to prevent overflow
-    content_len
-        .saturating_div(4)
-        .saturating_add(10)
-        .min(u32::MAX as usize) as u32
-}
-
-/// Estimate total tokens for messages and set usage on the last message.
-/// This allows `calculate_tokens` to use this as a baseline for future calculations.
-fn set_token_usage_on_last(messages: &mut [Arc<Message>]) {
-    if messages.is_empty() {
-        return;
+fn trim_oldest_context_rounds(messages: &[Arc<Message>]) -> Option<Vec<Arc<Message>>> {
+    let mut system = Vec::new();
+    let mut rounds: Vec<Vec<Arc<Message>>> = Vec::new();
+    for message in messages {
+        if message.role == Role::System {
+            system.push(Arc::clone(message));
+        } else if message.role == Role::User || rounds.is_empty() {
+            rounds.push(vec![Arc::clone(message)]);
+        } else {
+            rounds
+                .last_mut()
+                .expect("round exists")
+                .push(Arc::clone(message));
+        }
     }
 
-    let total_tokens = estimate_tokens_for_arc_messages(messages);
-
-    // Get the last message and set its token_usage
-    if let Some(last) = messages.last_mut() {
-        Arc::make_mut(last).token_usage = Some(crate::types::MessageTokenUsage {
-            prompt_tokens: total_tokens,
-            completion_tokens: 0,
-            total_tokens,
-        });
+    if rounds.len() <= 1 {
+        return None;
     }
+    let drop_count = (rounds.len() * CONTEXT_OVERFLOW_TRIM_PERCENT / 100).max(1);
+    let keep_from = drop_count.min(rounds.len() - 1);
+    let mut trimmed = system;
+    trimmed.extend(rounds.into_iter().skip(keep_from).flatten());
+    clear_stale_token_usage(&mut trimmed);
+
+    let first_non_system = trimmed.iter().find(|message| message.role != Role::System);
+    if first_non_system.is_some_and(|message| message.role != Role::User) {
+        trimmed.insert(
+            trimmed
+                .iter()
+                .position(|message| message.role != Role::System)
+                .unwrap_or(trimmed.len()),
+            Arc::new(Message::user(
+                "[Earlier conversation was truncated for compaction retry.]",
+            )),
+        );
+    }
+    Some(trimmed)
 }
 
 /// Compactor for managing conversation context
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Compactor {
+    /// Whether client-side micro-compaction is enabled
+    pub micro_compact_enabled: bool,
     /// Ratio (0.0–1.0) of the context window at which compaction is triggered
     pub threshold_ratio: f32,
     /// Number of recent messages to preserve during full compaction
@@ -118,6 +147,7 @@ pub struct Compactor {
 impl Default for Compactor {
     fn default() -> Self {
         Self {
+            micro_compact_enabled: false,
             threshold_ratio: DEFAULT_THRESHOLD_RATIO,
             keep_recent_messages: KEEP_RECENT_MESSAGES,
             keep_recent_tool_results: KEEP_RECENT_TOOL_RESULTS,
@@ -135,6 +165,7 @@ impl Compactor {
         summary_max_tokens: u32,
     ) -> Self {
         Self {
+            micro_compact_enabled: false,
             threshold_ratio,
             keep_recent_messages,
             keep_recent_tool_results,
@@ -142,45 +173,51 @@ impl Compactor {
         }
     }
 
-    /// Compute the absolute token threshold from the ratio and context window.
+    /// The reserve-based threshold is applied only when the context window can
+    /// actually fit that reserve; smaller windows retain the ratio/hard-cap
+    /// policy and let request budgeting report insufficient context explicitly.
     #[allow(clippy::cast_precision_loss)]
     pub fn threshold(&self, context_window: u32) -> u32 {
-        (context_window as f32 * self.threshold_ratio) as u32
-    }
-
-    /// Calculate total tokens from message history
-    /// Uses actual token usage from API responses when available
-    pub fn calculate_tokens(messages: &[Arc<Message>]) -> u32 {
-        let mut total = 0u32;
-        let mut last_usage_idx: Option<usize> = None;
-
-        // Walk backwards to find the last message with token usage
-        for (i, msg) in messages.iter().enumerate().rev() {
-            if msg.token_usage.is_some() {
-                last_usage_idx = Some(i);
-                break;
-            }
-        }
-
-        if let Some(idx) = last_usage_idx {
-            // Use the actual token usage from the last API response
-            if let Some(usage) = messages[idx].token_usage {
-                total += usage.total_tokens;
-                // Add rough estimation for messages after the last tracked usage
-                total += estimate_tokens_for_arc_messages(&messages[idx + 1..]);
-            }
+        let ratio_threshold = (context_window as f32 * self.threshold_ratio) as u32;
+        let summary_reserve = CONTEXT_SAFETY_BUFFER_TOKENS
+            .saturating_add(crate::utils::tokens::estimate_tokens(SUMMARY_PROMPT) as u32)
+            .saturating_add(MIN_SUMMARY_OUTPUT_TOKENS.min(self.summary_max_tokens));
+        let base_threshold = ratio_threshold.min(DEFAULT_THRESHOLD_TOKENS);
+        let summary_threshold = context_window.saturating_sub(summary_reserve);
+        if summary_threshold == 0 {
+            base_threshold
         } else {
-            // No tracked usage, estimate all messages
-            total += estimate_tokens_for_arc_messages(messages);
+            base_threshold.min(summary_threshold)
         }
-
-        total
     }
 
-    /// Check if compaction should be triggered
-    pub fn should_compact(&self, messages: &[Arc<Message>], context_window: u32) -> bool {
-        let tokens = Self::calculate_tokens(messages);
-        tokens >= self.threshold(context_window)
+    /// Calculate total tokens from message history and, when no real assistant
+    /// usage exists, the tool definitions that will be sent with the request.
+    /// Actual API usage already includes tools and assistant completion, so never
+    /// add either again when a validated baseline is available.
+    pub fn calculate_tokens(
+        messages: &[Arc<Message>],
+        tools: &[Arc<crate::types::ToolDefinition>],
+        model_config: &ModelConfig,
+    ) -> u32 {
+        estimate_request_input_tokens(messages, tools, model_config)
+    }
+
+    /// Check whether compaction is needed using the exact provider-facing view.
+    ///
+    /// Internal metadata and incomplete tool groups are removed before token
+    /// estimation, so callers do not need to duplicate request sanitization.
+    /// The threshold is the earliest of the configured ratio, hard token cap,
+    /// and the reserve required for a usable summary request.
+    pub fn should_compact(
+        &self,
+        messages: &[Arc<Message>],
+        tools: &[Arc<crate::types::ToolDefinition>],
+        model_config: &ModelConfig,
+    ) -> bool {
+        let provider_messages = crate::agent::MessageBuffer::sanitized_model_messages(messages);
+        Self::calculate_tokens(&provider_messages, tools, model_config)
+            >= self.threshold(model_config.context_window)
     }
 
     /// Try micro-compaction: clear old tool results
@@ -220,8 +257,7 @@ impl Compactor {
         }
 
         if modified {
-            // Estimate total tokens and set on the last message for accurate future calculations
-            set_token_usage_on_last(&mut result);
+            clear_stale_token_usage(&mut result);
             Some(result)
         } else {
             None
@@ -238,47 +274,85 @@ impl Compactor {
     pub async fn full_compact(
         &self,
         messages: &[Arc<Message>],
+        tools: &[Arc<crate::types::ToolDefinition>],
         provider: Arc<dyn Provider>,
         model_config: &ModelConfig,
         cancel_token: Option<CancellationToken>,
     ) -> Result<CompactionResult, CompactionError> {
-        // Separate system messages from the rest
-        let (_system_msgs, non_system): (Vec<_>, Vec<_>) = messages
+        // System messages stay in the summary request for prompt-cache sharing,
+        // but are not returned because Agent::apply_compacted_messages preserves
+        // the original system prompt separately.
+        let non_system: Vec<_> = messages
             .iter()
+            .filter(|message| !matches!(message.role, Role::System | Role::Internal))
             .cloned()
-            .partition(|m| m.role == Role::System);
+            .collect();
 
         if non_system.len() <= self.keep_recent_messages {
-            // Not enough non-system messages to compact, keep everything as-is
-            // Note: We still filter out system messages here
             return Ok(CompactionResult::new(
                 non_system,
                 crate::provider::TokenUsage::default(),
             ));
         }
 
-        let split_point = non_system.len() - self.keep_recent_messages;
-        let to_summarize = &non_system[..split_point];
-        let recent: Vec<Arc<Message>> = non_system[split_point..].to_vec();
+        // Preserve complete assistant/tool batches in the recent suffix.
+        let mut recent_start = non_system.len() - self.keep_recent_messages;
+        if recent_start < non_system.len() && non_system[recent_start].role == Role::Tool {
+            while recent_start > 0 && non_system[recent_start].role == Role::Tool {
+                recent_start -= 1;
+            }
+            if non_system[recent_start].role != Role::Assistant {
+                while recent_start < non_system.len() && non_system[recent_start].role == Role::Tool
+                {
+                    recent_start += 1;
+                }
+            }
+        }
+        let recent = non_system[recent_start..].to_vec();
 
-        // Generate summary using API
-        let (summary_text, token_usage) = generate_summary(
-            to_summarize,
-            provider,
-            model_config,
-            self.summary_max_tokens,
-            cancel_token,
-        )
-        .await?;
+        let mut summary_input = crate::agent::MessageBuffer::sanitized_model_messages(messages);
+        let mut overflow_retries = 0;
+        let (summary_text, token_usage) = loop {
+            match generate_summary(
+                &summary_input,
+                tools,
+                Arc::clone(&provider),
+                model_config,
+                self.summary_max_tokens,
+                cancel_token.clone(),
+            )
+            .await
+            {
+                Ok(result) => break result,
+                Err(error) if error.is_context_overflow() => {
+                    if overflow_retries >= MAX_CONTEXT_OVERFLOW_RETRIES {
+                        return Err(error);
+                    }
+                    let Some(trimmed) = trim_oldest_context_rounds(&summary_input) else {
+                        return Err(error);
+                    };
+                    overflow_retries += 1;
+                    tracing::warn!(
+                        retry = overflow_retries,
+                        previous_messages = summary_input.len(),
+                        remaining_messages = trimmed.len(),
+                        "summary input exceeded context window; trimming oldest context and retrying"
+                    );
+                    summary_input = trimmed;
+                }
+                Err(error) => return Err(error),
+            }
+        };
 
-        // Create summary message as user role so it survives session restore
-        let summary = Message::user(summary_text);
+        // Store a continuation instruction with the durable summary so the next
+        // normal turn resumes the unfinished task instead of acknowledging the
+        // compaction event.
+        let summary = Message::user(build_continuation_summary(&summary_text));
         // Reconstruct: summary + recent (system_msgs NOT included)
         let mut result: Vec<Arc<Message>> =
             std::iter::once(Arc::new(summary)).chain(recent).collect();
+        clear_stale_token_usage(&mut result);
 
-        // Estimate total tokens and set on the last message for accurate future calculations
-        set_token_usage_on_last(&mut result);
         Ok(CompactionResult::new(result, token_usage))
     }
 
@@ -289,39 +363,52 @@ impl Compactor {
     pub async fn auto_compact(
         &self,
         messages: &[Arc<Message>],
+        tools: &[Arc<crate::types::ToolDefinition>],
         provider: Arc<dyn Provider>,
         model_config: &ModelConfig,
         cancel_token: Option<CancellationToken>,
     ) -> Result<Option<CompactionResult>, CompactionError> {
-        if !self.should_compact(messages, model_config.context_window) {
+        if !self.should_compact(messages, tools, model_config) {
             return Ok(None);
         }
 
-        // Try micro-compaction first
-        if let Some(after_micro) = self.micro_compact(messages) {
-            // Check if micro-compaction was sufficient
-            if !self.should_compact(&after_micro, model_config.context_window) {
-                return Ok(Some(CompactionResult::new(
-                    after_micro,
-                    crate::provider::TokenUsage::default(),
-                )));
+        // Client-side micro-compaction rewrites old tool results and therefore
+        // breaks the stable message prefix needed for prompt-cache sharing.
+        if self.micro_compact_enabled {
+            // Try micro-compaction first
+            if let Some(after_micro) = self.micro_compact(messages) {
+                // Check if micro-compaction was sufficient
+                if !self.should_compact(&after_micro, tools, model_config) {
+                    return Ok(Some(CompactionResult::new(
+                        after_micro,
+                        crate::provider::TokenUsage::default(),
+                    )));
+                }
+                // Need full compaction on top of micro results
+                return self
+                    .full_compact(
+                        &after_micro,
+                        tools,
+                        Arc::clone(&provider),
+                        model_config,
+                        cancel_token,
+                    )
+                    .await
+                    .map(Some);
             }
-            // Need full compaction on top of micro results
-            return self
-                .full_compact(
-                    &after_micro,
-                    Arc::clone(&provider),
-                    model_config,
-                    cancel_token,
-                )
-                .await
-                .map(Some);
         }
 
-        // No micro-compaction possible, do full compaction directly
-        self.full_compact(messages, Arc::clone(&provider), model_config, cancel_token)
-            .await
-            .map(Some)
+        // Cache-first path: summarize the unmodified history so the request
+        // can reuse the normal agent prompt prefix.
+        self.full_compact(
+            messages,
+            tools,
+            Arc::clone(&provider),
+            model_config,
+            cancel_token,
+        )
+        .await
+        .map(Some)
     }
 }
 
@@ -330,6 +417,7 @@ impl Compactor {
 #[allow(clippy::semicolon_if_nothing_returned)]
 async fn generate_summary(
     messages: &[Arc<Message>],
+    tools: &[Arc<crate::types::ToolDefinition>],
     provider: Arc<dyn Provider>,
     model_config: &ModelConfig,
     summary_max_tokens: u32,
@@ -337,30 +425,33 @@ async fn generate_summary(
 ) -> Result<(String, crate::provider::TokenUsage), CompactionError> {
     use crate::agent::MessageBuffer;
 
-    let mut msg_buf = MessageBuffer::from_arc_messages(messages);
-    msg_buf.sanitize();
-    let messages = msg_buf.messages();
+    let messages = MessageBuffer::sanitized_model_messages(messages);
 
-    // Build messages for summary generation
-    let mut summary_messages: Vec<Arc<Message>> = vec![Arc::new(Message::system(SUMMARY_PROMPT))];
-    summary_messages.extend(messages.iter().cloned());
-    summary_messages.push(Arc::new(Message::user(
-        "Please provide a comprehensive summary of our conversation above.",
-    )));
+    // Reuse the normal conversation system prompt and history so the compactor
+    // request can share the provider's prompt cache prefix. Compact-specific
+    // instructions are appended as the final user message.
+    let mut summary_messages = messages;
+    summary_messages.push(Arc::new(Message::user(SUMMARY_PROMPT)));
 
-    // Create a config with limited max_tokens for summary
-    let summary_config = ModelConfig {
-        max_tokens: Some(summary_max_tokens),
-        ..model_config.clone()
-    };
+    let summary_config = crate::provider::resolve_request_config(
+        &summary_messages,
+        tools,
+        &ModelConfig {
+            max_tokens: Some(summary_max_tokens),
+            thinking: crate::provider::ThinkingConfig::default(),
+            ..model_config.clone()
+        },
+    )
+    .map_err(CompactionError::from)?;
 
     // Spawn provider request in a separate task to allow cancellation
     let summary_messages_clone = summary_messages;
+    let tools_clone = tools.to_vec();
     let summary_config_clone = summary_config;
     let provider_clone = Arc::clone(&provider);
     let stream_task = tokio::spawn(async move {
         provider_clone
-            .stream(&summary_messages_clone, &[], &summary_config_clone)
+            .stream(&summary_messages_clone, &tools_clone, &summary_config_clone)
             .await
     });
     let abort_handle = stream_task.abort_handle();
@@ -423,6 +514,11 @@ async fn generate_summary(
             } => {
                 finish_reason = reason;
             }
+            ModelStreamItem::ToolCall(_) | ModelStreamItem::ToolCallDelta { .. } => {
+                return Err(CompactionError::Api(
+                    "Summary generation attempted to call a tool".to_string(),
+                ));
+            }
             ModelStreamItem::Complete => break,
             _ => {}
         }
@@ -437,7 +533,53 @@ async fn generate_summary(
             "Summary generation returned an empty summary".to_string(),
         ));
     }
+    let summary = parse_summary_xml(&summary)?;
     Ok((summary, token_usage))
+}
+
+/// Build the user-facing continuation message stored after compaction.
+fn build_continuation_summary(summary: &str) -> String {
+    format!(
+        "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\n{summary}\n\nContinue the conversation from where it left off without asking the user to repeat information already included here. Resume the latest unfinished task directly. Do not acknowledge this summary, do not recap the conversation, and do not preface the response with phrases such as \"I'll continue\"."
+    )
+}
+
+/// Extract the durable summary from the model's XML response and discard the
+/// private drafting block. When the model omits the optional XML wrappers, keep
+/// the text rather than losing a potentially useful summary.
+fn parse_summary_xml(raw: &str) -> Result<String, CompactionError> {
+    if let Some(summary_start) = raw.find("<summary>") {
+        let content_start = summary_start + "<summary>".len();
+        let end = raw[content_start..]
+            .find("</summary>")
+            .map(|offset| content_start + offset)
+            .ok_or_else(|| {
+                CompactionError::Api(
+                    "Summary generation returned an unclosed <summary> block".to_string(),
+                )
+            })?;
+        let summary = raw[content_start..end].trim();
+        if summary.is_empty() {
+            return Err(CompactionError::Api(
+                "Summary generation returned an empty <summary> block".to_string(),
+            ));
+        }
+        return Ok(format!("Summary:\n{summary}"));
+    }
+
+    if raw.contains("<analysis>") || raw.contains("</analysis>") || raw.contains("</summary>") {
+        return Err(CompactionError::Api(
+            "Summary generation returned malformed XML".to_string(),
+        ));
+    }
+
+    let summary = raw.trim();
+    if summary.is_empty() {
+        return Err(CompactionError::Api(
+            "Summary generation returned an empty summary".to_string(),
+        ));
+    }
+    Ok(summary.to_string())
 }
 
 #[cfg(test)]

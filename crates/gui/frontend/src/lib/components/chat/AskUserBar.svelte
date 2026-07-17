@@ -93,9 +93,7 @@
     const requestId = askUser.req_id;
     try {
       await api.respondAskUser(sessionId, requestId, buildAnswers());
-      activeSession.pending_ask_users = activeSession.pending_ask_users.filter(
-        (item) => item.req_id !== requestId,
-      );
+      // Keep the request visible until AskUserAck confirms the agent received it.
     } catch (e: unknown) {
       showNotification("Response failed: " + api.errorMessage(e), "error");
       submitting = false;

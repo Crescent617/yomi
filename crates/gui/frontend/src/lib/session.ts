@@ -66,6 +66,7 @@ export function sendDesktopNotification(
   body: string,
   session_id?: string,
 ) {
+  if (typeof window === "undefined") return;
   try {
     if (session_id && typeof Notification !== "undefined") {
       try {

@@ -142,7 +142,9 @@ async fn generate(
         Arc::new(Message::system(PROMPT)),
         Arc::new(Message::user(input)),
     ];
-    let config = title_model_config(model_config);
+    let config =
+        crate::provider::resolve_request_config(&messages, &[], &title_model_config(model_config))
+            .map_err(|error| KernelError::Agent(crate::agent::AgentError::Provider(error)))?;
     let mut stream = provider
         .stream(&messages, &[], &config)
         .await

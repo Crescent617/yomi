@@ -41,6 +41,7 @@ max_iterations = 100
 enable_subagent = true
 
 [agent.compactor]
+micro_compact_enabled = false
 threshold_ratio = 0.8
 
 [env]
@@ -122,6 +123,7 @@ effort = "medium"  # low | medium | high
 
 | 字段 | 类型 | 说明 | 默认值 |
 |---|---|---|---|
+| `micro_compact_enabled` | boolean | 是否在全量压缩前尝试微压缩；启用后会改写旧工具结果，影响 prompt cache | `false` |
 | `threshold_ratio` | float | 触发压缩的上下文比例 (0.0–1.0) | `0.8` |
 | `keep_recent_messages` | integer | 全量压缩时保留的最近消息数 | `0` |
 | `keep_recent_tool_results` | integer | 微压缩时保留的最近工具结果数 | `5` |

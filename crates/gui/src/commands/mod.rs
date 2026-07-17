@@ -2,6 +2,7 @@ pub mod automation;
 pub mod chat;
 pub mod checkpoint;
 pub mod debug;
+pub mod pet;
 pub mod project;
 pub mod session;
 pub mod skill;

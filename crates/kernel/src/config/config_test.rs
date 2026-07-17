@@ -274,3 +274,48 @@ fn test_config_model_accessor() {
     assert_eq!(config.model().unwrap().provider, config.models[0].provider);
     assert_eq!(config.model().unwrap().model_id, config.models[0].model_id);
 }
+
+#[test]
+fn compactor_micro_compaction_config_defaults_to_disabled() {
+    let default_config = Config::default();
+    assert!(!default_config.agent.compactor.micro_compact_enabled);
+
+    let parsed: Config = toml::from_str(
+        "
+[agent.compactor]
+micro_compact_enabled = true
+",
+    )
+    .unwrap();
+    assert!(parsed.agent.compactor.micro_compact_enabled);
+}
+
+#[test]
+fn validate_rejects_invalid_compactor_settings() {
+    let mut config = Config::default();
+    config.agent.compactor.threshold_ratio = 0.0;
+    assert!(config.validate().is_err());
+
+    config.agent.compactor.threshold_ratio = f32::NAN;
+    assert!(config.validate().is_err());
+
+    config.agent.compactor.threshold_ratio = 0.9;
+    config.agent.compactor.summary_max_tokens = 0;
+    assert!(config.validate().is_err());
+}
+
+#[test]
+fn validate_rejects_zero_model_token_limits() {
+    let mut config = Config::default();
+    config.models[0].max_tokens = Some(0);
+    assert!(config.validate().is_err());
+
+    config.models[0].max_tokens = Some(1);
+    config.models[0].context_window = 0;
+    assert!(config.validate().is_err());
+}
+
+#[test]
+fn default_config_is_valid() {
+    assert!(Config::default().validate().is_ok());
+}

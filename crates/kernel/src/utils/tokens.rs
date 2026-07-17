@@ -4,21 +4,24 @@
 //! - 1 token ≈ 4 characters (for all text)
 //! - JSON is denser: 1 token ≈ 2 characters
 
-/// Estimate tokens from text length
-/// Rough approximation: 1 token ≈ 4 characters
+/// Estimate tokens from UTF-8 byte length, rounding up conservatively.
+/// Rough approximation: 1 token ≈ 4 bytes.
 ///
 /// # Examples
 /// ```
 /// use kernel::utils::tokens::estimate_tokens;
 ///
-/// assert_eq!(estimate_tokens("hello world"), 2);  // 11 / 4 = 2
-/// assert_eq!(estimate_tokens("你好世界"), 3);      // 12 / 4 = 3
+/// assert_eq!(estimate_tokens("hello world"), 3); // ceil(11 / 4)
+/// assert_eq!(estimate_tokens("你好世界"), 3);     // ceil(12 / 4)
 /// ```
 pub const fn estimate_tokens(text: &str) -> usize {
-    if text.is_empty() {
-        return 0;
-    }
-    text.len() / 4
+    text.len().div_ceil(4)
+}
+
+/// Estimate tokens for JSON content, rounding up conservatively.
+/// JSON is denser due to punctuation, so it uses approximately 2 bytes/token.
+pub const fn estimate_tokens_for_json(text: &str) -> usize {
+    text.len().div_ceil(2)
 }
 
 /// Estimate tokens as f64 for accurate accumulation
@@ -30,23 +33,14 @@ pub fn estimate_tokens_f64(text: &str) -> f64 {
     text.len() as f64 / 4.0
 }
 
-/// Estimate tokens for JSON content
-/// JSON is denser (more single-char tokens like `{`, `}`, `:`, `,`)
-/// Uses 2 chars/token instead of 4
-pub const fn estimate_tokens_for_json(text: &str) -> usize {
-    if text.is_empty() {
-        return 0;
-    }
-    text.len() / 2
-}
-
 /// Estimate tokens for a collection of messages (extracts text content only)
 ///
 /// Note: This only counts text content. Non-text content like images,
 /// tool calls, and thinking blocks are not included in the estimation.
 pub fn estimate_tokens_for_messages(messages: &[crate::types::Message]) -> u32 {
-    let total_chars: usize = messages.iter().map(|m| m.text_content().len()).sum();
-    total_chars as u32 / 4
+    messages.iter().fold(0u32, |total, message| {
+        total.saturating_add(estimate_tokens(&message.text_content()) as u32)
+    })
 }
 
 /// Format estimated token count with ~ prefix to indicate estimation

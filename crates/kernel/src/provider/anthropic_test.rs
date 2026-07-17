@@ -222,6 +222,7 @@ fn test_convert_tools() {
                 "cmd": {"type": "string"}
             }
         }),
+        estimated_tokens: 0,
     })];
 
     let converted = AnthropicProvider::convert_tools(&tools);
@@ -607,7 +608,7 @@ fn test_stream_state_token_usage_with_cache() {
     let mut state = AnthropicStreamState::new();
 
     // Simulate message_start with cache tokens
-    let event = r#"{"type":"message_start","message":{"id":"msg_456","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":50,"output_tokens":0,"cache_read_input_tokens":100}}}"#;
+    let event = r#"{"type":"message_start","message":{"id":"msg_456","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":50,"output_tokens":0,"cache_read_input_tokens":100,"cache_creation_input_tokens":25}}}"#;
     let items = state.process(event).unwrap();
     assert!(items.is_empty());
 
@@ -618,10 +619,10 @@ fn test_stream_state_token_usage_with_cache() {
     assert_eq!(items.len(), 1);
     match &items[0] {
         ModelStreamItem::TokenUsage(usage) => {
-            // prompt_tokens = input_tokens + cache_read_input_tokens = 50 + 100 = 150
+            // prompt_tokens includes uncached, cache-read, and cache-created input.
             assert_eq!(
-                usage.prompt_tokens, 150,
-                "prompt_tokens should be input_tokens + cache_read_input_tokens"
+                usage.prompt_tokens, 175,
+                "prompt_tokens should include all Anthropic input token classes"
             );
             assert_eq!(
                 usage.completion_tokens, 30,

@@ -9,6 +9,7 @@ fn counts_guards_per_session() {
     let first = tracker.start(session.clone(), BackgroundTaskKind::Shell);
     let second = tracker.start(session.clone(), BackgroundTaskKind::Shell);
     assert_eq!(tracker.count(&session, BackgroundTaskKind::Shell), 2);
+    assert_eq!(tracker.active_session_ids(), vec![session.clone()]);
     assert!(tracker.is_running(&session));
     assert!(!tracker.is_running(&other));
 
@@ -16,6 +17,7 @@ fn counts_guards_per_session() {
     assert!(tracker.is_running(&session));
     drop(second);
     assert!(!tracker.is_running(&session));
+    assert!(tracker.active_session_ids().is_empty());
     assert_eq!(tracker.count(&session, BackgroundTaskKind::Subagent), 0);
 }
 

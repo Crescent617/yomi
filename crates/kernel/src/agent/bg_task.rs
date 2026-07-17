@@ -66,6 +66,18 @@ impl BgTaskTracker {
             .map_or(0, |count| *count)
     }
 
+    pub fn active_session_ids(&self) -> Vec<SessionId> {
+        let mut session_ids: Vec<_> = self
+            .counts
+            .iter()
+            .filter(|entry| *entry.value() > 0)
+            .map(|entry| entry.key().0.clone())
+            .collect();
+        session_ids.sort_by(|left, right| left.0.cmp(&right.0));
+        session_ids.dedup();
+        session_ids
+    }
+
     pub fn shell_tasks(&self) -> Vec<BackgroundShellTask> {
         let mut tasks: Vec<_> = self
             .shell_tasks

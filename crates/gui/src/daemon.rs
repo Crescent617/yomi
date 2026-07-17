@@ -132,8 +132,6 @@ pub async fn spawn_daemon() -> Result<kernel::config::Config> {
     server.start(config.channels.clone()).await;
     let shutdown = CancellationToken::new();
 
-    let _signal_handle = kernel::utils::signal::spawn_signal_listener(shutdown.clone());
-
     // Write PID file
     let pid = std::process::id();
     tokio::fs::write(pid_file_path(), pid.to_string()).await?;

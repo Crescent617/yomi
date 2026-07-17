@@ -170,6 +170,7 @@ export interface RunningSessionInfo {
   title: string | null;
   project_id: string | null;
   phase: string;
+  background_task_count: number;
   background_shells: BackgroundShellTask[];
 }
 
@@ -264,6 +265,63 @@ export async function respondAskUser(
     req_id: req_id,
     answers,
   });
+}
+
+// ── Desktop pet API ───────────────────────────────────────────────────────
+
+export interface PetPermissionRequest {
+  kind: "permission";
+  req_id: string;
+  session_id: string;
+  title: string;
+}
+
+export interface PetAskUserRequest {
+  kind: "ask_user";
+  req_id: string;
+  session_id: string;
+  title: string;
+}
+
+export type PetRequest = PetPermissionRequest | PetAskUserRequest;
+export type PetNoticeKind =
+  | "completed"
+  | "cancelled"
+  | "failed"
+  | "max_iterations";
+
+export interface PetNotice {
+  event_id: string;
+  session_id: string;
+  title: string;
+  kind: PetNoticeKind;
+  message: string | null;
+}
+
+export type PetMood =
+  | "idle"
+  | "working"
+  | "happy"
+  | "curious"
+  | "alert"
+  | "worried"
+  | "sleepy";
+
+export interface PetSnapshot {
+  revision: number;
+  connection_status: "connected" | "disconnected";
+  running_count: number;
+  mood: PetMood;
+  request: PetRequest | null;
+  notice: PetNotice | null;
+}
+
+export async function getPetState(): Promise<PetSnapshot> {
+  return invokeCmd("get_pet_state");
+}
+
+export async function setPetEnabled(enabled: boolean): Promise<void> {
+  return invokeCmd("set_pet_enabled", { enabled });
 }
 
 export async function getCwd(): Promise<string> {
