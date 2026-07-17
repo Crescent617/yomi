@@ -5,7 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.24] - 2026-07-15
+## [0.5.27] - 2026-07-17
+
+### Added
+- 增加 compactor 的 `micro_compact_enabled` 配置，默认关闭。
+
+### Changed
+- 上下文超限时自动裁减最旧对话轮次并重试 full compact。
+- 完善 OpenAI Responses API 包装错误解析和上下文溢出恢复。
+- 新增 Pet 运行时、后台任务状态恢复和相关 GUI 交互。
+
+### Fixed
+- 修复 OpenAI Responses API 返回 `context_length_exceeded` 时被误判为 SSE JSON 解析错误的问题。
+
+
 
 ### Added
 - Session 菜单支持 `Create from`，复制 Project、Model Key 和 Approval Level 创建空白 Session。
