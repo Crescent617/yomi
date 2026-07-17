@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.28] - 2026-07-18
+
+### Changed
+- Compaction now triggers based on remaining context capacity, reserving 33k tokens by default for a 200k context window.
+- Shared request token estimation moved into `utils::tokens` and compaction threshold diagnostics were added.
+
+### Fixed
+- Avoided triggering compaction prematurely at a fixed 110k-token limit on larger context windows.
+
 ## [0.5.27] - 2026-07-17
 
 ### Added

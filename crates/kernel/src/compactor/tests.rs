@@ -662,6 +662,13 @@ async fn test_full_compact_uses_configured_summary_max_tokens() {
 }
 
 #[test]
+fn test_threshold_triggers_with_33k_remaining_for_200k_context() {
+    let compactor = Compactor::new(0.9, 0, 5, 8_192);
+
+    assert_eq!(compactor.threshold(200_000), 167_000);
+}
+
+#[test]
 fn test_threshold_reserves_summary_context() {
     let compactor = Compactor::new(0.9, 0, 5, 8_192);
     let threshold = compactor.threshold(32_768);

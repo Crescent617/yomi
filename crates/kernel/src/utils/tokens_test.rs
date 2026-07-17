@@ -85,3 +85,80 @@ fn test_estimate_tokens_whitespace() {
     assert_eq!(estimate_tokens("\n\n\n\n"), 1); // 4 newlines = 1 token
     assert_eq!(estimate_tokens("\t\t\t\t"), 1); // 4 tabs = 1 token
 }
+
+#[test]
+fn actual_usage_baseline_uses_latest_assistant_usage() {
+    let mut message = crate::types::Message::assistant("response");
+    message.token_usage = Some(crate::types::MessageTokenUsage {
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        total_tokens: 150,
+    });
+    let messages = vec![
+        std::sync::Arc::new(crate::types::Message::user("request")),
+        std::sync::Arc::new(message),
+        std::sync::Arc::new(crate::types::Message::user("next")),
+    ];
+
+    let estimated = estimate_request_input_tokens(&messages, &[]);
+    assert!(estimated > 150);
+    assert!(estimated < 200);
+}
+
+#[test]
+fn estimate_request_input_tokens_handles_non_text_content() {
+    let message = crate::types::Message::with_blocks(
+        crate::types::Role::User,
+        vec![crate::types::ContentBlock::ImageUrl {
+            image_url: crate::types::ImageUrl {
+                url: "https://example.com/image.png".into(),
+                detail: None,
+            },
+        }],
+    );
+
+    assert!(estimate_request_input_tokens(&[std::sync::Arc::new(message)], &[]) >= 4_096);
+}
+
+#[test]
+fn estimate_request_input_tokens_ignores_internal_messages() {
+    let mut internal = crate::types::Message::user("x".repeat(40_000));
+    internal.role = crate::types::Role::Internal;
+    let with_internal = vec![
+        std::sync::Arc::new(crate::types::Message::user("request")),
+        std::sync::Arc::new(internal),
+    ];
+    let without_internal = vec![std::sync::Arc::new(crate::types::Message::user("request"))];
+
+    assert_eq!(
+        estimate_request_input_tokens(&with_internal, &[]),
+        estimate_request_input_tokens(&without_internal, &[])
+    );
+}
+
+#[test]
+fn inline_image_estimate_scales_with_payload_size() {
+    let small = crate::types::Message::with_blocks(
+        crate::types::Role::User,
+        vec![crate::types::ContentBlock::ImageUrl {
+            image_url: crate::types::ImageUrl {
+                url: "data:image/png;base64,AAAA".into(),
+                detail: None,
+            },
+        }],
+    );
+    let large = crate::types::Message::with_blocks(
+        crate::types::Role::User,
+        vec![crate::types::ContentBlock::ImageUrl {
+            image_url: crate::types::ImageUrl {
+                url: format!("data:image/png;base64,{}", "A".repeat(40_000)),
+                detail: None,
+            },
+        }],
+    );
+
+    assert!(
+        estimate_request_input_tokens(&[std::sync::Arc::new(large)], &[])
+            > estimate_request_input_tokens(&[std::sync::Arc::new(small)], &[])
+    );
+}
