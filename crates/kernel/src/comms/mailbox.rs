@@ -9,7 +9,7 @@ use crate::types::ContentBlock;
 /// 与 Agent 1:1 绑定的双队列缓冲。
 /// steer 高优先级，在 Streaming 前批量消费；normal 普通消息，Idle 时逐条消费。
 pub struct Mailbox {
-    steer: Mutex<VecDeque<ContentBlock>>,
+    steer: Mutex<VecDeque<Vec<ContentBlock>>>,
     normal: Mutex<VecDeque<AgentInput>>,
     notify: Notify,
 }
@@ -38,15 +38,27 @@ impl Mailbox {
     }
 
     pub async fn push_steer(&self, content: Vec<ContentBlock>) {
-        self.steer.lock().await.extend(content);
+        self.steer.lock().await.push_back(content);
         self.notify.notify_one();
     }
 
-    /// 批量消费 steer，最多 `count` 条 ContentBlock（flat）
+    /// Consume up to `count` queued steer messages and separate each message with a blank line.
     pub async fn try_pull_steer(&self, count: usize) -> Vec<ContentBlock> {
         let mut q = self.steer.lock().await;
         let n = count.min(q.len());
-        q.drain(..n).collect()
+        let messages: Vec<_> = q.drain(..n).collect();
+        let mut merged = Vec::new();
+
+        for (index, message) in messages.into_iter().enumerate() {
+            if index > 0 {
+                merged.push(ContentBlock::Text {
+                    text: "\n\n".to_string(),
+                });
+            }
+            merged.extend(message);
+        }
+
+        merged
     }
 
     /// 批量消费 normal，最多 `count` 条 `AgentInput`

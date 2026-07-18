@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bot, ChevronDown, Mail, Terminal } from "lucide-svelte";
+  import { Bot, ChevronDown, Terminal, UserRound } from "lucide-svelte";
   import { activateSession } from "../../session";
   import { formatMessageTime } from "../../utils";
   import { parseSteerMessage } from "./steer-message";
@@ -37,24 +37,33 @@
 </script>
 
 <div
-  class="relative flex min-w-0 items-start gap-2 rounded-md bg-info/5 px-2.5 py-1.5"
+  class="relative flex min-w-0 items-start gap-2 rounded-md px-2.5 py-1.5 {parsed
+    .source?.type === 'user'
+    ? 'bg-primary/5'
+    : 'bg-info/5'}"
   aria-label="Steer message"
   title="Steer message"
 >
   <div class="flex w-4 shrink-0 flex-col items-center">
-    {#if parsed.source?.type === "agent"}
+    {#if parsed.source?.type === "user"}
+      <UserRound class="mt-0.5 size-3.5 text-primary" aria-hidden="true" />
+    {:else if parsed.source?.type === "agent"}
       <Bot class="mt-0.5 size-3.5 text-info" aria-hidden="true" />
     {:else if parsed.source?.type === "shell"}
       <Terminal class="mt-0.5 size-3.5 text-info" aria-hidden="true" />
     {:else}
-      <Mail class="mt-0.5 size-3.5 text-info" aria-hidden="true" />
+      <UserRound class="mt-0.5 size-3.5 text-info" aria-hidden="true" />
     {/if}
   </div>
   <div
     class="min-w-0 flex-1 text-xs leading-4 text-foreground"
     class:pb-3={isLong && expanded}
   >
-    {#if parsed.source?.type === "agent"}
+    {#if parsed.source?.type === "user"}
+      <span class="mb-0.5 inline-flex text-[11px] font-semibold text-primary">
+        User steer
+      </span>
+    {:else if parsed.source?.type === "agent"}
       <button
         type="button"
         class="mb-0.5 inline-flex max-w-full items-center gap-1 rounded-sm text-[11px] font-medium text-info transition-colors hover:text-info/80 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -78,7 +87,10 @@
       </div>
       {#if isLong && !expanded}
         <div
-          class="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-linear-to-t from-info/5 to-transparent"
+          class="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-linear-to-t to-transparent {parsed
+            .source?.type === 'user'
+            ? 'from-primary/5'
+            : 'from-info/5'}"
           aria-hidden="true"
         ></div>
       {/if}
@@ -87,7 +99,10 @@
   {#if isLong}
     <button
       type="button"
-      class="absolute bottom-0 left-1/2 z-10 grid h-5 w-10 -translate-x-1/2 place-items-center bg-linear-to-r from-transparent via-info/5 to-transparent text-info/70 transition-colors hover:text-info focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      class="absolute bottom-0 left-1/2 z-10 grid h-5 w-10 -translate-x-1/2 place-items-center bg-linear-to-r from-transparent to-transparent transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring {parsed
+        .source?.type === 'user'
+        ? 'via-primary/5 text-primary/70 hover:text-primary'
+        : 'via-info/5 text-info/70 hover:text-info'}"
       onclick={() => (expanded = !expanded)}
       aria-expanded={expanded}
       aria-label={expanded ? "Collapse steer message" : "Expand steer message"}

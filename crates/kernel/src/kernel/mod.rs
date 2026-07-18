@@ -947,6 +947,7 @@ impl Kernel {
 
     #[tracing::instrument(skip(self, content), fields(session_id = %session_id.0))]
     pub fn send_steer(&self, session_id: &SessionId, content: Vec<crate::types::ContentBlock>) {
+        let content = mark_user_steer(content);
         if let Err(e) = self
             .input_bus
             .publish(session_id.clone(), AgentInput::Steer(content))
@@ -1517,6 +1518,25 @@ impl crate::cron::CronExecutor for Kernel {
     }
 }
 
+fn mark_user_steer(
+    mut content: Vec<crate::types::ContentBlock>,
+) -> Vec<crate::types::ContentBlock> {
+    const PREFIX: &str = "[From User] ";
+
+    if let Some(crate::types::ContentBlock::Text { text }) = content.first_mut() {
+        text.insert_str(0, PREFIX);
+    } else {
+        content.insert(
+            0,
+            crate::types::ContentBlock::Text {
+                text: PREFIX.to_string(),
+            },
+        );
+    }
+
+    content
+}
+
 fn agent_state_phase(state: AgentState) -> &'static str {
     match state {
         AgentState::Streaming => "streaming",
@@ -1535,3 +1555,7 @@ fn normalize_session_title(title: &str) -> String {
     let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
     title.chars().take(20).collect::<String>()
 }
+
+#[cfg(test)]
+#[path = "mod_test.rs"]
+mod tests;

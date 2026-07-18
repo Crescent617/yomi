@@ -1,7 +1,7 @@
 //! Status bar component for TUI
 //!
 //! Shows current mode at the bottom (vim-style) with three sections:
-//! [LEFT: mode] [CENTER: tips] [RIGHT: context usage / scroll progress]
+//! [LEFT: mode + background activity] [RIGHT: context usage / scroll progress]
 
 use tuirealm::{
     command::{Cmd, CmdResult},
@@ -56,7 +56,7 @@ pub enum AppMode {
 }
 
 /// Status bar showing current mode (vim-style at bottom)
-/// Layout: [mode] [center] [scroll progress (optional)] [model] [ctx usage]
+/// Layout: [mode + background activity] [scroll progress (optional)] [model] [ctx usage]
 #[derive(Debug, Default)]
 pub struct StatusBar {
     props: Props,
@@ -128,21 +128,49 @@ impl StatusBar {
         )
     }
 
-    fn render_center_section(&self) -> Paragraph<'static> {
-        Paragraph::new(Self::activity_text(
-            self.activity_counts.0,
-            self.activity_counts.1,
-        ))
-        .style(Style::default().fg(colors::text_secondary()))
-        .alignment(Alignment::Center)
+    fn render_activity_section(&self) -> Line<'static> {
+        let (subagents, shells) = self.activity_counts;
+        let mut spans = Vec::new();
+
+        if subagents > 0 {
+            spans.push(Span::styled(
+                format!(
+                    " 󰚩 {subagents} AGENT{} ",
+                    if subagents == 1 { "" } else { "S" }
+                ),
+                Style::default()
+                    .fg(colors::selected_bg())
+                    .bg(colors::accent_info())
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+        if shells > 0 {
+            if !spans.is_empty() {
+                spans.push(Span::raw(" "));
+            }
+            spans.push(Span::styled(
+                format!("  {shells} BG TASK{} ", if shells == 1 { "" } else { "S" }),
+                Style::default()
+                    .fg(colors::selected_bg())
+                    .bg(colors::accent_warning())
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+
+        Line::from(spans)
     }
 
+    #[cfg(test)]
     fn activity_text(subagents: usize, shells: usize) -> String {
         match (subagents, shells) {
             (0, 0) => String::new(),
-            (agents, 0) => format!("Agents {agents}"),
-            (0, shells) => format!("Shells {shells}"),
-            (agents, shells) => format!("Agents {agents} · Shells {shells}"),
+            (agents, 0) => format!("󰚩 {agents} AGENT{}", if agents == 1 { "" } else { "S" }),
+            (0, shells) => format!(" {shells} BG TASK{}", if shells == 1 { "" } else { "S" }),
+            (agents, shells) => format!(
+                "󰚩 {agents} AGENT{}   {shells} BG TASK{}",
+                if agents == 1 { "" } else { "S" },
+                if shells == 1 { "" } else { "S" }
+            ),
         }
     }
 
@@ -207,11 +235,10 @@ impl Component for StatusBar {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         let has_scroll = self.scroll_progress.is_some();
 
-        // Layout: [mode] [center] [right content]
-        // Right content contains scroll (optional) + context
+        // Layout: [mode] [background activity] [right content]
         let constraints = vec![
             Constraint::Min(0),  // Mode (auto width)
-            Constraint::Fill(1), // Center (empty)
+            Constraint::Fill(1), // Background activity, left-aligned
             Constraint::Min(0),  // Right side: scroll? + context
         ];
 
@@ -223,8 +250,11 @@ impl Component for StatusBar {
             chunks[0],
         );
 
-        // Center section: empty
-        frame.render_widget(self.render_center_section(), chunks[1]);
+        // Running background activity stays at the bottom-left beside the mode badge.
+        frame.render_widget(
+            Paragraph::new(self.render_activity_section()).alignment(Alignment::Left),
+            chunks[1],
+        );
 
         // Right side content: scroll (optional) + model + context (right-aligned)
         let mut right_spans = Vec::new();
