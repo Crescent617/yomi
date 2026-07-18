@@ -135,24 +135,22 @@ impl StatusBar {
         if subagents > 0 {
             spans.push(Span::styled(
                 format!(
-                    " 󰚩 {subagents} AGENT{} ",
-                    if subagents == 1 { "" } else { "S" }
+                    "󰚩 {subagents} Agent{}",
+                    if subagents == 1 { "" } else { "s" }
                 ),
                 Style::default()
-                    .fg(colors::selected_bg())
-                    .bg(colors::accent_info())
+                    .fg(colors::accent_info())
                     .add_modifier(Modifier::BOLD),
             ));
         }
         if shells > 0 {
             if !spans.is_empty() {
-                spans.push(Span::raw(" "));
+                spans.push(Span::raw("  "));
             }
             spans.push(Span::styled(
-                format!("  {shells} BG TASK{} ", if shells == 1 { "" } else { "S" }),
+                format!(" {shells} Shell{}", if shells == 1 { "" } else { "s" }),
                 Style::default()
-                    .fg(colors::selected_bg())
-                    .bg(colors::accent_warning())
+                    .fg(colors::accent_warning())
                     .add_modifier(Modifier::BOLD),
             ));
         }
@@ -160,16 +158,22 @@ impl StatusBar {
         Line::from(spans)
     }
 
+    fn render_left_section(&self) -> Line<'static> {
+        let mut spans = vec![self.render_mode_section()];
+        spans.extend(self.render_activity_section().spans);
+        Line::from(spans)
+    }
+
     #[cfg(test)]
     fn activity_text(subagents: usize, shells: usize) -> String {
         match (subagents, shells) {
             (0, 0) => String::new(),
-            (agents, 0) => format!("󰚩 {agents} AGENT{}", if agents == 1 { "" } else { "S" }),
-            (0, shells) => format!(" {shells} BG TASK{}", if shells == 1 { "" } else { "S" }),
+            (agents, 0) => format!("󰚩 {agents} Agent{}", if agents == 1 { "" } else { "s" }),
+            (0, shells) => format!(" {shells} Shell{}", if shells == 1 { "" } else { "s" }),
             (agents, shells) => format!(
-                "󰚩 {agents} AGENT{}   {shells} BG TASK{}",
-                if agents == 1 { "" } else { "S" },
-                if shells == 1 { "" } else { "S" }
+                "󰚩 {agents} Agent{}   {shells} Shell{}",
+                if agents == 1 { "" } else { "s" },
+                if shells == 1 { "" } else { "s" }
             ),
         }
     }
@@ -235,28 +239,7 @@ impl Component for StatusBar {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         let has_scroll = self.scroll_progress.is_some();
 
-        // Layout: [mode] [background activity] [right content]
-        let constraints = vec![
-            Constraint::Min(0),  // Mode (auto width)
-            Constraint::Fill(1), // Background activity, left-aligned
-            Constraint::Min(0),  // Right side: scroll? + context
-        ];
-
-        let chunks = Layout::horizontal(constraints).split(area);
-
-        // Mode (left)
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![self.render_mode_section()])),
-            chunks[0],
-        );
-
-        // Running background activity stays at the bottom-left beside the mode badge.
-        frame.render_widget(
-            Paragraph::new(self.render_activity_section()).alignment(Alignment::Left),
-            chunks[1],
-        );
-
-        // Right side content: scroll (optional) + model + context (right-aligned)
+        // Build right side content first so the layout can reserve its display width.
         let mut right_spans = Vec::new();
         if has_scroll {
             right_spans.push(self.render_scroll_progress_section());
@@ -267,9 +250,23 @@ impl Component for StatusBar {
             right_spans.push(Span::raw(" · "));
         }
         right_spans.push(self.render_context_usage_section());
+        let right_line = Line::from(right_spans);
+        let right_width = u16::try_from(right_line.width()).unwrap_or(u16::MAX);
+
+        // Layout: [mode + background activity] [right content]
+        let chunks = Layout::horizontal([
+            Constraint::Fill(1),
+            Constraint::Length(right_width.min(area.width)),
+        ])
+        .split(area);
+
+        // Mode and running background activity share one left-aligned line so the
+        // activity indicators stay immediately beside the mode badge.
+        frame.render_widget(Paragraph::new(self.render_left_section()), chunks[0]);
+
         frame.render_widget(
-            Paragraph::new(Line::from(right_spans)).alignment(Alignment::Right),
-            chunks[2],
+            Paragraph::new(right_line).alignment(Alignment::Right),
+            chunks[1],
         );
     }
 
