@@ -27,7 +27,7 @@ pub async fn set_pet_enabled(
                 let builder =
                     WebviewWindowBuilder::new(&app_handle, "pet", WebviewUrl::App("/pet".into()))
                         .title("Yomi Pet")
-                        .inner_size(280.0, 160.0)
+                        .inner_size(152.0, 112.0)
                         .decorations(false)
                         .always_on_top(true)
                         .skip_taskbar(true)
@@ -46,18 +46,12 @@ pub async fn set_pet_enabled(
                 GuiError::unknown(format!("failed to make pet window transparent: {error}"))
             })?;
         window
-            .set_ignore_cursor_events(false)
-            .map_err(|error| GuiError::unknown(format!("failed to enable pet input: {error}")))?;
-        window
             .show()
             .map_err(|error| GuiError::unknown(format!("failed to show pet window: {error}")))?;
         state.set_pet_enabled(true);
         state.pet_runtime_notify.notify_one();
     } else {
         if let Some(window) = app_handle.get_webview_window("pet") {
-            window.set_ignore_cursor_events(true).map_err(|error| {
-                GuiError::unknown(format!("failed to disable pet input: {error}"))
-            })?;
             window.hide().map_err(|error| {
                 GuiError::unknown(format!("failed to hide pet window: {error}"))
             })?;

@@ -5,7 +5,7 @@
   import { onMount } from "svelte";
   import * as api from "../../lib/api";
   import type { PetSnapshot } from "../../lib/api";
-  import { PET_BUBBLE_SIZE } from "../../lib/pet";
+  import { PET_COMPACT_SIZE, getPetWindowSize } from "../../lib/pet";
   import type { PixelPetController } from "../../lib/pixel-pet";
 
   let petWindow: ReturnType<typeof getCurrentWindow> | undefined;
@@ -53,6 +53,18 @@
   });
 
   $effect(() => {
+    const currentWindow = petWindow;
+    const size = getPetWindowSize(bubbleVisible);
+    if (!currentWindow) return;
+
+    void currentWindow
+      .setSize(new LogicalSize(size.width, size.height))
+      .catch((resizeError) => {
+        console.error("Failed to resize desktop pet window:", resizeError);
+      });
+  });
+
+  $effect(() => {
     const speech = document.querySelector<HTMLElement>(".pet-speech");
     if (!speech || lastSpeech === bubbleText) return;
     lastSpeech = bubbleText;
@@ -69,7 +81,7 @@
     let disposed = false;
     petWindow = getCurrentWindow();
     void petWindow.setSize(
-      new LogicalSize(PET_BUBBLE_SIZE.width, PET_BUBBLE_SIZE.height),
+      new LogicalSize(PET_COMPACT_SIZE.width, PET_COMPACT_SIZE.height),
     );
 
     const unlistenState = listen<PetSnapshot>("pet:state", (event) => {
@@ -157,7 +169,6 @@
 
     <div
       class="pixel-game"
-      class:with-bubble={bubbleVisible}
       bind:this={gameHost}
       role="presentation"
       onpointerdown={startDragging}
@@ -182,10 +193,8 @@
   }
 
   .pet-window-root {
-    display: grid;
     width: 100vw;
     height: 100vh;
-    place-items: center;
     overflow: hidden;
     background: transparent;
     user-select: none;
@@ -194,38 +203,33 @@
 
   .pet-stage {
     position: relative;
-    width: 280px;
-    height: 160px;
+    width: 200px;
+    height: 216px;
     filter: drop-shadow(0 6px 9px rgb(23 19 50 / 0.2));
   }
 
   .pixel-game {
     position: absolute;
-    right: 2px;
-    bottom: 16px;
+    top: 0;
+    left: 0;
     width: 152px;
     height: 112px;
     border: 0;
-    transition: transform 180ms steps(3, end);
     pointer-events: auto;
-  }
-
-  .pixel-game.with-bubble {
-    transform: translateX(4px);
   }
 
   .pet-speech {
     position: absolute;
-    top: 14px;
+    top: 120px;
     left: 8px;
     z-index: 5;
     display: flex;
     box-sizing: border-box;
-    width: 146px;
-    min-height: 48px;
+    width: 184px;
+    min-height: 68px;
     align-items: center;
-    gap: 7px;
-    padding: 8px 9px;
+    gap: 6px;
+    padding: 5px 7px;
     border: 3px solid #24213f;
     background: #fffdf5;
     box-shadow:
@@ -243,12 +247,12 @@
   .pet-speech::before {
     content: "";
     position: absolute;
-    right: -11px;
-    bottom: 7px;
-    width: 11px;
-    height: 12px;
+    top: -11px;
+    left: 34px;
+    width: 12px;
+    height: 11px;
     background: linear-gradient(
-      135deg,
+      45deg,
       transparent 0 38%,
       #24213f 39% 58%,
       #fffdf5 59% 78%,
@@ -285,7 +289,6 @@
 
   @media (prefers-reduced-motion: reduce) {
     .pixel-game {
-      transition: none;
       animation: none;
     }
   }
