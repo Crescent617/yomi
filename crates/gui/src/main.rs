@@ -31,7 +31,6 @@ pub fn run() {
                     .window("pet")
                     .permission("core:event:allow-listen")
                     .permission("core:event:allow-unlisten")
-                    .permission("core:window:allow-set-ignore-cursor-events")
                     .permission("core:window:allow-show")
                     .permission("core:window:allow-hide")
                     .permission("core:window:allow-start-dragging")
