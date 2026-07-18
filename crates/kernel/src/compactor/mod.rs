@@ -13,22 +13,25 @@ use tokio_util::sync::CancellationToken;
 
 /// Default threshold ratio to trigger compaction (90% of context window)
 pub const DEFAULT_THRESHOLD_RATIO: f32 = 0.9;
-
 /// Default number of context-window tokens to keep available before compaction.
-pub const DEFAULT_COMPACTION_REMAINING_TOKENS: u32 = 33_000;
+pub const DEFAULT_COMPACTION_REMAINING_TOKENS: u32 = 25_600; // ~25k
 /// Default context window size
-pub const DEFAULT_CONTEXT_WINDOW: u32 = 131_072; // 128k
+pub const DEFAULT_CONTEXT_WINDOW: u32 = 204_800; // 200k
+
+/// Number of recent steps when do full compaction
 const KEEP_RECENT_MESSAGES: usize = 0;
 /// Number of recent messages whose tool results survive micro-compaction
 const KEEP_RECENT_TOOL_RESULTS: usize = 5;
 /// Max tokens for summary generation
-const SUMMARY_MAX_TOKENS: u32 = 8192; // 8k tokens for summary
+const SUMMARY_MAX_TOKENS: u32 = 10_240; // 8k tokens for summary
 /// Minimum useful summary output reserved before compaction is triggered.
 const MIN_SUMMARY_OUTPUT_TOKENS: u32 = 2_048;
 /// Maximum retries after a provider reports that the summary input is too large.
 const MAX_CONTEXT_OVERFLOW_RETRIES: usize = 3;
 /// Fraction of the oldest conversation rounds removed for each overflow retry.
 const CONTEXT_OVERFLOW_TRIM_PERCENT: usize = 20;
+/// Summary prompt for full compaction
+const SUMMARY_PROMPT: &str = include_str!("summary_prompt.txt");
 
 /// Compaction result containing compacted messages and token usage
 #[derive(Debug, Clone)]
@@ -47,8 +50,6 @@ impl CompactionResult {
     }
 }
 
-/// Summary prompt for full compaction
-const SUMMARY_PROMPT: &str = include_str!("summary_prompt.txt");
 /// Errors that can occur during compaction
 #[derive(Debug, thiserror::Error)]
 pub enum CompactionError {
