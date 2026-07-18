@@ -2,6 +2,13 @@ import { describe, expect, test } from "vitest";
 import { parseSteerMessage } from "./steer-message";
 
 describe("parseSteerMessage", () => {
+  test("extracts the user steer prefix", () => {
+    expect(parseSteerMessage("[From User] Change direction.")).toEqual({
+      source: { type: "user" },
+      content: "Change direction.",
+    });
+  });
+
   test("extracts the kernel From Agent prefix", () => {
     expect(
       parseSteerMessage("[From Agent: sub_123] Finished reviewing the code."),
