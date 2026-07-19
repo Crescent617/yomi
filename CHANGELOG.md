@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-07-19
+
+### Added
+- Usage 页面底部新增 Requests 记录表格，显示完整 request id、时间、模型、token 用量和 cache 率，支持表格内滚动加载更多。
+
+### Changed
+- 环境变量不再覆盖已有 model 配置，检测到 model 相关 env 时自动创建 `from_env` model；`default_model` 未配置时回退到 `models[0]`。
+- Cache 率显示统一改为 1 位小数。
+
 ## [0.6.0] - 2026-07-19
 
 ### Added
