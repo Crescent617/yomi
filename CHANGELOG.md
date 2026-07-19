@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-07-19
+
+### Added
+- Requests 表格加回 Type 列，徽标按类型着色区分 normal / subagent / compactor。
+
 ## [0.6.2] - 2026-07-19
 
 ### Added
