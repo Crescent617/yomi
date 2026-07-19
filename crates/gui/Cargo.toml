@@ -22,6 +22,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
+image = { workspace = true, features = ["webp"] }
 
 # Config TOML editing
 toml = { workspace = true }

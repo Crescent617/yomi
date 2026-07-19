@@ -36,6 +36,7 @@ describe("GUI preference normalization", () => {
   test("defaults desktop pet to disabled", () => {
     expect(defaultGuiPreferences.desktop_pet).toEqual({
       enabled: false,
+      selected_pet_id: null,
     });
   });
 
@@ -49,7 +50,27 @@ describe("GUI preference normalization", () => {
 
     expect(snapshotGuiPreferences().desktop_pet).toEqual({
       enabled: false,
+      selected_pet_id: null,
     });
+  });
+
+  test("normalizes missing and invalid selected pet IDs", () => {
+    const missing = {
+      ...snapshotGuiPreferences(),
+      desktop_pet: { enabled: true },
+    } as unknown as GuiPreferences;
+    replaceGuiPreferences(missing);
+    expect(snapshotGuiPreferences().desktop_pet).toEqual({
+      enabled: true,
+      selected_pet_id: null,
+    });
+
+    const invalid = {
+      ...snapshotGuiPreferences(),
+      desktop_pet: { enabled: true, selected_pet_id: 42 },
+    } as unknown as GuiPreferences;
+    replaceGuiPreferences(invalid);
+    expect(snapshotGuiPreferences().desktop_pet.selected_pet_id).toBeNull();
   });
 
   test("snapshots desktop pet preferences without sharing references", () => {

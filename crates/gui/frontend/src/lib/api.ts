@@ -316,6 +316,37 @@ export interface PetSnapshot {
   notice: PetNotice | null;
 }
 
+export interface PetPack {
+  id: string;
+  display_name: string;
+  description: string;
+  kind: string | null;
+  sprite_version_number: 1 | 2;
+}
+
+export async function listPetPacks(): Promise<PetPack[]> {
+  return invokeCmd("list_pet_packs");
+}
+
+export async function selectPetPack(pet_id: string | null): Promise<void> {
+  return invokeCmd("select_pet_pack", { pet_id });
+}
+
+export async function getSelectedPetPack(): Promise<PetPack | null> {
+  return invokeCmd("get_selected_pet_pack");
+}
+
+export async function readSelectedPetSpritesheet(
+  pet_id: string,
+  sprite_version_number: 1 | 2,
+): Promise<Uint8Array<ArrayBuffer>> {
+  const bytes = await invoke<ArrayBuffer | number[]>(
+    "read_selected_pet_spritesheet",
+    { pet_id, sprite_version_number },
+  );
+  return Array.isArray(bytes) ? new Uint8Array(bytes) : new Uint8Array(bytes);
+}
+
 export async function getPetState(): Promise<PetSnapshot> {
   return invokeCmd("get_pet_state");
 }

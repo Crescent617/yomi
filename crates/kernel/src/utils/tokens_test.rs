@@ -117,7 +117,10 @@ fn estimate_request_input_tokens_handles_non_text_content() {
         }],
     );
 
-    assert!(estimate_request_input_tokens(&[std::sync::Arc::new(message)], &[]) >= 4_096);
+    assert_eq!(
+        estimate_request_input_tokens(&[std::sync::Arc::new(message)], &[]),
+        IMAGE_TOKEN_ESTIMATE + 10
+    );
 }
 
 #[test]
@@ -137,7 +140,7 @@ fn estimate_request_input_tokens_ignores_internal_messages() {
 }
 
 #[test]
-fn inline_image_estimate_scales_with_payload_size() {
+fn inline_image_estimate_ignores_encoded_payload_size() {
     let small = crate::types::Message::with_blocks(
         crate::types::Role::User,
         vec![crate::types::ContentBlock::ImageUrl {
@@ -157,8 +160,8 @@ fn inline_image_estimate_scales_with_payload_size() {
         }],
     );
 
-    assert!(
-        estimate_request_input_tokens(&[std::sync::Arc::new(large)], &[])
-            > estimate_request_input_tokens(&[std::sync::Arc::new(small)], &[])
+    assert_eq!(
+        estimate_request_input_tokens(&[std::sync::Arc::new(large)], &[]),
+        estimate_request_input_tokens(&[std::sync::Arc::new(small)], &[])
     );
 }

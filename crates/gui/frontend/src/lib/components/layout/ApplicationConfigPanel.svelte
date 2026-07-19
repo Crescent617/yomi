@@ -36,6 +36,10 @@
   let draft = $state<GuiPreferences>(snapshotGuiPreferences());
   let saving = $state(false);
   let error = $state<string | null>(null);
+  let pet_packs = $state<api.PetPack[]>([]);
+  let pet_packs_loading = $state(true);
+  let pet_packs_error = $state<string | null>(null);
+  let pet_preview_changed = false;
 
   const themes: Array<{
     id: ThemePreference;
@@ -71,34 +75,82 @@
     JSON.stringify($state.snapshot(draft)) !==
       JSON.stringify($state.snapshot(saved)),
   );
+  const selected_pet_pack_id = $derived(
+    pet_packs.some((pack) => pack.id === draft.desktop_pet.selected_pet_id)
+      ? draft.desktop_pet.selected_pet_id
+      : (pet_packs[0]?.id ?? null),
+  );
 
   $effect(() => {
     onDirtyChange?.(dirty);
   });
 
   onMount(() => {
+    let disposed = false;
+    void api
+      .listPetPacks()
+      .then((packs) => {
+        if (disposed) return;
+        pet_packs = packs;
+        pet_packs_error = null;
+      })
+      .catch((load_error) => {
+        if (disposed) return;
+        pet_packs_error = api.errorMessage(load_error);
+        console.error("Failed to list desktop pet packs:", load_error);
+      })
+      .finally(() => {
+        if (!disposed) pet_packs_loading = false;
+      });
+
     return () => {
+      disposed = true;
       if (dirty) {
         const original = $state.snapshot(saved);
         replaceGuiPreferences(original);
-        void syncPetEnabled(original.desktop_pet.enabled).catch(() => {});
+        if (pet_preview_changed) {
+          void syncPetPreview(original.desktop_pet).catch(() => {});
+        }
       }
       onDirtyChange?.(false);
     };
   });
 
-  function syncPetEnabled(enabled: boolean): Promise<void> {
-    petSync = petSync.catch(() => {}).then(() => api.setPetEnabled(enabled));
+  function syncPetPreview(value: GuiPreferences["desktop_pet"]): Promise<void> {
+    pet_preview_changed = true;
+    const snapshot = {
+      enabled: value.enabled,
+      selected_pet_id: pet_packs.some(
+        (pack) => pack.id === value.selected_pet_id,
+      )
+        ? value.selected_pet_id
+        : (pet_packs[0]?.id ?? null),
+    };
+    petSync = petSync
+      .catch(() => {})
+      .then(async () => {
+        await api.selectPetPack(snapshot.selected_pet_id);
+        await api.setPetEnabled(
+          snapshot.enabled && snapshot.selected_pet_id !== null,
+        );
+      });
     return petSync;
   }
 
   function preview(update: (value: GuiPreferences) => void) {
-    const wasPetEnabled = draft.desktop_pet.enabled;
+    const previous_pet = { ...draft.desktop_pet };
     update(draft);
     replaceGuiPreferences(draft);
     error = null;
-    if (draft.desktop_pet.enabled !== wasPetEnabled) {
-      void syncPetEnabled(draft.desktop_pet.enabled).catch((syncError) => {
+    const effective_pet = {
+      enabled: draft.desktop_pet.enabled,
+      selected_pet_id: selected_pet_pack_id,
+    };
+    if (
+      effective_pet.enabled !== previous_pet.enabled ||
+      effective_pet.selected_pet_id !== previous_pet.selected_pet_id
+    ) {
+      void syncPetPreview(effective_pet).catch((syncError) => {
         error = `Desktop pet preview failed: ${api.errorMessage(syncError)}`;
       });
     }
@@ -113,7 +165,7 @@
     Object.assign(draft.chat, copy.chat);
     replaceGuiPreferences(copy);
     error = null;
-    void syncPetEnabled(copy.desktop_pet.enabled).catch((syncError) => {
+    void syncPetPreview(copy.desktop_pet).catch((syncError) => {
       error = `Desktop pet preview failed: ${api.errorMessage(syncError)}`;
     });
   }
@@ -123,6 +175,16 @@
     saving = true;
     error = null;
     try {
+      // Normalize a stale persisted selection only on an explicit save and
+      // only when the pack list loaded; keep the user's selection otherwise.
+      if (
+        !pet_packs_loading &&
+        !pet_packs_error &&
+        !pet_packs.some((pack) => pack.id === draft.desktop_pet.selected_pet_id)
+      ) {
+        draft.desktop_pet.selected_pet_id = pet_packs[0]?.id ?? null;
+        if (pet_packs.length === 0) draft.desktop_pet.enabled = false;
+      }
       await saveGuiPreferences($state.snapshot(draft));
       saved = snapshotGuiPreferences();
       restore(saved);
@@ -330,8 +392,54 @@
           </p>
         </div>
         <div class="divide-y divide-border">
+          <div
+            class="flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div>
+              <div class="text-sm text-foreground">Pet pack</div>
+              <div class="text-xs text-muted-foreground">
+                Local packs in
+                <code class="rounded bg-code-bg px-1 py-0.5">~/.yomi/pets</code>
+              </div>
+              {#if pet_packs_loading}
+                <div class="mt-1 text-xs text-muted-foreground">
+                  Loading local packs…
+                </div>
+              {:else if pet_packs_error}
+                <div class="mt-1 text-xs text-error">
+                  Could not load packs: {pet_packs_error}
+                </div>
+              {:else if pet_packs.length === 0}
+                <div class="mt-1 text-xs text-warning">
+                  No local pet packs found.
+                </div>
+              {/if}
+            </div>
+            <select
+              value={selected_pet_pack_id ?? ""}
+              onchange={(event) =>
+                preview(
+                  (value) =>
+                    (value.desktop_pet.selected_pet_id =
+                      event.currentTarget.value || null),
+                )}
+              disabled={pet_packs_loading || pet_packs.length === 0}
+              class="h-8 min-w-48 rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-ring disabled:opacity-40"
+              aria-label="Desktop pet pack"
+            >
+              {#if draft.desktop_pet.selected_pet_id === null || !pet_packs.some((pack) => pack.id === draft.desktop_pet.selected_pet_id)}
+                <option value="" disabled>Choose a pet</option>
+              {/if}
+              {#each pet_packs as pack (pack.id)}
+                <option value={pack.id}>{pack.display_name}</option>
+              {/each}
+            </select>
+          </div>
           <label
-            class="flex cursor-pointer items-center justify-between gap-4 px-4 py-3.5"
+            class="flex items-center justify-between gap-4 px-4 py-3.5 {pet_packs.length ===
+            0
+              ? 'cursor-not-allowed'
+              : 'cursor-pointer'}"
           >
             <div>
               <div class="text-sm text-foreground">Enable desktop pet</div>
@@ -342,12 +450,18 @@
             <input
               type="checkbox"
               checked={draft.desktop_pet.enabled}
+              disabled={pet_packs_loading || pet_packs.length === 0}
               onchange={(event) =>
-                preview(
-                  (value) =>
-                    (value.desktop_pet.enabled = event.currentTarget.checked),
-                )}
-              class="h-4 w-4 accent-primary"
+                preview((value) => {
+                  value.desktop_pet.enabled = event.currentTarget.checked;
+                  if (
+                    value.desktop_pet.enabled &&
+                    value.desktop_pet.selected_pet_id === null
+                  ) {
+                    value.desktop_pet.selected_pet_id = selected_pet_pack_id;
+                  }
+                })}
+              class="h-4 w-4 accent-primary disabled:opacity-40"
             />
           </label>
         </div>
