@@ -164,6 +164,61 @@ impl UsageStore for SqliteUsageStore {
             })
             .collect())
     }
+
+    async fn list_records(
+        &self,
+        before_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<UsageRecord>> {
+        let mut builder = sqlx::QueryBuilder::new(
+            "SELECT
+                id,
+                session_id,
+                prompt_tokens,
+                completion_tokens,
+                cached_tokens,
+                model,
+                provider,
+                usage_type,
+                created_at
+             FROM token_usage
+             WHERE 1=1",
+        );
+
+        if let Some(id) = before_id {
+            builder.push(" AND (created_at < (SELECT created_at FROM token_usage WHERE id = ");
+            builder.push_bind(id);
+            builder.push(") OR (created_at = (SELECT created_at FROM token_usage WHERE id = ");
+            builder.push_bind(id);
+            builder.push(") AND id < ");
+            builder.push_bind(id);
+            builder.push("))");
+        }
+
+        builder.push(" ORDER BY created_at DESC, id DESC LIMIT ");
+        builder.push_bind(limit as i64);
+
+        let rows = builder
+            .build_query_as::<RecordRow>()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| storage_err(format!("failed to list usage records: {e}")))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| UsageRecord {
+                id: r.id,
+                session_id: crate::types::SessionId::from(r.session_id),
+                prompt_tokens: r.prompt_tokens as u64,
+                completion_tokens: r.completion_tokens as u64,
+                cached_tokens: r.cached_tokens as u64,
+                model: r.model,
+                provider: r.provider,
+                usage_type: r.usage_type.parse().unwrap_or_default(),
+                created_at: r.created_at,
+            })
+            .collect())
+    }
 }
 
 /// Push the shared WHERE clauses (time range + optional filter) onto a
@@ -224,6 +279,20 @@ struct DailyRow {
     cached_tokens: i64,
     request_count: i64,
     models: String,
+}
+
+/// Internal row type for raw record queries
+#[derive(sqlx::FromRow)]
+struct RecordRow {
+    id: String,
+    session_id: String,
+    prompt_tokens: i64,
+    completion_tokens: i64,
+    cached_tokens: i64,
+    model: String,
+    provider: String,
+    usage_type: String,
+    created_at: DateTime<Utc>,
 }
 
 #[cfg(test)]

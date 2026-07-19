@@ -163,6 +163,11 @@ pub trait KernelApi: Send + Sync {
         &self,
         start: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<crate::storage::usage::ModelUsage>>;
+    async fn get_usage_records(
+        &self,
+        before_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<crate::storage::usage::UsageRecord>>;
 
     // ── Cron Job ─────────────────────────────────────────────────────────
     //
@@ -466,6 +471,14 @@ impl KernelApi for Kernel {
         start: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<crate::storage::usage::ModelUsage>> {
         Self::get_model_usage_since(self, start).await
+    }
+
+    async fn get_usage_records(
+        &self,
+        before_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<crate::storage::usage::UsageRecord>> {
+        Self::get_usage_records(self, before_id, limit).await
     }
 
     async fn create_cron_job(
@@ -1472,6 +1485,21 @@ impl KernelApi for RemoteKernel {
         let result = self.call(ReqMethod::GetModelUsageSince { start }).await?;
         let usage: Vec<crate::storage::usage::ModelUsage> = serde_json::from_value(result)?;
         Ok(usage)
+    }
+
+    async fn get_usage_records(
+        &self,
+        before_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<crate::storage::usage::UsageRecord>> {
+        let result = self
+            .call(ReqMethod::GetUsageRecords {
+                before_id: before_id.map(String::from),
+                limit,
+            })
+            .await?;
+        let records: Vec<crate::storage::usage::UsageRecord> = serde_json::from_value(result)?;
+        Ok(records)
     }
 
     async fn create_cron_job(

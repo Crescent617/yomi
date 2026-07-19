@@ -8,7 +8,7 @@ use crate::agent::{AgentConfig, AgentInput, AgentShared, AgentState};
 use crate::comms::InputBus;
 use crate::notification::{AgentActivity, Notification};
 use crate::permission::Level;
-use crate::storage::usage::{DailyUsage, ModelUsage, UsageSummary};
+use crate::storage::usage::{DailyUsage, ModelUsage, UsageRecord, UsageSummary};
 use crate::storage::{MessageStore, ProjectStore, SessionStore, StorageSet, UsageStore};
 use crate::tools::AskUserResponse;
 use crate::types::{KernelError, Project, ProjectId, Result, SessionError, SessionId};
@@ -1316,6 +1316,18 @@ impl Kernel {
         self.usage_store()
             .await
             .by_model_summary(start, Utc::now(), None)
+            .await
+    }
+
+    /// List raw usage records in reverse chronological order.
+    pub async fn get_usage_records(
+        &self,
+        before_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<UsageRecord>> {
+        self.usage_store()
+            .await
+            .list_records(before_id, limit)
             .await
     }
 

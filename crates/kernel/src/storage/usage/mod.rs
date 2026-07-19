@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 /// Usage type categorization
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum UsageType {
     /// Normal agent conversation
     #[default]
@@ -48,7 +48,7 @@ impl std::str::FromStr for UsageType {
 }
 
 /// Single token usage record
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UsageRecord {
     pub id: String,
     pub session_id: SessionId,
@@ -183,6 +183,11 @@ pub trait UsageStore: Send + Sync {
         end: DateTime<Utc>,
         filter: Option<&UsageFilter>,
     ) -> Result<Vec<ModelUsage>>;
+
+    /// List raw usage records in reverse chronological order.
+    /// `before_id` paginates by record id (ULID); `limit` caps the page size.
+    async fn list_records(&self, before_id: Option<&str>, limit: usize)
+        -> Result<Vec<UsageRecord>>;
 }
 
 /// Helper for storage errors
