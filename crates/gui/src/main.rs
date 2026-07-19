@@ -3,6 +3,9 @@ mod commands;
 mod daemon;
 mod error;
 mod pet;
+mod pet_pack;
+#[cfg(test)]
+mod pet_pack_test;
 mod pet_runtime;
 #[cfg(test)]
 mod pet_test;
@@ -26,16 +29,6 @@ pub fn run() {
             let gui_log_dir = commands::debug::configured_log_dir();
             let state = AppState::new(kernel.clone(), data_dir, gui_log_dir);
             app.manage(state.clone());
-            app.add_capability(
-                tauri::ipc::CapabilityBuilder::new("pet-window")
-                    .window("pet")
-                    .permission("core:event:allow-listen")
-                    .permission("core:event:allow-unlisten")
-                    .permission("core:window:allow-show")
-                    .permission("core:window:allow-hide")
-                    .permission("core:window:allow-start-dragging")
-                    .permission("core:window:allow-set-size"),
-            )?;
 
             let pet_app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -103,6 +96,10 @@ pub fn run() {
             commands::chat::stop_goal,
             commands::pet::get_pet_state,
             commands::pet::set_pet_enabled,
+            commands::pet::list_pet_packs,
+            commands::pet::select_pet_pack,
+            commands::pet::get_selected_pet_pack,
+            commands::pet::read_selected_pet_spritesheet,
             commands::automation::list_cron_jobs,
             commands::automation::create_cron_job,
             commands::automation::update_cron_job,
@@ -153,14 +150,22 @@ pub fn run() {
         app_handle.exit(0);
     });
 
-    app.run(|_app_handle, event| {
-        if let tauri::RunEvent::Exit = event {
+    app.run(|app_handle, event| match event {
+        tauri::RunEvent::WindowEvent { label, event, .. }
+            if label == "main" && matches!(event, tauri::WindowEvent::Destroyed) =>
+        {
+            if let Some(window) = app_handle.get_webview_window("pet") {
+                let _ = window.destroy();
+            }
+        }
+        tauri::RunEvent::Exit => {
             tauri::async_runtime::block_on(async {
                 if let Err(e) = daemon::stop_daemon().await {
                     tracing::warn!("Failed to stop daemon: {e}");
                 }
             });
         }
+        _ => {}
     });
 }
 

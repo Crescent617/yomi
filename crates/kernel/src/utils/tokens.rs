@@ -7,6 +7,10 @@
 use crate::types::{ContentBlock, Message, Role, ToolDefinition};
 use std::sync::Arc;
 
+/// Fixed per-image estimate matching Claude Code's rough token counting.
+/// Providers tokenize decoded image dimensions, not the URL or base64 byte length.
+const IMAGE_TOKEN_ESTIMATE: u32 = 2_000;
+
 /// Estimate tokens from UTF-8 byte length, rounding up conservatively.
 /// Rough approximation: 1 token ≈ 4 bytes.
 ///
@@ -40,12 +44,7 @@ fn estimate_message_tokens(message: &Message) -> u32 {
                     .map_or(0, |text| estimate_tokens(text) as u32),
             ),
             ContentBlock::RedactedThinking { data } => estimate_tokens(data) as u32,
-            ContentBlock::ImageUrl { image_url } => {
-                // Provider image tokenization depends on decoded dimensions. Use a
-                // conservative per-image floor and charge inline data by encoded
-                // size so large payloads cannot hide behind a fixed estimate.
-                4_096u32.max(estimate_tokens(&image_url.url) as u32)
-            }
+            ContentBlock::ImageUrl { .. } => IMAGE_TOKEN_ESTIMATE,
             // No current provider serializes Audio blocks; do not budget content
             // that is omitted from the actual request.
             ContentBlock::Audio { .. } => 0,

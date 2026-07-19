@@ -1,7 +1,7 @@
 {
   "$schema": "./frontend/node_modules/@tauri-apps/cli/schema.json",
   "productName": "Yomi",
-  "version": "0.5.28",
+  "version": "0.6.0",
   "identifier": "com.yomi.gui",
   "build": {
     "beforeDevCommand": "cd frontend && npm run dev",
@@ -62,6 +62,12 @@
             "pilot:default",
             "core:window:allow-hide",
             "core:window:allow-show",
+            "core:window:allow-cursor-position",
+            "core:window:allow-primary-monitor",
+            "core:window:allow-monitor-from-point",
+            "core:window:allow-is-visible",
+            "core:window:allow-scale-factor",
+            "core:window:allow-outer-position",
             "core:window:allow-set-size",
             "core:window:allow-start-dragging"
           ]

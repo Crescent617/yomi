@@ -26,8 +26,6 @@
   // @ts-expect-error svelte onMount 返回类型在 lib 升级后被误判
   onMount(async () => {
     if (!browser) return;
-    await initSettings();
-    startThemeListener();
 
     appWindow = getCurrentWindow();
     isPetWindow = appWindow.label === "pet";
@@ -36,16 +34,31 @@
 
     if (isPetWindow) {
       return () => {
-        stopThemeListener();
         document.documentElement.classList.remove("pet-window");
         document.body.classList.remove("pet-window");
       };
     }
 
+    await initSettings();
+    startThemeListener();
+
     const { activateSession } = await import("../lib/session");
     const { handleEvent } = await import("../lib/events");
+    const packs = await api.listPetPacks().catch((error) => {
+      console.error("Failed to list desktop pet packs at startup:", error);
+      return [];
+    });
+    const persisted_pet_id = guiPreferences.desktop_pet.selected_pet_id;
+    const selected_pet_id = packs.some((pack) => pack.id === persisted_pet_id)
+      ? persisted_pet_id
+      : (packs[0]?.id ?? null);
+    await api.selectPetPack(selected_pet_id).catch((error) => {
+      console.error("Failed to restore desktop pet pack:", error);
+    });
     await api
-      .setPetEnabled(guiPreferences.desktop_pet.enabled)
+      .setPetEnabled(
+        guiPreferences.desktop_pet.enabled && selected_pet_id !== null,
+      )
       .catch((error) => {
         console.error("Failed to restore desktop pet preference:", error);
       });

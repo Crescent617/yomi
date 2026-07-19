@@ -27,9 +27,9 @@ Yomi is a focused agent workspace: calm, dense, and direct. The interface should
 - Radius: modest and consistent. Panels and dialogs may be rounded; editors and full-size workspaces should usually meet their pane edges.
 - Icons: use Lucide consistently. Do not mix emoji with interface icons.
 
-## Desktop Pet Status Lamps
+## Desktop Pet
 
-The three lamps at the bottom of the desktop Pet form one compact status indicator, not three independent controls or metrics. They quietly reinforce the Pet's face and posture through shared color, position, and rhythm: calm and dim by default, animated only to communicate activity or attention, and dark while resting. The lamps should never carry critical information alone, imply false precision, or become decorative noise.
+The desktop Pet uses Codex Pets spritesheets; the old procedural status lamps no longer apply. Keep the Pet visually unobtrusive, use animation to communicate aggregate agent state, and do not make animation the only source of critical information. Package details are documented in [`docs/DESKTOP_PETS.md`](../../docs/DESKTOP_PETS.md).
 
 ## Decision Test
 

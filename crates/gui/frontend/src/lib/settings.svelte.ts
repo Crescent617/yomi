@@ -31,6 +31,7 @@ export interface GuiPreferences {
   };
   desktop_pet: {
     enabled: boolean;
+    selected_pet_id: string | null;
   };
   chat: {
     homeModel: string | null;
@@ -63,6 +64,7 @@ export const defaultGuiPreferences: GuiPreferences = {
   },
   desktop_pet: {
     enabled: false,
+    selected_pet_id: null,
   },
   chat: {
     homeModel: null,
@@ -144,6 +146,10 @@ function normalizeGuiPreferences(
       enabled:
         value?.desktop_pet?.enabled ??
         defaultGuiPreferences.desktop_pet.enabled,
+      selected_pet_id:
+        typeof value?.desktop_pet?.selected_pet_id === "string"
+          ? value.desktop_pet.selected_pet_id
+          : null,
     },
     chat: {
       homeModel: value?.chat?.homeModel ?? defaultGuiPreferences.chat.homeModel,
@@ -198,6 +204,7 @@ async function loadLegacyPreferences(s: Store): Promise<GuiPreferences> {
     },
     desktop_pet: {
       enabled: defaultGuiPreferences.desktop_pet.enabled,
+      selected_pet_id: defaultGuiPreferences.desktop_pet.selected_pet_id,
     },
     chat: {
       homeModel: legacyHomeModel,
