@@ -131,3 +131,43 @@ async fn test_by_model_summary_with_filter() {
     assert_eq!(rows.len(), 2);
     assert!(rows.iter().all(|r| r.request_count == 1));
 }
+
+#[tokio::test]
+async fn test_list_records() {
+    let store = create_test_store().await;
+    let session_id = SessionId::new();
+
+    for i in 0..5 {
+        store
+            .record(&UsageRecord::new(
+                session_id.clone(),
+                TokenUsage::new(10 + i, 5 + i, None),
+                format!("model-{i}"),
+                "provider-1",
+                UsageType::Normal,
+            ))
+            .await
+            .unwrap();
+    }
+
+    // Page 1: newest 2
+    let page1 = store.list_records(None, 2).await.unwrap();
+    assert_eq!(page1.len(), 2);
+    assert_eq!(page1[0].model, "model-4");
+    assert_eq!(page1[1].model, "model-3");
+
+    // Page 2: next 2 using cursor
+    let page2 = store.list_records(Some(&page1[1].id), 2).await.unwrap();
+    assert_eq!(page2.len(), 2);
+    assert_eq!(page2[0].model, "model-2");
+    assert_eq!(page2[1].model, "model-1");
+
+    // Page 3: remaining 1
+    let page3 = store.list_records(Some(&page2[1].id), 2).await.unwrap();
+    assert_eq!(page3.len(), 1);
+    assert_eq!(page3[0].model, "model-0");
+
+    // No more
+    let page4 = store.list_records(Some(&page3[0].id), 2).await.unwrap();
+    assert!(page4.is_empty());
+}

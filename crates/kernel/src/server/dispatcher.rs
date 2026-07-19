@@ -459,6 +459,22 @@ impl KernelServer {
                     },
                 }
             }
+            ReqMethod::GetUsageRecords { before_id, limit } => {
+                match self
+                    .kernel
+                    .get_usage_records(before_id.as_deref(), limit)
+                    .await
+                {
+                    Ok(records) => ok_body(records),
+                    Err(e) => RespBody::Err {
+                        error: RpcError {
+                            code: "get_usage_records_failed".to_string(),
+                            message: e.to_string(),
+                            detail: None,
+                        },
+                    },
+                }
+            }
 
             // ── Channel ────────────────────────────────────────────────────
             ReqMethod::ListChannels => {

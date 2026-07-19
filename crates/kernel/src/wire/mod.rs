@@ -170,6 +170,10 @@ pub enum ReqMethod {
     GetModelUsageSince {
         start: chrono::DateTime<chrono::Utc>,
     },
+    GetUsageRecords {
+        before_id: Option<String>,
+        limit: usize,
+    },
 
     // ── Channel ────────────────────────────────────────────────────
     ListChannels,

@@ -286,6 +286,20 @@ pub async fn get_today_model_usage(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn get_usage_records(
+    state: State<'_, AppState>,
+    before_id: Option<String>,
+    limit: Option<usize>,
+) -> Result<serde_json::Value, GuiError> {
+    let coord = state.kernel.clone();
+    let records = coord
+        .get_usage_records(before_id.as_deref(), limit.unwrap_or(50))
+        .await
+        .map_err(GuiError::kernel)?;
+    serde_json::to_value(records).map_err(|e| GuiError::unknown(e.to_string()))
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn get_models(state: State<'_, AppState>) -> Result<serde_json::Value, GuiError> {
     let models = state.kernel.list_models().await.map_err(GuiError::kernel)?;
     Ok(serde_json::json!({ "models": models }))

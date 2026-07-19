@@ -2,7 +2,7 @@
   import { onMount, tick } from "svelte";
   import * as echarts from "echarts";
   import * as api from "../../api";
-  import type { ModelInfo, ModelUsage } from "../../api";
+  import type { ModelInfo, ModelUsage, UsageRecord } from "../../api";
   import { getActiveSession } from "../../state.svelte";
   import InlineLoadingStatus from "../ui/InlineLoadingStatus.svelte";
   import PageLoading from "../ui/PageLoading.svelte";
@@ -55,6 +55,14 @@
   let allModelUsage = $state<ModelUsage[]>([]);
   let configuredModels = $state<ModelInfo[]>([]);
   let loading = $state(true);
+
+  // ── raw request records (infinite scroll) ──
+  let records = $state<UsageRecord[]>([]);
+  let recordsLoading = $state(false);
+  let recordsDone = $state(false);
+  let recordsSentinel = $state<HTMLDivElement | null>(null);
+  let recordsScrollContainer = $state<HTMLDivElement | null>(null);
+  const RECORDS_PAGE_SIZE = 50;
 
   let chartDiv: HTMLDivElement | null = $state(null);
   let chartInstance: echarts.ECharts | null = $state(null);
@@ -220,8 +228,8 @@
     prompt_tokens: number;
     cached_tokens: number;
   }): string {
-    if (d.prompt_tokens === 0) return "0%";
-    return `${Math.round((d.cached_tokens / d.prompt_tokens) * 100)}%`;
+    if (d.prompt_tokens === 0) return "0.0%";
+    return `${((d.cached_tokens / d.prompt_tokens) * 100).toFixed(1)}%`;
   }
 
   function cacheRateClass(d: {
@@ -557,6 +565,55 @@
       loading = false;
       console.log("[UsagePanel] loadData done, loading=false");
     }
+    // Kick off the first page of raw records regardless of scroll position.
+    loadMoreRecords();
+  }
+
+  // ── raw request records (infinite scroll) ──
+
+  async function loadMoreRecords() {
+    if (recordsLoading || recordsDone) return;
+    recordsLoading = true;
+    try {
+      const beforeId = records.length > 0 ? records[records.length - 1].id : undefined;
+      const batch = await api.getUsageRecords(beforeId, RECORDS_PAGE_SIZE);
+      if (batch.length === 0) {
+        recordsDone = true;
+      } else {
+        records = [...records, ...batch];
+        if (batch.length < RECORDS_PAGE_SIZE) recordsDone = true;
+      }
+    } catch (e: unknown) {
+      console.error(
+        "[UsagePanel] loadMoreRecords failed:",
+        e instanceof Error ? e.message : e,
+      );
+    } finally {
+      recordsLoading = false;
+    }
+  }
+
+  $effect(() => {
+    if (!recordsSentinel || !recordsScrollContainer) return;
+    const el = recordsSentinel;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) loadMoreRecords();
+      },
+      { root: recordsScrollContainer, rootMargin: "200px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  });
+
+  function formatRecordTime(iso: string): string {
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   }
 </script>
 
@@ -1134,6 +1191,138 @@
             </div>
           </div>
         {/if}
+
+        <!-- Raw request records -->
+        <div class="rounded-md border border-border bg-card overflow-hidden">
+          <div
+            class="flex items-center gap-2 px-4 py-3 border-b border-border"
+          >
+            <Hash class="w-4 h-4 text-muted-foreground" />
+            <span class="text-sm font-medium">Requests</span>
+            <span class="text-xs text-muted-foreground ml-auto">
+              {records.length} loaded · newest first
+            </span>
+          </div>
+
+          {#if records.length === 0 && !recordsLoading}
+            <div class="p-8 text-center text-sm text-muted-foreground">
+              No request records
+            </div>
+          {:else if records.length > 0}
+            <div
+              bind:this={recordsScrollContainer}
+              class="max-h-96 overflow-y-auto overflow-x-auto"
+            >
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border bg-muted/30">
+                    <th
+                      class="sticky top-0 z-10 bg-card text-left px-4 py-2 text-xs font-medium text-muted-foreground"
+                      >ID</th
+                    >
+                    <th
+                      class="sticky top-0 z-10 bg-card text-left px-4 py-2 text-xs font-medium text-muted-foreground"
+                      >Time</th
+                    >
+                    <th
+                      class="sticky top-0 z-10 bg-card text-left px-4 py-2 text-xs font-medium text-muted-foreground"
+                      >Model</th
+                    >
+                    <th
+                      class="sticky top-0 z-10 bg-card text-right px-4 py-2 text-xs font-medium text-muted-foreground"
+                      >Prompt</th
+                    >
+                    <th
+                      class="sticky top-0 z-10 bg-card text-right px-4 py-2 text-xs font-medium text-muted-foreground"
+                      >Cached</th
+                    >
+                    <th
+                      class="sticky top-0 z-10 bg-card text-right px-4 py-2 text-xs font-medium text-muted-foreground"
+                      >Cache</th
+                    >
+                    <th
+                      class="sticky top-0 z-10 bg-card text-right px-4 py-2 text-xs font-medium text-muted-foreground"
+                      >Completion</th
+                    >
+                    <th
+                      class="sticky top-0 z-10 bg-card text-right px-4 py-2 text-xs font-medium text-muted-foreground"
+                      >Total</th
+                    >
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each records as r, i (r.id)}
+                    {@const total = r.prompt_tokens + r.completion_tokens}
+                    <tr
+                      class="border-b border-border last:border-0 {i % 2 === 0
+                        ? 'bg-background'
+                        : 'bg-muted/20'} hover:bg-muted/40 transition-colors"
+                    >
+                      <td class="px-4 py-2 whitespace-nowrap">
+                        <span class="font-mono text-[10px] text-muted-foreground"
+                          >{r.id}</span
+                        >
+                      </td>
+                      <td class="px-4 py-2 whitespace-nowrap text-xs">
+                        {formatRecordTime(r.created_at)}
+                      </td>
+                      <td class="px-4 py-2">
+                        <div class="text-xs font-medium">{r.model}</div>
+                        <div class="text-[10px] text-muted-foreground">
+                          {r.provider}
+                        </div>
+                      </td>
+                      <td class="px-4 py-2 text-right font-mono text-xs"
+                        >{formatNumber(r.prompt_tokens)}</td
+                      >
+                      <td class="px-4 py-2 text-right font-mono text-xs text-success"
+                        >{formatNumber(r.cached_tokens)}</td
+                      >
+                      <td class="px-4 py-2 text-right">
+                        <span
+                          class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium {cacheRateClass(
+                            r,
+                          )}"
+                        >
+                          {cacheRate(r)}
+                        </span>
+                      </td>
+                      <td class="px-4 py-2 text-right font-mono text-xs"
+                        >{formatNumber(r.completion_tokens)}</td
+                      >
+                      <td
+                        class="px-4 py-2 text-right font-mono text-xs font-medium"
+                        >{formatNumber(total)}</td
+                      >
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+
+              <!-- infinite scroll sentinel inside the scrollable table -->
+              <div bind:this={recordsSentinel} class="h-1"></div>
+
+              {#if recordsLoading}
+                <div class="flex items-center justify-center py-3">
+                  <InlineLoadingStatus label="Loading" />
+                </div>
+              {:else if recordsDone && records.length > 0}
+                <div
+                  class="py-3 text-center text-xs text-muted-foreground border-t border-border"
+                >
+                  No more records
+                </div>
+              {/if}
+            </div>
+          {/if}
+
+          <!-- sentinel for empty state (observer needs it to fire the first load) -->
+          {#if records.length === 0 && recordsLoading}
+            <div class="flex items-center justify-center py-3">
+              <InlineLoadingStatus label="Loading" />
+            </div>
+          {/if}
+        </div>
       </div>
     {/if}
   </div>

@@ -665,6 +665,25 @@ export async function getTodayModelUsage(): Promise<ModelUsage[]> {
   return invokeCmd("get_today_model_usage");
 }
 
+export interface UsageRecord {
+  id: string;
+  session_id: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  model: string;
+  provider: string;
+  usage_type: string;
+  created_at: string;
+}
+
+export async function getUsageRecords(
+  before_id?: string,
+  limit?: number,
+): Promise<UsageRecord[]> {
+  return invokeCmd("get_usage_records", { before_id, limit });
+}
+
 export async function getTodos(session_id: string): Promise<{
   todos: { id: string; content: string; status: string }[];
 }> {

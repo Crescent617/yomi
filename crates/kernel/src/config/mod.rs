@@ -377,62 +377,86 @@ impl Config {
             self.agent.default_model = key;
         }
 
-        // Single-model env vars apply to the entry named by `agent.default_model`,
-        // falling back to models[0] when no entry matches.
-        let default_idx = self
-            .models
-            .iter()
-            .position(|m| m.name == self.agent.default_model)
-            .unwrap_or(0);
-        let default_model = &mut self.models[default_idx];
+        // Model-related env vars are collected into a new `from_env` entry
+        // instead of mutating an existing model in the array.
+        let mut env_model = ModelConfig {
+            name: "from_env".to_string(),
+            ..ModelConfig::default()
+        };
+        let mut has_env_model = false;
 
         // Provider selection (may affect subsequent provider-specific lookups)
         if let Some(provider) = env_var(env_names::PROVIDER) {
             if let Ok(p) = provider.parse() {
-                default_model.provider = p;
+                env_model.provider = p;
+                has_env_model = true;
             }
         }
 
-        let _provider = default_model.provider;
-
         // API Key: only YOMI_ prefixed generic variable is supported
         if let Some(key) = env_var(env_names::API_KEY) {
-            default_model.api_key = key;
+            env_model.api_key = key;
+            has_env_model = true;
         }
 
         // Model: only YOMI_ prefixed generic variable is supported
         if let Some(model) = env_var(env_names::MODEL) {
-            default_model.model_id = model;
+            env_model.model_id = model;
+            has_env_model = true;
         }
 
         // Endpoint: only YOMI_ prefixed generic variable is supported
         if let Some(endpoint) = env_var(env_names::API_BASE) {
-            default_model.endpoint = endpoint;
+            env_model.endpoint = endpoint;
+            has_env_model = true;
         }
 
         // Numeric settings
         // Max tokens (supports formats like "4096", "4k", "8k")
         if let Some(max_tokens) = env_var(env_names::MAX_TOKENS) {
             if let Some(tokens) = parse_number_with_unit(&max_tokens) {
-                default_model.max_tokens = Some(tokens);
+                env_model.max_tokens = Some(tokens);
+                has_env_model = true;
             }
         }
         if let Some(temp) = env_parse::<f32>(env_names::TEMPERATURE) {
-            default_model.temperature = Some(temp);
-        }
-        if let Some(iters) = env_parse::<usize>(env_names::MAX_ITERATIONS) {
-            self.agent.max_iterations = iters;
-        }
-        if let Some(budget) = env_parse::<u32>(env_names::THINKING_BUDGET) {
-            default_model.thinking.budget_tokens = budget;
+            env_model.temperature = Some(temp);
+            has_env_model = true;
         }
 
-        // Boolean settings
+        // Boolean / thinking settings
+        if let Some(budget) = env_parse::<u32>(env_names::THINKING_BUDGET) {
+            env_model.thinking.budget_tokens = budget;
+            has_env_model = true;
+        }
         if let Some(enabled) = env_bool_opt(env_names::THINKING) {
-            default_model.thinking.enabled = enabled;
+            env_model.thinking.enabled = enabled;
+            has_env_model = true;
         }
         if let Some(effort) = env_var(env_names::THINKING_EFFORT) {
-            default_model.thinking.effort = Some(effort);
+            env_model.thinking.effort = Some(effort);
+            has_env_model = true;
+        }
+
+        // Context window size (supports formats like "131072", "128k", "200k", "200000")
+        if let Some(context_window) = env_var(env_names::CONTEXT_WINDOW) {
+            if let Some(tokens) = parse_number_with_unit(&context_window) {
+                env_model.context_window = tokens;
+                has_env_model = true;
+            }
+        }
+
+        // Only push the env-derived model when at least one relevant env var was set.
+        if has_env_model {
+            // Replace any pre-existing entry with the same name to avoid duplicates.
+            self.models.retain(|m| m.name != "from_env");
+            self.models.push(env_model);
+        }
+
+        // Non-model agent / system settings
+
+        if let Some(iters) = env_parse::<usize>(env_names::MAX_ITERATIONS) {
+            self.agent.max_iterations = iters;
         }
 
         // Enable sub-agents (default true unless explicitly set to "false")
@@ -459,13 +483,6 @@ impl Config {
         if let Some(level) = env_var(env_names::AUTO_APPROVE) {
             if let Ok(l) = Level::from_str(&level) {
                 self.auto_approve = l;
-            }
-        }
-
-        // Context window size (supports formats like "131072", "128k", "200k", "200000")
-        if let Some(context_window) = env_var(env_names::CONTEXT_WINDOW) {
-            if let Some(tokens) = parse_number_with_unit(&context_window) {
-                default_model.context_window = tokens;
             }
         }
 
