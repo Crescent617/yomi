@@ -331,9 +331,13 @@ impl Compactor {
         let mut summary_input = crate::agent::MessageBuffer::sanitized_model_messages(messages);
         let mut overflow_retries = 0;
         let (summary_text, token_usage) = loop {
+            // Overflow retries already broke the shared prompt-cache prefix, so
+            // shed the tool definitions to leave more room for history.
+            let attempt_tools: &[Arc<crate::types::ToolDefinition>] =
+                if overflow_retries == 0 { tools } else { &[] };
             match generate_summary(
                 &summary_input,
-                tools,
+                attempt_tools,
                 Arc::clone(&provider),
                 model_config,
                 self.summary_max_tokens,

@@ -384,6 +384,7 @@ async fn test_full_compact_reuses_system_history_and_tools_prefix() {
 struct OverflowThenSuccessProvider {
     calls: AtomicUsize,
     message_counts: Mutex<Vec<usize>>,
+    tool_counts: Mutex<Vec<usize>>,
 }
 
 #[async_trait]
@@ -391,13 +392,17 @@ impl Provider for OverflowThenSuccessProvider {
     async fn stream(
         &self,
         messages: &[Arc<Message>],
-        _tools: &[Arc<ToolDefinition>],
+        tools: &[Arc<ToolDefinition>],
         _config: &ModelConfig,
     ) -> Result<ModelStream, ProviderError> {
         self.message_counts
             .lock()
             .expect("message counts lock")
             .push(messages.len());
+        self.tool_counts
+            .lock()
+            .expect("tool counts lock")
+            .push(tools.len());
         if self.calls.fetch_add(1, Ordering::Relaxed) == 0 {
             return Err(ProviderError::Api {
                 code: Some("context_length_exceeded".to_string()),
@@ -427,6 +432,7 @@ async fn test_full_compact_trims_oldest_round_after_context_overflow() {
     let provider = Arc::new(OverflowThenSuccessProvider {
         calls: AtomicUsize::new(0),
         message_counts: Mutex::new(Vec::new()),
+        tool_counts: Mutex::new(Vec::new()),
     });
     let messages = vec![
         Arc::new(Message::system("system")),
@@ -452,6 +458,41 @@ async fn test_full_compact_trims_oldest_round_after_context_overflow() {
     assert!(counts[1] < counts[0]);
     assert_eq!(result.messages.len(), 1);
     assert!(result.messages[0].text_content().contains("summary"));
+}
+
+#[tokio::test]
+async fn test_full_compact_drops_tools_on_overflow_retry() {
+    let provider = Arc::new(OverflowThenSuccessProvider {
+        calls: AtomicUsize::new(0),
+        message_counts: Mutex::new(Vec::new()),
+        tool_counts: Mutex::new(Vec::new()),
+    });
+    let tools = vec![Arc::new(ToolDefinition {
+        name: "read".to_string(),
+        description: "Read a file".to_string(),
+        parameters: serde_json::json!({"type": "object"}),
+        estimated_tokens: 500,
+    })];
+    let messages = vec![
+        Arc::new(Message::system("system")),
+        Arc::new(Message::user("old")),
+        Arc::new(Message::assistant("old answer")),
+        Arc::new(Message::user("current")),
+    ];
+
+    Compactor::default()
+        .full_compact(
+            &messages,
+            &tools,
+            provider.clone(),
+            &ModelConfig::default(),
+            None,
+        )
+        .await
+        .expect("overflow retry should compact successfully");
+
+    let tool_counts = provider.tool_counts.lock().expect("tool counts lock");
+    assert_eq!(tool_counts.as_slice(), &[1, 0]);
 }
 
 #[derive(Debug)]
@@ -662,10 +703,10 @@ async fn test_full_compact_uses_configured_summary_max_tokens() {
 }
 
 #[test]
-fn test_threshold_triggers_with_33k_remaining_for_200k_context() {
+fn test_threshold_triggers_with_25k_remaining_for_200k_context() {
     let compactor = Compactor::new(0.9, 0, 5, 8_192);
 
-    assert_eq!(compactor.threshold(200_000), 167_000);
+    assert_eq!(compactor.threshold(200_000), 174_400);
 }
 
 #[test]
