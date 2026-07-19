@@ -1229,6 +1229,10 @@
                       >Model</th
                     >
                     <th
+                      class="sticky top-0 z-10 bg-card text-left px-4 py-2 text-xs font-medium text-muted-foreground"
+                      >Type</th
+                    >
+                    <th
                       class="sticky top-0 z-10 bg-card text-right px-4 py-2 text-xs font-medium text-muted-foreground"
                       >Prompt</th
                     >
@@ -1271,6 +1275,18 @@
                         <div class="text-[10px] text-muted-foreground">
                           {r.provider}
                         </div>
+                      </td>
+                      <td class="px-4 py-2">
+                        <span
+                          class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium {r.usage_type ===
+                          'compactor'
+                            ? 'bg-warning/15 text-warning'
+                            : r.usage_type === 'subagent'
+                              ? 'bg-info/15 text-info'
+                              : 'bg-secondary text-secondary-foreground'}"
+                        >
+                          {r.usage_type}
+                        </span>
                       </td>
                       <td class="px-4 py-2 text-right font-mono text-xs"
                         >{formatNumber(r.prompt_tokens)}</td
