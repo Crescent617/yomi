@@ -745,7 +745,7 @@ impl Agent {
         let (provider, model_config) = self.resolve_model().await?;
 
         // 1. Check and run compaction if needed (at the very beginning)
-        if self.maybe_compact_messages(&model_config).await {
+        if self.maybe_compact_messages(&provider, &model_config).await {
             tracing::info!("performed auto-compaction before streaming");
         }
 
@@ -955,17 +955,8 @@ impl Agent {
         Ok(state.build_result())
     }
 
-    /// Force compaction regardless of threshold.
-    pub async fn force_compact(&mut self) -> Result<String, String> {
-        self.do_force_compact(false).await
-    }
-
     /// Force full compaction (skip micro-compaction).
     pub async fn force_full_compact(&mut self) -> Result<String, String> {
-        self.do_force_compact(true).await
-    }
-
-    async fn do_force_compact(&mut self, full: bool) -> Result<String, String> {
         let (provider, model_config) = self
             .resolve_model()
             .await
@@ -977,35 +968,37 @@ impl Agent {
             .ok_or("No compactor configured")?;
         let old_count = self.message_buffer.len();
         let tools = self.tool_registry.definitions();
+        let prev_state = self.begin_compaction();
+
+        let result = compactor
+            .full_compact(
+                self.message_buffer.messages(),
+                &tools,
+                provider,
+                &model_config,
+                Some(self.cancel_token.runtime_token()),
+            )
+            .await
+            .map(Some);
+
+        self.end_compaction(prev_state);
+        self.handle_compaction_result(result, old_count, &model_config)
+            .await
+    }
+
+    /// Transition into `Compacting` and emit the start event; returns the state
+    /// to restore with [`Self::end_compaction`].
+    fn begin_compaction(&self) -> AgentState {
         let prev_state = self.context.current_state();
         if !self.context.transition_to(AgentState::Compacting) {
             tracing::warn!("Failed to transition to Compacting from {:?}", prev_state);
         }
         self.emit_compaction_event(true);
+        prev_state
+    }
 
-        let result = if full {
-            compactor
-                .full_compact(
-                    self.message_buffer.messages(),
-                    &tools,
-                    provider,
-                    &model_config,
-                    Some(self.cancel_token.runtime_token()),
-                )
-                .await
-                .map(Some)
-        } else {
-            compactor
-                .auto_compact(
-                    self.message_buffer.messages(),
-                    &tools,
-                    provider,
-                    &model_config,
-                    Some(self.cancel_token.runtime_token()),
-                )
-                .await
-        };
-
+    /// Restore the pre-compaction state and emit the end event.
+    fn end_compaction(&self, prev_state: AgentState) {
         if !self.context.transition_to(prev_state) {
             tracing::warn!(
                 "Failed to transition back to {:?} from Compacting",
@@ -1013,8 +1006,6 @@ impl Agent {
             );
         }
         self.emit_compaction_event(false);
-        self.handle_compaction_result(result, old_count, &model_config)
-            .await
     }
 
     /// Handle compaction result, persist every rewrite, and clear derived file state.
@@ -1141,17 +1132,35 @@ impl Agent {
     /// Returns true if compaction occurred (including full compaction)
     async fn maybe_compact_messages(
         &mut self,
+        provider: &Arc<dyn crate::provider::Provider>,
         model_config: &crate::provider::ModelConfig,
     ) -> bool {
         let Some(compactor) = self.shared.compactor.as_ref() else {
             return false; // No compactor configured, skip
         };
         let tools = self.tool_registry.definitions();
+        // Pre-check so quiet turns do not flash Compacting state; auto_compact
+        // re-evaluates the threshold and then honors the micro-compaction
+        // config before falling back to a full summary.
         if !compactor.should_compact(self.message_buffer.messages(), &tools, model_config) {
             return false;
         }
-        // The centralized threshold check already used the provider-facing input.
-        match self.do_force_compact(true).await {
+        let old_count = self.message_buffer.len();
+        let prev_state = self.begin_compaction();
+        let result = compactor
+            .auto_compact(
+                self.message_buffer.messages(),
+                &tools,
+                Arc::clone(provider),
+                model_config,
+                Some(self.cancel_token.runtime_token()),
+            )
+            .await;
+        self.end_compaction(prev_state);
+        match self
+            .handle_compaction_result(result, old_count, model_config)
+            .await
+        {
             Ok(_) => true,
             Err(e) => {
                 tracing::warn!("auto-compaction failed: {}", e);
@@ -1301,7 +1310,7 @@ impl Agent {
                     tracing::warn!(
                         "streaming input exceeded the provider context window; forcing compaction"
                     );
-                    if let Err(compaction_error) = self.do_force_compact(true).await {
+                    if let Err(compaction_error) = self.force_full_compact().await {
                         return self
                             .fail_agent(
                                 "Context overflow recovery compaction failed",
