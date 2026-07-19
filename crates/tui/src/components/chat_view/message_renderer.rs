@@ -1053,15 +1053,11 @@ fn tool_header_summary(tool_name: &str, args: Option<&str>) -> ToolHeaderSummary
                 });
             }
         }
-        ToolKind::Write => {
-            if text("mode") == Some("append") {
-                metadata.push("append".to_string());
-            }
+        ToolKind::Write if text("mode") == Some("append") => {
+            metadata.push("append".to_string());
         }
-        ToolKind::Edit => {
-            if value.as_ref().and_then(|v| v["replace_all"].as_bool()) == Some(true) {
-                metadata.push("replace all".to_string());
-            }
+        ToolKind::Edit if value.as_ref().and_then(|v| v["replace_all"].as_bool()) == Some(true) => {
+            metadata.push("replace all".to_string());
         }
         ToolKind::Shell => {
             let background = value
@@ -1107,14 +1103,13 @@ fn tool_header_summary(tool_name: &str, args: Option<&str>) -> ToolHeaderSummary
                 metadata.push(format!("{count} results"));
             }
         }
-        ToolKind::Agent => {
+        ToolKind::Agent
             if value
                 .as_ref()
                 .and_then(|v| v["wait_for_completion"].as_bool())
-                == Some(false)
-            {
-                metadata.push("async".to_string());
-            }
+                == Some(false) =>
+        {
+            metadata.push("async".to_string());
         }
         ToolKind::PostMessage => {
             if let Some(title) = text("title") {
@@ -1151,10 +1146,10 @@ fn tool_header_summary(tool_name: &str, args: Option<&str>) -> ToolHeaderSummary
                 }
             }
         }
-        ToolKind::TaskList => {
-            if value.as_ref().and_then(|v| v["includeCompleted"].as_bool()) == Some(true) {
-                metadata.push("include completed".to_string());
-            }
+        ToolKind::TaskList
+            if value.as_ref().and_then(|v| v["includeCompleted"].as_bool()) == Some(true) =>
+        {
+            metadata.push("include completed".to_string());
         }
         ToolKind::TaskUpdate => {
             for key in ["status", "subject"] {

@@ -21,6 +21,7 @@ pub struct AppState {
     pub pet_runtime_notify: Arc<Notify>,
     pub pet_runtime_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pub selected_pet_id: Arc<std::sync::RwLock<Option<String>>>,
+    pub pet_scale: Arc<std::sync::RwLock<f64>>,
     pet_enabled: Arc<AtomicBool>,
 }
 
@@ -41,6 +42,7 @@ impl AppState {
             pet_runtime_notify: Arc::new(Notify::new()),
             pet_runtime_task: Arc::new(Mutex::new(None)),
             selected_pet_id: Arc::new(std::sync::RwLock::new(None)),
+            pet_scale: Arc::new(std::sync::RwLock::new(1.0)),
             pet_enabled: Arc::new(AtomicBool::new(false)),
         }
     }

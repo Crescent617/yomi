@@ -347,6 +347,14 @@ export async function readSelectedPetSpritesheet(
   return Array.isArray(bytes) ? new Uint8Array(bytes) : new Uint8Array(bytes);
 }
 
+export async function getPetScale(): Promise<number> {
+  return invokeCmd("get_pet_scale");
+}
+
+export async function setPetScale(scale: number): Promise<void> {
+  return invokeCmd("set_pet_scale", { scale });
+}
+
 export async function getPetState(): Promise<PetSnapshot> {
   return invokeCmd("get_pet_state");
 }

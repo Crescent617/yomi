@@ -3,7 +3,8 @@
   import {
     Bell,
     Check,
-    ChevronDown,
+    Info,
+    MessageSquare,
     Monitor,
     Moon,
     PanelLeft,
@@ -69,6 +70,14 @@
     { id: "while_running", label: "While running" },
   ];
 
+  const pet_scale_options: Array<{ value: number; label: string }> = [
+    { value: 0.5, label: "50%" },
+    { value: 0.75, label: "75%" },
+    { value: 1, label: "100%" },
+    { value: 1.5, label: "150%" },
+    { value: 2, label: "200%" },
+  ];
+
   let petSync = Promise.resolve();
 
   const dirty = $derived(
@@ -125,11 +134,13 @@
       )
         ? value.selected_pet_id
         : (pet_packs[0]?.id ?? null),
+      scale: value.scale,
     };
     petSync = petSync
       .catch(() => {})
       .then(async () => {
         await api.selectPetPack(snapshot.selected_pet_id);
+        await api.setPetScale(snapshot.scale);
         await api.setPetEnabled(
           snapshot.enabled && snapshot.selected_pet_id !== null,
         );
@@ -145,10 +156,12 @@
     const effective_pet = {
       enabled: draft.desktop_pet.enabled,
       selected_pet_id: selected_pet_pack_id,
+      scale: draft.desktop_pet.scale,
     };
     if (
       effective_pet.enabled !== previous_pet.enabled ||
-      effective_pet.selected_pet_id !== previous_pet.selected_pet_id
+      effective_pet.selected_pet_id !== previous_pet.selected_pet_id ||
+      effective_pet.scale !== previous_pet.scale
     ) {
       void syncPetPreview(effective_pet).catch((syncError) => {
         error = `Desktop pet preview failed: ${api.errorMessage(syncError)}`;
@@ -386,6 +399,31 @@
         <div class="border-b border-border px-4 py-3">
           <div class="flex items-center gap-2 text-sm font-medium">
             <Rabbit size={15} class="text-muted-foreground" /> Desktop pet
+            <div class="group relative ml-0.5 inline-flex">
+              <Info
+                size={13}
+                class="cursor-help text-muted-foreground transition-colors group-hover:text-foreground"
+              />
+              <div
+                class="invisible absolute left-1/2 top-full z-50 w-60 -translate-x-1/2 pt-1.5 opacity-0 transition-opacity group-hover:visible group-hover:opacity-100"
+              >
+                <div
+                  class="rounded-md border border-border bg-popover px-2.5 py-2 text-xs text-popover-foreground shadow-sm"
+                >
+                  Download pet packs from
+                  <a
+                    href="https://codex-pets.net"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="underline transition-colors hover:text-primary"
+                  >
+                    codex-pets.net</a
+                  >
+                  and place them in
+                  <code class="rounded bg-code-bg px-1 py-0.5">~/.yomi/pets</code>.
+                </div>
+              </div>
+            </div>
           </div>
           <p class="mt-0.5 text-xs text-muted-foreground">
             Keep a compact companion nearby for session status and requests.
@@ -435,6 +473,38 @@
               {/each}
             </select>
           </div>
+          <div
+            class="flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div>
+              <div class="text-sm text-foreground">Pet size</div>
+              <div class="text-xs text-muted-foreground">
+                Scale of the desktop pet window.
+              </div>
+            </div>
+            <select
+              value={String(draft.desktop_pet.scale)}
+              onchange={(event) =>
+                preview(
+                  (value) =>
+                    (value.desktop_pet.scale = Number(
+                      event.currentTarget.value,
+                    )),
+                )}
+              disabled={pet_packs_loading || pet_packs.length === 0}
+              class="h-8 min-w-48 rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-ring disabled:opacity-40"
+              aria-label="Desktop pet size"
+            >
+              {#each pet_scale_options as option (option.value)}
+                <option value={String(option.value)}>{option.label}</option>
+              {/each}
+              {#if !pet_scale_options.some((option) => option.value === draft.desktop_pet.scale)}
+                <option value={String(draft.desktop_pet.scale)}>
+                  {Math.round(draft.desktop_pet.scale * 100)}%
+                </option>
+              {/if}
+            </select>
+          </div>
           <label
             class="flex items-center justify-between gap-4 px-4 py-3.5 {pet_packs.length ===
             0
@@ -472,7 +542,7 @@
       >
         <div class="border-b border-border px-4 py-3">
           <div class="flex items-center gap-2 text-sm font-medium">
-            <ChevronDown size={15} class="text-muted-foreground" /> Chat
+            <MessageSquare size={15} class="text-muted-foreground" /> Chat
           </div>
           <p class="mt-0.5 text-xs text-muted-foreground">
             Defaults for new conversations.

@@ -32,6 +32,7 @@ export interface GuiPreferences {
   desktop_pet: {
     enabled: boolean;
     selected_pet_id: string | null;
+    scale: number;
   };
   chat: {
     homeModel: string | null;
@@ -65,6 +66,7 @@ export const defaultGuiPreferences: GuiPreferences = {
   desktop_pet: {
     enabled: false,
     selected_pet_id: null,
+    scale: 1,
   },
   chat: {
     homeModel: null,
@@ -102,6 +104,15 @@ function normalizePermissionLevel(value: unknown): PermissionLevel | null {
   return value === "safe" || value === "caution" || value === "dangerous"
     ? value
     : null;
+}
+
+const PET_SCALE_MIN = 0.5;
+const PET_SCALE_MAX = 3;
+
+function normalizePetScale(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(PET_SCALE_MAX, Math.max(PET_SCALE_MIN, value))
+    : defaultGuiPreferences.desktop_pet.scale;
 }
 
 function normalizeActivityGroupExpansion(
@@ -150,6 +161,7 @@ function normalizeGuiPreferences(
         typeof value?.desktop_pet?.selected_pet_id === "string"
           ? value.desktop_pet.selected_pet_id
           : null,
+      scale: normalizePetScale(value?.desktop_pet?.scale),
     },
     chat: {
       homeModel: value?.chat?.homeModel ?? defaultGuiPreferences.chat.homeModel,
@@ -205,6 +217,7 @@ async function loadLegacyPreferences(s: Store): Promise<GuiPreferences> {
     desktop_pet: {
       enabled: defaultGuiPreferences.desktop_pet.enabled,
       selected_pet_id: defaultGuiPreferences.desktop_pet.selected_pet_id,
+      scale: defaultGuiPreferences.desktop_pet.scale,
     },
     chat: {
       homeModel: legacyHomeModel,

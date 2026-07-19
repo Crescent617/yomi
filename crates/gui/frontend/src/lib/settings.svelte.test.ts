@@ -37,6 +37,7 @@ describe("GUI preference normalization", () => {
     expect(defaultGuiPreferences.desktop_pet).toEqual({
       enabled: false,
       selected_pet_id: null,
+      scale: 1,
     });
   });
 
@@ -51,6 +52,7 @@ describe("GUI preference normalization", () => {
     expect(snapshotGuiPreferences().desktop_pet).toEqual({
       enabled: false,
       selected_pet_id: null,
+      scale: 1,
     });
   });
 
@@ -63,6 +65,7 @@ describe("GUI preference normalization", () => {
     expect(snapshotGuiPreferences().desktop_pet).toEqual({
       enabled: true,
       selected_pet_id: null,
+      scale: 1,
     });
 
     const invalid = {
@@ -71,6 +74,25 @@ describe("GUI preference normalization", () => {
     } as unknown as GuiPreferences;
     replaceGuiPreferences(invalid);
     expect(snapshotGuiPreferences().desktop_pet.selected_pet_id).toBeNull();
+  });
+
+  test("normalizes invalid and out-of-range pet scales", () => {
+    const with_scale = (scale: unknown) =>
+      ({
+        ...snapshotGuiPreferences(),
+        desktop_pet: { ...snapshotGuiPreferences().desktop_pet, scale },
+      }) as GuiPreferences;
+
+    replaceGuiPreferences(with_scale("big"));
+    expect(snapshotGuiPreferences().desktop_pet.scale).toBe(1);
+    replaceGuiPreferences(with_scale(Number.NaN));
+    expect(snapshotGuiPreferences().desktop_pet.scale).toBe(1);
+    replaceGuiPreferences(with_scale(0.1));
+    expect(snapshotGuiPreferences().desktop_pet.scale).toBe(0.5);
+    replaceGuiPreferences(with_scale(10));
+    expect(snapshotGuiPreferences().desktop_pet.scale).toBe(3);
+    replaceGuiPreferences(with_scale(1.5));
+    expect(snapshotGuiPreferences().desktop_pet.scale).toBe(1.5);
   });
 
   test("snapshots desktop pet preferences without sharing references", () => {

@@ -2,7 +2,7 @@ use crate::agent::AgentConfig;
 use crate::permission::Level;
 use crate::provider::ModelConfig;
 use crate::types::KernelError;
-use crate::utils::env::{env_bool_opt, env_first, env_parse, env_var, parse_number_with_unit};
+use crate::utils::env::{env_bool_opt, env_parse, env_var, parse_number_with_unit};
 use crate::utils::path::{default_skill_folders, expand_tilde, DEFAULT_DATA_DIR};
 
 use serde::{Deserialize, Serialize};
@@ -21,14 +21,6 @@ pub mod env_names {
     pub const API_BASE: &str = env_name!("API_BASE");
     pub const MAX_TOKENS: &str = env_name!("MAX_TOKENS");
     pub const TEMPERATURE: &str = env_name!("TEMPERATURE");
-
-    /// Standard non-prefixed provider-specific env vars
-    pub const OPENAI_API_KEY: &str = "OPENAI_API_KEY";
-    pub const ANTHROPIC_API_KEY: &str = "ANTHROPIC_API_KEY";
-    pub const OPENAI_API_MODEL: &str = "OPENAI_API_MODEL";
-    pub const ANTHROPIC_MODEL: &str = "ANTHROPIC_MODEL";
-    pub const OPENAI_API_BASE: &str = "OPENAI_API_BASE";
-    pub const ANTHROPIC_BASE_URL: &str = "ANTHROPIC_BASE_URL";
 
     /// Application settings
     pub const DATA_DIR: &str = env_name!("DATA_DIR");
@@ -107,32 +99,8 @@ pub enum ModelProvider {
 }
 
 impl ModelProvider {
-    /// Get the standard (non-prefixed) API key env var name
-    #[inline]
-    pub const fn standard_api_key_env(&self) -> &'static str {
-        match self {
-            Self::OpenAI | Self::OpenAIResponse => env_names::OPENAI_API_KEY,
-            Self::Anthropic => env_names::ANTHROPIC_API_KEY,
-        }
-    }
-
-    /// Get the standard (non-prefixed) model env var name
-    #[inline]
-    pub const fn standard_model_env(&self) -> &'static str {
-        match self {
-            Self::OpenAI | Self::OpenAIResponse => env_names::OPENAI_API_MODEL,
-            Self::Anthropic => env_names::ANTHROPIC_MODEL,
-        }
-    }
-
-    /// Get the standard (non-prefixed) API base env var name
-    #[inline]
-    pub const fn standard_api_base_env(&self) -> &'static str {
-        match self {
-            Self::OpenAI | Self::OpenAIResponse => env_names::OPENAI_API_BASE,
-            Self::Anthropic => env_names::ANTHROPIC_BASE_URL,
-        }
-    }
+    // Standard non-prefixed provider-specific env vars removed.
+    // Only YOMI_* prefixed variables are supported.
 }
 
 impl std::str::FromStr for ModelProvider {
@@ -425,21 +393,20 @@ impl Config {
             }
         }
 
-        let provider = default_model.provider;
+        let _provider = default_model.provider;
 
-        // API Key: YOMI_ generic > provider-specific standard
-        if let Some(key) = env_first(&[env_names::API_KEY, provider.standard_api_key_env()]) {
+        // API Key: only YOMI_ prefixed generic variable is supported
+        if let Some(key) = env_var(env_names::API_KEY) {
             default_model.api_key = key;
         }
 
-        // Model: YOMI_ generic > provider-specific standard
-        if let Some(model) = env_first(&[env_names::MODEL, provider.standard_model_env()]) {
+        // Model: only YOMI_ prefixed generic variable is supported
+        if let Some(model) = env_var(env_names::MODEL) {
             default_model.model_id = model;
         }
 
-        // Endpoint: YOMI_ generic > provider-specific standard
-        if let Some(endpoint) = env_first(&[env_names::API_BASE, provider.standard_api_base_env()])
-        {
+        // Endpoint: only YOMI_ prefixed generic variable is supported
+        if let Some(endpoint) = env_var(env_names::API_BASE) {
             default_model.endpoint = endpoint;
         }
 

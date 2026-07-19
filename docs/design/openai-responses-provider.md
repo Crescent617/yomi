@@ -48,7 +48,7 @@ pub enum ModelProvider {
 }
 ```
 
-- `standard_api_key_env` / `standard_model_env` / `standard_api_base_env`：`OpenAIResponse` 分支**复用 OpenAI 的环境变量**（`OPENAI_API_KEY` / `OPENAI_API_MODEL` / `OPENAI_API_BASE`）。
+- `ModelProvider` 的三个标准环境变量方法（`standard_api_key_env` 等）已移除，仅保留 `YOMI_API_KEY` / `YOMI_MODEL` / `YOMI_API_BASE` 作为环境变量入口。
 - `FromStr`：接受 `openai_response` 与 `openai-response`（大小写不敏感）。
 - `Display`：输出 `openai_response`。
 

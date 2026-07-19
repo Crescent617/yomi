@@ -20,6 +20,7 @@
     look_direction?: CodexPetLookVector | null;
     look_deadzone?: number;
     look_index?: number | null;
+    scale?: number;
     label?: string;
     on_complete?: (animation: CodexPetAnimationName) => void;
   }
@@ -33,6 +34,7 @@
     look_direction = null,
     look_deadzone = 0,
     look_index = null,
+    scale = 1,
     label = "Yomi desktop pet",
     on_complete,
   }: Props = $props();
@@ -165,6 +167,8 @@
   class="codex-pet-sprite"
   width={CODEX_PET_CELL_WIDTH}
   height={CODEX_PET_CELL_HEIGHT}
+  style="width: {CODEX_PET_CELL_WIDTH *
+    scale}px; height: {CODEX_PET_CELL_HEIGHT * scale}px;"
   aria-label={label}
   data-animation={animation}
   data-frame={frame}
