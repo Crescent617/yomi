@@ -8,7 +8,7 @@ Yomi supports local packages that follow the Codex Pets V1 and V2 atlas contract
 └── spritesheet.webp
 ```
 
-Select and enable the pet from **Settings → Application → Desktop pet**. Invalid packages are ignored.
+Select and enable the pet from **Settings → Application → Desktop pet**. Invalid packages are ignored. The pet window size can be scaled from 50% to 200% in the same section.
 
 ## `pet.json`
 

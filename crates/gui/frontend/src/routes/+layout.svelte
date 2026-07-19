@@ -55,6 +55,9 @@
     await api.selectPetPack(selected_pet_id).catch((error) => {
       console.error("Failed to restore desktop pet pack:", error);
     });
+    await api.setPetScale(guiPreferences.desktop_pet.scale).catch((error) => {
+      console.error("Failed to restore desktop pet scale:", error);
+    });
     await api
       .setPetEnabled(
         guiPreferences.desktop_pet.enabled && selected_pet_id !== null,

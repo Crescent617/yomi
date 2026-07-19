@@ -100,6 +100,8 @@ pub fn run() {
             commands::pet::select_pet_pack,
             commands::pet::get_selected_pet_pack,
             commands::pet::read_selected_pet_spritesheet,
+            commands::pet::get_pet_scale,
+            commands::pet::set_pet_scale,
             commands::automation::list_cron_jobs,
             commands::automation::create_cron_job,
             commands::automation::update_cron_job,

@@ -233,14 +233,6 @@ app_secret = "..."
 | `YOMI_MAX_TOKENS` | 最大输出 token | `4096` |
 | `YOMI_TEMPERATURE` | 温度 | `0.7` |
 
-**Provider 特定 fallback（无 `YOMI_` 前缀）：**
-
-| OpenAI | Anthropic |
-|--------|-----------|
-| `OPENAI_API_KEY` | `ANTHROPIC_API_KEY` |
-| `OPENAI_API_MODEL` | `ANTHROPIC_MODEL` |
-| `OPENAI_API_BASE` | `ANTHROPIC_BASE_URL` |
-
 ### 应用配置
 
 | 变量 | 说明 | 默认值 |
@@ -289,18 +281,12 @@ app_secret = "..."
 
 ## 优先级
 
-`YOMI_XXX` > Provider 特定变量 > 配置文件 > 默认值
+`YOMI_XXX` > 配置文件 > 默认值
 
 ---
 
 ## `.env` 文件
 
-GUI 启动时会自动加载 `~/.env`（Windows 为 `%USERPROFILE%\.env`），方便桌面端配置环境变量：
-
-```dotenv
-ANTHROPIC_API_KEY=sk-...
-SEARXNG_URL=http://127.0.0.1:8080
-KIMI_AGENT_API_KEY=sk-...
-```
+GUI 启动时会自动加载 `~/.env`（Windows 为 `%USERPROFILE%\.env`），方便桌面端配置环境变量。
 
 修改后重启 GUI 生效。

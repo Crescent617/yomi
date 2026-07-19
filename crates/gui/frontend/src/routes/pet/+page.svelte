@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { LogicalSize } from "@tauri-apps/api/dpi";
   import { listen } from "@tauri-apps/api/event";
   import {
     cursorPosition,
@@ -29,6 +28,7 @@
   let snapshot = $state<PetSnapshot | null>(null);
   let spritesheet_url = $state<string | null>(null);
   let sprite_version_number = $state<PetSpriteVersion>(1);
+  let pet_scale = $state(1);
   let look_index = $state<number | null>(null);
   let pet_window: ReturnType<typeof getCurrentWindow> | undefined;
   let load_generation = 0;
@@ -117,10 +117,13 @@
     };
     update_reduced_motion();
     reduced_motion_query.addEventListener("change", update_reduced_motion);
-    void pet_window
-      .setSize(new LogicalSize(PET_SIZE.width, PET_SIZE.height))
+    void api
+      .getPetScale()
+      .then((scale) => {
+        if (!disposed) pet_scale = scale;
+      })
       .catch((error) =>
-        console.error("Failed to size desktop pet window:", error),
+        console.error("Failed to load desktop pet scale:", error),
       );
 
     const unlisten_state = listen<PetSnapshot>("pet:state", (event) => {
@@ -129,6 +132,12 @@
     const unlisten_pack = listen<PetPack | null>(
       "pet:pack_changed",
       () => void loadSpritesheet(),
+    );
+    const unlisten_scale_changed = listen<number>(
+      "pet:scale_changed",
+      (event) => {
+        if (!disposed) pet_scale = event.payload;
+      },
     );
     const unlisten_scale = pet_window.onScaleChanged(({ payload }) => {
       if (disposed) return;
@@ -311,10 +320,14 @@
       return {
         x:
           cursor_x / cursor_scale -
-          k * (last_window_x! / window_scale_factor + PET_SIZE.width / 2),
+          k *
+            (last_window_x! / window_scale_factor +
+              (PET_SIZE.width * pet_scale) / 2),
         y:
           cursor_y / cursor_scale -
-          k * (last_window_y! / window_scale_factor + PET_SIZE.height / 2),
+          k *
+            (last_window_y! / window_scale_factor +
+              (PET_SIZE.height * pet_scale) / 2),
       };
     }
 
@@ -417,6 +430,7 @@
       replaceSpritesheetUrl(null);
       void unlisten_state.then((stop) => stop());
       void unlisten_pack.then((stop) => stop());
+      void unlisten_scale_changed.then((stop) => stop());
       void unlisten_scale.then((stop) => stop());
       void unlisten_moved.then((stop) => stop());
     };
@@ -534,6 +548,7 @@
       {play_once}
       {sprite_version_number}
       {look_index}
+      scale={pet_scale}
       restart_nonce={interaction_revision}
       on_complete={completeInteraction}
     />
