@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-07-19
+
+### Added
+- Desktop pet now renders from local Codex Pets V1/V2 spritesheet packs in `~/.yomi/pets`, selectable in Settings; pack format documented in `docs/DESKTOP_PETS.md`.
+- Pet window supports status-driven animations, click jump, drag movement, and V2 gaze/ambient look with mixed-DPI handling.
+- `svelte-check` added as a frontend type-check gate (`npm run check`).
+
+### Changed
+- Auto-triggered compaction routes through `auto_compact`, honoring `micro_compact_enabled`; manual `/compact` and overflow recovery still force full compaction.
+- Request budgeting uses a fixed 2000-token estimate per image block.
+- Pet window is opaque on Linux (WebKitGTK stale-frame workaround); phaser dependency removed.
+
+### Fixed
+- Compaction overflow retries shed tool definitions to leave more room for history.
+- Stale compaction threshold test expectation after the remaining-context reserve changed to 25.6k.
+
 ## [0.5.28] - 2026-07-18
 
 ### Changed
