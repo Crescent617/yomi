@@ -135,7 +135,7 @@ impl StatusBar {
         if subagents > 0 {
             spans.push(Span::styled(
                 format!(
-                    "󰚩 {subagents} Agent{}",
+                    " 󰚩 {subagents} Agent{} ",
                     if subagents == 1 { "" } else { "s" }
                 ),
                 Style::default()
@@ -144,11 +144,8 @@ impl StatusBar {
             ));
         }
         if shells > 0 {
-            if !spans.is_empty() {
-                spans.push(Span::raw("  "));
-            }
             spans.push(Span::styled(
-                format!(" {shells} Shell{}", if shells == 1 { "" } else { "s" }),
+                format!("  {shells} Shell{} ", if shells == 1 { "" } else { "s" }),
                 Style::default()
                     .fg(colors::accent_warning())
                     .add_modifier(Modifier::BOLD),
@@ -162,20 +159,6 @@ impl StatusBar {
         let mut spans = vec![self.render_mode_section()];
         spans.extend(self.render_activity_section().spans);
         Line::from(spans)
-    }
-
-    #[cfg(test)]
-    fn activity_text(subagents: usize, shells: usize) -> String {
-        match (subagents, shells) {
-            (0, 0) => String::new(),
-            (agents, 0) => format!("󰚩 {agents} Agent{}", if agents == 1 { "" } else { "s" }),
-            (0, shells) => format!(" {shells} Shell{}", if shells == 1 { "" } else { "s" }),
-            (agents, shells) => format!(
-                "󰚩 {agents} Agent{}   {shells} Shell{}",
-                if agents == 1 { "" } else { "s" },
-                if shells == 1 { "" } else { "s" }
-            ),
-        }
     }
 
     fn render_scroll_progress_section(&self) -> Span<'static> {
