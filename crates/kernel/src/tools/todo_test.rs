@@ -183,22 +183,22 @@ async fn test_todo_update_batch_multiple() {
 }
 
 #[tokio::test]
-async fn test_todo_update_content_and_notes() {
+async fn test_todo_update_content() {
     let (storage, _temp) = create_test_storage().await;
     let tool = TodoTool::new(storage.clone());
 
     // First write a todo
     let write_input = json!({
         "action": "write",
-        "todos": [{"id": "1", "content": "Task 1", "status": "pending", "notes": "Original note"}]
+        "todos": [{"id": "1", "content": "Task 1", "status": "pending"}]
     });
     let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
     tool.exec(write_input, ctx).await.unwrap();
 
-    // Update content and remove notes
+    // Update content
     let update_input = json!({
         "action": "update",
-        "todos": [{"id": "1", "content": "Updated Task", "notes": null}]
+        "todos": [{"id": "1", "content": "Updated Task"}]
     });
     let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
     let result = tool.exec(update_input, ctx).await.unwrap();
@@ -206,7 +206,6 @@ async fn test_todo_update_content_and_notes() {
     let result_json: Value = serde_json::from_str(&result.text_content()).unwrap();
     let updated = result_json["updated"].as_array().unwrap();
     assert_eq!(updated[0]["content"], "Updated Task");
-    assert!(updated[0]["notes"].is_null());
     assert_eq!(updated[0]["status"], "pending"); // unchanged
 
     // Verify storage
@@ -214,7 +213,6 @@ async fn test_todo_update_content_and_notes() {
     let loaded_json: Value = serde_json::from_str(&loaded).unwrap();
     let todos = loaded_json["todos"].as_array().unwrap();
     assert_eq!(todos[0]["content"], "Updated Task");
-    assert!(todos[0].get("notes").is_none());
 }
 
 #[tokio::test]
@@ -379,38 +377,4 @@ async fn test_todo_update_ignores_blank_optional_fields() {
     let loaded_json: Value = serde_json::from_str(&loaded).unwrap();
     assert_eq!(loaded_json["todos"][0]["content"], "Task 1");
     assert_eq!(loaded_json["todos"][0]["status"], "pending");
-}
-
-#[tokio::test]
-async fn test_todo_update_blank_notes_removes_notes() {
-    let (storage, _temp) = create_test_storage().await;
-    let tool = TodoTool::new(storage.clone());
-
-    let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-    tool.exec(
-        json!({
-            "action": "write",
-            "todos": [{
-                "id": "1",
-                "content": "Task 1",
-                "status": "pending",
-                "notes": "Original note"
-            }]
-        }),
-        ctx,
-    )
-    .await
-    .unwrap();
-
-    let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-    tool.exec(
-        json!({"action": "update", "todos": [{"id": "1", "notes": "   "}]}),
-        ctx,
-    )
-    .await
-    .unwrap();
-
-    let loaded = storage.load("test-session").await.unwrap().unwrap();
-    let loaded_json: Value = serde_json::from_str(&loaded).unwrap();
-    assert!(loaded_json["todos"][0].get("notes").is_none());
 }
