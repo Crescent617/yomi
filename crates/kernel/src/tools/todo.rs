@@ -115,18 +115,6 @@ impl TodoTool {
                     {
                         todo["content"] = json!(content);
                     }
-                    // Update notes if provided; null or blank removes them.
-                    if update.get("notes").is_some() {
-                        if update["notes"].is_null()
-                            || update["notes"]
-                                .as_str()
-                                .is_some_and(|notes| notes.trim().is_empty())
-                        {
-                            todo.as_object_mut().unwrap().remove("notes");
-                        } else if let Some(notes) = update["notes"].as_str() {
-                            todo["notes"] = json!(notes);
-                        }
-                    }
                     updated_todos.push(todo.clone());
                     found = true;
                     break;
@@ -197,10 +185,6 @@ Guidelines:
                                 "type": "string",
                                 "enum": ["pending", "in_progress", "completed"],
                                 "description": "Current status (required for write)"
-                            },
-                            "notes": {
-                                "type": "string",
-                                "description": "Optional additional notes"
                             }
                         }
                     }
