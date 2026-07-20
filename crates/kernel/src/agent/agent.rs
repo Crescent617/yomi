@@ -833,6 +833,7 @@ impl Agent {
             if let Some(response_id) = result.response_id {
                 msg.response_id = Some(response_id);
             }
+            msg.model_id = Some(model_config.model_id.clone());
             if let Some(fr) = result.finish_reason {
                 msg.finish_reason = Some(fr);
             }

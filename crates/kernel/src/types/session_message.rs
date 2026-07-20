@@ -35,6 +35,7 @@ pub struct AssistantMsg {
     pub tool_calls: Option<Vec<ToolCall>>,
     pub token_usage: Option<MessageTokenUsage>,
     pub response_id: Option<String>,
+    pub model_id: Option<String>,
     pub finish_reason: Option<FinishReason>,
     pub created_at: DateTime<Utc>,
 }
@@ -109,6 +110,7 @@ impl SessionMessage {
                         tool_calls: msg.tool_calls,
                         token_usage: msg.token_usage,
                         response_id: msg.response_id,
+                        model_id: msg.model_id,
                         finish_reason: msg.finish_reason,
                         created_at: msg.created_at,
                     }));
