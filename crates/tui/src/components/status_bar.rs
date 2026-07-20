@@ -109,7 +109,7 @@ impl StatusBar {
     }
 
     fn render_mode_section(&self) -> Span<'static> {
-        let (bg, text) = match self.mode {
+        let (accent, text) = match self.mode {
             AppMode::Normal => {
                 // Use warning color for YOLO mode
                 if self.permission_level == Some(Level::Dangerous) {
@@ -120,11 +120,10 @@ impl StatusBar {
             }
             AppMode::Browse => (colors::accent_system(), " BROWSE ".to_string()),
         };
-        let fg = colors::selected_bg();
 
         Span::styled(
             text,
-            Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
         )
     }
 
