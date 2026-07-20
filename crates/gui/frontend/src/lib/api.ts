@@ -461,6 +461,7 @@ export interface SessionMessageAssistant {
     total_tokens: number;
   } | null;
   response_id: string | null;
+  model_id: string | null;
   finish_reason: string | null;
   created_at: string;
 }

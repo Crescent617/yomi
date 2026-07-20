@@ -354,6 +354,9 @@ pub struct Message {
     /// API response ID (e.g., "chatcmpl-xxx" or "`msg_xxx`", only set for assistant messages from API)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_id: Option<String>,
+    /// Model ID that generated this message (only set for assistant messages from API)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
     /// Finish/stop reason from API response (normalized across providers)
     /// Only set for assistant messages from API
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -375,6 +378,7 @@ impl Default for Message {
             created_at: Utc::now(),
             token_usage: None,
             response_id: None,
+            model_id: None,
             finish_reason: None,
             metadata: None,
         }
@@ -521,6 +525,13 @@ impl Message {
     #[must_use]
     pub fn with_response_id(mut self, response_id: impl Into<String>) -> Self {
         self.response_id = Some(response_id.into());
+        self
+    }
+
+    /// Set the model ID for this message (builder pattern, for assistant messages)
+    #[must_use]
+    pub fn with_model_id(mut self, model_id: impl Into<String>) -> Self {
+        self.model_id = Some(model_id.into());
         self
     }
 }
