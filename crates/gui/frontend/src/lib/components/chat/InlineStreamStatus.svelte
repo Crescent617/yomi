@@ -2,6 +2,7 @@
   import type { Message, SessionState } from "../../state.svelte";
   import { findThinking, hasText } from "../../session";
   import { isActiveSessionPhase } from "../../session-phase";
+  import { estimateJsonTokens, estimateTextTokens, formatStreamTokens } from "./stream-status";
 
   let {
     session,
@@ -59,6 +60,26 @@
     currentToolName ? capitalize(currentToolName) : null,
   );
 
+  // Live token estimate for whatever is currently streaming: thinking text
+  // or tool call argument deltas. Null when nothing countable is streaming.
+  const streamTokens = $derived.by(() => {
+    const lastMsg = messages.at(-1);
+    if (lastMsg?.type !== "assistant") return null;
+
+    if (session.streaming_tool_name) {
+      const args = lastMsg.tool_calls?.at(-1)?.arguments;
+      if (!args) return null;
+      const tokens = estimateJsonTokens(args);
+      return tokens > 0 ? formatStreamTokens(tokens) : null;
+    }
+
+    if (status !== "Thinking") return null;
+    const lastBlock = lastMsg.content.at(-1);
+    if (lastBlock?.type !== "thinking" || !lastBlock.thinking) return null;
+    const tokens = estimateTextTokens(lastBlock.thinking);
+    return tokens > 0 ? formatStreamTokens(tokens) : null;
+  });
+
   const visible = $derived(isActiveSessionPhase(session.phase));
 </script>
 
@@ -94,6 +115,11 @@
         {/if}...
       </span>
     {/key}
+    {#if streamTokens}
+      <span class="font-mono tabular-nums text-muted-foreground/60"
+        >{streamTokens}</span
+      >
+    {/if}
   </div>
 {/if}
 
