@@ -24,6 +24,10 @@ import {
   reconcileRunningSessionPhases,
   setSessionPhase,
 } from "./session-phase";
+import {
+  clearQueuedMessage,
+  flushQueuedMessage,
+} from "./queued-messages.svelte";
 
 // ── Kernel notification listener ─────────────────────────────────────────
 
@@ -157,6 +161,10 @@ export async function startNotificationListener(): Promise<() => void> {
           session_id: string;
           kind: "subagent" | "shell";
         };
+        agent_activity?: {
+          session_id: string;
+          activity: { kind: string; reason?: StopReason };
+        };
       };
     }) => {
       const payload = e.payload;
@@ -165,10 +173,8 @@ export async function startNotificationListener(): Promise<() => void> {
         const previousStatus = lastKnownSessionStatus.get(session_id);
         lastKnownSessionStatus.set(session_id, status);
         const session = getSession(session_id);
-        if (
-          !session_id.startsWith("sub_") &&
-          didSessionComplete(previousStatus, status)
-        ) {
+        const completed = didSessionComplete(previousStatus, status);
+        if (!session_id.startsWith("sub_") && completed) {
           const completedAt = new Date().toISOString();
           void recordSessionCompletion(session_id, completedAt);
         }
@@ -184,6 +190,20 @@ export async function startNotificationListener(): Promise<() => void> {
         }
         if (session_id.startsWith("sub_")) refreshSubagentParent(session_id);
         void refreshRunningSessions();
+      }
+      if (payload.agent_activity) {
+        const { session_id, activity } = payload.agent_activity;
+        // Auto-send the queued message only after a successful run; on
+        // failure/cancel it stays queued for the user to review.
+        if (
+          activity.kind === "stopped" &&
+          activity.reason &&
+          "completed" in activity.reason
+        ) {
+          void flushQueuedMessage(session_id).then((ok) => {
+            if (!ok) showNotification("Failed to send queued message", "error");
+          });
+        }
       }
       if (payload.title_updated) {
         const { session_id, title } = payload.title_updated;
@@ -326,11 +346,6 @@ export interface PendingAskUser {
   questions: AskQuestion[];
 }
 
-export interface QueuedInput {
-  text: string;
-  blocks?: TaggedContentBlock[];
-}
-
 export interface SessionState {
   id: string;
   project_path: string;
@@ -346,7 +361,6 @@ export interface SessionState {
   active_tab_id: string;
   pending_permissions: PendingPermission[];
   pending_ask_users: PendingAskUser[];
-  queued_input: QueuedInput | null;
   updated_at: string;
   permission_level?: string;
   is_pinned?: boolean;
@@ -422,14 +436,16 @@ export interface ToolMetadata {
   metadata: Record<string, string>;
 }
 
+export type StopReason =
+  | { cancelled: { operation?: string } }
+  | { failed: { error: string } }
+  | { max_iterations: { reached: number } }
+  | { completed: { finish_reason?: string | null } };
+
 export interface AgentLifecycleStopped {
   state: {
     stopped: {
-      reason:
-        | { cancelled: { operation?: string } }
-        | { failed: { error: string } }
-        | { max_iterations: { reached: number } }
-        | { completed: true };
+      reason: StopReason;
     };
   };
 }
@@ -577,6 +593,20 @@ export const pinnedSessionMeta = $state(
 );
 
 export const streamingMessages = $state<Record<string, Message[]>>({});
+
+/** Per-session composer drafts — survives tab/session switches. */
+export const inputDrafts = $state<Record<string, string>>({});
+
+/**
+ * Drop all ephemeral per-session UI state. Call when a session is deleted
+ * so stale entries never linger or resurface for a reused id.
+ */
+export function purgeSessionLocalState(sessionId: string): void {
+  clearQueuedMessage(sessionId);
+  delete inputDrafts[sessionId];
+  delete unreadSessions[sessionId];
+  delete pinnedSessionMeta[sessionId];
+}
 
 // ── Notification helper ──────────────────────────────────────────────────
 

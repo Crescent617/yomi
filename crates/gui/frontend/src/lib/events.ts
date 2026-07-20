@@ -395,23 +395,6 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
         streamingMessages[session.id] = [];
       }
       refreshCheckpoints(session.id);
-      if (session.queued_input) {
-        const { text, blocks } = session.queued_input;
-        session.queued_input = null;
-        if (blocks && blocks.length > 0) {
-          api
-            .sendMessageBlocks(session.id, blocks)
-            .catch((e: Error) =>
-              console.error("Failed to send queued message:", e),
-            );
-        } else {
-          api
-            .sendMessage(session.id, text)
-            .catch((e: Error) =>
-              console.error("Failed to send queued message:", e),
-            );
-        }
-      }
       const stopReason = state.stopped.reason;
       if ("cancelled" in stopReason) {
         const op = stopReason.cancelled.operation;

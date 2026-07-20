@@ -111,7 +111,6 @@ export function createSessionState(
     active_tab_id: "chat",
     pending_permissions: [],
     pending_ask_users: [],
-    queued_input: null,
     updated_at: new Date().toISOString(),
     goal: null,
     todos: [],

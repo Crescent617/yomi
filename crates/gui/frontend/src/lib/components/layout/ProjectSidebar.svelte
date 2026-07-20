@@ -24,6 +24,7 @@
   import * as api from "../../api";
   import ConfirmDialog from "../ui/ConfirmDialog.svelte";
   import StatusDot from "./StatusDot.svelte";
+  import QueuedIndicator from "./QueuedIndicator.svelte";
   import SessionForkMenuItem from "./SessionForkMenuItem.svelte";
   import {
     sessionState,
@@ -35,6 +36,7 @@
     pinnedSessionMeta,
     getSession,
     showNotification,
+    purgeSessionLocalState,
     type SessionState,
   } from "../../state.svelte";
   import {
@@ -357,8 +359,7 @@
       await api.deleteSession(id);
       sessionState.sessions = sessionState.sessions.filter((s) => s.id !== id);
       removeSessionNotifications(new Set([id]));
-      delete unreadSessions[id];
-      delete pinnedSessionMeta[id];
+      purgeSessionLocalState(id);
       loadPinnedSessions();
       if (sessionState.activeSessionId === id) setActiveSession(null);
       showNotification("Session deleted", "success");
@@ -404,8 +405,7 @@
       );
       removeProjectNotifications(id, removedIds);
       for (const sid of removedIds) {
-        delete unreadSessions[sid];
-        delete pinnedSessionMeta[sid];
+        purgeSessionLocalState(sid);
       }
       delete sessionCursors[id];
       loadedProjects.delete(id);
@@ -709,9 +709,9 @@
                   >
                 {/if}
               </button>
-              <div class="relative h-5 w-5 shrink-0">
+              <div class="relative h-5 min-w-5 shrink-0">
                 <div
-                  class="absolute inset-0 flex items-center justify-center gap-1 transition-opacity {pinnedMenu?.session_id ===
+                  class="flex h-5 items-center justify-center gap-1 transition-opacity {pinnedMenu?.session_id ===
                   session_id
                     ? 'opacity-0'
                     : 'group-hover:opacity-0'}"
@@ -723,6 +723,7 @@
                       title="Unread"
                     ></span>
                   {/if}
+                  <QueuedIndicator {session_id} />
                   {#if session}
                     <StatusDot phase={session.phase} />
                   {/if}
@@ -877,6 +878,7 @@
               <span class="absolute -top-0.5 -right-0.5">
                 <StatusDot phase={session.phase} />
               </span>
+              <QueuedIndicator session_id={session.id} variant="dot" />
             </button>
           {/each}
         </div>
@@ -956,9 +958,9 @@
                       </button>
                     {/if}
                   </div>
-                  <div class="relative h-5 w-5 shrink-0">
+                  <div class="relative h-5 min-w-5 shrink-0">
                     <div
-                      class="absolute inset-0 flex items-center justify-center gap-1 transition-opacity {projectMenu?.session_id ===
+                      class="flex h-5 items-center justify-center gap-1 transition-opacity {projectMenu?.session_id ===
                       session.id
                         ? 'opacity-0'
                         : 'group-hover:opacity-0'}"
@@ -970,6 +972,7 @@
                           title="Unread"
                         ></span>
                       {/if}
+                      <QueuedIndicator session_id={session.id} />
                       <StatusDot phase={session.phase} />
                     </div>
                     <button
@@ -1257,9 +1260,9 @@
                           {formatTimeAgo(session.updated_at, clock.now)}
                         </span>
                       {/if}
-                      <div class="relative h-5 w-5 shrink-0">
+                      <div class="relative h-5 min-w-5 shrink-0">
                         <div
-                          class="absolute inset-0 flex items-center justify-center gap-1 transition-opacity {projectMenu?.session_id ===
+                          class="flex h-5 items-center justify-center gap-1 transition-opacity {projectMenu?.session_id ===
                           session.id
                             ? 'opacity-0'
                             : 'group-hover:opacity-0'}"
@@ -1271,6 +1274,7 @@
                               title="Unread"
                             ></span>
                           {/if}
+                          <QueuedIndicator session_id={session.id} />
                           <StatusDot phase={session.phase} />
                         </div>
                         <button

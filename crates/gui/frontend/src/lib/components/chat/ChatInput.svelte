@@ -15,7 +15,9 @@
     sessionState,
     getActiveSession,
     showNotification,
+    inputDrafts,
   } from "../../state.svelte";
+  import { queueMessage } from "../../queued-messages.svelte";
   import { forkSession, textFromBlocks } from "../../session";
   import { isActiveSessionPhase } from "../../session-phase";
   import { SLASH_COMMANDS } from "../../commands";
@@ -220,13 +222,21 @@
     if (isSending) return;
     const session = activeSession;
     if (!session || !content.trim()) return;
-    session.queued_input = {
-      text: content.trim(),
+    const text = content.trim();
+    const queued = queueMessage(session.id, {
+      text,
       blocks:
         inlineImages.length > 0
-          ? buildContentBlocks(content.trim(), inlineImages)
+          ? buildContentBlocks(text, inlineImages)
           : undefined,
-    };
+    });
+    if (!queued) {
+      showNotification(
+        "A message is already queued — edit or cancel it first",
+        "warning",
+      );
+      return;
+    }
     content = "";
     clearInlineImages();
     fileAttachments = [];
@@ -816,7 +826,19 @@
       skillsLoadedForSessionId = null;
       availableSkills = [];
       prevSessionId = currentId;
+      // Restore this session's draft; attachments are not persisted
+      content = currentId ? (inputDrafts[currentId] ?? "") : "";
+      clearInlineImages();
+      fileAttachments = [];
+      requestAnimationFrame(autoResize);
     }
+  });
+
+  // Persist the draft on every change (declared after the restore effect
+  // above so a session switch never overwrites the new session's draft)
+  $effect(() => {
+    const currentId = activeSession?.id;
+    if (currentId) inputDrafts[currentId] = content;
   });
 
   function getSession(session_id: string) {
