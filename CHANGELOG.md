@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.4] - 2026-07-20
+
+### Fixed
+- Token usage 每个 stream 只记录一次：OpenAI 兼容流可能在 choice 级和顶层 chunk 重复携带 usage，此前每个事件都写库导致单次调用产生 2~3 条重复记录（约 18% 数据冗余）。
+
 ## [0.6.3] - 2026-07-19
 
 ### Added
