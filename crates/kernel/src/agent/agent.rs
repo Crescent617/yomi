@@ -919,21 +919,6 @@ impl Agent {
                                 total_tokens: total,
                                 context_window,
                             }));
-                            // Record token usage
-                            if let Some(store) = &self.shared.usage_store {
-                                if let Some(ref model_config) = self.current_model_config {
-                                    let record = crate::storage::UsageRecord::new(
-                                        self.session_id.clone(),
-                                        usage,
-                                        model_config.model_id.clone(),
-                                        model_config.provider.to_string(),
-                                        crate::storage::UsageType::Normal,
-                                    );
-                                    if let Err(e) = store.record(&record).await {
-                                        tracing::warn!("Failed to record token usage: {}", e);
-                                    }
-                                }
-                            }
                         }
                         ModelStreamItem::ResponseMeta { response_id, finish_reason } => {
                             tracing::debug!(
@@ -952,7 +937,27 @@ impl Agent {
             }
         }
 
-        Ok(state.build_result())
+        let result = state.build_result();
+
+        // Record token usage once per stream. Providers may emit TokenUsage
+        // multiple times per response (e.g. choice-level and top-level usage
+        // chunks); the final event carries the complete values.
+        if let (Some(usage), Some(store)) = (result.token_usage, &self.shared.usage_store) {
+            if let Some(ref model_config) = self.current_model_config {
+                let record = crate::storage::UsageRecord::new(
+                    self.session_id.clone(),
+                    usage,
+                    model_config.model_id.clone(),
+                    model_config.provider.to_string(),
+                    crate::storage::UsageType::Normal,
+                );
+                if let Err(e) = store.record(&record).await {
+                    tracing::warn!("Failed to record token usage: {}", e);
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     /// Force full compaction (skip micro-compaction).

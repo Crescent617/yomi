@@ -108,3 +108,87 @@ async fn retry_delay_observes_existing_cancellation() {
 
     assert!(matches!(result, Err(AgentError::Cancelled(_))));
 }
+
+/// Providers may emit `TokenUsage` multiple times per response (e.g. both
+/// choice-level and top-level usage chunks). Only one usage record should be
+/// persisted per stream, using the final reported values.
+#[tokio::test]
+async fn repeated_token_usage_events_are_recorded_once() {
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs};
+    use crate::provider::{ModelConfig, ModelStream, ModelStreamItem, TokenUsage};
+    use crate::storage::UsageStore;
+    use crate::types::{MessageId, SessionId};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    crate::storage::migrations::run_migrations(&pool)
+        .await
+        .unwrap();
+    let usage_store: Arc<dyn UsageStore> = Arc::new(crate::storage::SqliteUsageStore::new(pool));
+
+    let model_config = ModelConfig {
+        name: "test".to_string(),
+        model_id: "test-id".to_string(),
+        ..ModelConfig::default()
+    };
+    let mut models = BTreeMap::new();
+    models.insert("test".to_string(), model_config.clone());
+    let shared = Arc::new(AgentShared::new(
+        Arc::new(models),
+        "test".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(usage_store.clone()),
+        None,
+        Vec::new(),
+        None,
+        None,
+    ));
+
+    let working_dir = tempfile::tempdir().unwrap();
+    let args = AgentSpawnArgs {
+        base_prompt: "test".to_string(),
+        skills: Vec::new(),
+        history: Vec::new(),
+        session_id: SessionId::new().to_string(),
+        parent_session_id: None,
+        max_iterations: 1,
+        enable_subagent: false,
+        working_dir: working_dir.path().to_path_buf(),
+        cancel_token: None,
+        file_state_store: None,
+        tool_blocklist: Vec::new(),
+        max_tool_output_length: 1024,
+        mailbox: Arc::new(crate::comms::Mailbox::new()),
+        input_bus: None,
+    };
+    let mut agent = Agent::new(&shared, args).await;
+    agent.current_model_config = Some(Arc::new(model_config));
+
+    let usage = TokenUsage::new(100, 10, None);
+    let items = vec![
+        Ok(ModelStreamItem::TokenUsage(usage)),
+        Ok(ModelStreamItem::TokenUsage(usage)),
+        Ok(ModelStreamItem::TokenUsage(usage)),
+    ];
+    let mut stream: ModelStream = Box::pin(futures::stream::iter(items));
+
+    let result = agent
+        .collect_stream_output(&mut stream, MessageId::new())
+        .await
+        .unwrap();
+
+    assert_eq!(result.token_usage, Some(usage));
+    let records = usage_store.list_records(None, 10).await.unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].prompt_tokens, 100);
+    assert_eq!(records[0].completion_tokens, 10);
+}
