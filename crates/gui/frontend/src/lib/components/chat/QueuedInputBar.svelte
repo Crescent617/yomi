@@ -3,6 +3,10 @@
   import type { SessionState } from "../../state.svelte";
   import type { TaggedContentBlock } from "../../types";
   import { showNotification } from "../../state.svelte";
+  import {
+    clearQueuedMessage,
+    queuedMessages,
+  } from "../../queued-messages.svelte";
 
   let {
     session,
@@ -14,28 +18,28 @@
     onSteer: (blocks: TaggedContentBlock[]) => void;
   } = $props();
 
+  const queued = $derived(queuedMessages[session.id]);
+
   function handleSteer() {
-    if (!session.queued_input) return;
-    const blocks = session.queued_input.blocks ?? [
-      { type: "text", text: session.queued_input.text },
-    ];
+    if (!queued) return;
+    const blocks = queued.blocks ?? [{ type: "text", text: queued.text }];
     onSteer(blocks);
-    session.queued_input = null;
+    clearQueuedMessage(session.id);
   }
 
   function handleEdit() {
-    if (!session.queued_input) return;
-    onEdit(session.queued_input.text);
-    session.queued_input = null;
+    if (!queued) return;
+    onEdit(queued.text);
+    clearQueuedMessage(session.id);
   }
 
   function handleCancel() {
-    session.queued_input = null;
+    clearQueuedMessage(session.id);
     showNotification("Queued message cancelled", "info");
   }
 </script>
 
-{#if session.queued_input}
+{#if queued}
   <div
     class="mx-4 mb-2 rounded-md border border-border bg-secondary/50 px-3 py-2 flex items-center gap-3"
   >
@@ -44,7 +48,7 @@
       <div class="text-xs text-muted-foreground mb-0.5">
         Queued — will send when streaming ends
       </div>
-      <div class="text-sm truncate">{session.queued_input.text}</div>
+      <div class="text-sm truncate">{queued.text}</div>
     </div>
     <button
       type="button"
