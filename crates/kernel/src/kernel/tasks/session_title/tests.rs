@@ -78,7 +78,7 @@ fn title_model_config_disables_thinking_and_allows_output() {
 
     let config = title_model_config(&source);
 
-    assert_eq!(config.max_tokens, Some(64));
+    assert_eq!(config.max_tokens, Some(1000));
     assert!(!config.thinking.enabled);
     assert_eq!(config.thinking.effort, None);
     assert_eq!(config.thinking.budget_tokens, 2048);

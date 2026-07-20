@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 const PROMPT: &str = include_str!("prompt.txt");
 const MAX_INPUT_CHARS: usize = 200;
-const MAX_OUTPUT_TOKENS: u32 = 64;
+const MAX_OUTPUT_TOKENS: u32 = 1000;
 
 pub(in crate::kernel) fn input_from_blocks(blocks: &[ContentBlock]) -> Option<String> {
     let text = blocks
