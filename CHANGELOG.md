@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.5] - 2026-07-20
+
+### Added
+- GUI inline stream status 实时显示估算 token 数：thinking 流按 ~4 字节/token、tool 参数 delta 按 ~2 字节/token 估算，与 kernel 估算逻辑一致。
+
+### Fixed
+- Session title 生成的 max_tokens 从 64 提高到 1000：部分模型即使请求关闭 thinking 仍会输出推理内容，64 的预算被耗尽导致标题生成失败。
+
 ## [0.6.4] - 2026-07-20
 
 ### Fixed
