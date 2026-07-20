@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.6] - 2026-07-20
+
+### Added
+- Assistant 消息持久化 `model_id`：存储实际请求使用的模型 id，随 JSONL 消息历史保存，并通过 `list_messages` API 暴露给前端；旧格式消息无该字段可正常读取。
+
 ## [0.6.5] - 2026-07-20
 
 ### Added
