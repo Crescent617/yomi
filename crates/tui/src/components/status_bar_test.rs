@@ -1,6 +1,27 @@
 use super::{AppMode, StatusBar};
 use crate::theme::colors;
+use kernel::permission::Level;
 use tuirealm::ratatui::style::Modifier;
+
+#[test]
+fn mode_section_uses_colored_foreground_without_background() {
+    let mut status = StatusBar::default();
+    status.set_mode(AppMode::Browse);
+
+    let mode = &status.render_left_section().spans[0];
+    assert_eq!(mode.content, " BROWSE ");
+    assert_eq!(mode.style.fg, Some(colors::accent_system()));
+    assert_eq!(mode.style.bg, None);
+    assert!(mode.style.add_modifier.contains(Modifier::BOLD));
+
+    let mut status = StatusBar::default();
+    status.set_permission_level(Level::Dangerous);
+
+    let mode = &status.render_left_section().spans[0];
+    assert_eq!(mode.content, " YOLO ");
+    assert_eq!(mode.style.fg, Some(colors::accent_warning()));
+    assert_eq!(mode.style.bg, None);
+}
 
 #[test]
 fn activity_indicators_use_colored_foregrounds_without_backgrounds() {
