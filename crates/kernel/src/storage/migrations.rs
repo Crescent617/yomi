@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 13;
+pub const CURRENT_SCHEMA_VERSION: i64 = 14;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -166,6 +166,26 @@ const MIGRATIONS: &[Migration] = &[
         version: 13,
         name: "add_session_model_key",
         sqls: &[r"ALTER TABLE sessions ADD COLUMN model_key TEXT;"],
+    },
+    Migration {
+        version: 14,
+        name: "add_favorite_answers",
+        sqls: &[
+            r"CREATE TABLE favorite_answers (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                session_title TEXT,
+                content TEXT NOT NULL,
+                note TEXT,
+                favorited_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                message_created_at DATETIME
+            );",
+            r"CREATE UNIQUE INDEX idx_favorite_answers_message
+               ON favorite_answers(session_id, message_id);",
+            r"CREATE INDEX idx_favorite_answers_time
+               ON favorite_answers(favorited_at DESC);",
+        ],
     },
 ];
 

@@ -8,6 +8,7 @@
     Moon,
     Monitor,
     CalendarClock,
+    Star,
   } from "lucide-svelte";
   import { appState, requestActivePanel } from "../../state.svelte";
   import {
@@ -19,6 +20,7 @@
 
   const tabs = [
     { id: "chat", icon: MessageSquare, label: "Chat" },
+    { id: "favorites", icon: Star, label: "Favorites" },
     { id: "automation", icon: CalendarClock, label: "Automation" },
     { id: "usage", icon: BarChart3, label: "Usage" },
     { id: "debug", icon: Bug, label: "Debug" },

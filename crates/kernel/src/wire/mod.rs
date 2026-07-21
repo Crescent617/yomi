@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 // ── Wire Protocol ────────────────────────────────────────────────────────
 
 /// Wire protocol version. Bumped on any breaking change to the IPC schema.
-pub const WIRE_PROTOCOL_VERSION: u32 = 17;
+pub const WIRE_PROTOCOL_VERSION: u32 = 18;
 
 /// All operations a client can request from the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,6 +122,27 @@ pub enum ReqMethod {
     },
     ClearSession {
         session_id: String,
+    },
+
+    // ── Favorites ────────────────────────────────────────────────────────
+    AddFavorite {
+        input: crate::storage::AddFavoriteInput,
+    },
+    RemoveFavorite {
+        favorite_id: String,
+    },
+    RemoveFavoriteByMessage {
+        session_id: String,
+        message_id: String,
+    },
+    ListFavorites {
+        query: Option<String>,
+        limit: usize,
+        offset: usize,
+    },
+    UpdateFavoriteNote {
+        favorite_id: String,
+        note: Option<String>,
     },
 
     // ── Cron Job ─────────────────────────────────────────────────────────

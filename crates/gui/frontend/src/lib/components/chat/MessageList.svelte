@@ -1,5 +1,9 @@
 <script lang="ts">
   import { getActiveSession, streamingMessages } from "../../state.svelte";
+  import {
+    scrollToMessageRequest,
+    clearScrollToMessageRequest,
+  } from "../../state.svelte";
   import { onMount } from "svelte";
   import { ArrowDown } from "lucide-svelte";
   import TaskDock from "./TaskDock.svelte";
@@ -126,6 +130,44 @@
     if (isProgrammaticScroll) return;
     updateBottomState();
   }
+
+  // Honor scroll-to-message requests (e.g. jumping from Favorites). The
+  // request stays pending until the target renders (session switches load
+  // messages asynchronously and event replays keep mutating the list), so
+  // the actual scroll is debounced until the DOM settles; otherwise
+  // follow-latest scrolls would cancel it. Expires after a few seconds.
+  $effect(() => {
+    const id = scrollToMessageRequest.messageId;
+    if (!id || !messageContent || !scrollContainer) return;
+    // Re-run as rendered items change so late-arriving messages are found.
+    void displaySections;
+    if (Date.now() - scrollToMessageRequest.at > 8000) {
+      clearScrollToMessageRequest();
+      return;
+    }
+    const el = messageContent.querySelector(`[data-message-id="${id}"]`);
+    if (!el) return;
+    const container = scrollContainer;
+    const timer = setTimeout(() => {
+      if (scrollToMessageRequest.messageId !== id) return;
+      clearScrollToMessageRequest();
+      followLatest = false;
+      isNearBottom = false;
+      const containerTop = container.getBoundingClientRect().top;
+      const offset =
+        el.getBoundingClientRect().top - containerTop + container.scrollTop;
+      const reduceMotion = window.matchMedia(
+        "(prefers-reduced-motion: reduce)",
+      ).matches;
+      container.scrollTo({
+        top: Math.max(0, offset - container.clientHeight / 3),
+        behavior: reduceMotion ? "auto" : "smooth",
+      });
+      el.classList.add("message-flash");
+      setTimeout(() => el.classList.remove("message-flash"), 1800);
+    }, 400);
+    return () => clearTimeout(timer);
+  });
 
   onMount(() => {
     if (!messageContent) return;

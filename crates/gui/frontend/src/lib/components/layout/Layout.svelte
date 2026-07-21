@@ -13,9 +13,11 @@
   import UsagePanel from "./UsagePanel.svelte";
   import DebugPanel from "./DebugPanel.svelte";
   import AutomationPanel from "../automation/AutomationPanel.svelte";
+  import FavoritesPanel from "./FavoritesPanel.svelte";
   import ConfigPanel from "./ConfigPanel.svelte";
   import StatusBar from "./StatusBar.svelte";
   import { startClock } from "../../clock.svelte";
+  import { loadFavorites } from "../../favorites.svelte";
 
   let mobileSidebarOpen = $state(false);
   let isDraggingLeft = $state(false);
@@ -23,6 +25,7 @@
   onMount(() => {
     startClock();
     loadProjects();
+    void loadFavorites();
   });
 
   async function loadProjects() {
@@ -153,6 +156,8 @@
         />
       {:else if appState.activePanel === "usage"}
         <UsagePanel onToggleLeftPanel={toggleMobileSidebar} />
+      {:else if appState.activePanel === "favorites"}
+        <FavoritesPanel onToggleLeftPanel={toggleMobileSidebar} />
       {:else if appState.activePanel === "automation"}
         <AutomationPanel onToggleLeftPanel={toggleMobileSidebar} />
       {:else if appState.activePanel === "debug"}

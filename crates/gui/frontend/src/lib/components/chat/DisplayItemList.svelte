@@ -7,6 +7,7 @@
   import SteerBlock from "./SteerBlock.svelte";
   import ErrorBubble from "./ErrorBubble.svelte";
   import ActivityGroup from "./ActivityGroup.svelte";
+  import MessageActions from "./MessageActions.svelte";
   import TextBlock from "./TextBlock.svelte";
   import { formatMessageTime } from "../../utils";
 
@@ -50,8 +51,9 @@
   {:else if item.type === "message"}
     {@const msg = item.message}
     <div
-      class="group relative"
+      class="group group/ma relative"
       class:my-2={msg.type === "user"}
+      data-message-id={msg.id}
       data-user-query-id={msg.type === "user" ? msg.id : undefined}
     >
       {#if msg.type === "user"}
@@ -62,7 +64,11 @@
           created_at={msg.created_at}
         />
       {:else if msg.type === "assistant"}
-        <AssistantBubble message={msg} isStreaming={item.isStreaming} />
+        <AssistantBubble
+          message={msg}
+          isStreaming={item.isStreaming}
+          {session_id}
+        />
       {/if}
       {#if msg.type === "user"}
         {@render messageTimestamp(msg.created_at, item.isStreaming)}
@@ -80,10 +86,16 @@
       />
       {#each item.messages as m, messageIndex (`${m.type}-${m.id}-${messageIndex}`)}
         {#if m.type === "assistant" && hasText(m.content)}
-          <TextBlock
-            content={textFromBlocks(m.content)}
-            isStreaming={item.isStreaming}
-          />
+          {@const text = textFromBlocks(m.content)}
+          <div class="group/ma relative" data-message-id={m.id}>
+            <MessageActions
+              {session_id}
+              message={m}
+              content={text}
+              isStreaming={item.isStreaming}
+            />
+            <TextBlock content={text} isStreaming={item.isStreaming} />
+          </div>
         {/if}
       {/each}
     </div>

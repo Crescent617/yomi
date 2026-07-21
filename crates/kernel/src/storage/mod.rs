@@ -23,6 +23,7 @@
 //! # }
 //! ```
 
+pub mod favorite;
 pub mod file_state;
 pub mod gc;
 pub mod jsonl_store;
@@ -41,6 +42,7 @@ pub use init::StorageSet;
 pub(crate) mod migrations;
 
 // Re-export common types for convenience
+pub use favorite::{AddFavoriteInput, FavoriteAnswer, FavoriteStore, SqliteFavoriteStore};
 pub use file_state::{FileState, FileStateStore, JsonlFileStateStore};
 pub use gc::{GarbageCollector, GcOptions, GcReport};
 pub use message::{JsonlMessageStore, MessageStore};

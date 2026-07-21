@@ -203,3 +203,18 @@ body.pet-window {
     animation: none !important;
   }
 }
+
+/* Brief highlight when a message is jumped to (e.g. from Favorites). */
+@keyframes message-flash {
+  0% {
+    background-color: hsl(var(--primary) / 0.18);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.message-flash {
+  animation: message-flash 1.8s ease-out;
+  border-radius: 0.5rem;
+}
