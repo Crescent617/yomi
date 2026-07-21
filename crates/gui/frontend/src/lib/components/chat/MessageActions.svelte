@@ -1,13 +1,13 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { Star, Copy, Check, ImageDown, LoaderCircle } from "lucide-svelte";
+  import { Star, Copy, Check, Share2 } from "lucide-svelte";
   import {
     getSession,
     showNotification,
     type BotMessage,
   } from "../../state.svelte";
   import { favoriteIdFor, toggleFavorite } from "../../favorites.svelte";
-  import { shareAnswerAsImage } from "../../share-card";
+  import { requestShare } from "../../share.svelte";
 
   let {
     session_id,
@@ -25,7 +25,6 @@
   const favoriteId = $derived(favoriteIdFor(session_id, message.id));
 
   let copied = $state(false);
-  let sharing = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
   onDestroy(() => clearTimeout(copyTimer));
@@ -52,22 +51,12 @@
     }
   }
 
-  async function onShare() {
-    if (sharing) return;
-    sharing = true;
-    try {
-      const path = await shareAnswerAsImage({
-        content,
-        sessionTitle: getSession(session_id)?.alias,
-        date: message.created_at ? new Date(message.created_at) : new Date(),
-      });
-      if (path) showNotification("Share image saved", "success");
-    } catch (e) {
-      console.error("Failed to create share image:", e);
-      showNotification("Failed to create share image", "error");
-    } finally {
-      sharing = false;
-    }
+  function onShare() {
+    requestShare({
+      content,
+      sessionTitle: getSession(session_id)?.alias,
+      date: message.created_at ? new Date(message.created_at) : new Date(),
+    });
   }
 
   const btnClass =
@@ -84,9 +73,7 @@
     <button
       type="button"
       onclick={onToggleFavorite}
-      class="{btnClass} {favoriteId
-        ? 'text-warning'
-        : 'text-muted-foreground'}"
+      class="{btnClass} {favoriteId ? 'text-warning' : 'text-muted-foreground'}"
       title={favoriteId ? "Remove from favorites" : "Add to favorites"}
       aria-label={favoriteId ? "Remove from favorites" : "Add to favorites"}
     >
@@ -108,16 +95,11 @@
     <button
       type="button"
       onclick={onShare}
-      disabled={sharing}
-      class="{btnClass} text-muted-foreground disabled:opacity-50"
+      class="{btnClass} text-muted-foreground"
       title="Share as image"
       aria-label="Share as image"
     >
-      {#if sharing}
-        <LoaderCircle class="w-3.5 h-3.5 animate-spin" />
-      {:else}
-        <ImageDown class="w-3.5 h-3.5" />
-      {/if}
+      <Share2 class="w-3.5 h-3.5" />
     </button>
   </div>
 {/if}

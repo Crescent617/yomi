@@ -6,8 +6,7 @@
     RefreshCw,
     Copy,
     Check,
-    ImageDown,
-    LoaderCircle,
+    Share2,
     ExternalLink,
     Trash2,
     ArrowLeft,
@@ -27,7 +26,7 @@
     showNotification,
   } from "../../state.svelte";
   import { markdownToPlainText } from "../../share-text";
-  import { shareAnswerAsImage } from "../../share-card";
+  import { requestShare } from "../../share.svelte";
   import { formatMessageTime } from "../../utils";
   import TextBlock from "../chat/TextBlock.svelte";
   import ConfirmDialog from "../ui/ConfirmDialog.svelte";
@@ -45,7 +44,6 @@
   let refreshing = $state(false);
   let copied = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
-  let sharing = $state(false);
   let deleteTarget = $state<FavoriteAnswer | null>(null);
   let deleting = $state(false);
 
@@ -87,7 +85,11 @@
   }
 
   function firstLine(item: FavoriteAnswer): string {
-    return plainText(item).split("\n").find((l) => l.trim().length > 0) ?? "";
+    return (
+      plainText(item)
+        .split("\n")
+        .find((l) => l.trim().length > 0) ?? ""
+    );
   }
 
   function onQueryInput() {
@@ -132,24 +134,15 @@
     }
   }
 
-  async function shareSelected() {
-    if (!selected || sharing) return;
-    sharing = true;
-    try {
-      const path = await shareAnswerAsImage({
-        content: selected.content,
-        sessionTitle: selected.session_title,
-        date: selected.message_created_at
-          ? new Date(selected.message_created_at)
-          : new Date(selected.favorited_at),
-      });
-      if (path) showNotification("Share image saved", "success");
-    } catch (e) {
-      console.error("Failed to create share image:", e);
-      showNotification("Failed to create share image", "error");
-    } finally {
-      sharing = false;
-    }
+  function shareSelected() {
+    if (!selected) return;
+    requestShare({
+      content: selected.content,
+      sessionTitle: selected.session_title,
+      date: selected.message_created_at
+        ? new Date(selected.message_created_at)
+        : new Date(selected.favorited_at),
+    });
   }
 
   async function jumpToSource() {
@@ -333,9 +326,7 @@
     </aside>
 
     <section
-      class="{selected
-        ? 'flex'
-        : 'hidden lg:flex'} min-w-0 flex-1 flex-col"
+      class="{selected ? 'flex' : 'hidden lg:flex'} min-w-0 flex-1 flex-col"
       aria-label="Favorite detail"
     >
       {#if selected}
@@ -356,7 +347,9 @@
               <h2 class="truncate text-base font-semibold">
                 {selected.note || firstLine(selected)}
               </h2>
-              <div class="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+              <div
+                class="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground"
+              >
                 <span class="truncate">
                   {selected.session_title ?? "Deleted session"}
                 </span>
@@ -385,16 +378,11 @@
             <button
               type="button"
               onclick={shareSelected}
-              disabled={sharing}
               class={iconBtnClass}
               title="Share as image"
               aria-label="Share as image"
             >
-              {#if sharing}
-                <LoaderCircle class="size-4 animate-spin" />
-              {:else}
-                <ImageDown class="size-4" />
-              {/if}
+              <Share2 class="size-4" />
             </button>
             <button
               type="button"
