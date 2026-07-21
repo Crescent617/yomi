@@ -514,7 +514,13 @@ export type KernelEvent =
 
 // ── Core state ───────────────────────────────────────────────────────────
 
-export type ActivePanel = "chat" | "usage" | "debug" | "config" | "automation";
+export type ActivePanel =
+  | "chat"
+  | "usage"
+  | "debug"
+  | "config"
+  | "automation"
+  | "favorites";
 
 export const appState = $state({
   connectionStatus: "disconnected" as
@@ -606,6 +612,22 @@ export function purgeSessionLocalState(sessionId: string): void {
   delete inputDrafts[sessionId];
   delete unreadSessions[sessionId];
   delete pinnedSessionMeta[sessionId];
+}
+
+// ── Scroll-to-message requests (e.g. favorites → chat) ─────────────────
+
+export const scrollToMessageRequest = $state<{
+  messageId: string | null;
+  at: number;
+}>({ messageId: null, at: 0 });
+
+export function requestScrollToMessage(messageId: string): void {
+  scrollToMessageRequest.messageId = messageId;
+  scrollToMessageRequest.at = Date.now();
+}
+
+export function clearScrollToMessageRequest(): void {
+  scrollToMessageRequest.messageId = null;
 }
 
 // ── Notification helper ──────────────────────────────────────────────────

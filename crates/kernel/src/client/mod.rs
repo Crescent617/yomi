@@ -101,6 +101,23 @@ pub trait KernelApi: Send + Sync {
     async fn list_pinned_sessions(
         &self,
     ) -> Result<Vec<crate::storage::pinned_session::PinnedSessionDetail>>;
+    async fn add_favorite(
+        &self,
+        input: crate::storage::AddFavoriteInput,
+    ) -> Result<crate::storage::FavoriteAnswer>;
+    async fn remove_favorite(&self, id: &str) -> Result<()>;
+    async fn remove_favorite_by_message(
+        &self,
+        session_id: &SessionId,
+        message_id: &MessageId,
+    ) -> Result<()>;
+    async fn list_favorites(
+        &self,
+        query: Option<String>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<crate::storage::FavoriteAnswer>>;
+    async fn update_favorite_note(&self, id: &str, note: Option<String>) -> Result<()>;
     async fn start_goal(&self, session_id: &SessionId, state: GoalState) -> Result<()>;
     async fn pause_goal(&self, session_id: &SessionId) -> Result<()>;
     async fn resume_goal(&self, session_id: &SessionId) -> Result<()>;
@@ -314,6 +331,38 @@ impl KernelApi for Kernel {
         &self,
     ) -> Result<Vec<crate::storage::pinned_session::PinnedSessionDetail>> {
         Self::list_pinned_sessions(self).await
+    }
+
+    async fn add_favorite(
+        &self,
+        input: crate::storage::AddFavoriteInput,
+    ) -> Result<crate::storage::FavoriteAnswer> {
+        Self::add_favorite(self, input).await
+    }
+
+    async fn remove_favorite(&self, id: &str) -> Result<()> {
+        Self::remove_favorite(self, id).await
+    }
+
+    async fn remove_favorite_by_message(
+        &self,
+        session_id: &SessionId,
+        message_id: &MessageId,
+    ) -> Result<()> {
+        Self::remove_favorite_by_message(self, session_id, message_id).await
+    }
+
+    async fn list_favorites(
+        &self,
+        query: Option<String>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<crate::storage::FavoriteAnswer>> {
+        Self::list_favorites(self, query, limit, offset).await
+    }
+
+    async fn update_favorite_note(&self, id: &str, note: Option<String>) -> Result<()> {
+        Self::update_favorite_note(self, id, note).await
     }
 
     async fn start_goal(&self, session_id: &SessionId, state: GoalState) -> Result<()> {
@@ -1210,6 +1259,62 @@ impl KernelApi for RemoteKernel {
         let result = self.call(ReqMethod::ListPinnedSessions).await?;
         let sessions = serde_json::from_value(result)?;
         Ok(sessions)
+    }
+
+    async fn add_favorite(
+        &self,
+        input: crate::storage::AddFavoriteInput,
+    ) -> Result<crate::storage::FavoriteAnswer> {
+        let result = self.call(ReqMethod::AddFavorite { input }).await?;
+        let favorite = serde_json::from_value(result)?;
+        Ok(favorite)
+    }
+
+    async fn remove_favorite(&self, id: &str) -> Result<()> {
+        self.call(ReqMethod::RemoveFavorite {
+            favorite_id: id.to_string(),
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn remove_favorite_by_message(
+        &self,
+        session_id: &SessionId,
+        message_id: &MessageId,
+    ) -> Result<()> {
+        self.call(ReqMethod::RemoveFavoriteByMessage {
+            session_id: session_id.0.to_string(),
+            message_id: message_id.0.to_string(),
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn list_favorites(
+        &self,
+        query: Option<String>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<crate::storage::FavoriteAnswer>> {
+        let result = self
+            .call(ReqMethod::ListFavorites {
+                query,
+                limit,
+                offset,
+            })
+            .await?;
+        let favorites = serde_json::from_value(result)?;
+        Ok(favorites)
+    }
+
+    async fn update_favorite_note(&self, id: &str, note: Option<String>) -> Result<()> {
+        self.call(ReqMethod::UpdateFavoriteNote {
+            favorite_id: id.to_string(),
+            note,
+        })
+        .await?;
+        Ok(())
     }
 
     async fn start_goal(&self, session_id: &SessionId, state: GoalState) -> Result<()> {

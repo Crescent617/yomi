@@ -242,6 +242,44 @@ impl KernelServer {
                 "list_pinned_sessions_failed",
                 self.kernel.list_pinned_sessions().await,
             ),
+            ReqMethod::AddFavorite { input } => {
+                rpc_body("add_favorite_failed", self.kernel.add_favorite(input).await)
+            }
+            ReqMethod::RemoveFavorite { favorite_id } => rpc_body(
+                "remove_favorite_failed",
+                self.kernel
+                    .remove_favorite(&favorite_id)
+                    .await
+                    .map(|()| serde_json::Value::Null),
+            ),
+            ReqMethod::RemoveFavoriteByMessage {
+                session_id,
+                message_id,
+            } => rpc_body(
+                "remove_favorite_by_message_failed",
+                self.kernel
+                    .remove_favorite_by_message(
+                        &SessionId::from(session_id),
+                        &crate::types::MessageId::from(message_id),
+                    )
+                    .await
+                    .map(|()| serde_json::Value::Null),
+            ),
+            ReqMethod::ListFavorites {
+                query,
+                limit,
+                offset,
+            } => rpc_body(
+                "list_favorites_failed",
+                self.kernel.list_favorites(query, limit, offset).await,
+            ),
+            ReqMethod::UpdateFavoriteNote { favorite_id, note } => rpc_body(
+                "update_favorite_note_failed",
+                self.kernel
+                    .update_favorite_note(&favorite_id, note)
+                    .await
+                    .map(|()| serde_json::Value::Null),
+            ),
             ReqMethod::ShutdownSession { session_id: _ } => RespBody::Ok {
                 result: serde_json::Value::Null,
             },
@@ -716,3 +754,7 @@ fn rpc_body<T: serde::Serialize>(default_code: &str, result: crate::types::Resul
         }
     }
 }
+
+#[cfg(test)]
+#[path = "dispatcher_test.rs"]
+mod tests;

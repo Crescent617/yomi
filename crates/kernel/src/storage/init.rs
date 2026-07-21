@@ -36,6 +36,8 @@ pub struct StorageSet {
     project_store: Arc<dyn super::ProjectStore>,
     /// Pinned session metadata store
     pinned_session_store: Arc<dyn super::PinnedSessionStore>,
+    /// Favorite answer store
+    favorite_store: Arc<dyn super::FavoriteStore>,
     /// Cron job store
     cron_store: Arc<dyn crate::cron::CronStore>,
     /// Channel session mapping store
@@ -55,6 +57,7 @@ impl std::fmt::Debug for StorageSet {
             .field("checkpoint_store", &"<dyn CheckpointStore>")
             .field("project_store", &"<dyn ProjectStore>")
             .field("pinned_session_store", &"<dyn PinnedSessionStore>")
+            .field("favorite_store", &"<dyn FavoriteStore>")
             .field("cron_store", &"<dyn CronStore>")
             .field("channel_store", &"<dyn ChannelStore>")
             .finish()
@@ -144,6 +147,8 @@ impl StorageSet {
             Arc::new(super::SqliteProjectStore::new(pool.clone()));
         let pinned_session_store: Arc<dyn super::PinnedSessionStore> =
             Arc::new(super::SqlitePinnedSessionStore::new(pool.clone()));
+        let favorite_store: Arc<dyn super::FavoriteStore> =
+            Arc::new(super::SqliteFavoriteStore::new(pool.clone()));
         let cron_store: Arc<dyn crate::cron::CronStore> =
             Arc::new(SqliteCronStore::new(pool.clone()));
         let channel_store: Arc<dyn crate::channels::ChannelStore> = Arc::new(
@@ -183,6 +188,7 @@ impl StorageSet {
             checkpoint_store,
             project_store,
             pinned_session_store,
+            favorite_store,
             cron_store,
             channel_store,
         })
@@ -252,6 +258,11 @@ impl StorageSet {
     /// Get the pinned session store
     pub fn pinned_session_store(&self) -> Arc<dyn super::PinnedSessionStore> {
         self.pinned_session_store.clone()
+    }
+
+    /// Get the favorite answer store
+    pub fn favorite_store(&self) -> Arc<dyn super::FavoriteStore> {
+        self.favorite_store.clone()
     }
 
     /// Get the cron store

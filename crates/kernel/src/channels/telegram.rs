@@ -157,6 +157,8 @@ impl TelegramAdapter {
             .flatten()
             .map(str::to_string);
 
+        let is_group = msgs.last().is_some_and(|m| !m.chat.is_private());
+
         Some(ChannelMessage {
             external_chat_id: chat_id.to_string(),
             external_user_id: user_id,
@@ -165,6 +167,7 @@ impl TelegramAdapter {
             raw_text,
             content,
             thread_id: None,
+            is_group,
         })
     }
 
@@ -242,7 +245,18 @@ impl TelegramAdapter {
 mod tests;
 
 use teloxide_core::payloads::SetMessageReactionSetters;
-use teloxide_core::types::ReactionType;
+use teloxide_core::types::{ReactionType, ReplyParameters};
+
+/// Build quote-reply parameters for a platform message ID. Returns `None`
+/// when the ID is absent or not a valid Telegram message ID.
+/// `allow_sending_without_reply` keeps the reply functional when the original
+/// message was deleted.
+fn reply_parameters(reply_msg_id: Option<&str>) -> Option<ReplyParameters> {
+    let msg_id = reply_msg_id?.parse::<i32>().ok()?;
+    let mut params = ReplyParameters::new(teloxide_core::types::MessageId(msg_id));
+    params.allow_sending_without_reply = Some(true);
+    Some(params)
+}
 
 #[async_trait::async_trait]
 impl PlatformAdapter for TelegramAdapter {
@@ -347,7 +361,7 @@ impl PlatformAdapter for TelegramAdapter {
         &self,
         external_chat_id: &str,
         blocks: Vec<ContentBlock>,
-        _reply_msg_id: Option<&str>,
+        reply_msg_id: Option<&str>,
     ) -> Result<(), ChannelError> {
         let chat_id: i64 = external_chat_id
             .parse()
@@ -358,15 +372,16 @@ impl PlatformAdapter for TelegramAdapter {
             return Ok(());
         }
 
-        let mut req = self
-            .bot
-            .send_message(Recipient::Id(ChatId(chat_id)), text.clone());
+        let recipient = Recipient::Id(ChatId(chat_id));
+
+        let mut req = self.bot.send_message(recipient.clone(), text.clone());
         req.parse_mode = Some(ParseMode::MarkdownV2);
+        req.reply_parameters = reply_parameters(reply_msg_id);
         if let Err(e) = req.send().await {
             warn!(error = %e, "MarkdownV2 send failed, falling back to plain text");
-            self.bot
-                .send_message(Recipient::Id(ChatId(chat_id)), text)
-                .send()
+            let mut req = self.bot.send_message(recipient, text);
+            req.reply_parameters = reply_parameters(reply_msg_id);
+            req.send()
                 .await
                 .map_err(|e| ChannelError::Platform(format!("send_message failed: {e}")))?;
         }
@@ -378,7 +393,7 @@ impl PlatformAdapter for TelegramAdapter {
         &self,
         external_chat_id: &str,
         files: &[(&std::path::Path, Option<&str>)],
-        _reply_msg_id: Option<&str>,
+        reply_msg_id: Option<&str>,
     ) -> Result<(), ChannelError> {
         let chat_id: i64 = external_chat_id
             .parse()
@@ -398,6 +413,7 @@ impl PlatformAdapter for TelegramAdapter {
                     req.caption = Some(caption.to_string());
                     req.parse_mode = Some(ParseMode::MarkdownV2);
                 }
+                req.reply_parameters = reply_parameters(reply_msg_id);
                 req.send()
                     .await
                     .map_err(|e| ChannelError::Platform(format!("send_photo failed: {e}")))?;
@@ -407,6 +423,7 @@ impl PlatformAdapter for TelegramAdapter {
                     req.caption = Some(caption.to_string());
                     req.parse_mode = Some(ParseMode::MarkdownV2);
                 }
+                req.reply_parameters = reply_parameters(reply_msg_id);
                 req.send()
                     .await
                     .map_err(|e| ChannelError::Platform(format!("send_document failed: {e}")))?;

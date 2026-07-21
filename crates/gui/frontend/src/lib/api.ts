@@ -713,6 +713,68 @@ export async function listPinnedSessions(): Promise<PinnedSessionDetail[]> {
   return invokeCmd<PinnedSessionDetail[]>("list_pinned_sessions");
 }
 
+// ── Favorites API ────────────────────────────────────────────────────────
+
+export interface FavoriteAnswer {
+  id: string;
+  session_id: string;
+  message_id: string;
+  session_title?: string;
+  content: string;
+  note?: string;
+  favorited_at: string;
+  message_created_at?: string;
+}
+
+export async function addFavorite(
+  session_id: string,
+  message_id: string,
+  content: string,
+  session_title?: string,
+  message_created_at?: string,
+): Promise<FavoriteAnswer> {
+  return invokeCmd<FavoriteAnswer>("add_favorite", {
+    session_id,
+    message_id,
+    content,
+    session_title: session_title ?? null,
+    message_created_at: message_created_at ?? null,
+  });
+}
+
+export async function removeFavorite(favorite_id: string): Promise<void> {
+  return invokeCmd("remove_favorite", { favorite_id });
+}
+
+export async function removeFavoriteByMessage(
+  session_id: string,
+  message_id: string,
+): Promise<void> {
+  return invokeCmd("remove_favorite_by_message", { session_id, message_id });
+}
+
+export async function listFavorites(
+  query?: string,
+  limit?: number,
+  offset?: number,
+): Promise<FavoriteAnswer[]> {
+  return invokeCmd<FavoriteAnswer[]>("list_favorites", {
+    query: query ?? null,
+    limit: limit ?? null,
+    offset: offset ?? null,
+  });
+}
+
+export async function updateFavoriteNote(
+  favorite_id: string,
+  note?: string,
+): Promise<void> {
+  return invokeCmd("update_favorite_note", {
+    favorite_id,
+    note: note ?? null,
+  });
+}
+
 export async function ping(): Promise<boolean> {
   return withTimeout(invoke("ping"), PING_TIMEOUT, "ping");
 }

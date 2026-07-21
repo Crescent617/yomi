@@ -54,6 +54,8 @@ pub struct Kernel {
     project_store: Arc<dyn ProjectStore>,
     /// Pinned session store for sidebar pinning and emoji.
     pinned_session_store: Arc<dyn crate::storage::PinnedSessionStore>,
+    /// Favorite answer store for bookmarked assistant answers.
+    favorite_store: Arc<dyn crate::storage::FavoriteStore>,
     /// Cron store for scheduled job operations.
     pub(crate) cron_store: Option<Arc<dyn crate::cron::CronStore>>,
     pub(crate) channel_manager: Option<Arc<crate::channels::hub::ChannelHub>>,
@@ -90,6 +92,11 @@ impl Kernel {
     /// Get pinned session store
     pub fn pinned_session_store(&self) -> Arc<dyn crate::storage::PinnedSessionStore> {
         self.pinned_session_store.clone()
+    }
+
+    /// Get favorite answer store
+    pub fn favorite_store(&self) -> Arc<dyn crate::storage::FavoriteStore> {
+        self.favorite_store.clone()
     }
 
     /// Get message store from `agent_shared`
@@ -177,6 +184,7 @@ impl Kernel {
         let data_dir_for_conductor = data_dir.clone();
         let project_store = storage.project_store();
         let pinned_session_store = storage.pinned_session_store();
+        let favorite_store = storage.favorite_store();
         let goal_store = storage.goal_store();
 
         // Build model registry (BTreeMap for ordering); reject duplicate names
@@ -263,6 +271,7 @@ impl Kernel {
             update_session_title,
             project_store,
             pinned_session_store,
+            favorite_store,
             cron_store,
             channel_manager,
             notification_bus,
@@ -373,6 +382,49 @@ impl Kernel {
     /// List pinned sessions with their session metadata.
     pub async fn list_pinned_sessions(&self) -> Result<Vec<crate::storage::PinnedSessionDetail>> {
         self.pinned_session_store().list_with_details().await
+    }
+
+    // ── Favorites ────────────────────────────────────────────────────────
+
+    /// Favorite an assistant answer (snapshots its content).
+    pub async fn add_favorite(
+        &self,
+        input: crate::storage::AddFavoriteInput,
+    ) -> Result<crate::storage::FavoriteAnswer> {
+        self.favorite_store().add(input).await
+    }
+
+    /// Remove a favorite by id.
+    pub async fn remove_favorite(&self, id: &str) -> Result<()> {
+        self.favorite_store().remove(id).await
+    }
+
+    /// Remove a favorite by its source message.
+    pub async fn remove_favorite_by_message(
+        &self,
+        session_id: &SessionId,
+        message_id: &crate::types::MessageId,
+    ) -> Result<()> {
+        self.favorite_store()
+            .remove_by_message(session_id, message_id)
+            .await
+    }
+
+    /// List favorited answers, most recent first.
+    pub async fn list_favorites(
+        &self,
+        query: Option<String>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<crate::storage::FavoriteAnswer>> {
+        self.favorite_store()
+            .list(query.as_deref(), limit, offset)
+            .await
+    }
+
+    /// Update the note on a favorite.
+    pub async fn update_favorite_note(&self, id: &str, note: Option<String>) -> Result<()> {
+        self.favorite_store().update_note(id, note.as_deref()).await
     }
 
     /// Delete a project **and all its sessions** (including subagent children)
