@@ -207,6 +207,7 @@ app_secret = "..."
 | `blocked_chats` | string[] | 屏蔽的聊天 ID | `[]` |
 | `blocked_users` | string[] | 屏蔽的用户 ID | `[]` |
 | `require_mention` | boolean | 是否需要 @ 触发 | `true` |
+| `reply_in_thread` | boolean | 群聊中回复是否锚定到触发消息的 thread（Feishu 话题回复，Telegram 引用回复）；私聊不受影响 | `false` |
 | `auto_approve_level` | string | 通道级别自动批准：`safe`/`caution`/`dangerous` | `safe` |
 
 **Platform 配置：**

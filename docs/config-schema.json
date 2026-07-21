@@ -207,6 +207,11 @@
             "type": "boolean",
             "default": true
           },
+          "reply_in_thread": {
+            "description": "Whether group-chat replies are anchored to the triggering message so they land in its thread (Feishu thread reply, Telegram quote-reply). Private chats are unaffected.",
+            "type": "boolean",
+            "default": false
+          },
           "auto_approve_level": {
             "description": "Auto-approve level for this channel.",
             "type": "string",

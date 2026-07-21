@@ -63,6 +63,11 @@ pub struct ChannelConfig {
     pub blocked_users: Vec<String>,
     #[serde(default = "default_require_mention")]
     pub require_mention: bool,
+    /// When enabled, group-chat replies are anchored to the triggering
+    /// message so they land in its thread (Feishu thread reply, Telegram
+    /// quote-reply). Private chats are unaffected.
+    #[serde(default)]
+    pub reply_in_thread: bool,
     #[serde(default)]
     pub auto_approve_level: Level,
 }
@@ -84,6 +89,7 @@ impl Default for ChannelConfig {
             blocked_chats: Vec::new(),
             blocked_users: Vec::new(),
             require_mention: true,
+            reply_in_thread: false,
             auto_approve_level: Level::Safe,
         }
     }
@@ -110,6 +116,8 @@ pub struct ChannelMessage {
     /// When present, the hub uses this as the session mapping key instead of
     /// `external_chat_id` so that each thread gets its own session.
     pub thread_id: Option<String>,
+    /// Whether the message was sent in a group chat (vs. private/p2p).
+    pub is_group: bool,
 }
 
 /// Runtime info about a channel, for UI listing

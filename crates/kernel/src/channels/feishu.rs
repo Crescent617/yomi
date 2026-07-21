@@ -703,6 +703,7 @@ impl FeishuAdapter {
             raw_text: Some(raw_text),
             content: vec![ContentBlock::Text { text: formatted }],
             thread_id,
+            is_group: chat_type == "group",
         };
 
         if incoming.send(channel_msg).await.is_err() {

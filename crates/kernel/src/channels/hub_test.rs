@@ -208,6 +208,7 @@ async fn test_start_and_shutdown() {
             blocked_chats: vec![],
             blocked_users: vec![],
             require_mention: false,
+            reply_in_thread: false,
             auto_approve_level: crate::permission::Level::Safe,
         },
         ChannelConfig {
@@ -221,6 +222,7 @@ async fn test_start_and_shutdown() {
             blocked_chats: vec![],
             blocked_users: vec![],
             require_mention: false,
+            reply_in_thread: false,
             auto_approve_level: crate::permission::Level::Safe,
         },
     ];
@@ -462,4 +464,49 @@ fn test_format_current_and_unknown_model() {
     let unknown = format_unknown_model("missing", &models);
     assert!(unknown.contains("Model `missing` was not found"));
     assert!(unknown.contains("Available model keys: `kimi`"));
+}
+
+fn channel_message(
+    thread_id: Option<&str>,
+    is_group: bool,
+    has_message_id: bool,
+) -> ChannelMessage {
+    ChannelMessage {
+        external_chat_id: "chat-1".to_string(),
+        external_user_id: "user-1".to_string(),
+        external_message_id: has_message_id.then(|| "msg-1".to_string()),
+        is_mention: true,
+        raw_text: None,
+        content: vec![],
+        thread_id: thread_id.map(str::to_string),
+        is_group,
+    }
+}
+
+#[test]
+fn reply_anchor_keeps_in_thread_replies_anchored() {
+    let msg = channel_message(Some("thread-1"), true, true);
+    // Regardless of the config, in-thread messages anchor to the trigger.
+    assert_eq!(reply_anchor(&msg, false).as_deref(), Some("msg-1"));
+    assert_eq!(reply_anchor(&msg, true).as_deref(), Some("msg-1"));
+}
+
+#[test]
+fn reply_anchor_respects_reply_in_thread_config() {
+    let group_msg = channel_message(None, true, true);
+    assert_eq!(reply_anchor(&group_msg, false), None);
+    assert_eq!(reply_anchor(&group_msg, true).as_deref(), Some("msg-1"));
+}
+
+#[test]
+fn reply_anchor_never_anchors_private_chats() {
+    let private_msg = channel_message(None, false, true);
+    assert_eq!(reply_anchor(&private_msg, false), None);
+    assert_eq!(reply_anchor(&private_msg, true), None);
+}
+
+#[test]
+fn reply_anchor_requires_message_id() {
+    let msg = channel_message(None, true, false);
+    assert_eq!(reply_anchor(&msg, true), None);
 }

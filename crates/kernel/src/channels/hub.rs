@@ -161,7 +161,7 @@ impl ChannelHub {
                         ).await {
                             Ok(Some(reply_text)) => {
                                 let chat_id = msg.external_chat_id.clone();
-                                let reply_msg_id = msg.external_message_id.filter(|_| msg.thread_id.is_some());
+                                let reply_msg_id = reply_anchor(&msg, config_proc.reply_in_thread);
                                 let adapter = Arc::clone(&adapter_proc);
                                 tokio::spawn(async move {
                                     if let Err(e) = adapter.send_message(
@@ -318,13 +318,13 @@ impl ChannelHub {
 
 async fn handle_incoming_message(
     channel_name: &str,
-    _config: &ChannelConfig,
+    config: &ChannelConfig,
     store: &Arc<dyn ChannelStore>,
     kernel: Arc<Kernel>,
     msg: ChannelMessage,
 ) -> Result<Option<String>> {
     let chat_id = msg.external_chat_id.clone();
-    let reply_msg_id = msg.external_message_id.filter(|_| msg.thread_id.is_some());
+    let reply_msg_id = reply_anchor(&msg, config.reply_in_thread);
     let mapping_key = msg.thread_id.clone().unwrap_or_else(|| chat_id.clone());
 
     let cmd = parse_channel_command(msg.raw_text.as_deref());
@@ -436,6 +436,19 @@ async fn handle_incoming_message(
             Ok(None)
         }
     }
+}
+
+/// Compute the message ID a reply should be anchored to.
+///
+/// Replies to in-thread messages always stay in that thread. When the
+/// channel's `reply_in_thread` is enabled, group messages additionally anchor
+/// to the triggering message so the reply opens/continues its thread
+/// (Feishu thread reply, Telegram quote-reply). Private chats are never
+/// anchored — threading there is just noise.
+fn reply_anchor(msg: &ChannelMessage, reply_in_thread: bool) -> Option<String> {
+    msg.external_message_id
+        .clone()
+        .filter(|_| msg.thread_id.is_some() || (reply_in_thread && msg.is_group))
 }
 
 /// Get an existing session or create a new one, updating routing info.
