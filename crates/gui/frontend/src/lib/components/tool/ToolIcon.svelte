@@ -62,7 +62,7 @@
   <ListChecks class={cls} />
 {:else if name.includes("goal")}
   <Target class={cls} />
-{:else if name === "send_message" || name === "postmessage" || name === "message"}
+{:else if name === "send_message" || name === "post_message"}
   <Send class={cls} />
 {:else}
   <Wrench class={cls} />

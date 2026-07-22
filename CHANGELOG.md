@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.16] - 2026-07-22
+
+### Fixed
+- GUI `post_message` 工具图标修复：工具名改 snake_case 后匹配不到 Send 图标分支（旧判断为 `postmessage`），错误回退为 Wrench；判断条件同步改为 snake_case。
+
 ## [0.6.15] - 2026-07-22
 
 ### Changed
