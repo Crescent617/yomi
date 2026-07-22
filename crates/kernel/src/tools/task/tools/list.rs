@@ -5,7 +5,7 @@ use crate::types::{Result, ToolOutput};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-pub const TASK_LIST_TOOL_NAME: &str = "taskList";
+pub const TASK_LIST_TOOL_NAME: &str = "task_list";
 
 pub struct TaskListTool {
     store: SharedTaskStore,

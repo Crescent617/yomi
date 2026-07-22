@@ -11,7 +11,7 @@ use crate::storage::SessionStore;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{ContentBlock, KernelError, Result, SessionId, ToolOutput};
 
-pub const POST_MESSAGE_TOOL_NAME: &str = "postMessage";
+pub const POST_MESSAGE_TOOL_NAME: &str = "post_message";
 
 pub struct PostMessageTool {
     input_bus: Arc<InputBus>,
@@ -75,7 +75,7 @@ impl Tool for PostMessageTool {
 
     async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let args: PostMessageArgs = serde_json::from_value(args).map_err(|error| {
-            KernelError::tool(format!("Invalid postMessage arguments: {error}"))
+            KernelError::tool(format!("Invalid post_message arguments: {error}"))
         })?;
 
         let target = SessionId::from(args.agent_id.clone());

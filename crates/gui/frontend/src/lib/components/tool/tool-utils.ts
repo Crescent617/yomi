@@ -49,6 +49,28 @@ function normalizeToolName(toolName: string): string {
   return aliases[name] ?? name;
 }
 
+/**
+ * Humanize a tool name for display: convert snake_case / kebab-case /
+ * space-separated names to CamelCase (e.g. `my_custom_tool` → `MyCustomTool`).
+ */
+export function humanizeToolName(toolName: string): string {
+  if (!toolName) return "";
+  if (/^[A-Z]/.test(toolName)) return toolName;
+  let result = "";
+  let capitalizeNext = true;
+  for (const c of toolName) {
+    if (c === "_" || c === "-" || c === " ") {
+      capitalizeNext = true;
+    } else if (capitalizeNext) {
+      result += c.toUpperCase();
+      capitalizeNext = false;
+    } else {
+      result += c;
+    }
+  }
+  return result;
+}
+
 export function toolLabel(toolName: string, isSubagent = false): string {
   if (isSubagent || normalizeToolName(toolName) === "agent") {
     return "Agent";
@@ -79,7 +101,7 @@ export function toolLabel(toolName: string, isSubagent = false): string {
   };
   return (
     labels[normalizeToolName(toolName)] ??
-    (toolName ? toolName.charAt(0).toUpperCase() + toolName.slice(1) : "Tool")
+    (humanizeToolName(toolName) || "Tool")
   );
 }
 

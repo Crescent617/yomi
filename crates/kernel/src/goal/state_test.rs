@@ -30,5 +30,5 @@ fn test_continue_prompt() {
     assert!(p.contains("test goal"));
     assert!(p.contains("Completion audit"));
     assert!(p.contains("Blocked audit"));
-    assert!(p.contains("updateGoal"));
+    assert!(p.contains("update_goal"));
 }

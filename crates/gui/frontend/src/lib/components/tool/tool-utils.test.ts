@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   extractTarget,
   extraMeta,
+  humanizeToolName,
   parsePostMessageArgs,
   postMessageSessionTarget,
   toolLabel,
@@ -16,14 +17,14 @@ const argumentsJson = JSON.stringify({
 describe("tool header summaries", () => {
   test.each([
     ["read_file", { path: "src/main.rs" }, "Read", "src/main.rs"],
-    ["webSearch", { query: "Svelte runes" }, "Web search", "Svelte runes"],
+    ["web_search", { query: "Svelte runes" }, "Web search", "Svelte runes"],
     [
-      "askUser",
+      "ask_user",
       { questions: [{ question: "Continue?" }] },
       "Ask user",
       "Continue?",
     ],
-    ["taskCreate", { subject: "Ship release" }, "Create task", "Ship release"],
+    ["task_create", { subject: "Ship release" }, "Create task", "Ship release"],
     [
       "send_message",
       { content: "Build finished" },
@@ -46,15 +47,15 @@ describe("tool header summaries", () => {
         }),
       ),
     ).toBe("async · timeout 120s");
-    expect(extraMeta("askUser", JSON.stringify({ questions: [{}, {}] }))).toBe(
+    expect(extraMeta("ask_user", JSON.stringify({ questions: [{}, {}] }))).toBe(
       "2 questions",
     );
   });
 });
 
-describe("postMessage tool rendering", () => {
+describe("post_message tool rendering", () => {
   test("uses the recipient as the compact target", () => {
-    expect(extractTarget("postMessage", argumentsJson)).toBe("sub_123");
+    expect(extractTarget("post_message", argumentsJson)).toBe("sub_123");
   });
 
   test("parses the specialized message fields", () => {
@@ -65,15 +66,34 @@ describe("postMessage tool rendering", () => {
     });
   });
 
-  test("uses the postMessage recipient as its session target", () => {
-    expect(postMessageSessionTarget("postMessage", argumentsJson)).toBe(
+  test("uses the post_message recipient as its session target", () => {
+    expect(postMessageSessionTarget("post_message", argumentsJson)).toBe(
       "sub_123",
     );
     expect(postMessageSessionTarget("read", argumentsJson)).toBeNull();
-    expect(postMessageSessionTarget("postMessage", "{}")).toBeNull();
+    expect(postMessageSessionTarget("post_message", "{}")).toBeNull();
   });
 
   test("rejects incomplete arguments", () => {
     expect(parsePostMessageArgs('{"agent_id":"sub_123"}')).toBeNull();
+  });
+});
+
+describe("humanizeToolName", () => {
+  test.each([
+    ["web_search", "WebSearch"],
+    ["my_custom_tool", "MyCustomTool"],
+    ["my-custom-tool", "MyCustomTool"],
+    ["read", "Read"],
+    ["webSearch", "WebSearch"],
+    ["WebSearch", "WebSearch"],
+    ["", ""],
+  ])("humanizes %s to %s", (name, expected) => {
+    expect(humanizeToolName(name)).toBe(expected);
+  });
+
+  test("toolLabel falls back to humanized name for unknown tools", () => {
+    expect(toolLabel("my_custom_tool")).toBe("MyCustomTool");
+    expect(toolLabel("")).toBe("Tool");
   });
 });

@@ -27,7 +27,7 @@ async fn session_store_with(id: &SessionId) -> std::sync::Arc<dyn SessionStore> 
 async fn test_definition() {
     let tool = PostMessageTool::new(InputBus::new(), None);
 
-    assert_eq!(tool.name(), "postMessage");
+    assert_eq!(tool.name(), "post_message");
     assert!(tool.desc().contains("another agent by its ID"));
     assert!(tool
         .desc()
@@ -142,5 +142,5 @@ async fn test_exec_rejects_missing_required_argument() {
         .await
         .unwrap_err();
 
-    assert!(error.to_string().contains("Invalid postMessage arguments"));
+    assert!(error.to_string().contains("Invalid post_message arguments"));
 }

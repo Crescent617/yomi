@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.15] - 2026-07-22
+
+### Changed
+- 工具名统一为 snake_case：`webSearch`→`web_search`、`webFetch`→`web_fetch`、`askUser`→`ask_user`、`postMessage`→`post_message`、`updateGoal`→`update_goal`、`taskCreate/Get/List/Update`→`task_create/get/list/update`，goal/subagent prompt 中的工具名引用同步更新。TUI/GUI 展示层对旧 camelCase 名保持归一化识别，历史会话不受影响。
+- TUI/GUI 工具名展示新增 humanize（snake_case→CamelCase）：未知工具 label 兜底及 streaming inline 状态（TUI info bar、GUI InlineStreamStatus）中的工具名统一显示为 `WebSearch` 风格。
+
 ## [0.6.14] - 2026-07-22
 
 ### Fixed

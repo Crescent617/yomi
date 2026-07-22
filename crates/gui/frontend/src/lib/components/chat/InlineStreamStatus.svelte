@@ -2,7 +2,12 @@
   import type { Message, SessionState } from "../../state.svelte";
   import { findThinking, hasText } from "../../session";
   import { isActiveSessionPhase } from "../../session-phase";
-  import { estimateJsonTokens, estimateTextTokens, formatStreamTokens } from "./stream-status";
+  import { humanizeToolName } from "../tool/tool-utils";
+  import {
+    estimateJsonTokens,
+    estimateTextTokens,
+    formatStreamTokens,
+  } from "./stream-status";
 
   let {
     session,
@@ -34,9 +39,6 @@
     return null;
   });
 
-  const capitalize = (value: string) =>
-    value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
-
   const status = $derived.by(() => {
     if (session.phase === "compacting") return "Compacting";
     if (currentToolName) return "Calling";
@@ -57,7 +59,7 @@
   });
 
   const displayToolName = $derived(
-    currentToolName ? capitalize(currentToolName) : null,
+    currentToolName ? humanizeToolName(currentToolName) : null,
   );
 
   // Live token estimate for whatever is currently streaming: thinking text

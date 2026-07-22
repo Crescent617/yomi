@@ -1,6 +1,17 @@
 use super::*;
 
 #[test]
+fn test_humanize_tool_name() {
+    assert_eq!(humanize_tool_name("web_search"), "WebSearch");
+    assert_eq!(humanize_tool_name("my_custom_tool"), "MyCustomTool");
+    assert_eq!(humanize_tool_name("my-custom-tool"), "MyCustomTool");
+    assert_eq!(humanize_tool_name("read"), "Read");
+    assert_eq!(humanize_tool_name("webSearch"), "WebSearch");
+    assert_eq!(humanize_tool_name("WebSearch"), "WebSearch");
+    assert_eq!(humanize_tool_name(""), "");
+}
+
+#[test]
 fn test_truncate_by_chars_ascii() {
     assert_eq!(truncate_by_chars("hello world", 20), "hello world");
     assert_eq!(truncate_by_chars("hello world", 8), "hello...");

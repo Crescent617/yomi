@@ -43,7 +43,9 @@ async fn schema_does_not_accept_agent_id() {
     assert!(tool
         .desc()
         .contains("You can continue working while the agent runs"));
-    assert!(tool.desc().contains("returned agent ID with `postMessage`"));
+    assert!(tool
+        .desc()
+        .contains("returned agent ID with `post_message`"));
     assert!(schema["properties"]["wait_for_completion"]["description"]
         .as_str()
         .is_some_and(|description| description.contains("Whether you wait")));
@@ -148,7 +150,7 @@ fn async_prompt_includes_parent_agent_id_and_post_message_guidance() {
     );
 
     assert!(prompt.contains("Your parent agent ID is `parent_session`"));
-    assert!(prompt.contains("Use the `postMessage` tool with this ID"));
+    assert!(prompt.contains("Use the `post_message` tool with this ID"));
     assert!(prompt.ends_with("Review the implementation."));
 }
 

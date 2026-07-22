@@ -36,7 +36,7 @@ fn subagent_prompt(prompt: String, mode: SubAgentMode, parent_session_id: &Sessi
     }
 
     format!(
-        "You are running asynchronously. Your parent agent ID is `{parent_session_id}`. Use the `postMessage` tool with this ID to coordinate with the parent agent, ask for help, or report important progress.\n\n{prompt}"
+        "You are running asynchronously. Your parent agent ID is `{parent_session_id}`. Use the `post_message` tool with this ID to coordinate with the parent agent, ask for help, or report important progress.\n\n{prompt}"
     )
 }
 
@@ -257,8 +257,8 @@ impl Tool for SubagentTool {
 - Tasks that can be parallelized — call this tool multiple times in one response to launch independent subagents concurrently
 
 ## Execution Mode
-- Use `wait_for_completion: true` when you need to wait for this execution to finish before continuing. You can still use the returned agent ID with `postMessage` for later follow-up.
-- Use `wait_for_completion: false` for background or concurrent collaboration. You can continue working while the agent runs; the agent receives your ID so it can proactively contact you with `postMessage`.
+- Use `wait_for_completion: true` when you need to wait for this execution to finish before continuing. You can still use the returned agent ID with `post_message` for later follow-up.
+- Use `wait_for_completion: false` for background or concurrent collaboration. You can continue working while the agent runs; the agent receives your ID so it can proactively contact you with `post_message`.
 
 ## When NOT to Use
 - Read a specific file → use read tool
@@ -287,7 +287,7 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                 },
                 "wait_for_completion": {
                     "type": "boolean",
-                    "description": "Whether you wait for this execution to finish before continuing. Use true when you need the result before continuing; the returned agent ID remains available for later postMessage follow-up. Use false for background or concurrent collaboration so you can continue working while the agent runs and both agents can communicate with postMessage.",
+                    "description": "Whether you wait for this execution to finish before continuing. Use true when you need the result before continuing; the returned agent ID remains available for later post_message follow-up. Use false for background or concurrent collaboration so you can continue working while the agent runs and both agents can communicate with post_message.",
                     "default": true
                 }
             },

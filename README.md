@@ -74,7 +74,7 @@ export ANTHROPIC_MODEL=xxx
 
 ### Web Search
 
-The `webSearch` tool tries engines in the following priority order. Set the environment variable for the engine(s) you want to enable.
+The `web_search` tool tries engines in the following priority order. Set the environment variable for the engine(s) you want to enable.
 
 | Priority | Engine | Environment Variable | Notes |
 | --- | --- | --- | --- |

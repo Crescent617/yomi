@@ -336,7 +336,7 @@ impl ToolRegistry {
             }
         }
 
-        // Register postMessage for agent-to-agent messages.
+        // Register post_message for agent-to-agent messages.
         if let Some(input_bus) = config.input_bus {
             self.register(PostMessageTool::new(
                 Arc::clone(input_bus),

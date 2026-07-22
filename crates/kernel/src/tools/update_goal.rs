@@ -7,7 +7,7 @@ use serde_json::json;
 use serde_json::Value;
 use std::sync::Arc;
 
-pub const UPDATE_GOAL_TOOL_NAME: &str = "updateGoal";
+pub const UPDATE_GOAL_TOOL_NAME: &str = "update_goal";
 
 /// `UpdateGoalTool` - Allows the model to update the status of the active goal.
 /// Only `completed` and `blocked` are allowed; other status changes are controlled

@@ -8,6 +8,33 @@ pub fn preprocess(text: impl AsRef<str>) -> String {
     text.as_ref().replace('\t', "  ")
 }
 
+/// Humanize a tool name for display: convert `snake_case` / `kebab-case` /
+/// space-separated names to CamelCase (e.g. `my_custom_tool` → `MyCustomTool`).
+pub fn humanize_tool_name(s: &str) -> String {
+    if s.is_empty() {
+        return String::new();
+    }
+
+    // If already starts with uppercase, assume it's already CamelCase
+    if s.starts_with(|c: char| c.is_uppercase()) {
+        return s.to_string();
+    }
+
+    let mut result = String::with_capacity(s.len());
+    let mut capitalize_next = true;
+    for c in s.chars() {
+        if matches!(c, '_' | '-' | ' ') {
+            capitalize_next = true;
+        } else if capitalize_next {
+            result.extend(c.to_uppercase());
+            capitalize_next = false;
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 /// Extract a segment of a line as a new Line with owned data, preserving styles.
 /// Extracts text from `start_byte` (inclusive) to `end_byte` (exclusive).
 pub fn extract_line_segment(line: &Line<'_>, start_byte: usize, end_byte: usize) -> Line<'static> {

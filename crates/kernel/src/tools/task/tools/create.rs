@@ -5,7 +5,7 @@ use crate::types::{KernelError, Result, ToolOutput};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-pub const TASK_CREATE_TOOL_NAME: &str = "taskCreate";
+pub const TASK_CREATE_TOOL_NAME: &str = "task_create";
 
 pub struct TaskCreateTool {
     store: SharedTaskStore,

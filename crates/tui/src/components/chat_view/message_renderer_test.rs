@@ -27,13 +27,13 @@ fn tool_aliases_are_case_insensitive_and_compact() {
 }
 
 #[test]
-fn camel_case_builtins_extract_targets() {
+fn snake_case_builtins_extract_targets() {
     assert_eq!(
-        extract_tool_target("webSearch", Some(r#"{"query":"rust tui"}"#)),
+        extract_tool_target("web_search", Some(r#"{"query":"rust tui"}"#)),
         Some("rust tui".to_string())
     );
     assert_eq!(
-        extract_tool_target("taskUpdate", Some(r#"{"taskId":"task-1"}"#)),
+        extract_tool_target("task_update", Some(r#"{"taskId":"task-1"}"#)),
         Some("task-1".to_string())
     );
 }

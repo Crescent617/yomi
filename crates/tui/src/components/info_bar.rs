@@ -21,7 +21,10 @@ use crate::{
     attr,
     msg::Msg,
     theme::{chars, colors, spinner_char},
-    utils::{text::truncate_by_width, TimedMessage},
+    utils::{
+        text::{humanize_tool_name, truncate_by_width},
+        TimedMessage,
+    },
 };
 use kernel::utils::tokens;
 use std::ops::{Deref, DerefMut};
@@ -272,7 +275,10 @@ impl InfoBar {
             let tool_style = Style::default()
                 .fg(colors::accent_info())
                 .add_modifier(Modifier::ITALIC);
-            spans.push(Span::styled(format!("calling {tool_name}... "), tool_style));
+            spans.push(Span::styled(
+                format!("calling {}... ", humanize_tool_name(tool_name)),
+                tool_style,
+            ));
         }
 
         let token_style = Style::default().fg(colors::text_secondary());

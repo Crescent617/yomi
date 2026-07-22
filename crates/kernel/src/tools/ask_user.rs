@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub const ASK_USER_TOOL_NAME: &str = "askUser";
+pub const ASK_USER_TOOL_NAME: &str = "ask_user";
 
 /// A single option presented to the user.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

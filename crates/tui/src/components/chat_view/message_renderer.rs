@@ -13,7 +13,7 @@ use tuirealm::ratatui::{
 use crate::components::chat_view::{HistoryMessage, SubagentState, ToolStatus};
 use crate::markdown_stream::StreamingMarkdownRenderer;
 use crate::theme::{chars, colors};
-use crate::utils::text::{preprocess, truncate_by_chars, truncate_by_width};
+use crate::utils::text::{humanize_tool_name, preprocess, truncate_by_chars, truncate_by_width};
 
 use kernel::types::{ContentBlock, ToolOutputBlock};
 use kernel::utils::tokens;
@@ -908,24 +908,6 @@ pub fn get_message_pretty_json(msg: &HistoryMessage) -> String {
         .unwrap_or_else(|e| format!("{{\"error\": \"Failed to serialize: {e}\"}}"))
 }
 
-pub fn to_camel_case(s: &str) -> String {
-    if s.is_empty() {
-        return String::new();
-    }
-
-    // If already starts with uppercase, assume it's already CamelCase
-    if s.starts_with(|c: char| c.is_uppercase()) {
-        return s.to_string();
-    }
-
-    // Convert first char to uppercase, keep rest as-is
-    let mut chars = s.chars();
-    chars
-        .next()
-        .map(|c| c.to_uppercase().to_string() + chars.as_str())
-        .unwrap_or_default()
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ToolKind {
     Read,
@@ -1196,7 +1178,7 @@ fn tool_label(tool_name: &str) -> String {
         ToolKind::TaskGet => "Get task",
         ToolKind::TaskList => "List tasks",
         ToolKind::TaskUpdate => "Update task",
-        ToolKind::Other => return to_camel_case(tool_name),
+        ToolKind::Other => return humanize_tool_name(tool_name),
     }
     .to_string()
 }
