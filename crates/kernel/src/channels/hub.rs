@@ -1,6 +1,6 @@
 use crate::event::{Event, ModelEvent};
 use crate::kernel::{CreateSessionInput, Kernel};
-use crate::storage::SessionStore;
+use crate::storage::{format_age, SessionStore};
 use crate::types::{ContentBlock, Result, SessionId};
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -456,18 +456,20 @@ async fn handle_incoming_message(
         ChannelCommand::Info => {
             // Top-level group messages in reply_in_thread mode show the
             // chat-level session; in-thread messages show the thread's.
-            let key = if is_chat_level_message(&msg, config.reply_in_thread) {
-                &chat_id
-            } else {
-                &mapping_key
-            };
+            let chat_level = is_chat_level_message(&msg, config.reply_in_thread);
+            let key = if chat_level { &chat_id } else { &mapping_key };
             let sid = get_or_create_session(
                 channel_name,
                 store,
                 &kernel,
                 &chat_id,
                 key,
-                reply_msg_id.as_deref(),
+                // Don't re-anchor the chat-level routing to the /info message.
+                if chat_level {
+                    None
+                } else {
+                    reply_msg_id.as_deref()
+                },
             )
             .await?;
             let session = kernel.get_session(&sid).await?;
@@ -730,21 +732,6 @@ fn format_current_model(models: &[crate::kernel::ModelInfo], current: &str) -> S
             )
             },
         )
-}
-
-/// Format a timestamp as a relative age (same rules as
-/// `SessionInfo::format_age`, but usable for any timestamp).
-fn format_age(ts: chrono::DateTime<chrono::Utc>) -> String {
-    let age = chrono::Utc::now() - ts;
-    if age.num_days() > 0 {
-        format!("{}d ago", age.num_days())
-    } else if age.num_hours() > 0 {
-        format!("{}h ago", age.num_hours())
-    } else if age.num_minutes() > 0 {
-        format!("{}m ago", age.num_minutes())
-    } else {
-        "just now".to_string()
-    }
 }
 
 fn format_session_info(

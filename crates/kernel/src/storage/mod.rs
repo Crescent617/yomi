@@ -50,7 +50,7 @@ pub use pinned_session::{
     PinnedSessionDetail, PinnedSessionInfo, PinnedSessionStore, SqlitePinnedSessionStore,
 };
 pub use project::{ProjectStore, SqliteProjectStore};
-pub use session::{SessionInfo, SessionStore, SqliteSessionStore};
+pub use session::{format_age, SessionInfo, SessionStore, SqliteSessionStore};
 pub use todo::{
     strip_system_reminders, JsonTodoStore, TodoItem, TodoListData, TodoStatus, TodoStore,
     SYSTEM_REMINDER_END, SYSTEM_REMINDER_START,

@@ -101,10 +101,7 @@ impl Kernel {
     ) -> Vec<crate::agent::BackgroundShellTask> {
         self.agent_shared
             .background_tasks
-            .shell_tasks()
-            .into_iter()
-            .filter(|task| &task.session_id == session_id)
-            .collect()
+            .shell_tasks_for(session_id)
     }
 
     /// Get favorite answer store

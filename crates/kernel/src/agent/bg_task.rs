@@ -88,6 +88,14 @@ impl BgTaskTracker {
         tasks
     }
 
+    /// Background shell tasks belonging to a single session, oldest first.
+    pub fn shell_tasks_for(&self, session_id: &SessionId) -> Vec<BackgroundShellTask> {
+        self.shell_tasks()
+            .into_iter()
+            .filter(|task| &task.session_id == session_id)
+            .collect()
+    }
+
     pub fn is_running(&self, session_id: &SessionId) -> bool {
         self.count(session_id, BackgroundTaskKind::Subagent) > 0
             || self.count(session_id, BackgroundTaskKind::Shell) > 0

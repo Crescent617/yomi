@@ -23,16 +23,22 @@ pub struct SessionInfo {
 impl SessionInfo {
     /// Format the age of the session as a human-readable string
     pub fn format_age(&self) -> String {
-        let age = Utc::now() - self.updated_at;
-        if age.num_days() > 0 {
-            format!("{}d ago", age.num_days())
-        } else if age.num_hours() > 0 {
-            format!("{}h ago", age.num_hours())
-        } else if age.num_minutes() > 0 {
-            format!("{}m ago", age.num_minutes())
-        } else {
-            "just now".to_string()
-        }
+        format_age(self.updated_at)
+    }
+}
+
+/// Format a timestamp as a relative age ("2d ago", "3h ago", "5m ago",
+/// "just now").
+pub fn format_age(ts: DateTime<Utc>) -> String {
+    let age = Utc::now() - ts;
+    if age.num_days() > 0 {
+        format!("{}d ago", age.num_days())
+    } else if age.num_hours() > 0 {
+        format!("{}h ago", age.num_hours())
+    } else if age.num_minutes() > 0 {
+        format!("{}m ago", age.num_minutes())
+    } else {
+        "just now".to_string()
     }
 }
 
