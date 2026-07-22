@@ -48,4 +48,9 @@ describe("escapeIntrawordUnderscores", () => {
       "[t](https://a.com/b_c) d\\_e",
     );
   });
+
+  it("escapes underscores inside CJK words too", () => {
+    expect(escapeIntrawordUnderscores("变量_名 测试")).toBe("变量\\_名 测试");
+    expect(escapeIntrawordUnderscores("hello_世界")).toBe("hello\\_世界");
+  });
 });

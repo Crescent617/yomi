@@ -78,10 +78,6 @@ function countRun(s: string, start: number, ch: string): number {
 }
 
 function isAlnum(ch: string | undefined): boolean {
-  return (
-    ch !== undefined &&
-    ((ch >= "0" && ch <= "9") ||
-      (ch >= "a" && ch <= "z") ||
-      (ch >= "A" && ch <= "Z"))
-  );
+  // Unicode letters and digits (covers ASCII snake_case and CJK words).
+  return ch !== undefined && /[\p{L}\p{N}]/u.test(ch);
 }
