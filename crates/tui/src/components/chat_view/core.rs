@@ -1609,21 +1609,17 @@ impl ChatViewComponent {
                 let thinking = assistant_msg.thinking_content();
                 self.component
                     .add_assistant_message(content, thinking, None);
-
-                // Handle tool calls
-                if let Some(ref tool_calls) = assistant_msg.tool_calls {
-                    for call in tool_calls {
-                        let args = serde_json::to_string(&call.arguments).ok();
-                        self.component
-                            .start_tool(call.id.clone(), call.name.clone(), args);
-                    }
-                }
             }
             SessionMessage::Tool(tool_msg) => {
                 let output = tool_msg.text_content();
-                // For tool messages, we need to find the corresponding tool in history
-                // and mark it as completed. Since we don't have elapsed_ms, use 0.
-                // Content blocks are not available during history init, pass empty vec.
+                // Tool messages are self-contained (name + args + result), so
+                // history entries are built directly from them. Content blocks
+                // are not available during history init; elapsed is unknown.
+                self.component.start_tool(
+                    tool_msg.tool_call_id.clone(),
+                    tool_msg.name.clone(),
+                    Some(tool_msg.args.clone()),
+                );
                 self.component
                     .complete_tool(&tool_msg.tool_call_id, output, 0, Vec::new());
             }

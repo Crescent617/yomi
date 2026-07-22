@@ -1,4 +1,4 @@
-import { findThinking, hasText } from "../../session";
+import { hasText } from "../../session";
 import type {
   BotMessage,
   ErrorMessage,
@@ -102,10 +102,7 @@ describe("message display item projection", () => {
       const stableTailIsOpen =
         stableTail?.type === "tool" ||
         stableTail?.type === "error" ||
-        (stableTail?.type === "assistant" &&
-          (findThinking(stableTail.content) !== null ||
-            Boolean(stableTail.tool_calls?.length)) &&
-          !hasText(stableTail.content));
+        (stableTail?.type === "assistant" && !hasText(stableTail.content));
       const fullMessages = [...stable, ...effectiveStream];
       results.push({
         label,

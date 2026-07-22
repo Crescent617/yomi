@@ -279,6 +279,8 @@ export interface SteerMessage extends BaseMessage {
 export interface BotMessage extends BaseMessage {
   type: "assistant";
   content: TaggedContentBlock[];
+  /** Populated only by live streaming events (tool_call_delta); the
+   *  list_messages API does not carry tool calls for assistant messages. */
   tool_calls?: { id: string; name: string; arguments: string }[];
   token_usage?: {
     prompt_tokens: number;

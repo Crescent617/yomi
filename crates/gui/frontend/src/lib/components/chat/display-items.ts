@@ -75,9 +75,13 @@ export function buildDisplayItems(
     }
 
     const hasTextContent = hasText(message.content);
+    // Text-less assistant messages (tool-call-only turns, thinking-only,
+    // empty) produce no standalone output of their own — group them so they
+    // neither render as empty bubbles nor split the surrounding activity.
     const isActivity =
       findThinking(message.content) !== null ||
-      Boolean(message.tool_calls?.length);
+      Boolean(message.tool_calls?.length) ||
+      !hasTextContent;
 
     if (isActivity) {
       group.push(message);
@@ -102,10 +106,10 @@ function isClosedAfter(message: Message): boolean {
   if (message.type === "user" || message.type === "steer") return true;
   if (message.type === "error" || message.type === "tool") return false;
 
-  const isActivity =
-    findThinking(message.content) !== null ||
-    Boolean(message.tool_calls?.length);
-  return !isActivity || hasText(message.content);
+  // An assistant message closes its group only when it carries text. Text-less
+  // messages (thinking-only, tool-call-only, empty) stay open so later tool
+  // events join the same group.
+  return hasText(message.content);
 }
 
 function itemBaseKey(item: DisplayItem): string {

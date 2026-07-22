@@ -425,11 +425,6 @@ export function loadSessionMessages(
           id: m.id,
           type: "assistant",
           content: m.content ?? [],
-          tool_calls: m.tool_calls?.map((tc) => ({
-            id: tc.id,
-            name: tc.name,
-            arguments: tc.arguments ?? "",
-          })),
           token_usage: m.token_usage
             ? {
                 prompt_tokens: m.token_usage.prompt_tokens,

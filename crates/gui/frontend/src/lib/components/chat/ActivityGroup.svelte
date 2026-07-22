@@ -11,9 +11,9 @@
   } from "lucide-svelte";
   import type { ComponentType } from "svelte";
   import type { Message } from "../../state.svelte";
-  import { findThinking, textFromBlocks } from "../../session";
+  import { textFromBlocks } from "../../session";
   import { formatElapsed } from "../../utils";
-  import { isAgentActivity } from "./activity-group";
+  import { buildActivityTrail, computeActivityStats } from "./activity-group";
   import { guiPreferences } from "../../settings.svelte";
   import {
     activityGroupExpanded,
@@ -58,17 +58,6 @@
     onExpansionOverride(expanded ? "closed" : "open");
   }
 
-  const SEARCH_READ_TOOLS = new Set([
-    "read",
-    "readfile",
-    "grep",
-    "grepsearch",
-    "glob",
-    "globsearch",
-    "websearch",
-    "webfetch",
-  ]);
-
   interface Badge {
     icon: ComponentType;
     count: number;
@@ -76,94 +65,25 @@
   }
 
   const stats = $derived.by(() => {
-    const materializedToolIds = new Set(
-      messages
-        .filter((message) => message.type === "tool")
-        .map((message) => message.tool_call_id),
-    );
-    let subagentCount = 0;
-    let editWriteCount = 0;
-    let shellCount = 0;
-    let searchReadCount = 0;
-    let thinkingCount = 0;
-    let otherToolCount = 0;
-    let failedCount = 0;
-    let elapsedMs = 0;
-
-    for (const message of messages) {
-      if (message.type === "assistant") {
-        const thinking = findThinking(message.content);
-        if (thinking) {
-          thinkingCount += 1;
-          elapsedMs += thinking.elapsed_ms ?? 0;
-        }
-        if (message.tool_calls?.length) {
-          otherToolCount += message.tool_calls.filter(
-            (call) => !materializedToolIds.has(call.id),
-          ).length;
-        }
-        continue;
-      }
-      if (message.type !== "tool") continue;
-      elapsedMs += message.elapsed_ms ?? 0;
-      if (message.status === "failed") failedCount += 1;
-      const name = message.tool_name.toLowerCase().replace(/[_-]/g, "");
-      if (isAgentActivity(message)) subagentCount += 1;
-      else if (["write", "writefile", "edit", "editfile"].includes(name))
-        editWriteCount += 1;
-      else if (["shell", "bash", "command"].includes(name)) shellCount += 1;
-      else if (SEARCH_READ_TOOLS.has(name)) searchReadCount += 1;
-      else otherToolCount += 1;
-    }
-
+    const counts = computeActivityStats(messages);
     const badges: Badge[] = [
-      { icon: Lightbulb, count: thinkingCount, label: "thoughts" },
-      { icon: FileSearch, count: searchReadCount, label: "reads" },
-      { icon: FileEdit, count: editWriteCount, label: "edits" },
-      { icon: SquareTerminal, count: shellCount, label: "commands" },
-      { icon: Bot, count: subagentCount, label: "agents" },
-      { icon: Wrench, count: otherToolCount, label: "tools" },
+      { icon: Lightbulb, count: counts.thinkingCount, label: "thoughts" },
+      { icon: FileSearch, count: counts.searchReadCount, label: "reads" },
+      { icon: FileEdit, count: counts.editWriteCount, label: "edits" },
+      { icon: SquareTerminal, count: counts.shellCount, label: "commands" },
+      { icon: Bot, count: counts.subagentCount, label: "agents" },
+      { icon: Wrench, count: counts.otherToolCount, label: "tools" },
     ].filter((badge) => badge.count > 0);
 
     return {
       badges,
-      failedCount,
-      elapsedMs,
-      actionCount:
-        thinkingCount +
-        searchReadCount +
-        editWriteCount +
-        shellCount +
-        subagentCount +
-        otherToolCount,
+      failedCount: counts.failedCount,
+      elapsedMs: counts.elapsedMs,
+      actionCount: counts.actionCount,
     };
   });
 
-  const trailItems = $derived.by(() => {
-    const items: Array<
-      | { type: "thought"; id: string; content: string; elapsed_ms: number }
-      | {
-          type: "tool";
-          id: string;
-          message: Extract<Message, { type: "tool" }>;
-        }
-    > = [];
-    for (const message of messages) {
-      if (message.type === "assistant") {
-        const thinking = findThinking(message.content);
-        if (thinking)
-          items.push({
-            type: "thought",
-            id: message.id,
-            content: thinking.content,
-            elapsed_ms: thinking.elapsed_ms,
-          });
-      } else if (message.type === "tool") {
-        items.push({ type: "tool", id: message.id, message });
-      }
-    }
-    return items;
-  });
+  const trailItems = $derived.by(() => buildActivityTrail(messages));
 </script>
 
 {#if stats.actionCount > 0}

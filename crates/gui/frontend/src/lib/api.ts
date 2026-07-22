@@ -454,7 +454,6 @@ export interface SessionMessageAssistant {
   kind: "assistant";
   id: string;
   content: TaggedContentBlock[];
-  tool_calls: { id: string; name: string; arguments: string }[] | null;
   token_usage: {
     prompt_tokens: number;
     completion_tokens: number;

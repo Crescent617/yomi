@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.17] - 2026-07-22
+
+### Changed
+- `list_messages` API 的 `AssistantMsg` 不再携带 `tool_calls` 字段：`ToolMsg` 自包含（name/args/result），前端无需再按 `tool_call_id` 配对；TUI 历史加载改由 `ToolMsg` 直接构建工具条目（被中断回合中未执行的 tool call 不再以 running 占位出现）。
+- GUI activity group 的 header 统计与展开列表统一为仅基于 thinking 与已物化的 tool 消息，不再展示 pending 工具占位卡；无文本 assistant 消息（纯工具调用/纯 thinking/空）始终归入 activity group，不再拆组或渲染为空气泡。
+
+### Fixed
+- GUI 修复流式期间 activity group header 显示 N 个"未知工具"、展开却只有 thinking 的统计/渲染不一致。
+- GUI 修复 `args.replace is not a function` 崩溃：历史加载中 `AssistantMsg.tool_calls[].arguments` 以 JSON 对象上线（声明类型为 string），对象透传进 `compactArgs` 触发 TypeError；字段移除后该路径不复存在。
+
 ## [0.6.16] - 2026-07-22
 
 ### Fixed

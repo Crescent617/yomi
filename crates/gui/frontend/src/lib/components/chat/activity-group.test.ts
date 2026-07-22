@@ -1,5 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { isActivityTail, isAgentActivity } from "./activity-group";
+import {
+  buildActivityTrail,
+  categorizeToolName,
+  computeActivityStats,
+  isActivityTail,
+  isAgentActivity,
+} from "./activity-group";
 
 describe("isAgentActivity", () => {
   test("recognizes an agent tool before subagent metadata arrives", () => {
@@ -79,5 +85,81 @@ describe("activity group state", () => {
     });
 
     expect(active).toBe(false);
+  });
+});
+
+describe("categorizeToolName", () => {
+  test.each([
+    ["read", "searchRead"],
+    ["web_search", "searchRead"],
+    ["webSearch", "searchRead"],
+    ["edit", "editWrite"],
+    ["shell", "shell"],
+    ["agent", "agent"],
+    ["post_message", "other"],
+    ["my_custom_tool", "other"],
+  ])("categorizes %s as %s", (name, category) => {
+    expect(categorizeToolName(name)).toBe(category);
+  });
+});
+
+describe("unmaterialized tool calls", () => {
+  const assistantWithPendingCalls = {
+    id: "assistant-pending",
+    type: "assistant" as const,
+    content: [{ type: "thinking", thinking: "planning" }],
+    tool_calls: [
+      { id: "call-read", name: "read", arguments: '{"path":"a"}' },
+      { id: "call-agent", name: "agent", arguments: "{}" },
+    ],
+    created_at: new Date().toISOString(),
+  };
+
+  test("are neither counted nor rendered before tool messages arrive", () => {
+    const stats = computeActivityStats([assistantWithPendingCalls]);
+    expect(stats.thinkingCount).toBe(1);
+    expect(stats.searchReadCount).toBe(0);
+    expect(stats.subagentCount).toBe(0);
+    expect(stats.otherToolCount).toBe(0);
+    expect(stats.actionCount).toBe(1);
+
+    const trail = buildActivityTrail([assistantWithPendingCalls]);
+    expect(trail.map((item) => item.type)).toEqual(["thought"]);
+  });
+
+  test("tool messages count under their own categories once materialized", () => {
+    const readTool = {
+      id: "tool-read",
+      type: "tool" as const,
+      tool_call_id: "call-read",
+      tool_name: "read",
+      status: "completed" as const,
+      arguments: '{"path":"a"}',
+      result: [],
+      created_at: new Date().toISOString(),
+    };
+    const agentTool = {
+      id: "tool-agent",
+      type: "tool" as const,
+      tool_call_id: "call-agent",
+      tool_name: "agent",
+      status: "running" as const,
+      arguments: "{}",
+      result: [],
+      created_at: new Date().toISOString(),
+    };
+
+    const stats = computeActivityStats([
+      assistantWithPendingCalls,
+      readTool,
+      agentTool,
+    ]);
+    expect(stats.searchReadCount).toBe(1);
+    expect(stats.subagentCount).toBe(1);
+    expect(stats.otherToolCount).toBe(0);
+    expect(stats.actionCount).toBe(3);
+
+    const trail = buildActivityTrail([assistantWithPendingCalls, readTool]);
+    expect(trail.map((item) => item.type)).toEqual(["thought", "tool"]);
   });
 });

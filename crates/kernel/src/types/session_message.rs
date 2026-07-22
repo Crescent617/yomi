@@ -2,9 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::types::{
-    ContentBlock, FinishReason, Message, MessageId, MessageTokenUsage, Role, ToolCall,
-};
+use crate::types::{ContentBlock, FinishReason, Message, MessageId, MessageTokenUsage, Role};
 
 /// 会话消息列表 API 的清晰结构（与 storage Message 解耦）。
 /// 从类型层面区分 user / assistant / tool，消灭旧 Message 里大量 Option 的模糊性。
@@ -32,7 +30,6 @@ pub struct UserMsg {
 pub struct AssistantMsg {
     pub id: MessageId,
     pub content: Vec<ContentBlock>,
-    pub tool_calls: Option<Vec<ToolCall>>,
     pub token_usage: Option<MessageTokenUsage>,
     pub response_id: Option<String>,
     pub model_id: Option<String>,
@@ -107,7 +104,6 @@ impl SessionMessage {
                     result.push(SessionMessage::Assistant(AssistantMsg {
                         id: msg.id,
                         content: msg.content,
-                        tool_calls: msg.tool_calls,
                         token_usage: msg.token_usage,
                         response_id: msg.response_id,
                         model_id: msg.model_id,
