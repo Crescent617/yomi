@@ -1254,7 +1254,7 @@ impl Agent {
                 self.context.transition_to(AgentState::Idle);
                 return Ok(());
             }
-            Some(FinishReason::Stop) => {}
+            Some(FinishReason::Stop | FinishReason::Repeat) => {}
             None | Some(FinishReason::ContentFilter | FinishReason::Unknown) => {
                 unreachable!("inconsistent finish reasons returned above")
             }
@@ -1368,7 +1368,8 @@ fn is_stream_completion_consistent(
             FinishReason::Stop
             | FinishReason::MaxTokens
             | FinishReason::PauseTurn
-            | FinishReason::Refusal,
+            | FinishReason::Refusal
+            | FinishReason::Repeat,
         ) => !has_tool_calls,
         None | Some(FinishReason::ContentFilter | FinishReason::Unknown) => false,
     }

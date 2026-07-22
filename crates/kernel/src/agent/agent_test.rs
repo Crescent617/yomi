@@ -57,6 +57,29 @@ fn pause_and_refusal_do_not_consume_max_token_auto_continue() {
 }
 
 #[test]
+fn repeat_is_a_consistent_terminal_and_never_auto_continues() {
+    assert!(is_stream_completion_consistent(
+        Some(FinishReason::Repeat),
+        false
+    ));
+    assert!(!is_stream_completion_consistent(
+        Some(FinishReason::Repeat),
+        true
+    ));
+    // Auto-continuing a repetition stop would loop forever.
+    let mut used = false;
+    assert!(!should_auto_continue(&mut used, Some(FinishReason::Repeat)));
+}
+
+#[test]
+fn repeat_parses_from_provider_string() {
+    assert_eq!(
+        FinishReason::from_provider_str("repeat"),
+        Some(FinishReason::Repeat)
+    );
+}
+
+#[test]
 fn non_retryable_streaming_error_gets_one_recovery_attempt() {
     assert!(should_retry_streaming_error(0, false));
     assert!(!should_retry_streaming_error(1, false));

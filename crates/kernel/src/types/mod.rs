@@ -213,6 +213,8 @@ pub enum FinishReason {
     PauseTurn,
     /// Model refused the request (Anthropic: `refusal`)
     Refusal,
+    /// Model stopped due to repetition detection (e.g. Kimi: `repeat`)
+    Repeat,
     /// `Unknown` finish reason
     Unknown,
 }
@@ -231,6 +233,7 @@ impl FinishReason {
             "stop" | "end_turn" | "stop_sequence" => Some(Self::Stop),
             "pause_turn" => Some(Self::PauseTurn),
             "refusal" => Some(Self::Refusal),
+            "repeat" => Some(Self::Repeat),
             _ => {
                 tracing::warn!("unknown finish_reason {s}");
                 Some(Self::Unknown)
