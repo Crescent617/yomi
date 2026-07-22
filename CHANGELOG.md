@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.11] - 2026-07-22
+
+### Added
+- Feishu `reply_in_thread` 群聊中，在群里（非 thread）发送 `/model <key>` 切换整个群的所有 thread session，且新 thread 自动继承；thread 内发送仍只切换当前 thread。
+
 ## [0.6.10] - 2026-07-22
 
 ### Fixed
