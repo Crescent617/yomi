@@ -606,6 +606,20 @@ async fn model_key_for_new_channel_session(
         .and_then(|session| session.model_key))
 }
 
+const CMD_MODELS: &str = "/models";
+const CMD_MODEL: &str = "/model";
+const CMD_CLEAR: &str = "/clear";
+const CMD_STOP: &str = "/stop";
+const CMD_STEER: &str = "/steer";
+const CMD_QUEUE: &str = "/queue";
+const CMD_INFO: &str = "/info";
+
+/// All channel command prefixes, longest-first so `/models` is matched
+/// before `/model` (the latter is a prefix of the former).
+const CMD_PREFIXES: &[&str] = &[
+    CMD_MODELS, CMD_MODEL, CMD_CLEAR, CMD_STOP, CMD_STEER, CMD_QUEUE, CMD_INFO,
+];
+
 /// Parsed channel command from an incoming message.
 enum ChannelCommand {
     /// Clear context and start fresh.
@@ -639,40 +653,26 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
         return ChannelCommand::None;
     };
 
-    let command = if cmd.starts_with("/models") {
-        "/models"
-    } else if cmd.starts_with("/model") {
-        "/model"
-    } else if cmd.starts_with("/clear") {
-        "/clear"
-    } else if cmd.starts_with("/stop") {
-        "/stop"
-    } else if cmd.starts_with("/steer") {
-        "/steer"
-    } else if cmd.starts_with("/queue") {
-        "/queue"
-    } else if cmd.starts_with("/info") {
-        "/info"
-    } else {
+    let Some(&command) = CMD_PREFIXES.iter().find(|prefix| cmd.starts_with(**prefix)) else {
         return ChannelCommand::None;
     };
 
     match command {
-        "/clear" if parts.next().is_none() => ChannelCommand::Clear,
-        "/stop" if parts.next().is_none() => ChannelCommand::Stop,
-        "/info" if parts.next().is_none() => ChannelCommand::Info,
-        "/steer" | "/queue" => {
+        CMD_CLEAR if parts.next().is_none() => ChannelCommand::Clear,
+        CMD_STOP if parts.next().is_none() => ChannelCommand::Stop,
+        CMD_INFO if parts.next().is_none() => ChannelCommand::Info,
+        CMD_STEER | CMD_QUEUE => {
             let rest = parts.collect::<Vec<_>>().join(" ");
             if rest.is_empty() {
                 ChannelCommand::None
-            } else if command == "/queue" {
+            } else if command == CMD_QUEUE {
                 ChannelCommand::Queue(rest)
             } else {
                 ChannelCommand::Steer(rest)
             }
         }
-        "/models" | "/model" => match (parts.next(), parts.next()) {
-            (None, None) if command == "/models" => ChannelCommand::ListModels,
+        CMD_MODELS | CMD_MODEL => match (parts.next(), parts.next()) {
+            (None, None) if command == CMD_MODELS => ChannelCommand::ListModels,
             (None, None) => ChannelCommand::CurrentModel,
             (Some(key), None) => ChannelCommand::SwitchModel(key.to_string()),
             _ => ChannelCommand::InvalidModelCommand,
@@ -683,11 +683,9 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
 
 pub(super) fn has_channel_command_prefix(raw_text: &str) -> bool {
     let command = raw_text.split_whitespace().next().unwrap_or_default();
-    [
-        "/models", "/model", "/clear", "/stop", "/steer", "/queue", "/info",
-    ]
-    .iter()
-    .any(|prefix| command.starts_with(prefix))
+    CMD_PREFIXES
+        .iter()
+        .any(|prefix| command.starts_with(prefix))
 }
 
 fn format_model_list(models: &[crate::kernel::ModelInfo], current: &str) -> String {
