@@ -270,6 +270,38 @@ impl Conductor {
         }
     }
 
+    /// Check whether the session or any ancestor is routed from an external
+    /// channel (i.e. has no interactive UI attached).
+    ///
+    /// Subagent sessions don't carry their own channel mapping, so the parent
+    /// chain is walked to find a channel-routed ancestor.
+    async fn is_channel_routed(
+        &self,
+        sid: &SessionId,
+        session_info: Option<&crate::storage::SessionInfo>,
+    ) -> bool {
+        let Some(hub) = &self.agent_shared.channel_hub else {
+            return false;
+        };
+        if hub.is_channel_session(sid).await {
+            return true;
+        }
+        let Some(store) = &self.agent_shared.session_store else {
+            return false;
+        };
+        let mut cursor = session_info.and_then(|i| i.parent_id.clone());
+        while let Some(pid) = cursor {
+            if hub.is_channel_session(&pid).await {
+                return true;
+            }
+            cursor = match store.get(&pid).await {
+                Ok(Some(info)) => info.parent_id,
+                _ => None,
+            };
+        }
+        false
+    }
+
     async fn wake_agent(&self, sid: &SessionId, mailbox: Arc<Mailbox>) {
         let lock = self
             .spawn_locks
@@ -394,6 +426,20 @@ impl Conductor {
 
         let working_dir = cwd.unwrap_or_default();
 
+        // Channel sessions (and their subagent descendants) have no
+        // interactive UI to answer ask_user; block the tool so the model
+        // doesn't hang waiting for an answer that can never arrive.
+        // Temporary heuristic until per-session tool_blocklist is persisted
+        // in session meta at creation time.
+        let mut tool_blocklist = self.agent_config.tool_blocklist.clone();
+        if !tool_blocklist
+            .iter()
+            .any(|p| p == crate::tools::ask_user::ASK_USER_TOOL_NAME)
+            && self.is_channel_routed(sid, session_info.as_ref()).await
+        {
+            tool_blocklist.push(crate::tools::ask_user::ASK_USER_TOOL_NAME.to_string());
+        }
+
         let args = AgentSpawnArgs::new(
             self.base_prompt.clone(),
             sid.0.clone(),
@@ -405,7 +451,7 @@ impl Conductor {
         .with_max_iterations(self.agent_config.max_iterations)
         .with_subagent(self.agent_config.enable_subagent)
         .with_file_state_store(Arc::clone(&file_state_store))
-        .with_tool_blocklist(self.agent_config.tool_blocklist.clone())
+        .with_tool_blocklist(tool_blocklist)
         .with_max_tool_output_length(self.agent_config.max_tool_output_length)
         .with_cancel_token(cancel_token.clone())
         .with_input_bus(self.input_bus.clone());

@@ -314,6 +314,15 @@ impl ChannelHub {
 
         Ok(Some((routing, adapter)))
     }
+
+    /// Check whether a session is routed from an external channel, regardless
+    /// of whether the channel instance is currently running.
+    pub async fn is_channel_session(&self, session_id: &SessionId) -> bool {
+        matches!(
+            self.store.find_routing_by_session(session_id).await,
+            Ok(Some(_))
+        )
+    }
 }
 
 async fn handle_incoming_message(

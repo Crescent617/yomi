@@ -510,3 +510,21 @@ fn reply_anchor_requires_message_id() {
     let msg = channel_message(None, true, false);
     assert_eq!(reply_anchor(&msg, true), None);
 }
+
+#[tokio::test]
+async fn test_is_channel_session() {
+    let (_pool, store) = create_test_pool().await;
+    let hub = ChannelHub::new(store.clone());
+
+    let sid = SessionId::new();
+    assert!(!hub.is_channel_session(&sid).await);
+
+    store
+        .save_mapping("tg_bot", "12345", &sid, "chat123", None)
+        .await
+        .unwrap();
+    assert!(hub.is_channel_session(&sid).await);
+
+    // Unrelated session remains non-channel.
+    assert!(!hub.is_channel_session(&SessionId::new()).await);
+}
