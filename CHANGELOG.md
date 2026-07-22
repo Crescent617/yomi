@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.12] - 2026-07-22
+
+### Added
+- Channel 新命令 `/info`：查看当前 session 基本信息（ID、模型、运行状态、创建/活跃时间、权限、subagent 数、后台 shell）。thread 内显示 thread 的 session；reply_in_thread 群聊顶层显示 chat 级 session。
+- 支持 `repeat` finish_reason（如 Kimi 的重复检测停止）：按正常终止处理，不再产生 unknown 警告，且不会触发 auto-continue。
+
+### Changed
+- Channel 命令字符串字面量收敛为单一 `CMD_PREFIXES` 常量表，解析与命令前缀检测共用。
+
 ## [0.6.11] - 2026-07-22
 
 ### Added
