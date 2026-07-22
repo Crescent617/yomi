@@ -6,6 +6,7 @@
   import CodeBlock from "./CodeBlock.svelte";
   import MermaidBlock from "./MermaidBlock.svelte";
   import { endsWithClosedBacktickFence } from "./markdown-fences";
+  import { escapeIntrawordUnderscores } from "./escape-underscores";
 
   let { content, isStreaming }: { content: string; isStreaming?: boolean } =
     $props();
@@ -132,7 +133,11 @@
 
   $effect(() => {
     if (!el) return;
-    const curr = content;
+    // Escape intra-word underscores up front: streaming-markdown doesn't
+    // implement CommonMark flanking rules and would italicize snake_case
+    // identifiers (and everything after them). All parser bookkeeping below
+    // happens in the escaped space.
+    const curr = escapeIntrawordUnderscores(content);
     const streaming = isStreaming;
 
     if (parser === undefined) {
