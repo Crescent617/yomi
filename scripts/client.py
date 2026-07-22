@@ -10,6 +10,8 @@ Usage examples:
     python3 yomi_client.py list_sessions
     python3 yomi_client.py create_session
     python3 yomi_client.py send_message <session_id> "hello world"
+    python3 yomi_client.py send_steer <session_id> "focus on the tests first"
+    python3 yomi_client.py clear_session <session_id>
     python3 yomi_client.py list_messages <session_id>
 """
 import argparse
@@ -129,6 +131,16 @@ class Client:
         blocks = [{"type": "text", "text": text}]
         return self.request("send_message", session_id=session_id, blocks=blocks)
 
+    def send_steer(self, session_id: str, text: str) -> dict:
+        """Inject a steer message before the next streaming turn."""
+        blocks = [{"type": "text", "text": text}]
+        cmd = {"type": "steer", "content": blocks}
+        return self.request("command", session_id=session_id, cmd=cmd)
+
+    def clear_session(self, session_id: str) -> dict:
+        """Clear the session's conversation context."""
+        return self.request("clear_session", session_id=session_id)
+
     def subscribe(self, session_id: str):
         """Subscribe to session events. Returns the request response; events must be read separately."""
         return self.request("subscribe", session_id=session_id)
@@ -146,7 +158,8 @@ def main():
     parser.add_argument("command", choices=[
         "hello", "list_projects", "create_project", "get_project",
         "create_session", "list_sessions", "list_messages",
-        "get_session_status", "send_message", "subscribe", "interactive"
+        "get_session_status", "send_message", "send_steer", "clear_session",
+        "subscribe", "interactive"
     ])
     parser.add_argument("args", nargs="*", help="positional arguments for the command")
     parser.add_argument("--socket", "-s", help="override daemon socket path")
@@ -199,6 +212,18 @@ def main():
                 sys.exit(1)
             pretty_print(client.send_message(args.args[0], " ".join(args.args[1:])))
 
+        elif args.command == "send_steer":
+            if len(args.args) < 2:
+                print("Usage: send_steer <session_id> <text>", file=sys.stderr)
+                sys.exit(1)
+            pretty_print(client.send_steer(args.args[0], " ".join(args.args[1:])))
+
+        elif args.command == "clear_session":
+            if not args.args:
+                print("Usage: clear_session <session_id>", file=sys.stderr)
+                sys.exit(1)
+            pretty_print(client.clear_session(args.args[0]))
+
         elif args.command == "subscribe":
             if not args.args:
                 print("Usage: subscribe <session_id>", file=sys.stderr)
@@ -237,6 +262,10 @@ def main():
                     pretty_print(client.create_session(project_id=parts[1] if len(parts) > 1 else None))
                 elif cmd == "send_message" and len(parts) >= 3:
                     pretty_print(client.send_message(parts[1], " ".join(parts[2:])))
+                elif cmd == "send_steer" and len(parts) >= 3:
+                    pretty_print(client.send_steer(parts[1], " ".join(parts[2:])))
+                elif cmd == "clear_session" and len(parts) >= 2:
+                    pretty_print(client.clear_session(parts[1]))
                 else:
                     print(f"Unknown command: {cmd}")
     finally:
