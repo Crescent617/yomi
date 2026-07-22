@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.9] - 2026-07-22
+
+### Fixed
+- Channel（Telegram/Feishu）会话及其 subagent 子会话不再注册 `askUser` 工具：此前 channel 会话创建时传入的 per-session `tool_blocklist` 未被持久化也未生效，模型调用 ask_user 后会空等到 2 分钟超时。现在 Conductor 在 spawn 时通过 channel mapping（沿 parent 链回溯）实时判断并追加 block。
+
 ## [0.6.6] - 2026-07-20
 
 ### Added
