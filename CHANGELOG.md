@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.14] - 2026-07-22
+
+### Fixed
+- 聊天 markdown 下划线转义扩展到 CJK 文本：`变量_名`、`hello_世界` 等中文/混排词内下划线同样不再误渲染为斜体（词内判定从 ASCII 放宽到 Unicode 字母/数字）。
+
 ## [0.6.13] - 2026-07-22
 
 ### Fixed
