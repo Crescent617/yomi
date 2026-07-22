@@ -116,6 +116,10 @@ pub struct ChannelMessage {
     /// When present, the hub uses this as the session mapping key instead of
     /// `external_chat_id` so that each thread gets its own session.
     pub thread_id: Option<String>,
+    /// Root message ID of the reply chain (e.g. Feishu `root_id`). In a
+    /// thread, every message replies to the thread's root message, so this
+    /// identifies the message that started the thread.
+    pub root_id: Option<String>,
     /// Whether the message was sent in a group chat (vs. private/p2p).
     pub is_group: bool,
 }

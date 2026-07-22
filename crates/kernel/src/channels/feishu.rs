@@ -665,6 +665,7 @@ impl FeishuAdapter {
         }
 
         let thread_id = message["thread_id"].as_str().map(|s| s.to_string());
+        let root_id = message["root_id"].as_str().map(|s| s.to_string());
 
         let ts = Self::parse_feishu_timestamp(&message["create_time"]);
 
@@ -703,6 +704,7 @@ impl FeishuAdapter {
             raw_text: Some(raw_text),
             content: vec![ContentBlock::Text { text: formatted }],
             thread_id,
+            root_id,
             is_group: chat_type == "group",
         };
 

@@ -479,6 +479,7 @@ fn channel_message(
         raw_text: None,
         content: vec![],
         thread_id: thread_id.map(str::to_string),
+        root_id: None,
         is_group,
     }
 }
@@ -527,4 +528,49 @@ async fn test_is_channel_session() {
 
     // Unrelated session remains non-channel.
     assert!(!hub.is_channel_session(&SessionId::new()).await);
+}
+
+#[test]
+fn mapping_key_reply_in_thread_top_level_message_starts_new_session() {
+    // Top-level group message: no root_id/thread_id yet (the thread is only
+    // opened by the bot's reply), so it keys by its own message id.
+    let msg = channel_message(None, true, true);
+    assert_eq!(session_mapping_key(&msg, "chat-1", true), "msg-1");
+}
+
+#[test]
+fn mapping_key_reply_in_thread_follow_up_joins_root_session() {
+    // In-thread message: Feishu sets root_id to the thread's root message,
+    // so the follow-up joins the session started by that message.
+    let mut msg = channel_message(Some("thread-1"), true, true);
+    msg.root_id = Some("msg-root".to_string());
+    assert_eq!(session_mapping_key(&msg, "chat-1", true), "msg-root");
+}
+
+#[test]
+fn mapping_key_reply_in_thread_legacy_thread_falls_back_to_thread_id() {
+    // Thread message without root_id (older data / unusual shapes) still
+    // keys by thread_id.
+    let msg = channel_message(Some("thread-1"), true, true);
+    assert_eq!(session_mapping_key(&msg, "chat-1", true), "thread-1");
+}
+
+#[test]
+fn mapping_key_reply_in_thread_private_chat_stays_chat_scoped() {
+    // Private chats never key by message, even for quote-replies (root_id).
+    let mut msg = channel_message(None, false, true);
+    msg.root_id = Some("msg-root".to_string());
+    assert_eq!(session_mapping_key(&msg, "chat-1", true), "chat-1");
+}
+
+#[test]
+fn mapping_key_without_reply_in_thread_unchanged() {
+    // Quote-reply in a group with reply_in_thread off: root_id is ignored.
+    let mut msg = channel_message(None, true, true);
+    msg.root_id = Some("msg-root".to_string());
+    assert_eq!(session_mapping_key(&msg, "chat-1", false), "chat-1");
+
+    // Thread messages still key by thread_id as before.
+    let msg = channel_message(Some("thread-1"), true, true);
+    assert_eq!(session_mapping_key(&msg, "chat-1", false), "thread-1");
 }

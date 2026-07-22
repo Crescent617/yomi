@@ -334,7 +334,7 @@ async fn handle_incoming_message(
 ) -> Result<Option<String>> {
     let chat_id = msg.external_chat_id.clone();
     let reply_msg_id = reply_anchor(&msg, config.reply_in_thread);
-    let mapping_key = msg.thread_id.clone().unwrap_or_else(|| chat_id.clone());
+    let mapping_key = session_mapping_key(&msg, &chat_id, config.reply_in_thread);
 
     let cmd = parse_channel_command(msg.raw_text.as_deref());
     match cmd {
@@ -458,6 +458,27 @@ fn reply_anchor(msg: &ChannelMessage, reply_in_thread: bool) -> Option<String> {
     msg.external_message_id
         .clone()
         .filter(|_| msg.thread_id.is_some() || (reply_in_thread && msg.is_group))
+}
+
+/// Compute the session mapping key for an incoming message.
+///
+/// In `reply_in_thread` group chats each conversation thread gets its own
+/// session. The bot's reply is what opens the thread, so the thread's
+/// *starting* message itself carries no `thread_id` — but every message
+/// inside the thread replies to the thread's root message (Feishu sets
+/// `root_id` to it). Keying by root/message id therefore keeps a whole
+/// thread in one session while each new top-level message starts a fresh
+/// session.
+fn session_mapping_key(msg: &ChannelMessage, chat_id: &str, reply_in_thread: bool) -> String {
+    if reply_in_thread && msg.is_group {
+        msg.root_id
+            .clone()
+            .or_else(|| msg.thread_id.clone())
+            .or_else(|| msg.external_message_id.clone())
+            .unwrap_or_else(|| chat_id.to_string())
+    } else {
+        msg.thread_id.clone().unwrap_or_else(|| chat_id.to_string())
+    }
 }
 
 /// Get an existing session or create a new one, updating routing info.

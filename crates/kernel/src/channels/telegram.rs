@@ -167,6 +167,7 @@ impl TelegramAdapter {
             raw_text,
             content,
             thread_id: None,
+            root_id: None,
             is_group,
         })
     }
