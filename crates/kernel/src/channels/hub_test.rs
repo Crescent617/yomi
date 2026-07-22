@@ -574,3 +574,25 @@ fn mapping_key_without_reply_in_thread_unchanged() {
     let msg = channel_message(Some("thread-1"), true, true);
     assert_eq!(session_mapping_key(&msg, "chat-1", false), "thread-1");
 }
+
+#[test]
+fn chat_wide_model_command_only_for_top_level_group_in_thread_mode() {
+    // Top-level group message in reply_in_thread mode → chat-wide switch.
+    let msg = channel_message(None, true, true);
+    assert!(is_chat_wide_model_command(&msg, true));
+
+    // In-thread message → per-thread switch.
+    let mut msg = channel_message(Some("thread-1"), true, true);
+    assert!(!is_chat_wide_model_command(&msg, true));
+    // Quote-reply (root_id set) → per-session switch.
+    msg.root_id = Some("msg-root".to_string());
+    assert!(!is_chat_wide_model_command(&msg, true));
+
+    // Private chat → never chat-wide.
+    let msg = channel_message(None, false, true);
+    assert!(!is_chat_wide_model_command(&msg, true));
+
+    // reply_in_thread off → never chat-wide.
+    let msg = channel_message(None, true, true);
+    assert!(!is_chat_wide_model_command(&msg, false));
+}

@@ -410,6 +410,32 @@ async fn handle_incoming_message(
             Ok(Some(format_current_model(&models, &current)))
         }
         ChannelCommand::SwitchModel(key) => {
+            let models = kernel.list_models().await?;
+            if !models.iter().any(|model| model.name == key) {
+                return Ok(Some(format_unknown_model(&key, &models)));
+            }
+            if is_chat_wide_model_command(&msg, config.reply_in_thread) {
+                // Switch the whole chat: update every existing thread
+                // session routed to this chat, and persist the choice on
+                // the chat-level session so future threads inherit it.
+                let chat_sid =
+                    get_or_create_session(channel_name, store, &kernel, &chat_id, &chat_id, None)
+                        .await?;
+                kernel.set_session_model(&chat_sid, &key).await?;
+                for (mk, sid) in store.list_mappings(channel_name).await? {
+                    if mk == chat_id {
+                        continue;
+                    }
+                    if let Ok(Some(routing)) = store.find_routing_by_session(&sid).await {
+                        if routing.external_chat_id == chat_id {
+                            kernel.set_session_model(&sid, &key).await?;
+                        }
+                    }
+                }
+                return Ok(Some(format!(
+                    "Switched all threads in this chat to `{key}`. It takes effect on the next model invocation."
+                )));
+            }
             let sid = get_or_create_session(
                 channel_name,
                 store,
@@ -419,10 +445,6 @@ async fn handle_incoming_message(
                 reply_msg_id.as_deref(),
             )
             .await?;
-            let models = kernel.list_models().await?;
-            if !models.iter().any(|model| model.name == key) {
-                return Ok(Some(format_unknown_model(&key, &models)));
-            }
             kernel.set_session_model(&sid, &key).await?;
             Ok(Some(format!(
                 "Switched to `{key}`. It takes effect on the next model invocation."
@@ -479,6 +501,13 @@ fn session_mapping_key(msg: &ChannelMessage, chat_id: &str, reply_in_thread: boo
     } else {
         msg.thread_id.clone().unwrap_or_else(|| chat_id.to_string())
     }
+}
+
+/// Whether a `/model` command message should switch the whole chat rather
+/// than a single thread session: top-level group messages in
+/// `reply_in_thread` mode (in-thread `/model` stays per-thread).
+fn is_chat_wide_model_command(msg: &ChannelMessage, reply_in_thread: bool) -> bool {
+    reply_in_thread && msg.is_group && msg.thread_id.is_none() && msg.root_id.is_none()
 }
 
 /// Get an existing session or create a new one, updating routing info.
