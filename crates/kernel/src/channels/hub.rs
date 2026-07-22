@@ -414,7 +414,7 @@ async fn handle_incoming_message(
             if !models.iter().any(|model| model.name == key) {
                 return Ok(Some(format_unknown_model(&key, &models)));
             }
-            if is_chat_wide_model_command(&msg, config.reply_in_thread) {
+            if is_chat_level_message(&msg, config.reply_in_thread) {
                 // Switch the whole chat: update every existing thread
                 // session routed to this chat, and persist the choice on
                 // the chat-level session so future threads inherit it.
@@ -453,6 +453,36 @@ async fn handle_incoming_message(
         ChannelCommand::InvalidModelCommand => Ok(Some(
             "Usage: `/model` or `/model <model_key>`. Use `/models` to list models.".to_string(),
         )),
+        ChannelCommand::Info => {
+            // Top-level group messages in reply_in_thread mode show the
+            // chat-level session; in-thread messages show the thread's.
+            let key = if is_chat_level_message(&msg, config.reply_in_thread) {
+                &chat_id
+            } else {
+                &mapping_key
+            };
+            let sid = get_or_create_session(
+                channel_name,
+                store,
+                &kernel,
+                &chat_id,
+                key,
+                reply_msg_id.as_deref(),
+            )
+            .await?;
+            let session = kernel.get_session(&sid).await?;
+            let model_key = kernel.get_session_model(&sid).await;
+            let models = kernel.list_models().await?;
+            let subagent_count = kernel.list_subagents(&sid).await?.len();
+            let shells = kernel.list_background_shells(&sid);
+            Ok(Some(format_session_info(
+                &session,
+                &model_key,
+                &models,
+                subagent_count,
+                &shells,
+            )))
+        }
         ChannelCommand::None => {
             let sid = get_or_create_session(
                 channel_name,
@@ -503,10 +533,11 @@ fn session_mapping_key(msg: &ChannelMessage, chat_id: &str, reply_in_thread: boo
     }
 }
 
-/// Whether a `/model` command message should switch the whole chat rather
-/// than a single thread session: top-level group messages in
-/// `reply_in_thread` mode (in-thread `/model` stays per-thread).
-fn is_chat_wide_model_command(msg: &ChannelMessage, reply_in_thread: bool) -> bool {
+/// Whether a message is a top-level group message in `reply_in_thread`
+/// mode (i.e. not inside any thread). Such messages address the chat as a
+/// whole — e.g. a top-level `/model` switches every thread session, and a
+/// top-level `/info` shows the chat-level session.
+fn is_chat_level_message(msg: &ChannelMessage, reply_in_thread: bool) -> bool {
     reply_in_thread && msg.is_group && msg.thread_id.is_none() && msg.root_id.is_none()
 }
 
@@ -593,6 +624,8 @@ enum ChannelCommand {
     SwitchModel(String),
     /// A model command with too many arguments.
     InvalidModelCommand,
+    /// Show basic info about the current session.
+    Info,
     /// Not a command.
     None,
 }
@@ -618,6 +651,8 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
         "/steer"
     } else if cmd.starts_with("/queue") {
         "/queue"
+    } else if cmd.starts_with("/info") {
+        "/info"
     } else {
         return ChannelCommand::None;
     };
@@ -625,6 +660,7 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
     match command {
         "/clear" if parts.next().is_none() => ChannelCommand::Clear,
         "/stop" if parts.next().is_none() => ChannelCommand::Stop,
+        "/info" if parts.next().is_none() => ChannelCommand::Info,
         "/steer" | "/queue" => {
             let rest = parts.collect::<Vec<_>>().join(" ");
             if rest.is_empty() {
@@ -647,9 +683,11 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
 
 pub(super) fn has_channel_command_prefix(raw_text: &str) -> bool {
     let command = raw_text.split_whitespace().next().unwrap_or_default();
-    ["/models", "/model", "/clear", "/stop", "/steer", "/queue"]
-        .iter()
-        .any(|prefix| command.starts_with(prefix))
+    [
+        "/models", "/model", "/clear", "/stop", "/steer", "/queue", "/info",
+    ]
+    .iter()
+    .any(|prefix| command.starts_with(prefix))
 }
 
 fn format_model_list(models: &[crate::kernel::ModelInfo], current: &str) -> String {
@@ -694,6 +732,83 @@ fn format_current_model(models: &[crate::kernel::ModelInfo], current: &str) -> S
             )
             },
         )
+}
+
+/// Format a timestamp as a relative age (same rules as
+/// `SessionInfo::format_age`, but usable for any timestamp).
+fn format_age(ts: chrono::DateTime<chrono::Utc>) -> String {
+    let age = chrono::Utc::now() - ts;
+    if age.num_days() > 0 {
+        format!("{}d ago", age.num_days())
+    } else if age.num_hours() > 0 {
+        format!("{}h ago", age.num_hours())
+    } else if age.num_minutes() > 0 {
+        format!("{}m ago", age.num_minutes())
+    } else {
+        "just now".to_string()
+    }
+}
+
+fn format_session_info(
+    session: &crate::types::SessionResponse,
+    model_key: &str,
+    models: &[crate::kernel::ModelInfo],
+    subagent_count: usize,
+    shells: &[crate::agent::BackgroundShellTask],
+) -> String {
+    let model = models.iter().find(|m| m.name == model_key).map_or_else(
+        || format!("`{model_key}`"),
+        |m| {
+            format!(
+                "`{}` · {} · `{}` · {}k ctx",
+                m.name,
+                m.provider,
+                m.model_id,
+                m.context_window / 1000
+            )
+        },
+    );
+    // Sessions without a persisted model key resolve to the default model.
+    let default_marker = if session.model_key.is_none() {
+        " (default)"
+    } else {
+        ""
+    };
+    let shells_text = if shells.is_empty() {
+        "none".to_string()
+    } else {
+        shells
+            .iter()
+            .map(|s| {
+                format!(
+                    "`{}` (pid {}, {})",
+                    s.command,
+                    s.pid,
+                    format_age(s.started_at)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    [
+        "**Session Info**".to_string(),
+        String::new(),
+        format!("- ID: `{}`", session.id.0),
+        format!("- Model: {model}{default_marker}"),
+        format!("- Status: {}", session.phase),
+        format!(
+            "- Created: {} · Active: {}",
+            format_age(session.created_at),
+            format_age(session.updated_at)
+        ),
+        format!(
+            "- Permission: {}",
+            session.auto_approve_level.as_deref().unwrap_or("default")
+        ),
+        format!("- Subagents: {subagent_count}"),
+        format!("- Background Shell: {shells_text}"),
+    ]
+    .join("\n")
 }
 
 fn format_unknown_model(key: &str, models: &[crate::kernel::ModelInfo]) -> String {

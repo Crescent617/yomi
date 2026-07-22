@@ -576,23 +576,85 @@ fn mapping_key_without_reply_in_thread_unchanged() {
 }
 
 #[test]
-fn chat_wide_model_command_only_for_top_level_group_in_thread_mode() {
-    // Top-level group message in reply_in_thread mode → chat-wide switch.
+fn chat_level_message_only_for_top_level_group_in_thread_mode() {
+    // Top-level group message in reply_in_thread mode → chat-level.
     let msg = channel_message(None, true, true);
-    assert!(is_chat_wide_model_command(&msg, true));
+    assert!(is_chat_level_message(&msg, true));
 
-    // In-thread message → per-thread switch.
+    // In-thread message → thread session.
     let mut msg = channel_message(Some("thread-1"), true, true);
-    assert!(!is_chat_wide_model_command(&msg, true));
-    // Quote-reply (root_id set) → per-session switch.
+    assert!(!is_chat_level_message(&msg, true));
+    // Quote-reply (root_id set) → thread session of the quoted root.
     msg.root_id = Some("msg-root".to_string());
-    assert!(!is_chat_wide_model_command(&msg, true));
+    assert!(!is_chat_level_message(&msg, true));
 
-    // Private chat → never chat-wide.
+    // Private chat → never chat-level.
     let msg = channel_message(None, false, true);
-    assert!(!is_chat_wide_model_command(&msg, true));
+    assert!(!is_chat_level_message(&msg, true));
 
-    // reply_in_thread off → never chat-wide.
+    // reply_in_thread off → never chat-level.
     let msg = channel_message(None, true, true);
-    assert!(!is_chat_wide_model_command(&msg, false));
+    assert!(!is_chat_level_message(&msg, false));
+}
+
+#[test]
+fn test_parse_info_command() {
+    assert!(matches!(
+        parse_channel_command(Some("/info")),
+        ChannelCommand::Info
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/info@yomi_bot")),
+        ChannelCommand::Info
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/info extra")),
+        ChannelCommand::None
+    ));
+}
+
+#[test]
+fn test_format_session_info() {
+    let now = chrono::Utc::now();
+    let session = crate::types::SessionResponse {
+        id: SessionId::new(),
+        phase: "idle".to_string(),
+        title: None,
+        parent_id: None,
+        project_id: None,
+        working_dir: None,
+        message_count: 7,
+        created_at: now - chrono::Duration::hours(3),
+        updated_at: now - chrono::Duration::minutes(5),
+        auto_approve_level: Some("dangerous".to_string()),
+        model_key: None,
+    };
+    let models = vec![model_info("kimi", "kimi-k2", 256_000)];
+
+    let out = format_session_info(&session, "kimi", &models, 0, &[]);
+    assert!(out.contains(&format!("- ID: `{}`", session.id.0)));
+    assert!(out.contains("- Model: `kimi` · anthropic · `kimi-k2` · 256k ctx (default)"));
+    assert!(out.contains("- Status: idle"));
+    assert!(out.contains("- Created: 3h ago · Active: 5m ago"));
+    assert!(out.contains("- Permission: dangerous"));
+    assert!(out.contains("- Subagents: 0"));
+    assert!(out.contains("- Background Shell: none"));
+
+    // Persisted model key drops the (default) marker; shells are listed.
+    let session = crate::types::SessionResponse {
+        model_key: Some("kimi".to_string()),
+        ..session
+    };
+    let shells = vec![crate::agent::BackgroundShellTask {
+        task_id: "sh-1".to_string(),
+        session_id: session.id.clone(),
+        pid: 42,
+        command: "cargo test".to_string(),
+        output_path: "/tmp/sh-1.log".to_string(),
+        started_at: now - chrono::Duration::minutes(9),
+    }];
+    let out = format_session_info(&session, "kimi", &models, 2, &shells);
+    assert!(out.contains("- Model: `kimi` · anthropic · `kimi-k2` · 256k ctx\n"));
+    assert!(out.contains("- Subagents: 2"));
+    assert!(out.contains("- Background Shell: `cargo test` (pid 42, 9m ago)"));
 }

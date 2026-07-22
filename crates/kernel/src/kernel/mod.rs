@@ -94,6 +94,19 @@ impl Kernel {
         self.pinned_session_store.clone()
     }
 
+    /// List background shell tasks belonging to a session.
+    pub fn list_background_shells(
+        &self,
+        session_id: &SessionId,
+    ) -> Vec<crate::agent::BackgroundShellTask> {
+        self.agent_shared
+            .background_tasks
+            .shell_tasks()
+            .into_iter()
+            .filter(|task| &task.session_id == session_id)
+            .collect()
+    }
+
     /// Get favorite answer store
     pub fn favorite_store(&self) -> Arc<dyn crate::storage::FavoriteStore> {
         self.favorite_store.clone()
