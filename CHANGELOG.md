@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.13] - 2026-07-22
+
+### Fixed
+- GUI 聊天 markdown 渲染：`finish_reason` 等 snake_case 标识符中的词内下划线不再被误渲染为斜体（此前会斜体到段落结尾）。通过在渲染前转义词内下划线 run 解决，code block、inline code、链接 URL 不受影响，正常 `_斜体_` / `__粗体__` 语法保持可用。
+
 ## [0.6.12] - 2026-07-22
 
 ### Added
