@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.10] - 2026-07-22
+
+### Fixed
+- Feishu `reply_in_thread` 群聊模式下每个话题真正拥有独立 session：thread 由 bot 回复创建，发起消息不带 `thread_id`，此前所有顶层消息汇入同一个 chat 级 session（上下文互相污染），而 thread 内追问反而开出无上下文的新 session。现在利用话题内消息 `root_id` 指向话题根消息的语义，按根消息 id 归并 session。私聊与非 thread 模式行为不变。
+
 ## [0.6.9] - 2026-07-22
 
 ### Fixed
