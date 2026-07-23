@@ -108,17 +108,17 @@ fn injected_env_names_tracks_only_values_set_by_config() {
 }
 
 #[test]
-fn clear_removed_injected_env_removes_stale_values() {
+fn inject_env_does_not_clear_removed_values() {
     let key = format!("YOMI_TEST_ENV_{}", crate::types::MessageId::new().as_str());
-    let mut first = Config::default();
-    first.env.insert(key.clone(), "first".to_string());
-    first.inject_env().unwrap();
+    let mut config = Config::default();
+    config.env.insert(key.clone(), "configured".to_string());
+    config.inject_env().unwrap();
 
-    let second = Config::default();
-    second.clear_removed_injected_env();
+    let next = Config::default();
+    next.inject_env().unwrap();
 
-    assert!(std::env::var_os(&key).is_none());
-    assert!(!Config::injected_env_names().contains(&key));
+    assert_eq!(std::env::var(&key).unwrap(), "configured");
+    Config::clear_injected_env();
 }
 
 #[test]

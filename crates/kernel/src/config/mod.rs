@@ -309,9 +309,13 @@ impl Config {
         Ok(())
     }
 
-    /// Inject configured environment variables that are absent from the host process.
+    /// Inject configured environment variables into the host process.
     ///
-    /// Call this during startup, before applying environment overrides or spawning tasks.
+    /// Missing variables are added. Values previously injected by Yomi are
+    /// updated when the configuration changes. Existing host variables are
+    /// preserved, and removed `[env]` entries remain in this process until it
+    /// exits; daemon children explicitly remove tracked injected variables
+    /// before starting so they reload the current configuration.
     pub fn inject_env(&self) -> std::result::Result<(), KernelError> {
         self.validate_env_entries()?;
         let mut injected = INJECTED_ENV
@@ -355,27 +359,6 @@ impl Config {
             return;
         };
         for (name, value) in std::mem::take(&mut *injected) {
-            if std::env::var(&name).ok().as_deref() == Some(value.as_str()) {
-                std::env::remove_var(name);
-            }
-        }
-    }
-
-    /// Remove tracked injected values that are no longer present in `[env]`.
-    pub fn clear_removed_injected_env(&self) {
-        let Some(injected) = INJECTED_ENV.get() else {
-            return;
-        };
-        let Ok(mut injected) = injected.lock() else {
-            return;
-        };
-        let removed: Vec<_> = injected
-            .iter()
-            .filter(|(name, _)| !self.env.contains_key(*name))
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect();
-        for (name, value) in removed {
-            injected.remove(&name);
             if std::env::var(&name).ok().as_deref() == Some(value.as_str()) {
                 std::env::remove_var(name);
             }
