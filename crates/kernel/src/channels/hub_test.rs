@@ -637,7 +637,7 @@ fn test_format_session_info() {
     assert!(out.contains("- Status: idle"));
     assert!(out.contains("- Created: 3h ago · Active: 5m ago"));
     assert!(out.contains("- Permission: dangerous"));
-    assert!(out.contains("- Subagents: 0"));
+    assert!(out.contains("- Subagents (running): 0"));
     assert!(out.contains("- Background Shell: none"));
 
     // Persisted model key drops the (default) marker; shells are listed.
@@ -655,6 +655,6 @@ fn test_format_session_info() {
     }];
     let out = format_session_info(&session, "kimi", &models, 2, &shells);
     assert!(out.contains("- Model: `kimi` · anthropic · `kimi-k2` · 256k ctx\n"));
-    assert!(out.contains("- Subagents: 2"));
+    assert!(out.contains("- Subagents (running): 2"));
     assert!(out.contains("- Background Shell: `cargo test` (pid 42, 9m ago)"));
 }

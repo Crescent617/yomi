@@ -475,13 +475,18 @@ async fn handle_incoming_message(
             let session = kernel.get_session(&sid).await?;
             let model_key = kernel.get_session_model(&sid).await;
             let models = kernel.list_models().await?;
-            let subagent_count = kernel.list_subagents(&sid).await?.len();
+            let running_subagents = kernel
+                .list_subagents(&sid)
+                .await?
+                .into_iter()
+                .filter(|s| s.is_running)
+                .count();
             let shells = kernel.list_background_shells(&sid);
             Ok(Some(format_session_info(
                 &session,
                 &model_key,
                 &models,
-                subagent_count,
+                running_subagents,
                 &shells,
             )))
         }
@@ -738,7 +743,7 @@ fn format_session_info(
     session: &crate::types::SessionResponse,
     model_key: &str,
     models: &[crate::kernel::ModelInfo],
-    subagent_count: usize,
+    running_subagents: usize,
     shells: &[crate::agent::BackgroundShellTask],
 ) -> String {
     let model = models.iter().find(|m| m.name == model_key).map_or_else(
@@ -790,7 +795,7 @@ fn format_session_info(
             "- Permission: {}",
             session.auto_approve_level.as_deref().unwrap_or("default")
         ),
-        format!("- Subagents: {subagent_count}"),
+        format!("- Subagents (running): {running_subagents}"),
         format!("- Background Shell: {shells_text}"),
     ]
     .join("\n")
