@@ -57,7 +57,7 @@
   </div>
   <div
     class="min-w-0 flex-1 text-xs leading-4 text-foreground"
-    class:pb-3={isLong && expanded}
+    class:pb-2={isLong}
   >
     {#if parsed.source?.type === "user"}
       <span class="mb-0.5 inline-flex text-[11px] font-semibold text-primary">
@@ -88,19 +88,10 @@
         <span class="truncate font-mono">{parsed.source.id}</span>
       </span>
     {/if}
-    <div class="relative min-w-0" class:message-collapsed={isLong && !expanded}>
+    <div class="min-w-0" class:message-collapsed={isLong && !expanded}>
       <div class="min-w-0" class:truncate={!expanded} bind:this={textElement}>
         <UserText text={parsed.content} compact />
       </div>
-      {#if isLong && !expanded}
-        <div
-          class="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-linear-to-t to-transparent {parsed
-            .source?.type === 'user'
-            ? 'from-primary/5'
-            : 'from-info/5'}"
-          aria-hidden="true"
-        ></div>
-      {/if}
     </div>
   </div>
   {#if isLong}
