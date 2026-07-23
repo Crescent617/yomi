@@ -150,6 +150,7 @@ For long-running commands (e.g. start a server, run a script with unknown durati
                 &ctx.working_dir,
                 cancel_token,
                 &ctx.session_id,
+                ctx.max_tool_output_length,
             )
             .await
         } else {
@@ -273,6 +274,7 @@ impl ShellTool {
     }
 
     /// Execute command in background and send its completion as a steer message.
+    #[allow(clippy::too_many_arguments)]
     async fn exec_async(
         &self,
         command: &str,
@@ -280,6 +282,7 @@ impl ShellTool {
         working_dir: &std::path::Path,
         cancel_token: Option<tokio_util::sync::CancellationToken>,
         session_id: &str,
+        max_tool_output_length: usize,
     ) -> Result<ToolOutput> {
         let ctx = self
             .ctx
@@ -341,7 +344,19 @@ impl ShellTool {
             )
             .await;
 
-            let text = format_background_result(result, &output_path_clone);
+            let output = match tokio::fs::read_to_string(&output_path_clone).await {
+                Ok(log) => extract_log_body(&log).to_string(),
+                Err(e) => {
+                    tracing::warn!("Failed to read background task output: {e}");
+                    String::new()
+                }
+            };
+            let text = format_background_result(
+                result,
+                &output_path_clone,
+                &output,
+                max_tool_output_length,
+            );
             let text = crate::tools::format_shell_message(task_id_clone, text);
 
             drop(tracker_guard);
@@ -363,29 +378,58 @@ impl ShellTool {
 fn format_background_result<E: std::fmt::Display>(
     result: std::result::Result<(i32, bool, bool), E>,
     output_path: &std::path::Path,
+    output: &str,
+    max_output_length: usize,
 ) -> String {
-    match result {
-        Ok((_code, _timed_out, true)) => {
-            format!("[Task cancelled] Partial output: {}", output_path.display())
-        }
-        Ok((_code, true, _cancelled)) => {
-            format!("[Task timed_out] Partial output: {}", output_path.display())
-        }
-        Ok((0, false, false)) => {
-            format!(
-                "[Task completed] Exit code: 0 · Output: {}",
-                output_path.display()
-            )
-        }
-        Ok((code, false, false)) => format!(
-            "[Task failed] Exit code: {code} · Output: {}",
-            output_path.display()
-        ),
-        Err(error) => format!(
-            "[Task failed] Error: {error} · Output: {}",
-            output_path.display()
-        ),
+    let status = match result {
+        Ok((_code, _timed_out, true)) => "[Task cancelled]".to_string(),
+        Ok((_code, true, _cancelled)) => "[Task timed_out]".to_string(),
+        Ok((0, false, false)) => "[Task completed] Exit code: 0".to_string(),
+        Ok((code, false, false)) => format!("[Task failed] Exit code: {code}"),
+        Err(error) => format!("[Task failed] Error: {error}"),
+    };
+
+    let header = format!("{status} · Log file: {}", output_path.display());
+
+    let output = output.trim();
+    if output.is_empty() {
+        return format!("{header}\n[No output]");
     }
+
+    let budget = max_output_length.saturating_sub(header.len());
+    format!("{header}\n[output]\n{}", format_stream(output, budget))
+}
+
+/// Extract the command output from a background task log, stripping the
+/// `# Command:`/`# Timeout:` header and the trailing `# Exit:`/`# Task ...`
+/// footer lines written by `wait_for_child`.
+fn extract_log_body(log: &str) -> &str {
+    let mut body = log;
+
+    // Strip leading header lines ("# Command: ...", optional "# Timeout: ...").
+    while let Some(rest) = body.strip_prefix("# ") {
+        match rest.find('\n') {
+            Some(pos) => body = &rest[pos + 1..],
+            None => return "",
+        }
+    }
+    // Strip the blank line separating the header from the output.
+    if let Some(rest) = body.strip_prefix('\n') {
+        body = rest;
+    }
+
+    // Strip trailing footer lines ("# Task ...", "# Exit: ...") and the blank
+    // line separating them from the output.
+    while let Some(pos) = body.rfind('\n') {
+        let last_line = &body[pos + 1..];
+        if last_line.is_empty() || last_line.starts_with("# ") {
+            body = &body[..pos];
+        } else {
+            break;
+        }
+    }
+
+    body
 }
 
 fn format_exit_status(status: std::process::ExitStatus) -> String {
