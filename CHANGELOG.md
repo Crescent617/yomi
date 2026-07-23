@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.19] - 2026-07-23
+
+### Changed
+- 后台 shell 任务完成通知直接携带截断后的输出内容（keep-edges 截断，预算同工具输出上限），无需再手动读取日志文件；日志文件路径并入首行状态行，输出为空时显式标注 `[No output]`。
+
+### Fixed
+- GUI steer 消息展开/收起按钮不再被文本遮挡：长消息时文本列为按钮预留底部空间，并移除收起态底部的渐变遮罩。
+
 ## [0.6.17] - 2026-07-22
 
 ### Changed
