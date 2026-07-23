@@ -1,7 +1,21 @@
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
+
+const storeMocks = vi.hoisted(() => ({
+  set: vi.fn(),
+  save: vi.fn(),
+}));
+
+vi.mock("@tauri-apps/plugin-store", () => ({
+  Store: {
+    load: vi.fn(async () => storeMocks),
+  },
+}));
+
 import {
   defaultGuiPreferences,
   replaceGuiPreferences,
+  saveGuiPreferences,
+  scheduleGuiPreferencesSave,
   snapshotGuiPreferences,
   type GuiPreferences,
 } from "./settings.svelte";
@@ -23,8 +37,14 @@ function preferencesWithActivityGroupExpansion(
 }
 
 describe("GUI preference normalization", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.useRealTimers();
+    storeMocks.set.mockReset();
+    storeMocks.save.mockReset();
     replaceGuiPreferences(defaultGuiPreferences);
+    await saveGuiPreferences(snapshotGuiPreferences());
+    storeMocks.set.mockClear();
+    storeMocks.save.mockClear();
   });
 
   test("defaults activity group expansion to while_running", () => {
@@ -119,6 +139,49 @@ describe("GUI preference normalization", () => {
 
     expect(snapshotGuiPreferences().chat.activityGroupExpansion).toBe(
       "while_running",
+    );
+  });
+
+  test("debounces preference saves and persists only the latest snapshot", async () => {
+    vi.useFakeTimers();
+    const first = snapshotGuiPreferences();
+    first.layout.sidebarWidth = 220;
+    const latest = snapshotGuiPreferences();
+    latest.layout.sidebarWidth = 320;
+
+    scheduleGuiPreferencesSave(first);
+    scheduleGuiPreferencesSave(latest);
+    expect(storeMocks.set).not.toHaveBeenCalled();
+
+    await vi.runAllTimersAsync();
+
+    expect(storeMocks.set).toHaveBeenCalledTimes(1);
+    expect(storeMocks.set).toHaveBeenCalledWith(
+      "gui_preferences",
+      expect.objectContaining({
+        layout: expect.objectContaining({ sidebarWidth: 320 }),
+      }),
+    );
+    expect(storeMocks.save).toHaveBeenCalledTimes(1);
+  });
+
+  test("an immediate save cancels a pending debounced save", async () => {
+    vi.useFakeTimers();
+    const pending = snapshotGuiPreferences();
+    pending.layout.sidebarWidth = 220;
+    const immediate = snapshotGuiPreferences();
+    immediate.layout.sidebarWidth = 360;
+
+    scheduleGuiPreferencesSave(pending);
+    await saveGuiPreferences(immediate);
+    await vi.runAllTimersAsync();
+
+    expect(storeMocks.set).toHaveBeenCalledTimes(1);
+    expect(storeMocks.set).toHaveBeenCalledWith(
+      "gui_preferences",
+      expect.objectContaining({
+        layout: expect.objectContaining({ sidebarWidth: 360 }),
+      }),
     );
   });
 });

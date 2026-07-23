@@ -11,7 +11,7 @@ pub async fn get_checkpoints(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<Vec<Checkpoint>, GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     let checkpoints = coord
         .get_checkpoints(&sid)
@@ -26,7 +26,7 @@ pub async fn rewind(
     session_id: String,
     message_id: String,
 ) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     let mid = MessageId::from(message_id);
     coord

@@ -8696,6 +8696,7 @@ name = "yomi-gui"
 version = "0.6.17"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "directories",
  "dotenvy",

@@ -8,7 +8,10 @@ use crate::storage::AddFavoriteInput;
 use crate::types::{MessageId, SessionId};
 use tempfile::TempDir;
 
-async fn setup() -> (RemoteKernel, TempDir, tokio_util::sync::CancellationToken) {
+async fn setup_with_config_path(
+    config_path: Option<std::path::PathBuf>,
+    restart_tx: Option<tokio::sync::mpsc::Sender<()>>,
+) -> (RemoteKernel, TempDir, tokio_util::sync::CancellationToken) {
     let tmp = TempDir::new().unwrap();
     let mut config = Config {
         data_dir: tmp.path().to_path_buf(),
@@ -16,7 +19,7 @@ async fn setup() -> (RemoteKernel, TempDir, tokio_util::sync::CancellationToken)
     };
     config.finalize();
     let kernel = crate::build_kernel(&config, false).await.unwrap();
-    let server = crate::server::KernelServer::new(kernel);
+    let server = crate::server::KernelServer::with_lifecycle(kernel, config_path, restart_tx);
     server.start(Vec::new()).await;
     let addr = crate::transport::SocketAddr::Unix(tmp.path().join("daemon.sock"));
     let listener = crate::transport::bind(&addr).await.unwrap();
@@ -27,6 +30,10 @@ async fn setup() -> (RemoteKernel, TempDir, tokio_util::sync::CancellationToken)
     });
     let client = RemoteKernel::connect(&addr).await.unwrap();
     (client, tmp, shutdown)
+}
+
+async fn setup() -> (RemoteKernel, TempDir, tokio_util::sync::CancellationToken) {
+    setup_with_config_path(None, None).await
 }
 
 fn make_input() -> AddFavoriteInput {
@@ -82,4 +89,48 @@ async fn test_favorites_wire_round_trip() {
     assert!(client.list_favorites(None, 10, 0).await.unwrap().is_empty());
 
     shutdown.cancel();
+}
+
+#[tokio::test]
+async fn test_config_wire_round_trip() {
+    let root = TempDir::new().unwrap();
+    let config_path = root.path().join("config.toml");
+    let original = "max_checkpoints = 7\n";
+    std::fs::write(&config_path, original).unwrap();
+    let (client, _socket_dir, shutdown) =
+        setup_with_config_path(Some(config_path.clone()), None).await;
+
+    let config = client.get_config().await.unwrap();
+    assert_eq!(config.content, original);
+    assert_eq!(config.path, config_path.to_string_lossy());
+    assert!(config.full_config.contains("max_checkpoints = 7"));
+
+    let updated = "max_checkpoints = 9\n";
+    client.set_config(updated.to_string()).await.unwrap();
+    assert_eq!(std::fs::read_to_string(&config_path).unwrap(), updated);
+    assert_eq!(client.get_config().await.unwrap().content, updated);
+
+    let error = client
+        .set_config("auto_approve = \"unsupported\"\n".to_string())
+        .await
+        .expect_err("invalid config should fail");
+    assert!(error.to_string().contains("Invalid TOML"));
+    assert_eq!(std::fs::read_to_string(&config_path).unwrap(), updated);
+
+    shutdown.cancel();
+}
+
+#[tokio::test]
+async fn test_restart_wire_request() {
+    let (restart_tx, mut restart_rx) = tokio::sync::mpsc::channel(1);
+    let (client, _tmp, shutdown) = setup_with_config_path(None, Some(restart_tx)).await;
+
+    let call = tokio::spawn(async move { client.restart().await });
+    tokio::time::timeout(std::time::Duration::from_secs(1), restart_rx.recv())
+        .await
+        .expect("restart request timeout")
+        .expect("restart channel closed");
+    shutdown.cancel();
+    let result = call.await.unwrap();
+    assert!(result.is_err(), "test server is intentionally not replaced");
 }

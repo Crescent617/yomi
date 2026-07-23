@@ -67,9 +67,16 @@
       <button
         type="button"
         class="mb-0.5 inline-flex max-w-full items-center gap-1 rounded-sm text-[11px] font-medium text-info transition-colors hover:text-info/80 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        onclick={() => void activateSession(parsed.source!.id)}
-        title={`Open agent session ${parsed.source.id}`}
-        aria-label={`Open agent session ${parsed.source.id}`}
+        onclick={() => {
+          const source = parsed.source;
+          if (source?.type === "agent") void activateSession(source.id);
+        }}
+        title={parsed.source.type === "agent"
+          ? `Open agent session ${parsed.source.id}`
+          : "Open agent session"}
+        aria-label={parsed.source.type === "agent"
+          ? `Open agent session ${parsed.source.id}`
+          : "Open agent session"}
       >
         <span class="truncate font-mono">{parsed.source.id}</span>
       </button>

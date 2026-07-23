@@ -14,7 +14,7 @@
   import {
     guiPreferences,
     snapshotGuiPreferences,
-    saveGuiPreferences,
+    scheduleGuiPreferencesSave,
     applyTheme,
   } from "../../settings.svelte";
 
@@ -27,6 +27,10 @@
     { id: "config", icon: Settings, label: "Config" },
   ] as const;
 
+  function tabTitle(tab: (typeof tabs)[number]): string {
+    return tab.label;
+  }
+
   function toggleTheme() {
     const order = ["light", "dark", "system"] as const;
     const idx = order.indexOf(guiPreferences.appearance.theme);
@@ -34,7 +38,7 @@
     const next = snapshotGuiPreferences();
     next.appearance.theme = nextTheme;
     applyTheme(nextTheme);
-    void saveGuiPreferences(next);
+    scheduleGuiPreferencesSave(next);
   }
 </script>
 
@@ -49,7 +53,7 @@
              {appState.activePanel === tab.id
         ? 'bg-primary/10 text-primary'
         : 'text-muted-foreground hover:text-foreground hover:bg-accent'}"
-      title={tab.label}
+      title={tabTitle(tab)}
     >
       <tab.icon class="w-5 h-5" />
     </button>

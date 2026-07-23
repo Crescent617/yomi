@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   groupSessionsByTime,
   projectSessionsForList,
+  topLevelSessionsForList,
 } from "./session-time-groups";
 
 const NOW = new Date(2026, 6, 13, 12).getTime();
@@ -29,6 +30,25 @@ describe("projectSessionsForList", () => {
         },
       ]),
     ).toEqual([projectSession]);
+  });
+});
+
+describe("topLevelSessionsForList", () => {
+  test("keeps sessions without a project, drops subagents", () => {
+    const projectSession = { id: "project", project_id: "project_1" };
+    const orphanSession = { id: "orphan", project_id: null };
+
+    expect(
+      topLevelSessionsForList([
+        projectSession,
+        orphanSession,
+        {
+          id: "subagent",
+          project_id: "project_1",
+          parent_session_id: "project",
+        },
+      ]),
+    ).toEqual([projectSession, orphanSession]);
   });
 });
 

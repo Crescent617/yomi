@@ -6,9 +6,10 @@
 
   let expanded = $state(false);
 
-  const content =
-    message.type === "error" ? (message as { content: string }).content : "";
-  const isShort = content.length < 100 && !content.includes("\n");
+  const content = $derived(
+    message.type === "error" ? (message as { content: string }).content : "",
+  );
+  const isShort = $derived(content.length < 100 && !content.includes("\n"));
 </script>
 
 <div class="flex justify-center my-1">

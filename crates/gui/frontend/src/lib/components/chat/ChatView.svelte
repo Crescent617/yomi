@@ -66,7 +66,7 @@
   import { buildContentBlocks } from "../../types";
   import {
     guiPreferences,
-    saveGuiPreferences,
+    scheduleGuiPreferencesSave,
     snapshotGuiPreferences,
   } from "../../settings.svelte";
 
@@ -400,7 +400,7 @@
         // getActiveModel() returns "" until models load — don't persist that
         modelSelectorRef?.getActiveModel() || undefined,
       );
-      const result = await api.listSessions(project_id, undefined, 20);
+      const result = await api.listSessions(project_id, "all", undefined, 20);
       for (const s of result.sessions) {
         if (!sessionState.sessions.find((sess) => sess.id === s.id)) {
           sessionState.sessions.push(
@@ -1335,7 +1335,7 @@
                     permission_level = level;
                     const next = snapshotGuiPreferences();
                     next.chat.auto_approve_level = level;
-                    void saveGuiPreferences(next);
+                    scheduleGuiPreferencesSave(next);
                   }}
                 />
                 <ModelSelector bind:this={modelSelectorRef} />

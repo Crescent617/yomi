@@ -1,6 +1,6 @@
 //! `SQLite` implementation of `SessionStore`
 
-use super::{storage_err, SessionInfo, SessionStore};
+use super::{storage_err, SessionInfo, SessionListScope, SessionStore};
 use crate::types::{Result, SessionId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -111,6 +111,7 @@ impl SessionStore for SqliteSessionStore {
     async fn list(
         &self,
         project_id: Option<&crate::types::ProjectId>,
+        scope: crate::storage::session::SessionListScope,
         before: Option<chrono::DateTime<chrono::Utc>>,
         limit: usize,
     ) -> Result<(Vec<SessionInfo>, Option<String>)> {
@@ -123,6 +124,10 @@ impl SessionStore for SqliteSessionStore {
             builder.push(" AND project_id = ");
             builder.push_bind(&*pid.0);
         }
+        if matches!(scope, SessionListScope::Assigned) {
+            builder.push(" AND project_id IS NOT NULL");
+        }
+
         if let Some(before) = before {
             builder.push(" AND updated_at < ");
             builder.push_bind(before.format("%Y-%m-%d %H:%M:%S").to_string());

@@ -22,7 +22,7 @@ import struct
 import sys
 
 MAX_FRAME_SIZE = 8 * 1024 * 1024
-WIRE_PROTOCOL_VERSION = 5
+WIRE_PROTOCOL_VERSION = 21
 
 
 def socket_path() -> str:
@@ -104,7 +104,14 @@ class Client:
 
     def hello(self) -> dict:
         """Handshake: verify wire protocol version."""
-        return self.request("hello")
+        response = self.request("hello")
+        result = response.get("body", {}).get("result", {})
+        server_version = result.get("proto")
+        if server_version != WIRE_PROTOCOL_VERSION:
+            raise RuntimeError(
+                f"wire protocol mismatch: client v{WIRE_PROTOCOL_VERSION}, server v{server_version}"
+            )
+        return response
 
     def list_projects(self) -> dict:
         return self.request("list_projects")
@@ -119,7 +126,7 @@ class Client:
         return self.request("create_session", project_id=project_id, working_dir=working_dir, auto_approve_level="safe")
 
     def list_sessions(self, project_id: str | None = None, limit: int = 50) -> dict:
-        return self.request("list_sessions", project_id=project_id, before=None, limit=limit)
+        return self.request("list_sessions", project_id=project_id, scope="all", before=None, limit=limit)
 
     def list_messages(self, session_id: str) -> dict:
         return self.request("list_messages", session_id=session_id)

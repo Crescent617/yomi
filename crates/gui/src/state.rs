@@ -7,9 +7,27 @@ use tokio::sync::{Mutex, Notify};
 
 use crate::pet::PetRuntime;
 
+/// Which daemon the GUI currently talks to.
+#[derive(Debug, Clone)]
+pub enum ConnectionMode {
+    /// Local daemon (spawned by this GUI or started externally), resolved
+    /// via the standard socket address resolution.
+    Local,
+    /// Remote daemon at an explicit socket address.
+    Remote(kernel::transport::SocketAddr),
+}
+
+#[derive(Clone)]
+struct ConnectionState {
+    kernel: Arc<dyn KernelApi>,
+    mode: ConnectionMode,
+}
+
 #[derive(Clone)]
 pub struct AppState {
-    pub kernel: Arc<dyn KernelApi>,
+    connection: Arc<std::sync::RwLock<ConnectionState>>,
+    /// Serializes complete connect/validate/swap operations.
+    pub connection_switch: Arc<Mutex<()>>,
     /// Mutable because a daemon restart may reload a config with a
     /// different `data_dir`.
     pub data_dir: Arc<std::sync::RwLock<std::path::PathBuf>>,
@@ -33,7 +51,11 @@ impl AppState {
         gui_log_dir: std::path::PathBuf,
     ) -> Self {
         Self {
-            kernel,
+            connection: Arc::new(std::sync::RwLock::new(ConnectionState {
+                kernel,
+                mode: ConnectionMode::Local,
+            })),
+            connection_switch: Arc::new(Mutex::new(())),
             data_dir: Arc::new(std::sync::RwLock::new(data_dir)),
             gui_log_dir,
             active_session: Arc::new(Mutex::new(None)),
@@ -52,6 +74,37 @@ impl AppState {
         if let Some(handle) = tasks.remove(session_id) {
             handle.abort();
         }
+    }
+
+    /// Swap the kernel the GUI talks to (local <-> remote daemon).
+    ///
+    /// The old kernel is stopped, which closes its connection and any
+    /// streams subscribed through it; subscribers re-subscribe onto the new
+    /// kernel.
+    pub fn kernel_snapshot(&self) -> Arc<dyn KernelApi> {
+        self.connection
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .kernel
+            .clone()
+    }
+
+    pub fn swap_kernel(&self, next: Arc<dyn KernelApi>, mode: ConnectionMode) {
+        let old = {
+            let mut guard = self.connection.write().unwrap_or_else(|e| e.into_inner());
+            let old = Arc::clone(&guard.kernel);
+            *guard = ConnectionState { kernel: next, mode };
+            old
+        };
+        old.stop();
+    }
+
+    pub fn connection_mode(&self) -> ConnectionMode {
+        self.connection
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .mode
+            .clone()
     }
 
     pub fn set_pet_enabled(&self, enabled: bool) {

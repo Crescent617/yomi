@@ -4,7 +4,7 @@
   import { projectState, appState } from "../../state.svelte";
   import {
     guiPreferences,
-    saveGuiPreferences,
+    scheduleGuiPreferencesSave,
     snapshotGuiPreferences,
   } from "../../settings.svelte";
   import ProjectSidebar from "./ProjectSidebar.svelte";
@@ -56,7 +56,7 @@
     guiPreferences.layout.sidebarCollapsed =
       !guiPreferences.layout.sidebarCollapsed;
     const next = snapshotGuiPreferences();
-    void saveGuiPreferences(next);
+    scheduleGuiPreferencesSave(next);
   }
 
   function handleToggleLeft() {
@@ -87,7 +87,7 @@
       isDraggingLeft = false;
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      void saveGuiPreferences(snapshotGuiPreferences());
+      scheduleGuiPreferencesSave(snapshotGuiPreferences());
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);

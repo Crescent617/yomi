@@ -669,13 +669,14 @@ impl Kernel {
     pub async fn list_sessions(
         &self,
         project_id: Option<&ProjectId>,
+        scope: crate::storage::session::SessionListScope,
         before: Option<DateTime<Utc>>,
         limit: usize,
     ) -> Result<crate::client::PaginatedSessions> {
         let (sessions, next_cursor) = self
             .session_store()
             .await
-            .list(project_id, before, limit)
+            .list(project_id, scope, before, limit)
             .await?;
         Ok(crate::client::PaginatedSessions {
             sessions,

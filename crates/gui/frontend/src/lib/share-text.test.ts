@@ -13,9 +13,9 @@ describe("markdownToPlainText", () => {
   });
 
   it("keeps link text and image alt", () => {
-    expect(
-      markdownToPlainText("[docs](https://x.com) ![logo](/img.png)"),
-    ).toBe("docs logo");
+    expect(markdownToPlainText("[docs](https://x.com) ![logo](/img.png)")).toBe(
+      "docs logo",
+    );
   });
 
   it("keeps fenced code content but drops fences", () => {
@@ -61,11 +61,7 @@ describe("wrapText", () => {
   });
 
   it("breaks long tokens anywhere", () => {
-    expect(wrapText("abcdefghij", 4, measure)).toEqual([
-      "abcd",
-      "efgh",
-      "ij",
-    ]);
+    expect(wrapText("abcdefghij", 4, measure)).toEqual(["abcd", "efgh", "ij"]);
   });
 
   it("preserves hard newlines", () => {
@@ -73,19 +69,10 @@ describe("wrapText", () => {
   });
 
   it("handles CJK text without spaces", () => {
-    expect(wrapText("你好世界你好", 3, measure)).toEqual([
-      "你好世",
-      "界你好",
-    ]);
+    expect(wrapText("你好世界你好", 3, measure)).toEqual(["你好世", "界你好"]);
   });
 
   it("always terminates on tiny widths", () => {
-    expect(wrapText("hello", 1, measure)).toEqual([
-      "h",
-      "e",
-      "l",
-      "l",
-      "o",
-    ]);
+    expect(wrapText("hello", 1, measure)).toEqual(["h", "e", "l", "l", "o"]);
   });
 });

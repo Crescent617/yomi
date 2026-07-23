@@ -210,13 +210,14 @@ export interface PaginatedSessions {
 
 export async function listSessions(
   project_id?: string,
+  scope: "all" | "assigned" = "all",
   before?: string,
   limit?: number,
 ): Promise<PaginatedSessions> {
   const result = await invokeCmd<{
     sessions: unknown[];
     next_cursor: string | null;
-  }>("list_sessions", { project_id: project_id, before, limit });
+  }>("list_sessions", { project_id: project_id, scope, before, limit });
   return {
     sessions: result.sessions.map((s: unknown) => {
       const session = s as Record<string, unknown>;
@@ -600,6 +601,7 @@ export async function continueSession(session_id: string): Promise<void> {
 export async function getConfigToml(): Promise<{
   content: string;
   path: string;
+  full_config: string;
 }> {
   return invokeCmd("get_config_toml");
 }
@@ -620,6 +622,26 @@ export async function getConfig(): Promise<{
 
 export async function getDaemonStatus(): Promise<{ managed: boolean }> {
   return invokeCmd("get_daemon_status");
+}
+
+// ── Connection (local / remote daemon) ───────────────────────────────────
+
+export interface ConnectionInfo {
+  mode: "local" | "remote";
+  addr: string;
+  managed: boolean;
+}
+
+export async function getConnectionInfo(): Promise<ConnectionInfo> {
+  return invokeCmd("get_connection_info");
+}
+
+export async function connectRemote(addr: string): Promise<ConnectionInfo> {
+  return invokeCmd("connect_remote", { addr });
+}
+
+export async function disconnectRemote(): Promise<ConnectionInfo> {
+  return invokeCmd("disconnect_remote");
 }
 
 export async function restartDaemon(): Promise<void> {

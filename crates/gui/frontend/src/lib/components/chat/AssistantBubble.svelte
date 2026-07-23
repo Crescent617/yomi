@@ -8,8 +8,11 @@
     message,
     session_id,
     isStreaming = false,
-  }: { message: BotMessage; session_id: string; isStreaming?: boolean } =
-    $props();
+  }: {
+    message: BotMessage;
+    session_id: string;
+    isStreaming?: boolean;
+  } = $props();
 </script>
 
 <div class="w-full space-y-2">

@@ -23,7 +23,7 @@ pub async fn read_session_jsonl(
     after_offset: Option<u64>,
 ) -> Result<kernel::client::SessionJsonlChunk, GuiError> {
     state
-        .kernel
+        .kernel_snapshot()
         .read_session_jsonl(
             &kernel::types::SessionId::from(session_id),
             before_offset,

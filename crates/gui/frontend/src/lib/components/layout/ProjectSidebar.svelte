@@ -1,9 +1,17 @@
-<script context="module" lang="ts">
+<script module lang="ts">
   const loadedProjects = new Set<string>();
   const projectLoadPromises = new Map<string, Promise<boolean>>();
-  let allSessionsLoadedShared = false;
-  let allSessionsCursorShared: string | null = null;
-  let allSessionsLoadPromise: Promise<void> | null = null;
+  const allSessionsLoadedShared: Record<"all" | "assigned", boolean> = {
+    all: false,
+    assigned: false,
+  };
+  const allSessionsCursorShared: Record<"all" | "assigned", string | null> = {
+    all: null,
+    assigned: null,
+  };
+  const allSessionsLoadPromise: Partial<
+    Record<"all" | "assigned", Promise<void>>
+  > = {};
 </script>
 
 <script lang="ts">
@@ -48,16 +56,13 @@
     activateSession as stateActivateSession,
   } from "../../session";
   import { formatTimeAgo } from "../../utils";
-  import {
-    groupSessionsByTime,
-    projectSessionsForList,
-  } from "./session-time-groups";
+  import { groupSessionsByTime } from "./session-time-groups";
   import { createFromSessionParams } from "./session-create";
   import { isActiveSessionPhase } from "../../session-phase";
   import { clock } from "../../clock.svelte";
   import {
     guiPreferences,
-    saveGuiPreferences,
+    scheduleGuiPreferencesSave,
     snapshotGuiPreferences,
     type SidebarViewPreference,
   } from "../../settings.svelte";
@@ -94,10 +99,10 @@
   let deletingProject = $state<{ id: string; name: string } | null>(null);
   let deletingSession = $state<{ id: string; title: string } | null>(null);
   const sidebarView = $derived(guiPreferences.layout.sidebar_view);
-  let allSessionsLoaded = $state(allSessionsLoadedShared);
+  let allSessionsLoaded = $state(false);
   let allSessionsLoading = $state(false);
   let allSessionsError = $state(false);
-  let allSessionsCursor = $state<string | null>(allSessionsCursorShared);
+  let allSessionsCursor = $state<string | null>(null);
 
   function focusAndSelect(node: HTMLInputElement) {
     node.focus();
@@ -144,10 +149,17 @@
       .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
   }
 
+  const sessionListScope = $derived(
+    guiPreferences.layout.show_project_sessions_only ? "assigned" : "all",
+  );
   const allSessions = $derived(
-    projectSessionsForList(sessionState.sessions).sort((a, b) =>
-      (b.updated_at ?? "").localeCompare(a.updated_at ?? ""),
-    ),
+    sessionState.sessions
+      .filter(
+        (session) =>
+          !session.parent_session_id &&
+          (sessionListScope === "all" || Boolean(session.project_id)),
+      )
+      .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? "")),
   );
 
   const sessionTimeGroups = $derived(
@@ -180,19 +192,21 @@
   }
 
   async function loadAllSessions(load_more = false) {
-    if (!load_more && allSessionsLoadedShared) {
+    const scope = sessionListScope;
+    if (!load_more && allSessionsLoadedShared[scope]) {
       allSessionsLoaded = true;
-      allSessionsCursor = allSessionsCursorShared;
+      allSessionsCursor = allSessionsCursorShared[scope];
       allSessionsError = false;
       return;
     }
-    if (load_more && !allSessionsCursorShared) return;
-    if (allSessionsLoadPromise) {
+    if (load_more && !allSessionsCursorShared[scope]) return;
+    const existing = allSessionsLoadPromise[scope];
+    if (existing) {
       allSessionsLoading = true;
       try {
-        await allSessionsLoadPromise;
-        allSessionsLoaded = allSessionsLoadedShared;
-        allSessionsCursor = allSessionsCursorShared;
+        await existing;
+        allSessionsLoaded = allSessionsLoadedShared[scope];
+        allSessionsCursor = allSessionsCursorShared[scope];
         allSessionsError = false;
       } catch {
         allSessionsError = true;
@@ -205,27 +219,27 @@
     allSessionsLoading = true;
     allSessionsError = false;
     const cursor = load_more
-      ? (allSessionsCursorShared ?? undefined)
+      ? (allSessionsCursorShared[scope] ?? undefined)
       : undefined;
-    allSessionsLoadPromise = (async () => {
-      const result = await api.listSessions(undefined, cursor, 30);
+    allSessionsLoadPromise[scope] = (async () => {
+      const result = await api.listSessions(undefined, scope, cursor, 30);
       for (const session of result.sessions) mergeSessionInfo(session);
-      allSessionsCursorShared = result.next_cursor;
-      allSessionsLoadedShared = true;
+      allSessionsCursorShared[scope] = result.next_cursor;
+      allSessionsLoadedShared[scope] = true;
     })();
 
     try {
-      await allSessionsLoadPromise;
-      allSessionsCursor = allSessionsCursorShared;
+      await allSessionsLoadPromise[scope];
+      allSessionsCursor = allSessionsCursorShared[scope];
       allSessionsLoaded = true;
     } catch (e: unknown) {
       console.error(
-        "Failed to load all sessions:",
+        "Failed to load sessions:",
         e instanceof Error ? e.message : e,
       );
       allSessionsError = true;
     } finally {
-      allSessionsLoadPromise = null;
+      delete allSessionsLoadPromise[scope];
       allSessionsLoading = false;
     }
   }
@@ -238,7 +252,7 @@
     if (sidebarView === view) return;
     guiPreferences.layout.sidebar_view = view;
     closeMenus();
-    void saveGuiPreferences(snapshotGuiPreferences());
+    scheduleGuiPreferencesSave(snapshotGuiPreferences());
   }
 
   /** Projects sorted by most recently updated. */
@@ -297,7 +311,7 @@
       try {
         if (!load_more) delete sessionCursors[project_id];
         const cursor = load_more ? sessionCursors[project_id] : undefined;
-        const result = await api.listSessions(project_id, cursor, 5);
+        const result = await api.listSessions(project_id, "all", cursor, 5);
         for (const s of result.sessions) mergeSessionInfo(s);
         loadedProjects.add(project_id);
         if (result.next_cursor) {

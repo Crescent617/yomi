@@ -17,6 +17,66 @@ impl KernelServer {
         method: ReqMethod,
     ) -> RespBody {
         match method {
+            // ── Config ───────────────────────────────────────────────────
+            ReqMethod::GetConfig => {
+                let path = self
+                    .config_path
+                    .clone()
+                    .unwrap_or_else(crate::config::Config::write_path);
+                rpc_body(
+                    "get_config_failed",
+                    crate::config::Config::get_kernel_config_from(&path),
+                )
+            }
+            ReqMethod::SetConfig { content } => {
+                let path = self
+                    .config_path
+                    .clone()
+                    .unwrap_or_else(crate::config::Config::write_path);
+                rpc_body(
+                    "set_config_failed",
+                    crate::config::Config::set_kernel_config_at(&path, &content)
+                        .map(|()| serde_json::Value::Null),
+                )
+            }
+            ReqMethod::Restart => {
+                let Some(restart_tx) = &self.restart_tx else {
+                    return rpc_error(
+                        "restart_unavailable",
+                        "daemon restart is not supported by this server",
+                    );
+                };
+                let restart_tx = restart_tx.clone();
+                match restart_tx.try_reserve_owned() {
+                    Ok(permit) => {
+                        tokio::spawn(async move {
+                            // Keep the server alive long enough for the queued RPC response
+                            // to reach the caller, while reserving lifecycle capacity now.
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                            permit.send(());
+                        });
+                        RespBody::Ok {
+                            result: serde_json::Value::Null,
+                        }
+                    }
+                    Err(error) => rpc_error(
+                        "restart_unavailable",
+                        format!("failed to request daemon restart: {error}"),
+                    ),
+                }
+            }
+            ReqMethod::ReadAsset { url } => {
+                let data_dir = self.kernel.data_dir().await;
+                rpc_body(
+                    "read_asset_failed",
+                    crate::utils::asset::read_asset(&url, &data_dir)
+                        .await
+                        .ok_or_else(|| {
+                            crate::types::KernelError::config(format!("Asset not found: {url}"))
+                        }),
+                )
+            }
+
             // ── Project ──────────────────────────────────────────────────
             ReqMethod::ListProjects => {
                 rpc_body("list_projects_failed", self.kernel.list_projects().await)
@@ -177,11 +237,15 @@ impl KernelServer {
             }
             ReqMethod::ListSessions {
                 project_id,
+                scope,
                 before,
                 limit,
             } => {
                 let pid = project_id.as_ref().map(|p| ProjectId::from(p.clone()));
-                let result = self.kernel.list_sessions(pid.as_ref(), before, limit).await;
+                let result = self
+                    .kernel
+                    .list_sessions(pid.as_ref(), scope, before, limit)
+                    .await;
                 rpc_body("list_sessions_failed", result)
             }
             ReqMethod::ListRunningSessions => rpc_body(
@@ -542,6 +606,7 @@ impl KernelServer {
 
             ReqMethod::Hello => ok_body(ProtoResponse {
                 proto: crate::wire::WIRE_PROTOCOL_VERSION,
+                instance_id: &self.instance_id,
             }),
         }
     }
@@ -720,8 +785,19 @@ struct JobIdResponse {
 }
 
 #[derive(serde::Serialize)]
-struct ProtoResponse {
+struct ProtoResponse<'a> {
     proto: u32,
+    instance_id: &'a str,
+}
+
+fn rpc_error(code: &str, message: impl Into<String>) -> RespBody {
+    RespBody::Err {
+        error: RpcError {
+            code: code.to_string(),
+            message: message.into(),
+            detail: None,
+        },
+    }
 }
 
 fn rpc_body<T: serde::Serialize>(default_code: &str, result: crate::types::Result<T>) -> RespBody {

@@ -575,7 +575,8 @@
     if (recordsLoading || recordsDone) return;
     recordsLoading = true;
     try {
-      const beforeId = records.length > 0 ? records[records.length - 1].id : undefined;
+      const beforeId =
+        records.length > 0 ? records[records.length - 1].id : undefined;
       const batch = await api.getUsageRecords(beforeId, RECORDS_PAGE_SIZE);
       if (batch.length === 0) {
         recordsDone = true;
@@ -1194,9 +1195,7 @@
 
         <!-- Raw request records -->
         <div class="rounded-md border border-border bg-card overflow-hidden">
-          <div
-            class="flex items-center gap-2 px-4 py-3 border-b border-border"
-          >
+          <div class="flex items-center gap-2 px-4 py-3 border-b border-border">
             <Hash class="w-4 h-4 text-muted-foreground" />
             <span class="text-sm font-medium">Requests</span>
             <span class="text-xs text-muted-foreground ml-auto">
@@ -1263,7 +1262,8 @@
                         : 'bg-muted/20'} hover:bg-muted/40 transition-colors"
                     >
                       <td class="px-4 py-2 whitespace-nowrap">
-                        <span class="font-mono text-[10px] text-muted-foreground"
+                        <span
+                          class="font-mono text-[10px] text-muted-foreground"
                           >{r.id}</span
                         >
                       </td>
@@ -1291,7 +1291,8 @@
                       <td class="px-4 py-2 text-right font-mono text-xs"
                         >{formatNumber(r.prompt_tokens)}</td
                       >
-                      <td class="px-4 py-2 text-right font-mono text-xs text-success"
+                      <td
+                        class="px-4 py-2 text-right font-mono text-xs text-success"
                         >{formatNumber(r.cached_tokens)}</td
                       >
                       <td class="px-4 py-2 text-right">

@@ -23,6 +23,9 @@ fn should_clear_event_buffer(event: &Event) -> bool {
 #[derive(Clone)]
 pub struct KernelServer {
     pub(crate) kernel: Arc<Kernel>,
+    pub(crate) config_path: Option<std::path::PathBuf>,
+    pub(crate) restart_tx: Option<mpsc::Sender<()>>,
+    pub(crate) instance_id: Arc<str>,
     pub(crate) connections: Arc<dashmap::DashMap<u64, tokio_util::sync::CancellationToken>>,
     pub(crate) next_conn_id: Arc<std::sync::atomic::AtomicU64>,
     /// Cron scheduler.  Held here because the `KernelServer` owns the lifecycle
@@ -37,9 +40,22 @@ pub struct KernelServer {
 }
 
 impl KernelServer {
+    /// Create a server without lifecycle restart support.
     pub fn new(kernel: Arc<Kernel>) -> Self {
+        Self::with_lifecycle(kernel, crate::config::Config::discover_file(), None)
+    }
+
+    /// Create a server with an explicit config path and restart request sink.
+    pub fn with_lifecycle(
+        kernel: Arc<Kernel>,
+        config_path: Option<std::path::PathBuf>,
+        restart_tx: Option<mpsc::Sender<()>>,
+    ) -> Self {
         Self {
             kernel,
+            config_path,
+            restart_tx,
+            instance_id: Arc::from(ulid::Ulid::new().to_string()),
             connections: Arc::new(dashmap::DashMap::new()),
             next_conn_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             cron_scheduler: Arc::new(std::sync::Mutex::new(None)),

@@ -870,14 +870,13 @@ impl Agent {
                     Ok(Some(item)) => match item {
                         ModelStreamItem::Chunk(chunk) => {
                             state.handle_chunk(&chunk);
-                                                        self.emit(Event::Model(ModelEvent::Chunk {
+                            self.emit(Event::Model(ModelEvent::Chunk {
                                 message_id: message_id.clone(),
                                 content: chunk,
                             }));
                         }
                         ModelStreamItem::ToolCallDelta { id, name, arguments_delta } => {
-                            // Forward incremental tool call update to TUI for UI feedback
-                                                        self.emit(Event::Model(ModelEvent::ToolCallDelta {
+                            self.emit(Event::Model(ModelEvent::ToolCallDelta {
                                 message_id: message_id.clone(),
                                 tool_id: id,
                                 tool_name: name,
@@ -889,7 +888,7 @@ impl Agent {
                         }
                         ModelStreamItem::Complete => break,
                         ModelStreamItem::Fallback { from, to } => {
-                                                        self.emit(Event::Model(ModelEvent::Fallback {
+                            self.emit(Event::Model(ModelEvent::Fallback {
                                 message_id: message_id.clone(),
                                 from,
                                 to,

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 // ── Wire Protocol ────────────────────────────────────────────────────────
 
 /// Wire protocol version. Bumped on any breaking change to the IPC schema.
-pub const WIRE_PROTOCOL_VERSION: u32 = 18;
+pub const WIRE_PROTOCOL_VERSION: u32 = 21;
 
 /// All operations a client can request from the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,6 +16,16 @@ pub const WIRE_PROTOCOL_VERSION: u32 = 18;
 pub enum ReqMethod {
     /// Handshake: client checks daemon wire protocol version.
     Hello,
+
+    // ── Config ───────────────────────────────────────────────────────────
+    GetConfig,
+    SetConfig {
+        content: String,
+    },
+    Restart,
+    ReadAsset {
+        url: String,
+    },
 
     // ── Project ──────────────────────────────────────────────────────────
     ListProjects,
@@ -74,6 +84,7 @@ pub enum ReqMethod {
     },
     ListSessions {
         project_id: Option<String>,
+        scope: crate::storage::session::SessionListScope,
         before: Option<DateTime<Utc>>,
         limit: usize,
     },

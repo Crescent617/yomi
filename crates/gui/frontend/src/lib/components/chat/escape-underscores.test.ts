@@ -37,9 +37,7 @@ describe("escapeIntrawordUnderscores", () => {
   });
 
   it("does not escape inside inline code spans", () => {
-    expect(escapeIntrawordUnderscores("`a_b` and c_d")).toBe(
-      "`a_b` and c\\_d",
-    );
+    expect(escapeIntrawordUnderscores("`a_b` and c_d")).toBe("`a_b` and c\\_d");
     expect(escapeIntrawordUnderscores("``a_b ` c``")).toBe("``a_b ` c``");
   });
 

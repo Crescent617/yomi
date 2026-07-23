@@ -363,32 +363,27 @@
             class="flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between"
           >
             <div>
-              <div class="text-sm text-foreground">Sidebar width</div>
+              <div class="text-sm text-foreground">Session list</div>
               <div class="text-xs text-muted-foreground">
-                Set the default width for the project sidebar.
+                Show all sessions or only sessions assigned to a project.
               </div>
             </div>
-            <div class="flex min-w-52 items-center gap-3">
+            <label
+              class="inline-flex cursor-pointer items-center gap-2 text-xs text-muted-foreground"
+            >
               <input
-                type="range"
-                min="160"
-                max="400"
-                step="8"
-                value={draft.layout.sidebarWidth}
-                oninput={(event) =>
+                type="checkbox"
+                checked={draft.layout.show_project_sessions_only}
+                onchange={(event) =>
                   preview(
                     (value) =>
-                      (value.layout.sidebarWidth = Number(
-                        event.currentTarget.value,
-                      )),
+                      (value.layout.show_project_sessions_only =
+                        event.currentTarget.checked),
                   )}
-                class="w-36 accent-primary"
+                class="h-4 w-4 accent-primary"
               />
-              <span
-                class="w-12 text-right text-xs tabular-nums text-muted-foreground"
-                >{draft.layout.sidebarWidth}px</span
-              >
-            </div>
+              Only project sessions
+            </label>
           </div>
         </div>
       </section>
@@ -420,7 +415,9 @@
                     codex-pets.net</a
                   >
                   and place them in
-                  <code class="rounded bg-code-bg px-1 py-0.5">~/.yomi/pets</code>.
+                  <code class="rounded bg-code-bg px-1 py-0.5"
+                    >~/.yomi/pets</code
+                  >.
                 </div>
               </div>
             </div>

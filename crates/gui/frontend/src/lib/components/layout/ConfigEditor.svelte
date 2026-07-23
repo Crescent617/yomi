@@ -43,7 +43,6 @@
   let saveError = $state<SaveDiagnostic | null>(null);
   let full_config = $state("");
 
-  let daemonManaged = $state<boolean | null>(null);
   let restarting = $state(false);
   let restartConfirmOpen = $state(false);
   let effectiveCollapsed = $state(false);
@@ -62,13 +61,9 @@
     "Restart the daemon to apply config changes?\n\nAll running sessions and tasks will be interrupted. Chat history is preserved.";
 
   const daemonButtonTitle = $derived(
-    daemonManaged === null
-      ? "Checking daemon status…"
-      : !daemonManaged
-        ? "Daemon is externally managed; restart it externally to apply changes"
-        : dirty
-          ? "Save config changes before restarting"
-          : "Restart the daemon to apply config changes",
+    dirty
+      ? "Save config changes before restarting"
+      : "Restart the daemon to apply config changes",
   );
 
   const saveStatus = $derived.by(() => {
@@ -76,12 +71,10 @@
     if (saveError) return "Save failed";
     if (dirty) return "Unsaved changes";
     if (appState.config_restart_required) {
-      return daemonManaged === false
-        ? "Saved to disk · Restart externally"
-        : "Saved to disk · Restart required";
+      return "Saved to daemon · Restart required";
     }
     if (appState.config_applied) return "Applied";
-    return "Saved to disk";
+    return "Saved to daemon";
   });
 
   const saveStatusClass = $derived(
@@ -268,26 +261,17 @@
     event.returnValue = "";
   }
 
-  async function refreshDaemonStatus() {
-    try {
-      const status = await api.getDaemonStatus();
-      daemonManaged = status.managed;
-    } catch (e: unknown) {
-      console.error("Failed to get daemon status:", e);
-    }
-  }
-
   async function doRestartDaemon() {
     restartConfirmOpen = false;
-    if (restarting || dirty || !daemonManaged) return;
+    if (restarting || dirty) return;
     restarting = true;
     try {
       await api.restartDaemon();
       appState.config_restart_required = false;
       appState.config_applied = true;
       showNotification("Configuration applied", "success");
-      const config = await api.getConfig().catch(() => null);
-      if (config) full_config = config.full_config;
+      const toml = await api.getConfigToml().catch(() => null);
+      if (toml) full_config = toml.full_config;
     } catch (e: unknown) {
       showNotification(
         `Failed to restart daemon: ${api.errorMessage(e)}`,
@@ -295,7 +279,6 @@
       );
     } finally {
       restarting = false;
-      await refreshDaemonStatus();
     }
   }
 
@@ -304,14 +287,11 @@
     else reloading = true;
     const previousDiskContent = disk_content;
     try {
-      const [toml, config] = await Promise.all([
-        api.getConfigToml(),
-        api.getConfig().catch(() => null),
-      ]);
+      const toml = await api.getConfigToml();
       content = toml.content;
       disk_content = toml.content;
       filePath = toml.path;
-      if (config) full_config = config.full_config;
+      full_config = toml.full_config;
       saveError = null;
       if (!initial && toml.content !== previousDiskContent) {
         appState.config_restart_required = true;
@@ -324,7 +304,7 @@
     } catch (e: unknown) {
       console.error("Failed to load config:", e);
       showNotification(
-        `Failed to ${initial ? "load config" : "reload from disk"}: ${api.errorMessage(e)}`,
+        `Failed to ${initial ? "load config" : "reload from daemon"}: ${api.errorMessage(e)}`,
         "error",
       );
       return false;
@@ -339,13 +319,13 @@
     if (
       dirty &&
       !window.confirm(
-        "Reload from disk and discard your unsaved config changes?",
+        "Reload from daemon and discard your unsaved config changes?",
       )
     ) {
       return;
     }
     if (await loadFromDisk()) {
-      showNotification("Reloaded from disk", "success");
+      showNotification("Reloaded from daemon", "success");
     }
   }
 
@@ -359,7 +339,7 @@
       disk_content = snapshot;
       appState.config_restart_required = true;
       appState.config_applied = false;
-      showNotification("Config saved to disk", "success");
+      showNotification("Config saved to daemon", "success");
     } catch (e: unknown) {
       console.error("Failed to save config:", e);
       saveError = parseSaveDiagnostic(e);
@@ -378,7 +358,6 @@
 
   onMount(() => {
     void loadFromDisk(true);
-    void refreshDaemonStatus();
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload);
@@ -420,7 +399,7 @@
         class="inline-flex items-center gap-1 rounded-md border border-border bg-secondary/40 px-2.5 py-1 text-xs text-foreground transition-colors hover:bg-secondary/80 disabled:opacity-50"
       >
         <RotateCcw class="w-3 h-3 {reloading ? 'animate-spin' : ''}" />
-        Reload from Disk
+        Reload
       </button>
       <button
         type="button"
@@ -436,7 +415,7 @@
         <button
           type="button"
           onclick={() => (restartConfirmOpen = true)}
-          disabled={!daemonManaged || restarting || dirty}
+          disabled={restarting || dirty}
           class="inline-flex items-center gap-1 rounded-md border border-warning/30 bg-warning/10 px-2.5 py-1 text-xs font-medium text-warning transition-colors hover:border-warning/40 hover:bg-warning/15 disabled:pointer-events-none disabled:opacity-50"
         >
           <RefreshCw class="w-3 h-3 {restarting ? 'animate-spin' : ''}" />

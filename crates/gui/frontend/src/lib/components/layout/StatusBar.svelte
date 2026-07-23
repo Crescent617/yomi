@@ -4,12 +4,12 @@
     Check,
     Copy,
     Github,
+    Globe,
+    House,
+    LoaderCircle,
     Terminal,
-    Wifi,
-    WifiOff,
   } from "lucide-svelte";
   import {
-    appState,
     projectState,
     requestActivePanel,
     runningSessions,
@@ -18,9 +18,16 @@
   import { activateSession } from "../../session";
   import { isActiveSessionPhase } from "../../session-phase";
   import { errorMessage, openDefault } from "../../api";
+  import * as api from "../../api";
   import { clock } from "../../clock.svelte";
   import { elapsedLabel, shellActivitySummary } from "./status-activity";
   import NotificationCenter from "./NotificationCenter.svelte";
+  import {
+    guiPreferences,
+    saveGuiPreferences,
+    snapshotGuiPreferences,
+  } from "../../settings.svelte";
+  import { connectionState } from "../../connection.svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import { onMount } from "svelte";
 
@@ -30,6 +37,68 @@
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined;
   let activityRef = $state<HTMLDivElement>();
   let cardRef = $state<HTMLDivElement>();
+
+  // ── Connection (local / remote daemon) ───────────────────────────────
+  let connInfo = $derived(connectionState.info);
+  let connOpen = $state(false);
+  let connInput = $state("");
+  let connBusy = $state(false);
+  let connError = $state<string | null>(null);
+  let connRef = $state<HTMLDivElement>();
+  let connCardRef = $state<HTMLDivElement>();
+
+  function remoteHostLabel(addr: string): string {
+    return addr.replace(/^[a-z]+:\/\//i, "");
+  }
+
+  function isWsAddr(addr: string): boolean {
+    return /^wss?:\/\//i.test(addr);
+  }
+
+  function openConnPopover() {
+    connError = null;
+    connInput =
+      connInfo?.mode === "remote"
+        ? connInfo.addr
+        : (guiPreferences.connection.remote_addr ?? "");
+    connOpen = true;
+  }
+
+  async function submitConnect() {
+    const addr = connInput.trim();
+    if (!/^(wss?|tcp|unix):\/\//.test(addr)) {
+      connError = "Address must start with ws://, wss://, tcp:// or unix://";
+      return;
+    }
+    connBusy = true;
+    connError = null;
+    try {
+      await api.connectRemote(addr);
+      guiPreferences.connection.remote_addr = addr;
+      try {
+        await saveGuiPreferences(snapshotGuiPreferences());
+      } catch (error) {
+        console.warn("Failed to save remote daemon address:", error);
+      }
+      // Kernel swapped — always reload, even if persisting the address failed.
+      window.location.reload();
+    } catch (error) {
+      connError = errorMessage(error);
+      connBusy = false;
+    }
+  }
+
+  async function backToLocal() {
+    connBusy = true;
+    connError = null;
+    try {
+      await api.disconnectRemote();
+      window.location.reload();
+    } catch (error) {
+      connError = errorMessage(error);
+      connBusy = false;
+    }
+  }
 
   onMount(() => {
     getVersion()
@@ -73,6 +142,13 @@
     if (open && !activityRef?.contains(target) && !cardRef?.contains(target)) {
       open = false;
     }
+    if (
+      connOpen &&
+      !connRef?.contains(target) &&
+      !connCardRef?.contains(target)
+    ) {
+      connOpen = false;
+    }
   }
 
   async function copyOutputPath(outputPath: string) {
@@ -105,6 +181,130 @@
 <div
   class="shrink-0 h-7 border-t border-border bg-card flex items-center px-3 text-xs select-none gap-3"
 >
+  <div bind:this={connRef} class="relative flex items-center">
+    <button
+      type="button"
+      class="flex items-center gap-1 rounded px-1 py-0.5 transition-colors hover:bg-secondary/70 {connInfo?.mode ===
+      'remote'
+        ? 'text-info'
+        : 'text-muted-foreground'}"
+      aria-expanded={connOpen}
+      title={connInfo
+        ? connInfo.mode === "remote"
+          ? `Remote daemon: ${connInfo.addr}`
+          : isWsAddr(connInfo.addr)
+            ? `Default daemon (via YOMI_SOCKET): ${connInfo.addr}`
+            : `Local daemon: ${connInfo.addr}`
+        : "Connection"}
+      onclick={() => (connOpen ? (connOpen = false) : openConnPopover())}
+    >
+      {#if connInfo?.mode === "remote"}
+        <Globe class="w-3 h-3" />
+        <span class="max-w-40 truncate">{remoteHostLabel(connInfo.addr)}</span>
+      {:else if connInfo && isWsAddr(connInfo.addr)}
+        <Globe class="w-3 h-3" />
+        <span class="max-w-40 truncate">{remoteHostLabel(connInfo.addr)}</span>
+      {:else}
+        <House class="w-3 h-3" />
+        <span>Local</span>
+      {/if}
+    </button>
+
+    {#if connOpen}
+      <div
+        bind:this={connCardRef}
+        class="absolute bottom-full left-0 z-30 mb-1 w-80 overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-xl"
+      >
+        <div class="border-b border-border px-3 py-2 font-medium">
+          Connection
+        </div>
+        <div class="space-y-2.5 px-3 py-2.5">
+          <div class="space-y-0.5">
+            <div
+              class="text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
+            >
+              Current
+            </div>
+            <div class="flex items-center gap-1.5 text-xs">
+              {#if connInfo?.mode === "remote"}
+                <Globe class="h-3 w-3 shrink-0 text-info" />
+                <span>Remote daemon</span>
+              {:else if connInfo && isWsAddr(connInfo.addr)}
+                <Globe class="h-3 w-3 shrink-0" />
+                <span>Default daemon</span>
+              {:else}
+                <House class="h-3 w-3 shrink-0" />
+                <span>Local daemon</span>
+              {/if}
+            </div>
+            {#if connInfo}
+              <div
+                class="truncate font-mono text-[10px] text-muted-foreground"
+                title={connInfo.addr}
+              >
+                {connInfo.addr}{#if connInfo.mode === "local" && isWsAddr(connInfo.addr)}
+                  &nbsp;· via YOMI_SOCKET{/if}
+              </div>
+            {/if}
+          </div>
+
+          <div class="h-px bg-border"></div>
+
+          <div class="space-y-1.5">
+            <label
+              for="remote-addr-input"
+              class="text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
+            >
+              Remote daemon URL
+            </label>
+            <input
+              id="remote-addr-input"
+              type="text"
+              bind:value={connInput}
+              placeholder="wss://host:port"
+              disabled={connBusy}
+              autocapitalize="off"
+              autocorrect="off"
+              spellcheck="false"
+              class="w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
+              onkeydown={(e: KeyboardEvent) => {
+                if (e.key === "Enter" && !connBusy) void submitConnect();
+              }}
+            />
+            {#if connError}
+              <p class="text-[11px] leading-snug text-error">{connError}</p>
+            {/if}
+            <div class="flex items-center gap-2 pt-0.5">
+              <button
+                type="button"
+                disabled={connBusy || !connInput.trim()}
+                class="inline-flex h-7 items-center gap-1.5 rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+                onclick={() => void submitConnect()}
+              >
+                {#if connBusy}
+                  <LoaderCircle class="h-3 w-3 animate-spin" />
+                {/if}
+                Connect
+              </button>
+              {#if connInfo?.mode === "remote"}
+                <button
+                  type="button"
+                  disabled={connBusy}
+                  class="inline-flex h-7 items-center rounded-md border border-border bg-secondary px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary/80 disabled:opacity-50"
+                  onclick={() => void backToLocal()}
+                >
+                  Back to local
+                </button>
+              {/if}
+            </div>
+          </div>
+        </div>
+      </div>
+    {/if}
+  </div>
+
+  <div class="h-3 w-px shrink-0 bg-border" aria-hidden="true"></div>
+
   <div
     bind:this={activityRef}
     class="relative flex items-center gap-1.5 min-w-0"
@@ -230,15 +430,6 @@
   <div class="flex-1"></div>
 
   <div class="flex items-center gap-3">
-    <div class="flex items-center gap-1.5">
-      {#if appState.connectionStatus === "connected"}
-        <Wifi class="w-3 h-3 text-success" />
-        <span class="text-success">Connected</span>
-      {:else if appState.connectionStatus === "connecting"}
-        <WifiOff class="w-3 h-3 text-warning" />
-        <span class="text-warning">Connecting...</span>
-      {/if}
-    </div>
     {#if version}
       <a
         href="https://github.com/Crescent617/yomi"

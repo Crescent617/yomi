@@ -25,7 +25,7 @@
     // Fetch a few extra so we still have 3 after filtering out
     // sessions without a project (e.g. subagents, ad-hoc dirs).
     api
-      .listSessions(undefined, undefined, 10)
+      .listSessions(undefined, "all", undefined, 10)
       .then((r) => {
         recent = r.sessions.filter((s) => !!s.project_id).slice(0, 3);
         loaded = true;

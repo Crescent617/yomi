@@ -7,8 +7,12 @@ use crate::utils::path::{default_skill_folders, expand_tilde, DEFAULT_DATA_DIR};
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::{Mutex, OnceLock};
+
+static INJECTED_ENV: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
 
 /// Environment variable names (for easy reference and IDE completion)
 pub mod env_names {
@@ -162,6 +166,14 @@ pub struct TasksConfig {
     pub fast_model: Option<String>,
 }
 
+/// Editable kernel configuration and its effective startup representation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KernelConfig {
+    pub content: String,
+    pub path: String,
+    pub full_config: String,
+}
+
 /// Complete yomi configuration from environment
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -230,32 +242,144 @@ impl Config {
     /// 1. `YOMI_CONFIG` environment variable
     /// 2. `~/.yomi/config.toml`
     pub fn discover_file() -> Option<PathBuf> {
-        if let Some(path) = env_var(env_names::CONFIG) {
-            let p = PathBuf::from(path);
-            if p.exists() {
-                return Some(p);
+        if let Some(config_path) = env_var(env_names::CONFIG).map(PathBuf::from) {
+            if config_path.exists() {
+                return Some(config_path);
             }
         }
-        let default = expand_tilde(DEFAULT_DATA_DIR).join("config.toml");
-        if default.exists() {
-            return Some(default);
+        let default_path = expand_tilde(DEFAULT_DATA_DIR).join("config.toml");
+        default_path.exists().then_some(default_path)
+    }
+
+    /// Path used for config reads and writes, including a non-existent target.
+    pub fn write_path() -> PathBuf {
+        env_var(env_names::CONFIG).map_or_else(
+            || expand_tilde(DEFAULT_DATA_DIR).join("config.toml"),
+            PathBuf::from,
+        )
+    }
+
+    /// Read the editable config plus the effective startup config.
+    pub fn get_kernel_config() -> std::result::Result<KernelConfig, KernelError> {
+        Self::get_kernel_config_from(&Self::write_path())
+    }
+
+    pub fn get_kernel_config_from(path: &Path) -> std::result::Result<KernelConfig, KernelError> {
+        let content = if path.exists() {
+            std::fs::read_to_string(path)?
+        } else {
+            String::new()
+        };
+
+        let full_config = match parse_effective_config(&content) {
+            Ok(effective) => toml::to_string_pretty(&redact_effective_config(effective))
+                .map_err(|e| KernelError::serde(format!("Failed to serialize config: {e}")))?,
+            Err(error) => {
+                tracing::warn!(%error, path = %path.display(), "editable config is invalid");
+                String::new()
+            }
+        };
+
+        Ok(KernelConfig {
+            content,
+            path: path.to_string_lossy().into_owned(),
+            full_config,
+        })
+    }
+
+    /// Validate and atomically replace the editable config file.
+    pub fn set_kernel_config(content: &str) -> std::result::Result<(), KernelError> {
+        Self::set_kernel_config_at(&Self::write_path(), content)
+    }
+
+    pub fn set_kernel_config_at(
+        path: &Path,
+        content: &str,
+    ) -> std::result::Result<(), KernelError> {
+        validate_editable_config(content)?;
+
+        atomic_write_config(path, content)?;
+        Ok(())
+    }
+
+    fn validate_env_entries(&self) -> std::result::Result<(), KernelError> {
+        for (name, value) in &self.env {
+            validate_env_entry(name, value)?;
         }
-        None
+        Ok(())
     }
 
     /// Inject configured environment variables that are absent from the host process.
     ///
     /// Call this during startup, before applying environment overrides or spawning tasks.
     pub fn inject_env(&self) -> std::result::Result<(), KernelError> {
+        self.validate_env_entries()?;
+        let mut injected = INJECTED_ENV
+            .get_or_init(|| Mutex::new(BTreeMap::new()))
+            .lock()
+            .map_err(|error| KernelError::config(format!("injected env lock poisoned: {error}")))?;
         for (name, value) in &self.env {
-            validate_env_entry(name, value)?;
-        }
-        for (name, value) in &self.env {
-            if std::env::var_os(name).is_none() {
+            let current = std::env::var(name).ok();
+            let was_injected = injected
+                .get(name)
+                .is_some_and(|previous| current.as_deref() == Some(previous.as_str()));
+            if current.is_none() || was_injected {
                 std::env::set_var(name, value);
+                injected.insert(name.clone(), value.clone());
+            } else {
+                injected.remove(name);
             }
         }
         Ok(())
+    }
+
+    /// Names of environment values previously installed by `inject_env`.
+    /// Daemon process spawners remove these from the child environment so the
+    /// replacement reloads the current `[env]` section itself.
+    pub fn injected_env_names() -> Vec<String> {
+        INJECTED_ENV
+            .get()
+            .and_then(|injected| injected.lock().ok())
+            .map(|injected| injected.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Remove environment values previously installed by `inject_env`.
+    /// This is used before restarting an in-process daemon so the replacement
+    /// reloads `[env]` values from the saved config.
+    pub fn clear_injected_env() {
+        let Some(injected) = INJECTED_ENV.get() else {
+            return;
+        };
+        let Ok(mut injected) = injected.lock() else {
+            return;
+        };
+        for (name, value) in std::mem::take(&mut *injected) {
+            if std::env::var(&name).ok().as_deref() == Some(value.as_str()) {
+                std::env::remove_var(name);
+            }
+        }
+    }
+
+    /// Remove tracked injected values that are no longer present in `[env]`.
+    pub fn clear_removed_injected_env(&self) {
+        let Some(injected) = INJECTED_ENV.get() else {
+            return;
+        };
+        let Ok(mut injected) = injected.lock() else {
+            return;
+        };
+        let removed: Vec<_> = injected
+            .iter()
+            .filter(|(name, _)| !self.env.contains_key(*name))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        for (name, value) in removed {
+            injected.remove(&name);
+            if std::env::var(&name).ok().as_deref() == Some(value.as_str()) {
+                std::env::remove_var(name);
+            }
+        }
     }
 
     /// Apply environment variable overrides to this config
@@ -529,6 +653,123 @@ impl Config {
         self.data_dir = data_dir;
         self
     }
+}
+
+fn redact_effective_config(mut config: Config) -> Config {
+    config.env.values_mut().for_each(|value| value.clear());
+    for model in &mut config.models {
+        model.api_key.clear();
+        for (name, value) in &mut model.headers {
+            let normalized = name.to_ascii_lowercase();
+            if normalized.contains("authorization")
+                || normalized.contains("api-key")
+                || normalized.contains("api_key")
+                || normalized.contains("token")
+                || normalized.contains("secret")
+            {
+                value.clear();
+            }
+        }
+    }
+    for channel in &mut config.channels {
+        match &mut channel.platform {
+            crate::channels::PlatformConfig::Telegram { token } => token.clear(),
+            crate::channels::PlatformConfig::Feishu { app_secret, .. } => app_secret.clear(),
+        }
+    }
+    config
+}
+
+fn parse_effective_config(content: &str) -> std::result::Result<Config, KernelError> {
+    let mut config = if content.is_empty() {
+        Config::default()
+    } else {
+        toml::from_str(content).map_err(|e| KernelError::config(format!("Invalid TOML: {e}")))?
+    };
+    ensure_unique_models(&config)?;
+    config.validate_env_entries()?;
+    config.apply_env_overrides();
+    config.finalize();
+    config.validate()?;
+    Ok(config)
+}
+
+fn ensure_unique_models(config: &Config) -> std::result::Result<(), KernelError> {
+    let mut model_names = std::collections::HashSet::new();
+    if config
+        .models
+        .iter()
+        .any(|model| !model_names.insert(&model.name))
+    {
+        return Err(KernelError::config(
+            "Invalid config: duplicate model name in [[models]]",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_editable_config(content: &str) -> std::result::Result<(), KernelError> {
+    let config: Config =
+        toml::from_str(content).map_err(|e| KernelError::config(format!("Invalid TOML: {e}")))?;
+
+    ensure_unique_models(&config)?;
+    config.validate_env_entries()?;
+
+    if !config.models.is_empty()
+        && !config
+            .models
+            .iter()
+            .any(|model| model.name == config.agent.default_model)
+    {
+        return Err(KernelError::config(
+            "Invalid config: agent.default_model must match a [[models]] name",
+        ));
+    }
+
+    config.validate()
+}
+
+fn resolve_config_write_target(path: &Path) -> std::io::Result<PathBuf> {
+    let mut target = path.to_path_buf();
+    for _ in 0..40 {
+        let metadata = match std::fs::symlink_metadata(&target) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(target),
+            Err(error) => return Err(error),
+        };
+        if !metadata.file_type().is_symlink() {
+            return Ok(target);
+        }
+
+        let link = std::fs::read_link(&target)?;
+        target = if link.is_absolute() {
+            link
+        } else {
+            target.parent().unwrap_or_else(|| Path::new(".")).join(link)
+        };
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        "too many symbolic links in config path",
+    ))
+}
+
+fn atomic_write_config(path: &Path, content: &str) -> std::io::Result<()> {
+    let path = resolve_config_write_target(path)?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let existing_permissions = std::fs::metadata(&path)
+        .ok()
+        .map(|metadata| metadata.permissions());
+    let mut temp_file = tempfile::NamedTempFile::new_in(parent)?;
+    temp_file.write_all(content.as_bytes())?;
+    if let Some(permissions) = existing_permissions {
+        temp_file.as_file().set_permissions(permissions)?;
+    }
+    temp_file.as_file().sync_all()?;
+    temp_file.persist(&path).map_err(|error| error.error)?;
+    Ok(())
 }
 
 #[cfg(test)]

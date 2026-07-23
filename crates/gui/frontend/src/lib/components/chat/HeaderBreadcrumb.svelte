@@ -82,7 +82,7 @@
     loading = true;
     setTimeout(() => searchRef?.focus(), 0);
     try {
-      const result = await api.listSessions(projectId, undefined, 50);
+      const result = await api.listSessions(projectId, "all", undefined, 50);
       if (requestVersion !== sessionRequestVersion) return;
       sessionOptions = result.sessions.map((item) => ({
         id: item.id,

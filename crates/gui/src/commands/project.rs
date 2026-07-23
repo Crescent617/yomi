@@ -6,7 +6,7 @@ use crate::state::AppState;
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn list_projects(state: State<'_, AppState>) -> Result<Vec<Project>, GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let projects = coord.list_projects().await.map_err(GuiError::kernel)?;
     Ok(projects)
 }
@@ -17,7 +17,7 @@ pub async fn create_project(
     dir: String,
     name: Option<String>,
 ) -> Result<Project, GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let project = coord
         .create_project(dir.into(), name)
         .await
@@ -30,7 +30,7 @@ pub async fn get_project(
     state: State<'_, AppState>,
     project_id: String,
 ) -> Result<Option<Project>, GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let project = coord
         .get_project(&ProjectId::from(project_id))
         .await
@@ -44,7 +44,7 @@ pub async fn rename_project(
     project_id: String,
     name: String,
 ) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     coord
         .rename_project(&ProjectId::from(project_id), name)
         .await
@@ -65,7 +65,7 @@ pub async fn delete_project(
     state: State<'_, AppState>,
     project_id: String,
 ) -> Result<DeleteProjectResult, GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let report = coord
         .delete_project(&ProjectId::from(project_id))
         .await

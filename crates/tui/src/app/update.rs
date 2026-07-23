@@ -523,7 +523,14 @@ impl Model {
                     let tx = self.cmd_tx.clone();
                     let working_dir = self.working_dir.to_string_lossy().to_string();
                     tokio::spawn(async move {
-                        let result = coord.list_sessions(None, None, 200).await;
+                        let result = coord
+                            .list_sessions(
+                                None,
+                                kernel::storage::session::SessionListScope::All,
+                                None,
+                                200,
+                            )
+                            .await;
                         let sessions: Vec<_> = match result {
                             Ok(paginated) => paginated
                                 .sessions

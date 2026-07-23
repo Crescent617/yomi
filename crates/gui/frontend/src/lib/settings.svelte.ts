@@ -25,6 +25,7 @@ export interface GuiPreferences {
     sidebarCollapsed: boolean;
     sidebarWidth: number;
     sidebar_view: SidebarViewPreference;
+    show_project_sessions_only: boolean;
   };
   notifications: {
     enabled: boolean;
@@ -40,6 +41,13 @@ export interface GuiPreferences {
     auto_approve_level: PermissionLevel | null;
     activityGroupExpansion: ActivityGroupExpansionPreference;
   };
+  connection: {
+    remote_addr: string | null;
+  };
+}
+
+interface LegacyLayoutPreferences extends Partial<GuiPreferences["layout"]> {
+  show_all_sessions?: boolean;
 }
 
 interface LegacyAppSettings {
@@ -59,6 +67,7 @@ export const defaultGuiPreferences: GuiPreferences = {
     sidebarCollapsed: false,
     sidebarWidth: 256,
     sidebar_view: "projects",
+    show_project_sessions_only: false,
   },
   notifications: {
     enabled: true,
@@ -74,6 +83,9 @@ export const defaultGuiPreferences: GuiPreferences = {
     auto_approve_level: null,
     activityGroupExpansion: "while_running",
   },
+  connection: {
+    remote_addr: null,
+  },
 };
 
 export const guiPreferences = $state<GuiPreferences>(
@@ -83,6 +95,11 @@ export const guiPreferences = $state<GuiPreferences>(
 let store: Store | null = null;
 let initialized = false;
 let initialization: Promise<void> | null = null;
+const PREFERENCE_SAVE_DEBOUNCE_MS = 250;
+let pendingPreferenceSave: GuiPreferences | null = null;
+let preferenceSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let preferenceSaveRevision = 0;
+let preferenceSaveQueue: Promise<void> = Promise.resolve();
 
 function cloneGuiPreferences(value: GuiPreferences): GuiPreferences {
   return {
@@ -92,6 +109,7 @@ function cloneGuiPreferences(value: GuiPreferences): GuiPreferences {
     notifications: { ...value.notifications },
     desktop_pet: { ...value.desktop_pet },
     chat: { ...value.chat },
+    connection: { ...value.connection },
   };
 }
 
@@ -129,6 +147,7 @@ function normalizeActivityGroupExpansion(
 function normalizeGuiPreferences(
   value?: Partial<GuiPreferences> | null,
 ): GuiPreferences {
+  const layout = value?.layout as LegacyLayoutPreferences | undefined;
   return {
     schemaVersion: 1,
     appearance: {
@@ -147,6 +166,11 @@ function normalizeGuiPreferences(
         value?.layout?.sidebar_view === "projects"
           ? value.layout.sidebar_view
           : defaultGuiPreferences.layout.sidebar_view,
+      show_project_sessions_only:
+        layout?.show_project_sessions_only ??
+        (typeof layout?.show_all_sessions === "boolean"
+          ? !layout.show_all_sessions
+          : defaultGuiPreferences.layout.show_project_sessions_only),
     },
     notifications: {
       enabled:
@@ -174,6 +198,12 @@ function normalizeGuiPreferences(
         value?.chat?.activityGroupExpansion,
       ),
     },
+    connection: {
+      remote_addr:
+        typeof value?.connection?.remote_addr === "string"
+          ? value.connection.remote_addr
+          : null,
+    },
   };
 }
 
@@ -184,6 +214,7 @@ function assignGuiPreferences(value: GuiPreferences): void {
   Object.assign(guiPreferences.notifications, value.notifications);
   Object.assign(guiPreferences.desktop_pet, value.desktop_pet);
   Object.assign(guiPreferences.chat, value.chat);
+  Object.assign(guiPreferences.connection, value.connection);
 }
 
 async function getStore(): Promise<Store> {
@@ -208,6 +239,8 @@ async function loadLegacyPreferences(s: Store): Promise<GuiPreferences> {
         defaultGuiPreferences.layout.sidebarCollapsed,
       sidebarWidth: defaultGuiPreferences.layout.sidebarWidth,
       sidebar_view: defaultGuiPreferences.layout.sidebar_view,
+      show_project_sessions_only:
+        defaultGuiPreferences.layout.show_project_sessions_only,
     },
     notifications: {
       enabled:
@@ -224,6 +257,9 @@ async function loadLegacyPreferences(s: Store): Promise<GuiPreferences> {
       autoScroll: defaultGuiPreferences.chat.autoScroll,
       auto_approve_level: defaultGuiPreferences.chat.auto_approve_level,
       activityGroupExpansion: defaultGuiPreferences.chat.activityGroupExpansion,
+    },
+    connection: {
+      remote_addr: defaultGuiPreferences.connection.remote_addr,
     },
   });
 }
@@ -272,13 +308,56 @@ export function replaceGuiPreferences(value: GuiPreferences): void {
   applyGuiPreferences(normalized);
 }
 
-export async function saveGuiPreferences(value: GuiPreferences): Promise<void> {
-  const normalized = normalizeGuiPreferences(value);
+async function persistGuiPreferences(
+  normalized: GuiPreferences,
+  revision: number,
+): Promise<void> {
   const s = await getStore();
   await s.set(PREFERENCES_KEY, normalized);
   await s.save();
-  assignGuiPreferences(normalized);
-  applyGuiPreferences(normalized);
+  if (revision === preferenceSaveRevision) {
+    assignGuiPreferences(normalized);
+    applyGuiPreferences(normalized);
+  }
+}
+
+function enqueueGuiPreferencesSave(
+  value: GuiPreferences,
+  revision: number,
+): Promise<void> {
+  const normalized = normalizeGuiPreferences(value);
+  const save = preferenceSaveQueue.then(() =>
+    persistGuiPreferences(normalized, revision),
+  );
+  preferenceSaveQueue = save.catch(() => undefined);
+  return save;
+}
+
+export async function saveGuiPreferences(value: GuiPreferences): Promise<void> {
+  if (preferenceSaveTimer) {
+    clearTimeout(preferenceSaveTimer);
+    preferenceSaveTimer = null;
+  }
+  pendingPreferenceSave = null;
+  const revision = ++preferenceSaveRevision;
+  await enqueueGuiPreferencesSave(value, revision);
+}
+
+export function scheduleGuiPreferencesSave(
+  value: GuiPreferences = snapshotGuiPreferences(),
+): void {
+  pendingPreferenceSave = cloneGuiPreferences(value);
+  const revision = ++preferenceSaveRevision;
+  if (preferenceSaveTimer) clearTimeout(preferenceSaveTimer);
+  preferenceSaveTimer = setTimeout(() => {
+    preferenceSaveTimer = null;
+    const pending = pendingPreferenceSave;
+    pendingPreferenceSave = null;
+    if (!pending) return;
+    void enqueueGuiPreferencesSave(pending, revision).catch((error) => {
+      console.error("[Settings] Failed to save GUI preferences:", error);
+    });
+  }, PREFERENCE_SAVE_DEBOUNCE_MS);
 }
 
 export function applyGuiPreferences(value: GuiPreferences): void {

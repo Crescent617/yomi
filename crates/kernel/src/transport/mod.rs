@@ -365,7 +365,23 @@ pub async fn bind(addr: &SocketAddr) -> io::Result<Listener> {
                 if let Some(parent) = path.parent() {
                     tokio::fs::create_dir_all(parent).await?;
                 }
-                let _ = tokio::fs::remove_file(path).await;
+                match tokio::net::UnixStream::connect(path).await {
+                    Ok(_) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::AddrInUse,
+                            format!("Unix socket is already in use: {}", path.display()),
+                        ));
+                    }
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+                        ) =>
+                    {
+                        let _ = tokio::fs::remove_file(path).await;
+                    }
+                    Err(_) => {}
+                }
                 let std_listener = std::os::unix::net::UnixListener::bind(path)?;
                 let perms = std::fs::Permissions::from_mode(0o600);
                 tokio::fs::set_permissions(path, perms).await?;

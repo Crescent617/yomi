@@ -114,7 +114,7 @@ fn spawn_notification_reconnect(
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(PET_RUNTIME_TICK).await;
-            match state.kernel.subscribe_notifications().await {
+            match state.kernel_snapshot().subscribe_notifications().await {
                 Ok(receiver) => return receiver,
                 Err(error) => {
                     tracing::debug!("Desktop pet notification retry failed: {error}");
@@ -139,7 +139,7 @@ fn spawn_connection_recovery(
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(PET_RUNTIME_TICK).await;
-            match state.kernel.list_running_sessions().await {
+            match state.kernel_snapshot().list_running_sessions().await {
                 Ok(sessions) => return sessions,
                 Err(error) => {
                     tracing::debug!("Desktop pet connection recovery failed: {error}");
@@ -180,7 +180,7 @@ pub async fn start_pet_runtime(state: &AppState, app_handle: &AppHandle) -> Resu
         }
     }
     let notifications = state
-        .kernel
+        .kernel_snapshot()
         .subscribe_notifications()
         .await
         .map_err(GuiError::kernel)?;
@@ -196,7 +196,7 @@ pub async fn start_pet_runtime(state: &AppState, app_handle: &AppHandle) -> Resu
 
 pub async fn sync_running_sessions(state: &AppState) -> Result<(), GuiError> {
     let sessions = state
-        .kernel
+        .kernel_snapshot()
         .list_running_sessions()
         .await
         .map_err(GuiError::kernel)?;

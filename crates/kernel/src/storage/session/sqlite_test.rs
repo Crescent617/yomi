@@ -1,7 +1,7 @@
 use super::*;
 
 use crate::storage::migrations::run_migrations;
-use crate::storage::session::SessionStore;
+use crate::storage::session::{SessionListScope, SessionStore};
 
 async fn create_test_store() -> SqliteSessionStore {
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
@@ -94,7 +94,10 @@ async fn test_list_ordering() {
     // Update id1 to make it more recent
     store.update_message_count(&id1, 1).await.unwrap();
 
-    let (list, _) = store.list(None, None, 100).await.unwrap();
+    let (list, _) = store
+        .list(None, SessionListScope::All, None, 100)
+        .await
+        .unwrap();
     assert_eq!(list[0].id.0, id1.0);
     assert_eq!(list[1].id.0, id2.0);
 }
@@ -120,11 +123,52 @@ async fn test_list_filter_by_project_id() {
         .await
         .unwrap();
 
-    let (list, _) = store.list(Some(&pid), None, 100).await.unwrap();
+    let (list, _) = store
+        .list(Some(&pid), SessionListScope::All, None, 100)
+        .await
+        .unwrap();
     assert_eq!(list.len(), 2);
     let ids: Vec<_> = list.iter().map(|s| &s.id.0).collect();
     assert!(ids.contains(&&id1.0));
     assert!(ids.contains(&&id3.0));
+}
+
+#[tokio::test]
+async fn test_list_assigned_scope_filters_before_pagination() {
+    let store = create_test_store().await;
+    let pid = crate::types::ProjectId::new();
+    let assigned = SessionId::new();
+    store
+        .create(&assigned, Some(&pid), Some("/project"), None, None, None)
+        .await
+        .unwrap();
+    let unassigned = SessionId::new();
+    store
+        .create(&unassigned, None, Some("/other"), None, None, None)
+        .await
+        .unwrap();
+
+    sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-1 minute') WHERE id = ?")
+        .bind(&*assigned.0)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+    let (assigned_list, assigned_cursor) = store
+        .list(None, SessionListScope::Assigned, None, 1)
+        .await
+        .unwrap();
+    assert_eq!(assigned_list.len(), 1);
+    assert_eq!(assigned_list[0].id, assigned);
+    assert!(assigned_cursor.is_none());
+
+    let (all_list, _) = store
+        .list(None, SessionListScope::All, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(all_list.len(), 2);
+    assert!(all_list.iter().any(|session| session.id == assigned));
+    assert!(all_list.iter().any(|session| session.id == unassigned));
 }
 
 #[tokio::test]
@@ -155,18 +199,27 @@ async fn test_list_limit_and_next_cursor() {
     }
 
     // Test limit
-    let (list, cursor) = store.list(None, None, 2).await.unwrap();
+    let (list, cursor) = store
+        .list(None, SessionListScope::All, None, 2)
+        .await
+        .unwrap();
     assert_eq!(list.len(), 2);
     assert!(cursor.is_some());
 
     // Get next page using cursor
     let before = list.last().unwrap().updated_at;
-    let (next_list, next_cursor) = store.list(None, Some(before), 2).await.unwrap();
+    let (next_list, next_cursor) = store
+        .list(None, SessionListScope::All, Some(before), 2)
+        .await
+        .unwrap();
     assert_eq!(next_list.len(), 2);
     assert!(next_cursor.is_some());
 
     // Full list for comparison
-    let (full_list, full_cursor) = store.list(None, None, 100).await.unwrap();
+    let (full_list, full_cursor) = store
+        .list(None, SessionListScope::All, None, 100)
+        .await
+        .unwrap();
     assert_eq!(full_list.len(), 5);
     assert!(full_cursor.is_none());
 
@@ -316,7 +369,10 @@ async fn test_list_expired_empty_when_no_old_sessions() {
     assert!(expired.is_empty());
 
     // Verify all sessions still exist
-    let (all, _) = store.list(None, None, 100).await.unwrap();
+    let (all, _) = store
+        .list(None, SessionListScope::All, None, 100)
+        .await
+        .unwrap();
     assert_eq!(all.len(), 2);
 }
 
@@ -498,7 +554,10 @@ async fn test_list_excludes_subagent_sessions() {
         .await
         .unwrap();
 
-    let (list, _) = store.list(None, None, 100).await.unwrap();
+    let (list, _) = store
+        .list(None, SessionListScope::All, None, 100)
+        .await
+        .unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].id.0, parent_id.0);
 }

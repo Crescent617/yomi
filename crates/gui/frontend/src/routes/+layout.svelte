@@ -2,7 +2,6 @@
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount } from "svelte";
-  import { browser } from "$app/environment";
   import {
     getSession,
     requestActivePanel,
@@ -18,6 +17,7 @@
     stopThemeListener,
   } from "../lib/settings.svelte";
   import * as api from "../lib/api";
+  import { refreshConnectionInfo } from "../lib/connection.svelte";
   import "../app.css";
 
   let appWindow: ReturnType<typeof getCurrentWindow> | undefined;
@@ -25,7 +25,7 @@
 
   // @ts-expect-error svelte onMount 返回类型在 lib 升级后被误判
   onMount(async () => {
-    if (!browser) return;
+    if (typeof window === "undefined") return;
 
     appWindow = getCurrentWindow();
     isPetWindow = appWindow.label === "pet";
@@ -87,6 +87,7 @@
       },
     );
     const unlistenNoti = startNotificationListener();
+    void refreshConnectionInfo();
     const unlistenOpenSession = listen<{ session_id: string }>(
       "app:open_session",
       (event) => {

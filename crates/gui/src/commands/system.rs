@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use tauri::State;
 
 use crate::error::GuiError;
@@ -10,16 +12,11 @@ pub async fn ping(_state: State<'_, AppState>) -> Result<bool, GuiError> {
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn read_asset(state: State<'_, AppState>, url: String) -> Result<Vec<u8>, GuiError> {
-    let data_dir = state
-        .data_dir
-        .read()
-        .map_err(|e| GuiError::unknown(format!("data_dir lock poisoned: {e}")))?
-        .clone();
-    if let Some(bytes) = kernel::utils::asset::read_asset(&url, &data_dir).await {
-        Ok(bytes)
-    } else {
-        Err(GuiError::unknown(format!("Asset not found: {url}")))
-    }
+    state
+        .kernel_snapshot()
+        .read_asset(url)
+        .await
+        .map_err(GuiError::kernel)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -29,15 +26,86 @@ pub async fn get_daemon_status() -> Result<serde_json::Value, GuiError> {
     }))
 }
 
-/// Restart the daemon spawned by this GUI so it reloads the config file.
-/// Fails when the GUI is connected to an externally started daemon.
+fn connection_info_json(mode: &crate::state::ConnectionMode, managed: bool) -> serde_json::Value {
+    match mode {
+        crate::state::ConnectionMode::Local => serde_json::json!({
+            "mode": "local",
+            "addr": crate::daemon::socket_addr().to_string(),
+            "managed": managed,
+        }),
+        crate::state::ConnectionMode::Remote(addr) => serde_json::json!({
+            "mode": "remote",
+            "addr": addr.to_string(),
+            "managed": managed,
+        }),
+    }
+}
+
+/// Current daemon connection info (mode + address).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn get_connection_info(
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, GuiError> {
+    let managed = crate::daemon::is_managed().await;
+    Ok(connection_info_json(&state.connection_mode(), managed))
+}
+
+/// Switch the GUI to a remote daemon at `addr` (e.g. `wss://host:port`).
+/// Validates connectivity before swapping; the previous connection stays
+/// untouched on failure.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn connect_remote(
+    state: State<'_, AppState>,
+    addr: String,
+) -> Result<serde_json::Value, GuiError> {
+    let _switch_guard = state.connection_switch.lock().await;
+    let addr: kernel::transport::SocketAddr = addr
+        .trim()
+        .parse()
+        .map_err(|e: String| GuiError::unknown(format!("Invalid socket address: {e}")))?;
+    let remote = kernel::client::RemoteKernel::connect(&addr)
+        .await
+        .map_err(|e| GuiError::unknown(format!("Failed to connect to {addr}: {e}")))?;
+    remote
+        .check_ready()
+        .await
+        .map_err(|e| GuiError::unknown(format!("Daemon at {addr} is not ready: {e}")))?;
+    state.swap_kernel(Arc::new(remote), crate::state::ConnectionMode::Remote(addr));
+    crate::daemon::stop_daemon()
+        .await
+        .map_err(|e| GuiError::unknown(format!("Failed to stop local daemon: {e}")))?;
+    let managed = crate::daemon::is_managed().await;
+    Ok(connection_info_json(&state.connection_mode(), managed))
+}
+
+/// Leave remote mode and reconnect to the local daemon (connecting to an
+/// existing one or spawning a background daemon if none is running).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn disconnect_remote(state: State<'_, AppState>) -> Result<serde_json::Value, GuiError> {
+    let _switch_guard = state.connection_switch.lock().await;
+    let (kernel, data_dir) = crate::daemon::get_kernel()
+        .await
+        .map_err(GuiError::unknown)?;
+    state.swap_kernel(kernel, crate::state::ConnectionMode::Local);
+    if let Ok(mut guard) = state.data_dir.write() {
+        *guard = data_dir;
+    }
+    let managed = crate::daemon::is_managed().await;
+    Ok(connection_info_json(&state.connection_mode(), managed))
+}
+
+/// Restart the currently connected daemon through the unified kernel API.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn restart_daemon(state: State<'_, AppState>) -> Result<(), GuiError> {
-    let config = crate::daemon::restart_daemon()
-        .await
-        .map_err(|e| GuiError::unknown(format!("Failed to restart daemon: {e}")))?;
-    if let Ok(mut data_dir) = state.data_dir.write() {
-        *data_dir = config.data_dir;
+    let kernel = state.kernel_snapshot();
+    kernel.restart().await.map_err(GuiError::kernel)?;
+    let config = kernel.get_config().await.map_err(GuiError::kernel)?;
+    if !config.full_config.is_empty() {
+        let effective: kernel::config::Config = toml::from_str(&config.full_config)
+            .map_err(|e| GuiError::unknown(format!("Failed to parse effective config: {e}")))?;
+        if let Ok(mut data_dir) = state.data_dir.write() {
+            *data_dir = effective.data_dir;
+        }
     }
     Ok(())
 }
@@ -50,159 +118,54 @@ pub fn get_cwd() -> Result<String, GuiError> {
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn get_config_toml(_state: State<'_, AppState>) -> Result<serde_json::Value, GuiError> {
-    let path = kernel::config::Config::discover_file();
-    let (content, file_path) = match &path {
-        Some(p) => {
-            let c = std::fs::read_to_string(p)
-                .map_err(|e| GuiError::unknown(format!("Failed to read config: {e}")))?;
-            (c, p.to_string_lossy().to_string())
-        }
-        None => {
-            let default_path = kernel::expand_tilde(kernel::DEFAULT_DATA_DIR).join("config.toml");
-            (String::new(), default_path.to_string_lossy().to_string())
-        }
-    };
-    Ok(serde_json::json!({
-        "content": content,
-        "path": file_path,
-    }))
-}
-
-fn validate_config_toml(content: &str) -> Result<(), GuiError> {
-    let config: kernel::config::Config =
-        toml::from_str(content).map_err(|e| GuiError::unknown(format!("Invalid TOML: {e}")))?;
-
-    let mut model_names = std::collections::HashSet::new();
-    if config
-        .models
-        .iter()
-        .any(|model| !model_names.insert(&model.name))
-    {
-        return Err(GuiError::unknown(
-            "Invalid config: duplicate model name in [[models]]",
-        ));
-    }
-
-    if !config.models.is_empty()
-        && !config
-            .models
-            .iter()
-            .any(|model| model.name == config.agent.default_model)
-    {
-        return Err(GuiError::unknown(
-            "Invalid config: agent.default_model must match a [[models]] name",
-        ));
-    }
-
-    Ok(())
-}
-
-fn resolve_config_write_target(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
-    let mut target = path.to_path_buf();
-    for _ in 0..40 {
-        let metadata = match std::fs::symlink_metadata(&target) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(target),
-            Err(error) => return Err(error),
-        };
-        if !metadata.file_type().is_symlink() {
-            return Ok(target);
-        }
-
-        let link = std::fs::read_link(&target)?;
-        target = if link.is_absolute() {
-            link
-        } else {
-            target
-                .parent()
-                .unwrap_or_else(|| std::path::Path::new("."))
-                .join(link)
-        };
-    }
-
-    Err(std::io::Error::new(
-        std::io::ErrorKind::InvalidInput,
-        "too many symbolic links in config path",
-    ))
-}
-
-fn atomic_write_config(file_path: &std::path::Path, content: &str) -> std::io::Result<()> {
-    use std::io::Write;
-
-    let file_path = resolve_config_write_target(file_path)?;
-    let parent = file_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."));
-    let mut temp_file = tempfile::NamedTempFile::new_in(parent)?;
-    temp_file.write_all(content.as_bytes())?;
-    temp_file.as_file().sync_all()?;
-    temp_file.persist(file_path).map_err(|error| error.error)?;
-    Ok(())
-}
-
-fn save_config_toml_to_path(file_path: &std::path::Path, content: &str) -> Result<(), GuiError> {
-    validate_config_toml(content)?;
-    atomic_write_config(file_path, content)
-        .map_err(|e| GuiError::unknown(format!("Failed to write config: {e}")))
+pub async fn get_config_toml(state: State<'_, AppState>) -> Result<serde_json::Value, GuiError> {
+    let config = state
+        .kernel_snapshot()
+        .get_config()
+        .await
+        .map_err(GuiError::kernel)?;
+    serde_json::to_value(config).map_err(|e| GuiError::unknown(e.to_string()))
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn save_config_toml(
-    _state: State<'_, AppState>,
-    content: String,
-) -> Result<(), GuiError> {
-    let path = kernel::config::Config::discover_file();
-    let file_path = match path {
-        Some(p) => p,
-        None => {
-            let default_path = kernel::expand_tilde(kernel::DEFAULT_DATA_DIR).join("config.toml");
-            if let Some(parent) = default_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| GuiError::unknown(format!("Failed to create config dir: {e}")))?;
-            }
-            default_path
-        }
-    };
-
-    save_config_toml_to_path(&file_path, &content)
+pub async fn save_config_toml(state: State<'_, AppState>, content: String) -> Result<(), GuiError> {
+    state
+        .kernel_snapshot()
+        .set_config(content)
+        .await
+        .map_err(GuiError::kernel)
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn get_config(_state: State<'_, AppState>) -> Result<serde_json::Value, GuiError> {
-    let config_file = kernel::config::Config::discover_file();
-    let mut config = if let Some(ref path) = config_file {
-        kernel::config::Config::from_file(path)
-            .map_err(|e| GuiError::unknown(format!("Failed to load config: {e}")))?
+pub async fn get_config(state: State<'_, AppState>) -> Result<serde_json::Value, GuiError> {
+    let kernel_config = state
+        .kernel_snapshot()
+        .get_config()
+        .await
+        .map_err(GuiError::kernel)?;
+    let config: kernel::config::Config = if kernel_config.full_config.is_empty() {
+        return Err(GuiError::unknown(
+            "Invalid config: saved config cannot be applied",
+        ));
     } else {
-        kernel::config::Config::default()
+        toml::from_str(&kernel_config.full_config)
+            .map_err(|e| GuiError::unknown(format!("Failed to parse effective config: {e}")))?
     };
-    config.apply_env_overrides();
-    config.finalize();
-    config
-        .validate()
-        .map_err(|e| GuiError::unknown(format!("Invalid config: {e}")))?;
 
-    // `finalize()` is supposed to guarantee a valid default model; if it's
-    // still missing, surface a real error instead of silently returning
-    // empty model/provider and context_window = 0.
     let default_model = config.model().ok_or_else(|| {
         GuiError::unknown("invalid config: default_model does not match any entry in [models]")
     })?;
     let model = default_model.model_id.clone();
     let context_window = default_model.context_window;
     let provider = default_model.provider.to_string();
-
     let auto_approve = config.auto_approve.to_string().to_lowercase();
-    let full_config = toml::to_string_pretty(&config)
-        .map_err(|e| GuiError::unknown(format!("Failed to serialize config: {e}")))?;
 
     Ok(serde_json::json!({
         "model": model,
         "context_window": context_window,
         "provider": provider,
         "auto_approve": auto_approve,
-        "full_config": full_config,
+        "full_config": kernel_config.full_config,
     }))
 }
 
@@ -211,7 +174,7 @@ pub async fn get_usage_summary(
     state: State<'_, AppState>,
     days: Option<i64>,
 ) -> Result<serde_json::Value, GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let days = days.unwrap_or(365);
     let summary = coord
         .get_usage_summary(days)
@@ -230,7 +193,7 @@ pub async fn get_daily_usage(
     state: State<'_, AppState>,
     days: i64,
 ) -> Result<serde_json::Value, GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     tracing::info!("get_daily_usage called with days={}", days);
     let daily = coord
         .get_daily_usage(days)
@@ -258,7 +221,7 @@ pub async fn get_model_usage(
     state: State<'_, AppState>,
     days: Option<i64>,
 ) -> Result<serde_json::Value, GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let days = days.unwrap_or(365);
     let usage = coord
         .get_model_usage(days)
@@ -271,7 +234,7 @@ pub async fn get_model_usage(
 pub async fn get_today_model_usage(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     // 本地时区今日零点 -> UTC，与 daily_summary 的 localtime 口径一致
     let local_start = chrono::Local::now()
         .date_naive()
@@ -291,7 +254,7 @@ pub async fn get_usage_records(
     before_id: Option<String>,
     limit: Option<usize>,
 ) -> Result<serde_json::Value, GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let records = coord
         .get_usage_records(before_id.as_deref(), limit.unwrap_or(50))
         .await
@@ -301,7 +264,11 @@ pub async fn get_usage_records(
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn get_models(state: State<'_, AppState>) -> Result<serde_json::Value, GuiError> {
-    let models = state.kernel.list_models().await.map_err(GuiError::kernel)?;
+    let models = state
+        .kernel_snapshot()
+        .list_models()
+        .await
+        .map_err(GuiError::kernel)?;
     Ok(serde_json::json!({ "models": models }))
 }
 
@@ -312,7 +279,7 @@ pub async fn get_session_model(
 ) -> Result<String, GuiError> {
     let sid = kernel::SessionId::from(session_id);
     state
-        .kernel
+        .kernel_snapshot()
         .get_session_model(&sid)
         .await
         .map_err(GuiError::kernel)
@@ -326,7 +293,7 @@ pub async fn set_session_model(
 ) -> Result<(), GuiError> {
     let sid = kernel::SessionId::from(session_id);
     state
-        .kernel
+        .kernel_snapshot()
         .set_session_model(&sid, &key)
         .await
         .map_err(GuiError::kernel)

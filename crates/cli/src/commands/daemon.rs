@@ -48,7 +48,8 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
                 tracing::info!("Stale PID file, cleaning up");
             }
 
-            let (kernel, config, _config_file) = kernel::init_kernel(None, true).await?;
+            let (kernel, config, config_file) = kernel::init_kernel(None, true).await?;
+            let config_file = config_file.or_else(|| Some(kernel::config::Config::write_path()));
             let _log_guard = kernel::utils::logging::init_logging(&config, "daemon", true)?;
 
             let addr = crate::daemon::socket_addr();
@@ -63,9 +64,23 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
             }
             tokio::fs::write(&pid_file, std::process::id().to_string()).await?;
 
-            let server = kernel::server::KernelServer::new(Arc::clone(&kernel));
+            let (restart_tx, mut restart_rx) = tokio::sync::mpsc::channel(1);
+            let restart_requested = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let server = kernel::server::KernelServer::with_lifecycle(
+                Arc::clone(&kernel),
+                config_file,
+                Some(restart_tx),
+            );
             server.start(config.channels.clone()).await;
             let shutdown = tokio_util::sync::CancellationToken::new();
+            let restart_shutdown = shutdown.clone();
+            let restart_requested_task = Arc::clone(&restart_requested);
+            tokio::spawn(async move {
+                if restart_rx.recv().await.is_some() {
+                    restart_requested_task.store(true, std::sync::atomic::Ordering::Release);
+                    restart_shutdown.cancel();
+                }
+            });
 
             let _signal_handle = kernel::utils::signal::spawn_signal_listener(shutdown.clone());
 
@@ -80,6 +95,7 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
                         DAEMON_IDLE_TIMEOUT_SECS
                     );
                     let mut interval = tokio::time::interval(IDLE_CHECK_INTERVAL);
+                    interval.tick().await;
                     loop {
                         tokio::select! {
                             biased;
@@ -117,8 +133,13 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
                 let _ = tokio::fs::remove_file(path).await;
             }
 
-            tracing::info!("Daemon shutting down gracefully");
+            tracing::info!(pid = std::process::id(), "Daemon shutting down gracefully");
             serve_result?;
+
+            if restart_requested.load(std::sync::atomic::Ordering::Acquire) {
+                tracing::info!("Restart requested through KernelApi; spawning replacement daemon");
+                crate::daemon::spawn_daemon_with_auto_exit(auto_exit).await?;
+            }
         }
         DaemonCommands::Stop => {
             tracing::info!("Stop command received");

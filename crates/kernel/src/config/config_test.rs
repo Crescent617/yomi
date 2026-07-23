@@ -70,6 +70,58 @@ fn inject_env_sets_missing_values() {
 }
 
 #[test]
+fn inject_env_replaces_values_set_by_an_earlier_injection() {
+    let key = format!("YOMI_TEST_ENV_{}", crate::types::MessageId::new().as_str());
+    let mut first = Config::default();
+    first.env.insert(key.clone(), "first".to_string());
+    first.inject_env().unwrap();
+
+    let mut second = Config::default();
+    second.env.insert(key.clone(), "second".to_string());
+    second.inject_env().unwrap();
+
+    assert_eq!(std::env::var(&key).unwrap(), "second");
+    Config::clear_injected_env();
+    assert!(std::env::var_os(key).is_none());
+}
+
+#[test]
+fn injected_env_names_tracks_only_values_set_by_config() {
+    let injected_key = format!("YOMI_TEST_ENV_{}", crate::types::MessageId::new().as_str());
+    let host_key = format!("YOMI_TEST_ENV_{}", crate::types::MessageId::new().as_str());
+    std::env::set_var(&host_key, "host");
+    let mut config = Config::default();
+    config
+        .env
+        .insert(injected_key.clone(), "configured".to_string());
+    config
+        .env
+        .insert(host_key.clone(), "configured".to_string());
+
+    config.inject_env().unwrap();
+    let names = Config::injected_env_names();
+
+    assert!(names.contains(&injected_key));
+    assert!(!names.contains(&host_key));
+    Config::clear_injected_env();
+    std::env::remove_var(host_key);
+}
+
+#[test]
+fn clear_removed_injected_env_removes_stale_values() {
+    let key = format!("YOMI_TEST_ENV_{}", crate::types::MessageId::new().as_str());
+    let mut first = Config::default();
+    first.env.insert(key.clone(), "first".to_string());
+    first.inject_env().unwrap();
+
+    let second = Config::default();
+    second.clear_removed_injected_env();
+
+    assert!(std::env::var_os(&key).is_none());
+    assert!(!Config::injected_env_names().contains(&key));
+}
+
+#[test]
 fn inject_env_rejects_invalid_names() {
     let mut config = Config::default();
     config
@@ -318,4 +370,177 @@ fn validate_rejects_zero_model_token_limits() {
 #[test]
 fn default_config_is_valid() {
     assert!(Config::default().validate().is_ok());
+}
+
+#[test]
+fn set_kernel_config_retains_parser_location() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("config.toml");
+
+    let error = Config::set_kernel_config_at(&path, "# comment\nauto_approve = \"unsupported\"\n")
+        .expect_err("typed config should be rejected");
+    let message = error.to_string();
+
+    assert!(message.contains("Invalid TOML:"));
+    assert!(message.contains("line 2, column"));
+}
+
+#[test]
+fn set_kernel_config_rejects_duplicate_model_names() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("config.toml");
+    let content = r#"
+[[models]]
+name = "duplicate"
+
+[[models]]
+name = "duplicate"
+"#;
+
+    let error = Config::set_kernel_config_at(&path, content)
+        .expect_err("duplicate names should be rejected");
+
+    assert!(error
+        .to_string()
+        .contains("Invalid config: duplicate model name in [[models]]"));
+}
+
+#[test]
+fn set_kernel_config_rejects_missing_default_model() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("config.toml");
+    let content = r#"
+[agent]
+default_model = "missing"
+
+[[models]]
+name = "available"
+"#;
+
+    let error = Config::set_kernel_config_at(&path, content)
+        .expect_err("missing default model should fail");
+
+    assert!(error
+        .to_string()
+        .contains("Invalid config: agent.default_model must match a [[models]] name"));
+}
+
+#[test]
+fn set_kernel_config_rejects_invalid_env_names() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("config.toml");
+    let content = r#"
+[env]
+"INVALID=NAME" = "value"
+"#;
+
+    let error = Config::set_kernel_config_at(&path, content)
+        .expect_err("invalid environment variable name should fail");
+
+    assert!(error
+        .to_string()
+        .contains("Invalid environment variable name"));
+    assert!(!path.exists());
+}
+
+#[test]
+fn set_kernel_config_preserves_original_toml_text() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("config.toml");
+    let content = "# keep this comment\nmax_checkpoints = 7  # and spacing\n";
+
+    Config::set_kernel_config_at(&path, content).expect("save config");
+
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
+    let files: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+    assert_eq!(files.len(), 1, "temporary file should be renamed");
+}
+
+#[test]
+fn set_kernel_config_replaces_existing_config() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "# old\n").unwrap();
+
+    Config::set_kernel_config_at(&path, "# new\n").expect("replace config");
+
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "# new\n");
+}
+
+#[test]
+fn invalid_kernel_config_does_not_replace_existing_file() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("config.toml");
+    let original = "# existing config\n";
+    std::fs::write(&path, original).unwrap();
+
+    Config::set_kernel_config_at(&path, "auto_approve = \"unsupported\"\n")
+        .expect_err("invalid config should not be written");
+
+    assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+}
+
+#[test]
+fn get_kernel_config_returns_invalid_content_without_effective_config() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("config.toml");
+    let content = "auto_approve = \"unsupported\"\n";
+    std::fs::write(&path, content).unwrap();
+
+    let config = Config::get_kernel_config_from(&path).expect("read editable config");
+
+    assert_eq!(config.content, content);
+    assert_eq!(config.path, path.to_string_lossy());
+    assert!(config.full_config.is_empty());
+}
+
+#[test]
+fn get_kernel_config_returns_defaults_for_missing_file() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("config.toml");
+
+    let config = Config::get_kernel_config_from(&path).expect("read default config");
+    let effective: Config = toml::from_str(&config.full_config).unwrap();
+
+    assert!(config.content.is_empty());
+    assert_eq!(config.path, path.to_string_lossy());
+    assert!(effective.model().is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn set_kernel_config_follows_relative_symlink_without_replacing_it() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let target = dir.path().join("managed-config.toml");
+    let link = dir.path().join("config.toml");
+    std::fs::write(&target, "# old\n").unwrap();
+    symlink("managed-config.toml", &link).unwrap();
+
+    Config::set_kernel_config_at(&link, "# new\n").expect("save through symlink");
+
+    assert!(std::fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(
+        std::fs::read_link(&link).unwrap(),
+        std::path::Path::new("managed-config.toml")
+    );
+    assert_eq!(std::fs::read_to_string(target).unwrap(), "# new\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn newly_created_kernel_config_has_private_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("config.toml");
+
+    Config::set_kernel_config_at(&path, "# valid config\n").expect("save config");
+
+    let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
 }

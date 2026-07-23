@@ -62,6 +62,10 @@ pub async fn try_connect() -> Option<kernel::transport::Stream> {
 /// Otherwise spawns a new process and polls until the socket is ready
 /// (up to 10 s) so callers never race with daemon initialisation.
 pub async fn spawn_daemon() -> Result<()> {
+    spawn_daemon_with_auto_exit(true).await
+}
+
+pub async fn spawn_daemon_with_auto_exit(auto_exit: bool) -> Result<()> {
     const SPAWN_READY_TIMEOUT: Duration = Duration::from_secs(10);
     const SPAWN_READY_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -88,10 +92,11 @@ pub async fn spawn_daemon() -> Result<()> {
     }
 
     let mut cmd = std::process::Command::new(&current_exe);
-    cmd.arg("daemon")
-        .arg("start")
-        .arg("--auto-exit")
-        .stdin(std::process::Stdio::null())
+    cmd.arg("daemon").arg("start");
+    if auto_exit {
+        cmd.arg("--auto-exit");
+    }
+    cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
 
@@ -106,6 +111,9 @@ pub async fn spawn_daemon() -> Result<()> {
         }
     }
 
+    for name in kernel::config::Config::injected_env_names() {
+        cmd.env_remove(name);
+    }
     let mut child = cmd.spawn().context("Failed to spawn daemon process")?;
     let pid = child.id();
     tracing::info!("Spawned daemon process (PID {pid})");
@@ -150,10 +158,13 @@ pub async fn stop_daemon() -> Result<()> {
     #[cfg(unix)]
     if let Some(pid) = pid {
         tracing::info!("Sending SIGKILL to daemon (PID {pid})...");
-        let _ = nix::sys::signal::kill(
+        let signal_result = nix::sys::signal::kill(
             nix::unistd::Pid::from_raw(pid as i32),
             nix::sys::signal::Signal::SIGKILL,
         );
+        if let Err(error) = signal_result {
+            anyhow::bail!("failed to kill daemon process {pid}: {error}");
+        }
     }
 
     #[cfg(windows)]
@@ -170,6 +181,9 @@ pub async fn stop_daemon() -> Result<()> {
         let start = tokio::time::Instant::now();
         while process_exists(pid) && start.elapsed() < Duration::from_secs(2) {
             sleep(Duration::from_millis(50)).await;
+        }
+        if process_exists(pid) {
+            anyhow::bail!("daemon process {pid} is still running after SIGKILL");
         }
     }
 
@@ -238,7 +252,7 @@ pub async fn restart_daemon() -> Result<()> {
     // Give a short extra grace period in case the old process is slow to exit.
     sleep(Duration::from_millis(200)).await;
 
-    spawn_daemon().await?;
+    spawn_daemon_with_auto_exit(false).await?;
     tracing::info!("Daemon restarted successfully");
     Ok(())
 }

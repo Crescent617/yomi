@@ -30,7 +30,15 @@ pub async fn list(global: &GlobalArgs, all: bool) -> Result<()> {
     let current_dir_str = current_dir.to_string_lossy().to_string();
 
     // List sessions: by default only current working dir, with --all list all
-    let (sessions, _) = storage.session_store().list(None, None, 200).await?;
+    let (sessions, _) = storage
+        .session_store()
+        .list(
+            None,
+            kernel::storage::session::SessionListScope::All,
+            None,
+            200,
+        )
+        .await?;
 
     let sessions: Vec<_> = if all {
         sessions

@@ -54,6 +54,7 @@ tokio-tungstenite = { workspace = true, features = ["connect", "rustls-tls-nativ
 cron = { workspace = true }
 mime_guess = { workspace = true }
 teloxide-core = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

@@ -5,6 +5,7 @@ use crate::kernel::CreateSessionInput;
 use crate::kernel::Kernel;
 use crate::notification::Notification;
 use crate::permission::Level;
+use crate::storage::session::SessionListScope;
 use crate::transport::{recv_frame, send_frame, ReadHalf, SocketAddr, Stream, WriteHalf};
 use crate::types::{
     ContentBlock, KernelError, MessageId, Project, ProjectId, Result, SessionError, SessionId,
@@ -36,7 +37,6 @@ type PendingMap = dashmap::DashMap<
 >;
 type EventRouterMap = dashmap::DashMap<String, broadcast::Sender<Envelope>>;
 
-/// Paginated session list result
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PaginatedSessions {
     pub sessions: Vec<crate::storage::session::SessionInfo>,
@@ -51,6 +51,12 @@ pub type SessionJsonlChunk = crate::utils::file_chunk::FileChunk;
 pub trait KernelApi: Send + Sync {
     /// Gracefully stop the kernel and all background tasks.
     fn stop(&self);
+
+    // ── Config ─────────────────────────────────────────────────────────────
+    async fn get_config(&self) -> Result<crate::config::KernelConfig>;
+    async fn set_config(&self, content: String) -> Result<()>;
+    async fn restart(&self) -> Result<()>;
+    async fn read_asset(&self, url: String) -> Result<Vec<u8>>;
 
     // ── Project ──────────────────────────────────────────────────────────
     async fn list_projects(&self) -> Result<Vec<Project>>;
@@ -145,6 +151,7 @@ pub trait KernelApi: Send + Sync {
     async fn list_sessions(
         &self,
         project_id: Option<&ProjectId>,
+        scope: crate::storage::session::SessionListScope,
         before: Option<DateTime<Utc>>,
         limit: usize,
     ) -> Result<PaginatedSessions>;
@@ -228,6 +235,26 @@ pub trait KernelApi: Send + Sync {
 impl KernelApi for Kernel {
     fn stop(&self) {
         Self::stop(self);
+    }
+
+    async fn get_config(&self) -> Result<crate::config::KernelConfig> {
+        crate::config::Config::get_kernel_config()
+    }
+
+    async fn set_config(&self, content: String) -> Result<()> {
+        crate::config::Config::set_kernel_config(&content)
+    }
+
+    async fn restart(&self) -> Result<()> {
+        Err(KernelError::config(
+            "restart is only available through a daemon server",
+        ))
+    }
+
+    async fn read_asset(&self, url: String) -> Result<Vec<u8>> {
+        crate::utils::asset::read_asset(&url, &self.data_dir().await)
+            .await
+            .ok_or_else(|| KernelError::config(format!("Asset not found: {url}")))
     }
 
     async fn list_projects(&self) -> Result<Vec<Project>> {
@@ -428,10 +455,11 @@ impl KernelApi for Kernel {
     async fn list_sessions(
         &self,
         project_id: Option<&ProjectId>,
+        scope: SessionListScope,
         before: Option<DateTime<Utc>>,
         limit: usize,
     ) -> Result<PaginatedSessions> {
-        Self::list_sessions(self, project_id, before, limit).await
+        Self::list_sessions(self, project_id, scope, before, limit).await
     }
 
     async fn list_running_sessions(&self) -> Result<Vec<crate::types::RunningSessionResponse>> {
@@ -625,7 +653,9 @@ impl RemoteKernel {
     /// Connect immediately and return a ready kernel.
     pub async fn connect(addr: &SocketAddr) -> Result<Self> {
         let stream = crate::transport::connect(addr).await?;
-        Self::from_stream(stream, addr).await
+        let this = Self::from_stream(stream, addr).await?;
+        this.validate_wire_protocol().await?;
+        Ok(this)
     }
 
     /// Wrap an already-connected stream.
@@ -737,19 +767,13 @@ impl RemoteKernel {
                     }));
                 }
             }
-            // Notify all local event subscribers that the connection is
-            // dead by dropping the senders so receivers become Closed.
-            // This forces the UI to re-subscribe (and re-establish the
-            // server-side forwarding task) instead of hanging forever
-            // on an empty channel.
-            let keys: Vec<String> = event_routers.iter().map(|e| e.key().clone()).collect();
-            for key in &keys {
-                if let Some((_, tx)) = event_routers.remove(key) {
-                    let _ = notification_tx.send(Notification::ConnectionLost {
-                        session_id: SessionId::from(key.clone()),
-                    });
-                    drop(tx);
-                }
+            // Keep persistent routers alive across reconnects. Existing receivers
+            // continue consuming from the same broadcast senders after the new
+            // connection re-subscribes server-side.
+            for entry in event_routers.iter() {
+                let _ = notification_tx.send(Notification::ConnectionLost {
+                    session_id: SessionId::from(entry.key().clone()),
+                });
             }
         })
     }
@@ -802,7 +826,20 @@ impl RemoteKernel {
         })
     }
 
-    /// Ensure the connection is established (lazy on first call).
+    pub async fn check_ready(&self) -> Result<()> {
+        self.ensure_connected().await
+    }
+
+    async fn server_instance_id(&self) -> Result<String> {
+        self.ensure_connected().await?;
+        let value = self.call_raw(ReqMethod::Hello).await?;
+        value
+            .get("instance_id")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| SessionError::WireProtocolMismatch.into())
+    }
+
     /// Retries for up to 10 s to allow the daemon to finish spawning.
     /// On reconnect, re-subscribes all sessions in the persistent router.
     async fn ensure_connected(&self) -> Result<()> {
@@ -889,6 +926,13 @@ impl RemoteKernel {
             }
         }
 
+        // Wire protocol version handshake.
+        self.validate_wire_protocol().await?;
+
+        Ok(())
+    }
+
+    async fn validate_wire_protocol(&self) -> Result<()> {
         // Wire protocol version handshake.
         match self.call_raw(ReqMethod::Hello).await {
             Ok(val) => {
@@ -1055,6 +1099,53 @@ impl KernelApi for RemoteKernel {
                 c.cancel.cancel();
             }
         });
+    }
+
+    async fn get_config(&self) -> Result<crate::config::KernelConfig> {
+        let result = self.call(ReqMethod::GetConfig).await?;
+        Ok(serde_json::from_value(result)?)
+    }
+
+    async fn set_config(&self, content: String) -> Result<()> {
+        self.call(ReqMethod::SetConfig { content }).await?;
+        Ok(())
+    }
+
+    async fn restart(&self) -> Result<()> {
+        let old_instance_id = self.server_instance_id().await?;
+        self.call(ReqMethod::Restart).await?;
+        self.invalidate_connection().await;
+
+        let start = tokio::time::Instant::now();
+        loop {
+            match self.server_instance_id().await {
+                Ok(instance_id) if instance_id != old_instance_id => break,
+                Ok(_) | Err(_) if start.elapsed() < CONNECT_RETRY_TIMEOUT => {
+                    self.invalidate_connection().await;
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                Ok(_) => {
+                    return Err(SessionError::Other(
+                        "daemon restart timed out waiting for a replacement instance".to_string(),
+                    )
+                    .into());
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        let config = self.get_config().await?;
+        if config.full_config.is_empty() {
+            return Err(KernelError::config(
+                "daemon restarted but the saved config could not be applied",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn read_asset(&self, url: String) -> Result<Vec<u8>> {
+        let result = self.call(ReqMethod::ReadAsset { url }).await?;
+        Ok(serde_json::from_value(result)?)
     }
 
     async fn list_projects(&self) -> Result<Vec<Project>> {
@@ -1440,12 +1531,14 @@ impl KernelApi for RemoteKernel {
     async fn list_sessions(
         &self,
         project_id: Option<&ProjectId>,
+        scope: SessionListScope,
         before: Option<DateTime<Utc>>,
         limit: usize,
     ) -> Result<PaginatedSessions> {
         let result = self
             .call(ReqMethod::ListSessions {
                 project_id: project_id.map(|p| p.0.to_string()),
+                scope,
                 before,
                 limit,
             })

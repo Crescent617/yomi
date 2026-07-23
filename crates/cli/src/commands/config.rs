@@ -1,14 +1,13 @@
 use crate::args::GlobalArgs;
 use crate::utils::{get_nested_value, load_config, set_nested_value};
 use anyhow::{Context, Result};
-use kernel::{expand_tilde, DEFAULT_DATA_DIR};
 use std::path::PathBuf;
 
 fn config_path(global: &GlobalArgs) -> PathBuf {
     global
         .config
         .clone()
-        .unwrap_or_else(|| expand_tilde(DEFAULT_DATA_DIR).join("config.toml"))
+        .unwrap_or_else(kernel::config::Config::write_path)
 }
 
 pub fn show(global: &GlobalArgs) -> Result<()> {
@@ -42,11 +41,8 @@ pub fn set(global: &GlobalArgs, key: &str, value: String) -> Result<()> {
 
     set_nested_value(&mut config, key, value)?;
 
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    std::fs::write(&config_path, toml::to_string_pretty(&config)?)?;
+    let content = toml::to_string_pretty(&config)?;
+    kernel::config::Config::set_kernel_config_at(&config_path, &content)?;
     println!("Config saved to {}", config_path.display());
     Ok(())
 }

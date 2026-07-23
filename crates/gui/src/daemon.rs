@@ -45,6 +45,35 @@ enum DaemonSlot {
 /// daemon; `Some` while this process owns the daemon lifecycle — even if
 /// the server itself is currently dead.
 static MANAGED_DAEMON: tokio::sync::Mutex<Option<DaemonSlot>> = tokio::sync::Mutex::const_new(None);
+static DAEMON_LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+type RestartChannel = (
+    tokio::sync::mpsc::Sender<()>,
+    std::sync::Mutex<Option<tokio::sync::mpsc::Receiver<()>>>,
+);
+static RESTART_CHANNEL: std::sync::OnceLock<RestartChannel> = std::sync::OnceLock::new();
+
+fn restart_sender() -> tokio::sync::mpsc::Sender<()> {
+    RESTART_CHANNEL
+        .get_or_init(|| {
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            (tx, std::sync::Mutex::new(Some(rx)))
+        })
+        .0
+        .clone()
+}
+
+pub fn take_restart_receiver() -> Option<tokio::sync::mpsc::Receiver<()>> {
+    RESTART_CHANNEL
+        .get_or_init(|| {
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            (tx, std::sync::Mutex::new(Some(rx)))
+        })
+        .1
+        .lock()
+        .ok()?
+        .take()
+}
 
 #[cfg(unix)]
 fn process_exists(pid: u32) -> bool {
@@ -111,6 +140,11 @@ pub async fn get_kernel() -> Result<(Arc<dyn kernel::client::KernelApi>, std::pa
 /// Start the kernel server in a background task.
 /// If a daemon is already accepting connections, returns Ok immediately.
 pub async fn spawn_daemon() -> Result<kernel::config::Config> {
+    let _lifecycle_guard = DAEMON_LIFECYCLE.lock().await;
+    spawn_daemon_inner().await
+}
+
+async fn spawn_daemon_inner() -> Result<kernel::config::Config> {
     // Install rustls crypto provider before any TLS operations.
     // Required by rustls 0.23+ when multiple crypto providers are available.
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -120,7 +154,8 @@ pub async fn spawn_daemon() -> Result<kernel::config::Config> {
         return Ok(kernel::config::Config::default());
     }
 
-    let (kernel, config, _config_file) = kernel::init_kernel(None, true).await?;
+    let (kernel, config, config_file) = kernel::init_kernel(None, true).await?;
+    let config_file = config_file.or_else(|| Some(kernel::config::Config::write_path()));
 
     let addr = socket_addr();
     let listener = kernel::transport::bind(&addr)
@@ -128,7 +163,11 @@ pub async fn spawn_daemon() -> Result<kernel::config::Config> {
         .with_context(|| format!("Failed to bind daemon listener on {addr}"))?;
     tracing::info!("Daemon listening on {addr}");
 
-    let server = kernel::server::KernelServer::new(Arc::clone(&kernel));
+    let server = kernel::server::KernelServer::with_lifecycle(
+        Arc::clone(&kernel),
+        config_file,
+        Some(restart_sender()),
+    );
     server.start(config.channels.clone()).await;
     let shutdown = CancellationToken::new();
 
@@ -208,6 +247,11 @@ async fn cleanup_own_daemon_files() {
 ///
 /// If the GUI connected to an external daemon, this is a no-op.
 pub async fn stop_daemon() -> Result<()> {
+    let _lifecycle_guard = DAEMON_LIFECYCLE.lock().await;
+    stop_daemon_inner().await
+}
+
+async fn stop_daemon_inner() -> Result<()> {
     let slot = {
         let mut guard = MANAGED_DAEMON.lock().await;
         guard.take()
@@ -218,8 +262,19 @@ pub async fn stop_daemon() -> Result<()> {
         return Ok(());
     };
 
-    if let DaemonSlot::Managed { shutdown, .. } = slot {
+    if let DaemonSlot::Managed {
+        shutdown,
+        mut serve_handle,
+    } = slot
+    {
         shutdown.cancel();
+        if tokio::time::timeout(RESTART_STOP_TIMEOUT, &mut serve_handle)
+            .await
+            .is_err()
+        {
+            serve_handle.abort();
+            let _ = serve_handle.await;
+        }
     }
     // The serve task removes the pid/socket files itself on exit; clean up
     // defensively in case it does not get to run (the process is exiting).
@@ -240,6 +295,11 @@ pub async fn stop_daemon() -> Result<()> {
 /// ownership of the lifecycle is retained so a later call can retry after
 /// the config is fixed.
 pub async fn restart_daemon() -> Result<kernel::config::Config> {
+    let _lifecycle_guard = DAEMON_LIFECYCLE.lock().await;
+    restart_daemon_inner().await
+}
+
+async fn restart_daemon_inner() -> Result<kernel::config::Config> {
     let slot = {
         let mut guard = MANAGED_DAEMON.lock().await;
         guard.take()
@@ -268,11 +328,13 @@ pub async fn restart_daemon() -> Result<kernel::config::Config> {
             // same paths, deleting the new daemon's socket file. We clean
             // up ourselves instead.
             serve_handle.abort();
+            let _ = serve_handle.await;
             cleanup_own_daemon_files().await;
         }
     }
 
-    let result = spawn_daemon().await;
+    kernel::config::Config::clear_injected_env();
+    let result = spawn_daemon_inner().await;
 
     if result.is_err() {
         // Keep ownership unless the failed spawn actually registered a new

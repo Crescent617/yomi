@@ -4,6 +4,13 @@ use crate::types::{Result, SessionId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionListScope {
+    All,
+    Assigned,
+}
+
 /// Session metadata for listing and display
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -76,6 +83,7 @@ pub trait SessionStore: Send + Sync {
     async fn list(
         &self,
         project_id: Option<&crate::types::ProjectId>,
+        scope: SessionListScope,
         before: Option<chrono::DateTime<chrono::Utc>>,
         limit: usize,
     ) -> Result<(Vec<SessionInfo>, Option<String>)>;

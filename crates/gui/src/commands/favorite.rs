@@ -14,7 +14,7 @@ pub async fn add_favorite(
     session_title: Option<String>,
     message_created_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<FavoriteAnswer, GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let input = AddFavoriteInput {
         session_id: SessionId::from(session_id),
         message_id: MessageId::from(message_id),
@@ -31,7 +31,7 @@ pub async fn remove_favorite(
     state: State<'_, AppState>,
     favorite_id: String,
 ) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     coord
         .remove_favorite(&favorite_id)
         .await
@@ -44,7 +44,7 @@ pub async fn remove_favorite_by_message(
     session_id: String,
     message_id: String,
 ) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     coord
         .remove_favorite_by_message(&SessionId::from(session_id), &MessageId::from(message_id))
         .await
@@ -58,7 +58,7 @@ pub async fn list_favorites(
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<Vec<FavoriteAnswer>, GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     coord
         .list_favorites(query, limit.unwrap_or(200), offset.unwrap_or(0))
         .await
@@ -71,7 +71,7 @@ pub async fn update_favorite_note(
     favorite_id: String,
     note: Option<String>,
 ) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     coord
         .update_favorite_note(&favorite_id, note)
         .await

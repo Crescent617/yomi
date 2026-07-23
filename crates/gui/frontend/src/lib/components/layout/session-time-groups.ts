@@ -46,6 +46,13 @@ export function projectSessionsForList<T extends ProjectSessionListItem>(
   );
 }
 
+/** Keep all top-level sessions, including ones without a project. */
+export function topLevelSessionsForList<T extends ProjectSessionListItem>(
+  sessions: T[],
+): T[] {
+  return sessions.filter((session) => !session.parent_session_id);
+}
+
 export function groupSessionsByTime<T extends { updated_at?: string }>(
   sessions: T[],
   nowMs: number = Date.now(),

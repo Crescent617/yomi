@@ -39,7 +39,7 @@ pub async fn send_message(
     session_id: String,
     content: String,
 ) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     let block = ContentBlock::Text { text: content };
     coord
@@ -55,7 +55,7 @@ pub async fn send_message_blocks(
     session_id: String,
     blocks: Vec<ContentBlock>,
 ) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     coord
         .send_message(&sid, blocks)
@@ -71,7 +71,7 @@ pub async fn subscribe(
     session_id: String,
     after_event_id: Option<String>,
 ) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id.clone());
     let after = after_event_id.map(kernel::types::EventId::from);
     let mut rx = match coord.subscribe_session_events(&sid, after.clone()).await {
@@ -148,7 +148,7 @@ pub async fn get_messages(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<Vec<serde_json::Value>, GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     let messages = coord.list_messages(&sid).await.map_err(GuiError::kernel)?;
     let values: Vec<_> = messages
@@ -163,7 +163,7 @@ pub async fn get_session(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<serde_json::Value, GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     let status = coord.get_session(&sid).await.map_err(GuiError::kernel)?;
     Ok(serde_json::to_value(status)?)
@@ -174,7 +174,7 @@ pub async fn get_todos(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<serde_json::Value, GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     match coord.get_todos(&sid).await.map_err(GuiError::kernel)? {
         Some(json_str) => {
@@ -191,7 +191,7 @@ pub async fn cancel_session(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     coord.cancel(&sid).await.map_err(GuiError::kernel)?;
     Ok(())
@@ -205,7 +205,7 @@ pub async fn respond_permission(
     approved: bool,
     remember: bool,
 ) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     coord
         .send_permission_response(&sid, &req_id, approved, remember)
@@ -221,7 +221,7 @@ pub async fn respond_ask_user(
     req_id: String,
     answers: Vec<(String, String)>,
 ) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     let response = AskUserResponse {
         answers: answers.into_iter().collect(),
@@ -238,7 +238,7 @@ pub async fn compact_session(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     coord
         .compact_session(&sid)
@@ -253,7 +253,7 @@ pub async fn set_permission_level(
     session_id: String,
     level: String,
 ) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     let level = parse_level(&level)?;
     coord
@@ -268,7 +268,7 @@ pub async fn get_goal(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<Option<GoalState>, GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     let goal = coord.get_goal(&sid).await.map_err(GuiError::kernel)?;
     Ok(goal)
@@ -280,7 +280,7 @@ pub async fn start_goal(
     session_id: String,
     description: String,
 ) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     let goal_state = GoalState::new(description);
     coord
@@ -292,7 +292,7 @@ pub async fn start_goal(
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn pause_goal(state: State<'_, AppState>, session_id: String) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     coord.pause_goal(&sid).await.map_err(GuiError::kernel)?;
     Ok(())
@@ -300,7 +300,7 @@ pub async fn pause_goal(state: State<'_, AppState>, session_id: String) -> Resul
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn resume_goal(state: State<'_, AppState>, session_id: String) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     coord.resume_goal(&sid).await.map_err(GuiError::kernel)?;
     Ok(())
@@ -312,7 +312,7 @@ pub async fn edit_goal(
     session_id: String,
     description: String,
 ) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     coord
         .update_goal(&sid, description)
@@ -323,7 +323,7 @@ pub async fn edit_goal(
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn stop_goal(state: State<'_, AppState>, session_id: String) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     coord.stop_goal(&sid).await.map_err(GuiError::kernel)?;
     Ok(())
@@ -335,7 +335,7 @@ pub async fn rename_session(
     session_id: String,
     title: String,
 ) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     coord
         .rename_session(&sid, title)
@@ -350,7 +350,7 @@ pub async fn send_steer(
     session_id: String,
     blocks: Vec<ContentBlock>,
 ) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     coord
         .send_steer(&sid, blocks)
@@ -364,7 +364,7 @@ pub async fn continue_session(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<(), GuiError> {
-    let coord = state.kernel.clone();
+    let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id);
     coord.send_continue(&sid).await.map_err(GuiError::kernel)?;
     Ok(())

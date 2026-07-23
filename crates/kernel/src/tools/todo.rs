@@ -164,7 +164,7 @@ Guidelines:
                 "action": {
                     "type": "string",
                     "enum": ["read", "write", "update"],
-                    "description": "Operation type: read - get current list, write - full replace (needs id/content/status), update - batch partial update (only id required)"
+                    "description": "read: get current list; write: full replace (needs id/content/status); update: batch partial update (only id required)"
                 },
                 "todos": {
                     "type": "array",
@@ -179,12 +179,11 @@ Guidelines:
                             },
                             "content": {
                                 "type": "string",
-                                "description": "The task description (required for write)"
+                                "description": "The task description, must be concise and clear. No more than 100 words."
                             },
                             "status": {
                                 "type": "string",
-                                "enum": ["pending", "in_progress", "completed"],
-                                "description": "Current status (required for write)"
+                                "enum": ["pending", "in_progress", "completed"]
                             }
                         }
                     }
