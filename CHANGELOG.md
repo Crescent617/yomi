@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.22] - 2026-07-24
 
 ### Added
 - 流式工具调用参数摘要日志：单个 tool call 的流式参数每累积约 4k token（4 字节 ≈ 1 token 估算）输出一条 `tracing::warn!` 摘要，含工具名、调用 id、累计 token 估算及参数头/尾各 80 字符片段（unicode 安全、转义为单行），便于观测大文件写入等超长参数流；跟踪状态为单槽设计，新 tool call 的 delta 到达即替换旧状态，首个 delta 为空或缺工具名时由后续 delta 补全。
