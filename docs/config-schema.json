@@ -217,6 +217,11 @@
             "type": "string",
             "enum": ["safe", "caution", "dangerous"],
             "default": "safe"
+          },
+          "observability": {
+            "description": "Status card + reaction state machine for run observability. When disabled, channels behave as before (ack reaction + final reply).",
+            "type": "boolean",
+            "default": true
           }
         },
         "required": ["name", "platform"],

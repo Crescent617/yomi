@@ -117,7 +117,7 @@ impl Tool for SendMessageTool {
             let blocks = vec![ContentBlock::Text {
                 text: text.to_string(),
             }];
-            adapter
+            let _ = adapter
                 .send_message(chat_id, blocks, reply_msg_id)
                 .await
                 .map_err(|e| {

@@ -804,6 +804,11 @@ impl Kernel {
         self.conductor.active_count()
     }
 
+    /// Whether the session has a live agent task with an active (non-idle) run.
+    pub fn is_session_running(&self, session_id: &SessionId) -> bool {
+        self.conductor.is_running(session_id)
+    }
+
     /// List skills available to a session, merging global skills with workspace skills.
     /// Workspace skills take precedence on name collision.
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]

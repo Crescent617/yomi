@@ -49,6 +49,7 @@ pub enum ChannelStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(clippy::struct_excessive_bools)] // feature toggles are naturally bools
 pub struct ChannelConfig {
     pub name: String,
     pub enabled: bool,
@@ -70,6 +71,14 @@ pub struct ChannelConfig {
     pub reply_in_thread: bool,
     #[serde(default)]
     pub auto_approve_level: Level,
+    /// Status card + reaction state machine for run observability.
+    /// When disabled, channels behave as before (ack reaction + final reply).
+    #[serde(default = "default_observability")]
+    pub observability: bool,
+}
+
+fn default_observability() -> bool {
+    true
 }
 
 fn default_require_mention() -> bool {
@@ -91,6 +100,7 @@ impl Default for ChannelConfig {
             require_mention: true,
             reply_in_thread: false,
             auto_approve_level: Level::Safe,
+            observability: true,
         }
     }
 }
@@ -122,6 +132,10 @@ pub struct ChannelMessage {
     pub root_id: Option<String>,
     /// Whether the message was sent in a group chat (vs. private/p2p).
     pub is_group: bool,
+    /// Reaction ID of the ack reaction the adapter added on receipt
+    /// (e.g. Feishu `OneSecond`), used by the observability reaction state
+    /// machine to replace it on run completion.
+    pub receipt_reaction_id: Option<String>,
 }
 
 /// Runtime info about a channel, for UI listing
@@ -196,21 +210,66 @@ pub trait PlatformAdapter: Send + Sync {
     ///
     /// `reply_msg_id` is the original message ID to reply to. For Feishu, this
     /// is used with the reply API to place the response in the same thread.
+    ///
+    /// Returns the platform message ID of the sent message when available
+    /// (used by observability to react on the last content message).
     async fn send_message(
         &self,
         external_chat_id: &str,
         blocks: Vec<ContentBlock>,
         reply_msg_id: Option<&str>,
-    ) -> Result<(), ChannelError>;
+    ) -> Result<Option<String>, ChannelError>;
+
+    /// Send a raw card message (platform-specific card JSON), returning its
+    /// message ID for later [`update_card`](Self::update_card) calls.
+    ///
+    /// Default implementation returns `Ok(None)` — platforms without card
+    /// support simply skip status cards.
+    async fn send_card(
+        &self,
+        _external_chat_id: &str,
+        _card_json: &str,
+        _reply_msg_id: Option<&str>,
+    ) -> Result<Option<String>, ChannelError> {
+        Ok(None)
+    }
+
+    /// Update a previously sent card message in place.
+    ///
+    /// Default implementation does nothing for platforms that don't support it.
+    async fn update_card(&self, _message_id: &str, _card_json: &str) -> Result<(), ChannelError> {
+        Ok(())
+    }
+
+    /// Whether the platform supports status cards (`send_card`/`update_card`).
+    /// When false, the hub falls back to typing indicators for run progress.
+    fn supports_status_card(&self) -> bool {
+        false
+    }
 
     /// Send a reaction (emoji) to a message on the platform.
     ///
+    /// `emoji` is a platform-specific emoji identifier (Feishu `emoji_type`).
+    /// `external_chat_id` is unused by platforms whose message IDs are
+    /// globally unique (Feishu) — callers pass `""` there.
+    /// Returns the reaction ID when available (needed for removal).
     /// Default implementation does nothing for platforms that don't support it.
     async fn send_reaction(
         &self,
         _external_chat_id: &str,
         _message_id: &str,
         _emoji: &str,
+    ) -> Result<Option<String>, ChannelError> {
+        Ok(None)
+    }
+
+    /// Remove a reaction previously added by the bot.
+    ///
+    /// Default implementation does nothing for platforms that don't support it.
+    async fn remove_reaction(
+        &self,
+        _message_id: &str,
+        _reaction_id: &str,
     ) -> Result<(), ChannelError> {
         Ok(())
     }
@@ -298,6 +357,8 @@ pub fn blocks_to_text(blocks: &[ContentBlock]) -> String {
 }
 
 pub mod store;
+
+pub(crate) mod obs;
 
 pub mod hub;
 

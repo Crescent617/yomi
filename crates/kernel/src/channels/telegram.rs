@@ -169,6 +169,7 @@ impl TelegramAdapter {
             thread_id: None,
             root_id: None,
             is_group,
+            receipt_reaction_id: None,
         })
     }
 
@@ -363,14 +364,14 @@ impl PlatformAdapter for TelegramAdapter {
         external_chat_id: &str,
         blocks: Vec<ContentBlock>,
         reply_msg_id: Option<&str>,
-    ) -> Result<(), ChannelError> {
+    ) -> Result<Option<String>, ChannelError> {
         let chat_id: i64 = external_chat_id
             .parse()
             .map_err(|e| ChannelError::Platform(format!("invalid chat_id: {e}")))?;
 
         let text = super::blocks_to_text(&blocks);
         if text.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
 
         let recipient = Recipient::Id(ChatId(chat_id));
@@ -387,7 +388,8 @@ impl PlatformAdapter for TelegramAdapter {
                 .map_err(|e| ChannelError::Platform(format!("send_message failed: {e}")))?;
         }
 
-        Ok(())
+        // Telegram reactions/ids are not tracked for observability.
+        Ok(None)
     }
 
     async fn send_files(
@@ -439,7 +441,7 @@ impl PlatformAdapter for TelegramAdapter {
         external_chat_id: &str,
         message_id: &str,
         emoji: &str,
-    ) -> Result<(), ChannelError> {
+    ) -> Result<Option<String>, ChannelError> {
         let chat_id: i64 = external_chat_id
             .parse()
             .map_err(|e| ChannelError::Platform(format!("invalid chat_id: {e}")))?;
@@ -458,7 +460,8 @@ impl PlatformAdapter for TelegramAdapter {
             .send()
             .await
             .map_err(|e| ChannelError::Platform(format!("set_message_reaction failed: {e}")))?;
-        Ok(())
+        // Telegram reactions carry no removable ID.
+        Ok(None)
     }
 
     async fn send_typing(&self, external_chat_id: &str) -> Result<(), ChannelError> {

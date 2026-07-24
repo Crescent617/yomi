@@ -68,7 +68,9 @@
       >
         {preview}
       </span>
-      <span class="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
+      <span
+        class="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70"
+      >
         {tokenEstimate(content)} tokens
       </span>
       {#if elapsed_ms > 0}

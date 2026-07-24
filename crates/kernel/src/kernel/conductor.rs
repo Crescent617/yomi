@@ -197,6 +197,17 @@ impl Conductor {
             .map(|a| *a.state.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
+    /// Whether the session's agent task is live and in an active (non-idle)
+    /// run. Used by the channel observability watchdog: a long tool call
+    /// keeps the agent in `ExecutingTool` (alive), so liveness — unlike an
+    /// event-gap timeout — never false-positives on slow tools.
+    pub fn is_running(&self, sid: &SessionId) -> bool {
+        self.active.get(sid).is_some_and(|agent| {
+            !agent.handle.is_finished()
+                && *agent.state.lock().unwrap_or_else(|e| e.into_inner()) != AgentState::Idle
+        })
+    }
+
     pub fn active_count(&self) -> usize {
         self.active.len()
     }

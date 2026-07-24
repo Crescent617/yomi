@@ -10,13 +10,16 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use super::{
-    ChannelConfig, ChannelInfo, ChannelMessage, ChannelStatus, ChannelStore, PlatformAdapter,
-    SessionRouting,
+    obs::ObsTracker, ChannelConfig, ChannelInfo, ChannelMessage, ChannelStatus, ChannelStore,
+    PlatformAdapter, SessionRouting,
 };
 
 const STATUS_IDLE: u8 = 0;
 const STATUS_CONNECTING: u8 = 1;
 const STATUS_ERROR: u8 = 3;
+
+/// Watchdog sweep interval for dead-session status cards.
+const WATCHDOG_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_mins(1);
 
 /// A running channel instance.
 struct ChannelInstance {
@@ -30,6 +33,7 @@ struct ChannelInstance {
 pub struct ChannelHub {
     store: Arc<dyn ChannelStore>,
     instances: Arc<DashMap<String, ChannelInstance>>,
+    obs: Arc<ObsTracker>,
 }
 
 impl ChannelHub {
@@ -37,6 +41,7 @@ impl ChannelHub {
         Self {
             store,
             instances: Arc::new(DashMap::new()),
+            obs: Arc::new(ObsTracker::new()),
         }
     }
 
@@ -70,7 +75,8 @@ impl ChannelHub {
         // Start the global event forwarder if we have a kernel with an event bus.
         if let Some(coord) = kernel.upgrade() {
             if let Some(bus) = coord.event_bus() {
-                self.start_event_forwarder(bus, token.child_token()).await;
+                self.start_event_forwarder(bus, token.child_token(), kernel.clone())
+                    .await;
             }
         }
 
@@ -127,6 +133,7 @@ impl ChannelHub {
         let adapter_proc = Arc::clone(&adapter);
         let name_proc = name.clone();
         let config_proc = config.clone();
+        let obs_proc = Arc::clone(&self.obs);
 
         // Spawn the message processing loop
         let proc_handle = tokio::spawn(async move {
@@ -158,6 +165,7 @@ impl ChannelHub {
                             &store,
                             coord,
                             msg.clone(),
+                            &obs_proc,
                         ).await {
                             Ok(Some(reply_text)) => {
                                 let chat_id = msg.external_chat_id.clone();
@@ -210,17 +218,27 @@ impl ChannelHub {
         &self,
         event_bus: Arc<crate::comms::EventBus>,
         token: CancellationToken,
+        kernel: std::sync::Weak<Kernel>,
     ) {
         let store = Arc::clone(&self.store);
         let instances = Arc::clone(&self.instances);
+        let obs = Arc::clone(&self.obs);
 
         tokio::spawn(async move {
             let mut rx = event_bus.subscribe_all();
+            let mut watchdog = tokio::time::interval(WATCHDOG_SWEEP_INTERVAL);
+            watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
             loop {
                 tokio::select! {
                     biased;
                     () = token.cancelled() => break,
+                    _ = watchdog.tick() => {
+                        // Kernel gone = shutting down; nothing to settle.
+                        if let Some(kernel) = kernel.upgrade() {
+                            obs.sweep_dead_sessions(|sid| kernel.is_session_running(sid)).await;
+                        }
+                    }
                     Some((session_id, envelope)) = rx.recv() => {
                         let routing = match store.find_routing_by_session(&session_id).await {
                             Ok(Some(r)) => r,
@@ -231,24 +249,54 @@ impl ChannelHub {
                             }
                         };
 
-                        let Some(instance) = instances.get(&routing.channel_name) else { continue };
-                        let adapter = Arc::clone(&instance.adapter);
+                        let (adapter, observability) = {
+                            let Some(instance) = instances.get(&routing.channel_name) else { continue };
+                            (Arc::clone(&instance.adapter), instance.config.observability)
+                        };
+                        let supports_cards = adapter.supports_status_card();
 
+                        // Observability first: cheap state updates + throttled
+                        // in-place PATCHes (design: feishu-channel-observability).
+                        if observability {
+                            obs.handle_event(
+                                &adapter,
+                                &session_id,
+                                &routing.external_chat_id,
+                                routing.reply_msg_id.as_deref(),
+                                &envelope.event,
+                            ).await;
+                        }
+
+                        // Content replies (unchanged behavior). Sent inline
+                        // (not spawned) so the final reply lands before the
+                        // subsequent `Stopped` settlement reacts on it.
                         match envelope.event {
-                            Event::Model(ModelEvent::Request { .. }) => {
-                                let chat_id = routing.external_chat_id.clone();
-                                tokio::spawn(async move {
-                                    let _ = adapter.send_typing(&chat_id).await;
-                                });
+                            // Typing indicator as the fallback progress
+                            // signal on platforms without status cards
+                            // (or when observability is disabled).
+                            Event::Model(ModelEvent::Request { .. })
+                                if !supports_cards || !observability =>
+                            {
+                                let _ = adapter.send_typing(&routing.external_chat_id).await;
                             }
                             Event::Model(ModelEvent::End { content, .. }) => {
                                 let text = super::blocks_to_text(&content);
                                 if !text.is_empty() {
-                                    Self::spawn_reply(adapter, routing, text);
+                                    let blocks = vec![ContentBlock::Text { text }];
+                                    match adapter.send_message(
+                                        &routing.external_chat_id,
+                                        blocks,
+                                        routing.reply_msg_id.as_deref(),
+                                    ).await {
+                                        Ok(Some(msg_id)) if observability => {
+                                            obs.record_content_msg(&session_id, msg_id);
+                                        }
+                                        Ok(_) => {}
+                                        Err(e) => {
+                                            error!(error = %e, "failed to send reply to platform");
+                                        }
+                                    }
                                 }
-                            }
-                            Event::Model(ModelEvent::Error { error, .. }) => {
-                                Self::spawn_reply(adapter, routing, format!("Error: {error}"));
                             }
                             _ => {}
                         }
@@ -257,24 +305,6 @@ impl ChannelHub {
             }
 
             info!("channel event forwarder exited");
-        });
-    }
-
-    fn spawn_reply(
-        adapter: Arc<dyn PlatformAdapter>,
-        routing: SessionRouting,
-        text: impl Into<String>,
-    ) {
-        let chat_id = routing.external_chat_id;
-        let reply_msg_id = routing.reply_msg_id;
-        let blocks = vec![ContentBlock::Text { text: text.into() }];
-        tokio::spawn(async move {
-            if let Err(e) = adapter
-                .send_message(&chat_id, blocks, reply_msg_id.as_deref())
-                .await
-            {
-                error!(error = %e, "failed to send reply to platform");
-            }
         });
     }
 
@@ -331,6 +361,7 @@ async fn handle_incoming_message(
     store: &Arc<dyn ChannelStore>,
     kernel: Arc<Kernel>,
     msg: ChannelMessage,
+    obs: &Arc<ObsTracker>,
 ) -> Result<Option<String>> {
     let chat_id = msg.external_chat_id.clone();
     let reply_msg_id = reply_anchor(&msg, config.reply_in_thread);
@@ -363,6 +394,7 @@ async fn handle_incoming_message(
                 reply_msg_id.as_deref(),
             )
             .await?;
+            record_receipt(config, obs, &sid, &msg);
             kernel.send_steer(&sid, vec![ContentBlock::Text { text }]);
             Ok(None)
         }
@@ -376,6 +408,7 @@ async fn handle_incoming_message(
                 reply_msg_id.as_deref(),
             )
             .await?;
+            record_receipt(config, obs, &sid, &msg);
             kernel
                 .send_message(&sid, vec![ContentBlock::Text { text }])
                 .await?;
@@ -500,9 +533,28 @@ async fn handle_incoming_message(
                 reply_msg_id.as_deref(),
             )
             .await?;
+            record_receipt(config, obs, &sid, &msg);
             kernel.send_steer(&sid, msg.content);
             Ok(None)
         }
+    }
+}
+
+/// Record the ack reaction of a user message for the observability
+/// reaction state machine (no-op when observability is disabled or the
+/// platform provided no receipt).
+fn record_receipt(
+    config: &ChannelConfig,
+    obs: &ObsTracker,
+    session_id: &SessionId,
+    msg: &ChannelMessage,
+) {
+    if !config.observability {
+        return;
+    }
+    if let (Some(msg_id), Some(reaction_id)) = (&msg.external_message_id, &msg.receipt_reaction_id)
+    {
+        obs.record_receipt(session_id, msg_id.clone(), reaction_id.clone());
     }
 }
 

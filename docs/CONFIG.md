@@ -209,6 +209,7 @@ app_secret = "..."
 | `require_mention` | boolean | 是否需要 @ 触发 | `true` |
 | `reply_in_thread` | boolean | 群聊中回复是否锚定到触发消息的 thread（Feishu 话题回复，Telegram 引用回复）；私聊不受影响 | `false` |
 | `auto_approve_level` | string | 通道级别自动批准：`safe`/`caution`/`dangerous` | `safe` |
+| `observability` | boolean | 运行可观测性（状态卡片 + reaction 状态机）；关闭后退回"收到确认 + 最终回复"的旧行为 | `true` |
 
 **Platform 配置：**
 

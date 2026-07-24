@@ -228,10 +228,6 @@ pub enum ModelEvent {
         message_id: MessageId,
         content: Vec<crate::types::ContentBlock>,
     },
-    Error {
-        message_id: MessageId,
-        error: String,
-    },
     Fallback {
         message_id: MessageId,
         from: String,

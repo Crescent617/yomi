@@ -39,12 +39,12 @@ impl PlatformAdapter for MockAdapter {
         external_chat_id: &str,
         blocks: Vec<ContentBlock>,
         _reply_msg_id: Option<&str>,
-    ) -> std::result::Result<(), crate::channels::ChannelError> {
+    ) -> std::result::Result<Option<String>, crate::channels::ChannelError> {
         self.outgoing
             .lock()
             .await
             .push((external_chat_id.to_string(), blocks));
-        Ok(())
+        Ok(None)
     }
 }
 
@@ -210,6 +210,7 @@ async fn test_start_and_shutdown() {
             require_mention: false,
             reply_in_thread: false,
             auto_approve_level: crate::permission::Level::Safe,
+            observability: true,
         },
         ChannelConfig {
             name: "mock2".to_string(),
@@ -224,6 +225,7 @@ async fn test_start_and_shutdown() {
             require_mention: false,
             reply_in_thread: false,
             auto_approve_level: crate::permission::Level::Safe,
+            observability: true,
         },
     ];
 
@@ -481,6 +483,7 @@ fn channel_message(
         thread_id: thread_id.map(str::to_string),
         root_id: None,
         is_group,
+        receipt_reaction_id: None,
     }
 }
 

@@ -131,13 +131,6 @@ impl Model {
                     }
                     self.state.should_redraw = true;
                 }
-                Event::Model(kernel::event::ModelEvent::Error { error, .. }) => {
-                    // Model-level error: stop streaming and show error
-                    self.handle_streaming_error(
-                        StreamingStatus::Failed,
-                        format!("Model error: {error}"),
-                    );
-                }
                 Event::Model(kernel::event::ModelEvent::Request { .. }) => {
                     self.start_streaming();
                 }

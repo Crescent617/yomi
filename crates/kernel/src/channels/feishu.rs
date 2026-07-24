@@ -47,6 +47,7 @@ pub struct FeishuAdapter {
     app_id: String,
     app_secret: String,
     client: Client,
+    base_url: String,
     token_cache: Mutex<Option<TokenCache>>,
     bot_open_id: tokio::sync::Mutex<Option<String>>,
     require_mention: bool,
@@ -61,10 +62,18 @@ impl FeishuAdapter {
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .expect("reqwest client build"),
+            base_url: FEISHU_BASE_URL.to_string(),
             token_cache: Mutex::new(None),
             bot_open_id: tokio::sync::Mutex::new(None),
             require_mention,
         }
+    }
+
+    /// Point the adapter at a different API base URL (tests only).
+    #[cfg(test)]
+    fn with_base_url(mut self, base_url: String) -> Self {
+        self.base_url = base_url;
+        self
     }
 
     async fn ensure_bot_open_id(&self, token: &str) -> Option<String> {
@@ -79,7 +88,7 @@ impl FeishuAdapter {
         // Slow path: fetch from API (no lock held).
         let resp = self
             .client
-            .get(format!("{FEISHU_BASE_URL}/open-apis/bot/v3/info"))
+            .get(format!("{}/open-apis/bot/v3/info", self.base_url))
             .header("Authorization", format!("Bearer {token}"))
             .send()
             .await
@@ -108,7 +117,8 @@ impl FeishuAdapter {
         let resp: TokenResp = self
             .client
             .post(format!(
-                "{FEISHU_BASE_URL}/open-apis/auth/v3/tenant_access_token/internal"
+                "{}/open-apis/auth/v3/tenant_access_token/internal",
+                self.base_url
             ))
             .json(&json!({ "app_id": self.app_id, "app_secret": self.app_secret }))
             .send()
@@ -151,9 +161,25 @@ impl FeishuAdapter {
         url: &str,
         body: serde_json::Value,
     ) -> Result<serde_json::Value, ChannelError> {
-        let resp = self
-            .client
-            .post(url)
+        self.api_json(self.client.post(url), token, body).await
+    }
+
+    async fn api_patch(
+        &self,
+        token: &str,
+        url: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ChannelError> {
+        self.api_json(self.client.patch(url), token, body).await
+    }
+
+    async fn api_json(
+        &self,
+        builder: reqwest::RequestBuilder,
+        token: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ChannelError> {
+        let resp = builder
             .header("Authorization", format!("Bearer {token}"))
             .json(&body)
             .send()
@@ -164,6 +190,22 @@ impl FeishuAdapter {
             .map_err(|e| api_err("API parse", e))?;
 
         check_api_resp(resp)
+    }
+
+    async fn api_delete(&self, token: &str, url: &str) -> Result<(), ChannelError> {
+        let resp = self
+            .client
+            .delete(url)
+            .header("Authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .map_err(|e| api_err("API request", e))?
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| api_err("API parse", e))?;
+
+        check_api_resp(resp)?;
+        Ok(())
     }
 
     async fn upload(
@@ -189,6 +231,7 @@ impl FeishuAdapter {
 
     // ── Send helpers ─────────────────────────────────────────────────
 
+    /// Send or reply; returns the platform message ID when available.
     async fn send_or_reply(
         &self,
         token: &str,
@@ -196,7 +239,7 @@ impl FeishuAdapter {
         reply_msg_id: Option<&str>,
         content: &str,
         msg_type: &str,
-    ) -> Result<(), ChannelError> {
+    ) -> Result<Option<String>, ChannelError> {
         if let Some(msg_id) = reply_msg_id {
             self.reply_msg(token, msg_id, content, msg_type).await
         } else {
@@ -210,16 +253,18 @@ impl FeishuAdapter {
         chat_id: &str,
         content: &str,
         msg_type: &str,
-    ) -> Result<(), ChannelError> {
-        self.api_post(
-            token,
-            &format!(
-                "{FEISHU_BASE_URL}/open-apis/im/v1/messages?receive_id_type={RECEIVE_ID_TYPE}"
-            ),
-            json!({ "receive_id": chat_id, "content": content, "msg_type": msg_type }),
-        )
-        .await?;
-        Ok(())
+    ) -> Result<Option<String>, ChannelError> {
+        let resp = self
+            .api_post(
+                token,
+                &format!(
+                    "{}/open-apis/im/v1/messages?receive_id_type={RECEIVE_ID_TYPE}",
+                    self.base_url
+                ),
+                json!({ "receive_id": chat_id, "content": content, "msg_type": msg_type }),
+            )
+            .await?;
+        Ok(resp_data_str(&resp, "message_id"))
     }
 
     async fn reply_msg(
@@ -228,18 +273,19 @@ impl FeishuAdapter {
         msg_id: &str,
         content: &str,
         msg_type: &str,
-    ) -> Result<(), ChannelError> {
-        self.api_post(
-            token,
-            &format!("{FEISHU_BASE_URL}/open-apis/im/v1/messages/{msg_id}/reply"),
-            json!({
-                "content": content,
-                "msg_type": msg_type,
-                "reply_in_thread": true,
-            }),
-        )
-        .await?;
-        Ok(())
+    ) -> Result<Option<String>, ChannelError> {
+        let resp = self
+            .api_post(
+                token,
+                &format!("{}/open-apis/im/v1/messages/{msg_id}/reply", self.base_url),
+                json!({
+                    "content": content,
+                    "msg_type": msg_type,
+                    "reply_in_thread": true,
+                }),
+            )
+            .await?;
+        Ok(resp_data_str(&resp, "message_id"))
     }
 
     // ── WebSocket helpers ───────────────────────────────────────────
@@ -247,7 +293,7 @@ impl FeishuAdapter {
     async fn ws_endpoint(&self) -> Result<(String, i32), ChannelError> {
         let resp = self
             .client
-            .post(format!("{FEISHU_BASE_URL}/callback/ws/endpoint"))
+            .post(format!("{}/callback/ws/endpoint", self.base_url))
             .json(&json!({ "AppID": self.app_id, "AppSecret": self.app_secret }))
             .send()
             .await
@@ -395,12 +441,12 @@ impl PlatformAdapter for FeishuAdapter {
         external_chat_id: &str,
         blocks: Vec<ContentBlock>,
         reply_msg_id: Option<&str>,
-    ) -> Result<(), ChannelError> {
+    ) -> Result<Option<String>, ChannelError> {
         const MAX_MD: usize = 30_000;
         let token = self.get_token().await?;
         let text = super::blocks_to_text(&blocks);
         if text.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
         let text = if text.len() > MAX_MD {
             let split = text
@@ -422,6 +468,35 @@ impl PlatformAdapter for FeishuAdapter {
             "interactive",
         )
         .await
+    }
+
+    async fn send_card(
+        &self,
+        external_chat_id: &str,
+        card_json: &str,
+        reply_msg_id: Option<&str>,
+    ) -> Result<Option<String>, ChannelError> {
+        let token = self.get_token().await?;
+        self.send_or_reply(
+            &token,
+            external_chat_id,
+            reply_msg_id,
+            card_json,
+            "interactive",
+        )
+        .await
+    }
+
+    /// refer: <https://open.feishu.cn/document/server-docs/im-v1/message-card/patch>
+    async fn update_card(&self, message_id: &str, card_json: &str) -> Result<(), ChannelError> {
+        let token = self.get_token().await?;
+        self.api_patch(
+            &token,
+            &format!("{}/open-apis/im/v1/messages/{message_id}", self.base_url),
+            json!({ "content": card_json }),
+        )
+        .await?;
+        Ok(())
     }
 
     async fn send_files(
@@ -453,20 +528,22 @@ impl PlatformAdapter for FeishuAdapter {
                 .ok_or_else(|| api_err("no upload key", ""))?;
             let content = json!({ key_field: key }).to_string();
 
-            self.send_or_reply(&token, external_chat_id, reply_msg_id, &content, msg_type)
+            let _ = self
+                .send_or_reply(&token, external_chat_id, reply_msg_id, &content, msg_type)
                 .await?;
 
             if let Some(caption) = caption {
                 if !caption.is_empty() {
                     let content = Self::build_card(caption);
-                    self.send_or_reply(
-                        &token,
-                        external_chat_id,
-                        reply_msg_id,
-                        &content,
-                        "interactive",
-                    )
-                    .await?;
+                    let _ = self
+                        .send_or_reply(
+                            &token,
+                            external_chat_id,
+                            reply_msg_id,
+                            &content,
+                            "interactive",
+                        )
+                        .await?;
                 }
             }
         }
@@ -478,22 +555,40 @@ impl PlatformAdapter for FeishuAdapter {
         &self,
         _external_chat_id: &str,
         message_id: &str,
-        _emoji: &str,
+        emoji: &str,
+    ) -> Result<Option<String>, ChannelError> {
+        let token = self.get_token().await?;
+        let url = format!(
+            "{}/open-apis/im/v1/messages/{message_id}/reactions",
+            self.base_url
+        );
+
+        let resp = self
+            .api_post(
+                &token,
+                &url,
+                json!({ "reaction_type": { "emoji_type": emoji } }),
+            )
+            .await?;
+
+        Ok(resp_data_str(&resp, "reaction_id"))
+    }
+
+    async fn remove_reaction(
+        &self,
+        message_id: &str,
+        reaction_id: &str,
     ) -> Result<(), ChannelError> {
         let token = self.get_token().await?;
-        let url = format!("{FEISHU_BASE_URL}/open-apis/im/v1/messages/{message_id}/reactions");
+        let url = format!(
+            "{}/open-apis/im/v1/messages/{message_id}/reactions/{reaction_id}",
+            self.base_url
+        );
+        self.api_delete(&token, &url).await
+    }
 
-        info!(message_id, "Feishu sending reaction");
-
-        self.api_post(
-            &token,
-            &url,
-            json!({ "reaction_type": { "emoji_type": "OneSecond" } }),
-        )
-        .await?;
-
-        info!(message_id, "Feishu reaction sent");
-        Ok(())
+    fn supports_status_card(&self) -> bool {
+        true
     }
 }
 
@@ -578,9 +673,13 @@ impl FeishuAdapter {
         }
     }
 
-    async fn add_reaction_or_warn(&self, msg_id: &str) {
-        if let Err(e) = self.send_reaction("", msg_id, "").await {
-            warn!(error = %e, "reaction failed");
+    async fn add_reaction_or_warn(&self, msg_id: &str) -> Option<String> {
+        match self.send_reaction("", msg_id, "OneSecond").await {
+            Ok(reaction_id) => reaction_id,
+            Err(e) => {
+                warn!(error = %e, "reaction failed");
+                None
+            }
         }
     }
 
@@ -696,6 +795,12 @@ impl FeishuAdapter {
         let raw_text =
             strip_bot_mention(text, message["mentions"].as_array(), bot_open_id.as_deref());
 
+        let receipt_reaction_id = if !self.require_mention || is_mention {
+            self.add_reaction_or_warn(&msg_id).await
+        } else {
+            None
+        };
+
         let channel_msg = ChannelMessage {
             external_chat_id: chat_id.to_string(),
             external_user_id: user_id.to_string(),
@@ -706,15 +811,13 @@ impl FeishuAdapter {
             thread_id,
             root_id,
             is_group: chat_type == "group",
+            receipt_reaction_id,
         };
 
         if incoming.send(channel_msg).await.is_err() {
             return Err(ChannelError::Platform("incoming closed".to_string()));
         }
 
-        if !self.require_mention || is_mention {
-            self.add_reaction_or_warn(&msg_id).await;
-        }
         Ok(Some(msg_id))
     }
 }
@@ -790,6 +893,11 @@ fn api_err(action: &str, e: impl std::fmt::Display) -> ChannelError {
     } else {
         ChannelError::Platform(format!("{action}: {e}"))
     }
+}
+
+/// Extract `data.<key>` as an owned string from a Feishu API response.
+fn resp_data_str(resp: &serde_json::Value, key: &str) -> Option<String> {
+    resp["data"][key].as_str().map(str::to_string)
 }
 
 fn check_api_resp(resp: serde_json::Value) -> Result<serde_json::Value, ChannelError> {

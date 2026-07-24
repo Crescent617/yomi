@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- channel 运行可观测性（`observability` 配置开关，默认开启）：任务运行期间以一张紧凑卡片（400px 宽、12px 字号、英文文案）呈现进度，首个工具调用时才发卡（纯问答不产卡），标题实时区分 🧠 Thinking / ✍️ Typing / 🔧 工具 / 🔁 重试 / 🗜 压缩 / 🔀 降级等阶段，正文单行汇总耗时、工具总数与 token 用量（1.5s 节流原地更新）；`Lifecycle(Stopped)` 结算为终态（绿=✅ Done / 红=❌ Failed / 灰=⏹ Stopped / 灰=⏰ Timed out，watchdog 每分钟查询 session 活性兜底崩溃/panic/失联，长工具调用不误判），首个工具前失败的运行也会直接补发终态红卡。运行期间收到的用户消息 ack reaction（`OneSecond`）在结算时统一替换为 `DONE`/`CrossMark`，并给最后一条内容回复打上同样 reaction。Feishu 适配器新增 `send_card`/`update_card`/`remove_reaction`，`send_reaction` 修复为透传 emoji 并返回 reaction_id；无卡片能力的平台（Telegram）保留 typing 指示作为进度回退。
+
+### Removed
+- 删除从未有发射方的 `ModelEvent::Error` 死事件及其在 hub/TUI 的死消费分支（agent 错误统一走 `AgentEvent::Error`）。
+
 ## [0.6.20] - 2026-07-23
 
 ### Fixed
