@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] - 2026-07-24
 
 ### Added
 - channel 状态卡运行中新增两行实时信息（≤100 字符截断）：last tool（`🔧 工具名 · 主参数摘要`）与 whisper（`💬` 灰色的当前输出文本尾部，流式累积、新模型调用清空、`End` 用完整文本自愈，3s 节流 PATCH 下呈打字感）。
