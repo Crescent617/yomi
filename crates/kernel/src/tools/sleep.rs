@@ -4,9 +4,10 @@
 //! Unlike the reminder tool, this blocks synchronously and returns when the
 //! delay has elapsed.
 //!
-//! When an input bus is available, the sleep wakes up early if new input
-//! (e.g. a user message or a steer message) arrives for the current session,
-//! so the agent can react promptly instead of sleeping through it.
+//! When an input bus is available, the sleep wakes up early if a steer
+//! message (e.g. a background shell result, reminder, or subagent message)
+//! arrives for the current session, so the agent can react promptly instead
+//! of sleeping through it.
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -35,35 +36,13 @@ impl SleepTool {
     }
 }
 
-/// Returns `true` for inputs that should wake a sleeping agent early.
-///
-/// Excluded:
-/// - `Cancel`: handled deterministically via the cancel token.
-/// - `PermissionResponse` / `AskUserResponse`: directed at specific
-///   subscribers (Checker / AskUserTool), not the agent loop.
+/// Only steer messages wake a sleeping agent early: they carry async results
+/// the agent is typically waiting for (background shell output, reminders,
+/// subagent messages). User input and control signals are left queued in the
+/// mailbox and handled after the sleep; `Cancel` still works via the cancel
+/// token.
 fn should_wake(input: &AgentInput) -> bool {
-    !matches!(
-        input,
-        AgentInput::Cancel
-            | AgentInput::PermissionResponse { .. }
-            | AgentInput::AskUserResponse { .. }
-    )
-}
-
-/// Human-readable kind of an input, used in the early-wake message.
-fn describe_input(input: &AgentInput) -> &'static str {
-    match input {
-        AgentInput::User { .. } => "user message",
-        AgentInput::Continue => "continue signal",
-        AgentInput::Cancel => "cancel request",
-        AgentInput::Steer(_) => "steer message",
-        AgentInput::PermissionResponse { .. } => "permission response",
-        AgentInput::Shutdown => "shutdown signal",
-        AgentInput::Compact => "compact request",
-        AgentInput::Rewind { .. } => "rewind request",
-        AgentInput::Clear => "clear request",
-        AgentInput::AskUserResponse { .. } => "ask_user response",
-    }
+    matches!(input, AgentInput::Steer(_))
 }
 
 #[async_trait]
@@ -73,7 +52,7 @@ impl Tool for SleepTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Sleep for a specified number of seconds. Use when an external process needs time to settle or requires waiting. Wakes up early if new input arrives for the current session."
+        "Sleep for a specified number of seconds. Use when an external process needs time to settle or requires waiting. Wakes up early if a steer message (e.g. background task result) arrives for the current session."
     }
 
     fn schema(&self) -> Value {
@@ -106,10 +85,9 @@ impl Tool for SleepTool {
         // missing an input that arrives right as the sleep starts.
         // The subscription is a fan-out peek: messages are still queued to
         // the session mailbox by the conductor and processed after we return.
-        let mut subscriber = self
-            .input_bus
-            .as_ref()
-            .map(|bus| bus.subscribe_filtered(SessionId::from(ctx.session_id.clone()), should_wake));
+        let mut subscriber = self.input_bus.as_ref().map(|bus| {
+            bus.subscribe_filtered(SessionId::from(ctx.session_id.clone()), should_wake)
+        });
 
         let start = tokio::time::Instant::now();
         tokio::select! {
@@ -124,21 +102,18 @@ impl Tool for SleepTool {
             }
             input = recv_wake(&mut subscriber) => {
                 let elapsed = start.elapsed().as_secs();
+                debug_assert!(matches!(input, AgentInput::Steer(_)));
                 Ok(ToolOutput::text(format!(
-                    "Sleep interrupted after {elapsed} seconds (planned {delay} seconds): new {} arrived for this session. It will be processed next.",
-                    describe_input(&input)
+                    "Sleep interrupted after {elapsed} seconds (planned {delay} seconds): a steer message arrived for this session. It will be processed next."
                 )))
             }
         }
     }
 }
 
-/// Wait for a wake-worthy input. Resolves to `AgentInput::Continue` as a
-/// placeholder when there is no subscriber (the branch then never completes
-/// because the inner future pends forever).
-async fn recv_wake(
-    subscriber: &mut Option<crate::comms::InputBusSubscriber>,
-) -> AgentInput {
+/// Wait for a wake-worthy input. Pends forever when there is no subscriber
+/// or the bus closes, so the timer/cancel branches decide the outcome.
+async fn recv_wake(subscriber: &mut Option<crate::comms::InputBusSubscriber>) -> AgentInput {
     match subscriber {
         Some(sub) => match sub.recv().await {
             Some((_, input)) => input,
