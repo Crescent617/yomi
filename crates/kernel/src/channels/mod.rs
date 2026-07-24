@@ -71,10 +71,19 @@ pub struct ChannelConfig {
     pub reply_in_thread: bool,
     #[serde(default)]
     pub auto_approve_level: Level,
-    /// Status card + reaction state machine for run observability.
+    /// Status card + run receipts for run observability.
     /// When disabled, channels behave as before (ack reaction + final reply).
     #[serde(default = "default_observability")]
     pub observability: bool,
+    /// Attach the run trace (tool calls + intermediate texts) to the final
+    /// reply bubble — a collapsible panel on card-capable platforms
+    /// (Feishu, requires client V7.9+), plain-text lines elsewhere.
+    #[serde(default = "default_tool_trace")]
+    pub tool_trace: bool,
+}
+
+fn default_tool_trace() -> bool {
+    true
 }
 
 fn default_observability() -> bool {
@@ -101,6 +110,7 @@ impl Default for ChannelConfig {
             reply_in_thread: false,
             auto_approve_level: Level::Safe,
             observability: true,
+            tool_trace: true,
         }
     }
 }
@@ -132,10 +142,6 @@ pub struct ChannelMessage {
     pub root_id: Option<String>,
     /// Whether the message was sent in a group chat (vs. private/p2p).
     pub is_group: bool,
-    /// Reaction ID of the ack reaction the adapter added on receipt
-    /// (e.g. Feishu `OneSecond`), used by the observability reaction state
-    /// machine to replace it on run completion.
-    pub receipt_reaction_id: Option<String>,
 }
 
 /// Runtime info about a channel, for UI listing
@@ -263,17 +269,6 @@ pub trait PlatformAdapter: Send + Sync {
         Ok(None)
     }
 
-    /// Remove a reaction previously added by the bot.
-    ///
-    /// Default implementation does nothing for platforms that don't support it.
-    async fn remove_reaction(
-        &self,
-        _message_id: &str,
-        _reaction_id: &str,
-    ) -> Result<(), ChannelError> {
-        Ok(())
-    }
-
     /// Send a typing action to indicate the bot is processing.
     ///
     /// Default implementation does nothing for platforms that don't support it.
@@ -359,6 +354,8 @@ pub fn blocks_to_text(blocks: &[ContentBlock]) -> String {
 pub mod store;
 
 pub(crate) mod obs;
+
+pub(crate) mod reply;
 
 pub mod hub;
 

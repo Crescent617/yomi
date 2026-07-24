@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- channel 状态卡运行中新增两行实时信息（≤100 字符截断）：last tool（`🔧 工具名 · 主参数摘要`）与 whisper（`💬` 灰色的当前输出文本尾部，流式累积、新模型调用清空、`End` 用完整文本自愈，3s 节流 PATCH 下呈打字感）。
+- 最终回复卡附可折叠运行轨迹面板（Feishu `collapsible_panel`，默认收起，需客户端 V7.9+；无卡平台为纯文本行）：工具成败图标、参数摘要（按工具取主参数；短参数内联，长/多行参数保留自带换行以 `↳` 续行，最多 3 行 × 100 字符）、耗时；agent loop 中间轮次文本降级为面板内灰色旁白。新增 `tool_trace` 配置开关（默认开启）。
+
+### Changed
+- channel 回复改为**自适应单/双消息**：run 期间用户未发新消息时，状态卡在 `Lifecycle(Stopped)` 原地 morph 为最终回复卡（无 header，正文 = 最后一个模型文本 + 轨迹面板），一段 run 一条消息；**run 期间用户发了新消息（平台消息，命令除外）时**，状态卡冻结为终态凭据留在上方（终态 header + 统计行），最终回复作为新消息沉底（锚定最新用户消息），避免答案出现在用户消息之上。异常结束（Failed/MaxIterations/watchdog 超时）以正文提示行呈现；结算发送失败或状态缺失时回退为普通消息，不丢内容。
+- 状态卡开卡时机由"首个工具"提前到"首个工具**或首个模型输出 chunk（文本或 thinking）**"：模型一开始响应卡片就到位（reasoning 模型长 thinking 期间标题为 `💭 Thinking…`），纯问答 run 也有状态卡且中途输出全程可见。
+
+### Removed
+- 结算时不再发送任何 reaction：移除 0.6.21 引入的用户消息 `OneSecond → DONE/CrossMark` 切换与回复卡完成 reaction（`OneSecond` 收到确认保留）；连带删除已无调用方的 `remove_reaction`（trait 默认方法 + Feishu 实现）与 `ChannelMessage.receipt_reaction_id` 字段。
+
+### Fixed
+- channel forwarder 订阅改为过滤掉 `ToolCallDelta` 事件：大文件写入等场景会产生成百上千个参数 delta，打满 forwarder 的 256 事件缓冲（总线满即丢），导致文本 chunk/End 被静默丢弃（whisper 为空、回复文本丢失）。
+- Telegram 适配器补充消息长度截断（4000 字符上限，unicode 安全 + 截断标记）：此前超过 4096 字符的消息整条发送失败丢失，追加运行轨迹后更易超限。
+
 ## [0.6.22] - 2026-07-24
 
 ### Added

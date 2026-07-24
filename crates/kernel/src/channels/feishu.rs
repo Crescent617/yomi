@@ -192,22 +192,6 @@ impl FeishuAdapter {
         check_api_resp(resp)
     }
 
-    async fn api_delete(&self, token: &str, url: &str) -> Result<(), ChannelError> {
-        let resp = self
-            .client
-            .delete(url)
-            .header("Authorization", format!("Bearer {token}"))
-            .send()
-            .await
-            .map_err(|e| api_err("API request", e))?
-            .json::<serde_json::Value>()
-            .await
-            .map_err(|e| api_err("API parse", e))?;
-
-        check_api_resp(resp)?;
-        Ok(())
-    }
-
     async fn upload(
         &self,
         token: &str,
@@ -574,19 +558,6 @@ impl PlatformAdapter for FeishuAdapter {
         Ok(resp_data_str(&resp, "reaction_id"))
     }
 
-    async fn remove_reaction(
-        &self,
-        message_id: &str,
-        reaction_id: &str,
-    ) -> Result<(), ChannelError> {
-        let token = self.get_token().await?;
-        let url = format!(
-            "{}/open-apis/im/v1/messages/{message_id}/reactions/{reaction_id}",
-            self.base_url
-        );
-        self.api_delete(&token, &url).await
-    }
-
     fn supports_status_card(&self) -> bool {
         true
     }
@@ -673,13 +644,9 @@ impl FeishuAdapter {
         }
     }
 
-    async fn add_reaction_or_warn(&self, msg_id: &str) -> Option<String> {
-        match self.send_reaction("", msg_id, "OneSecond").await {
-            Ok(reaction_id) => reaction_id,
-            Err(e) => {
-                warn!(error = %e, "reaction failed");
-                None
-            }
+    async fn add_reaction_or_warn(&self, msg_id: &str) {
+        if let Err(e) = self.send_reaction("", msg_id, "OneSecond").await {
+            warn!(error = %e, "reaction failed");
         }
     }
 
@@ -795,11 +762,10 @@ impl FeishuAdapter {
         let raw_text =
             strip_bot_mention(text, message["mentions"].as_array(), bot_open_id.as_deref());
 
-        let receipt_reaction_id = if !self.require_mention || is_mention {
-            self.add_reaction_or_warn(&msg_id).await
-        } else {
-            None
-        };
+        // Ack reaction on receipt (`OneSecond`); best-effort.
+        if !self.require_mention || is_mention {
+            self.add_reaction_or_warn(&msg_id).await;
+        }
 
         let channel_msg = ChannelMessage {
             external_chat_id: chat_id.to_string(),
@@ -811,7 +777,6 @@ impl FeishuAdapter {
             thread_id,
             root_id,
             is_group: chat_type == "group",
-            receipt_reaction_id,
         };
 
         if incoming.send(channel_msg).await.is_err() {

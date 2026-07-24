@@ -219,7 +219,12 @@
             "default": "safe"
           },
           "observability": {
-            "description": "Status card + reaction state machine for run observability. When disabled, channels behave as before (ack reaction + final reply).",
+            "description": "Status card + run receipts for run observability. When disabled, channels behave as before (ack reaction + final reply).",
+            "type": "boolean",
+            "default": true
+          },
+          "tool_trace": {
+            "description": "Attach the run trace (tool calls + intermediate texts) to the final reply bubble: a collapsible panel on card-capable platforms (Feishu, requires client V7.9+), plain-text lines elsewhere. When disabled, the final reply is the bare text.",
             "type": "boolean",
             "default": true
           }

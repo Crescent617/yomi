@@ -1,13 +1,20 @@
-//! Run observability for external channels: status card + reaction state machine.
+//! Run observability for external channels: status card + run receipts.
 //!
 //! A "run" is bracketed by `AgentEvent::Lifecycle(Running)` and
 //! `AgentEvent::Lifecycle(Stopped)` (see `docs/design/feishu-channel-observability.md`).
-//! Run state is tracked from `Running`, but the status card is only
-//! materialized on the first `ToolEvent::Start` — short no-tool runs never
-//! show a card. Once sent, the card is updated in place; on settlement it
-//! freezes into a terminal style and every user message received during the
-//! run has its ack reaction replaced, while the last content reply gets a
-//! completion reaction.
+//! Run state is tracked from `Running`, and the status card is materialized
+//! on the first `ToolEvent::Start` or the first model output chunk (text or
+//! thinking) — since the card morphs into the final reply on settlement,
+//! every run is exactly one message (two when the user posted mid-run: the
+//! card freezes as a terminal receipt and the reply lands at the bottom).
+//! While running, the card body shows the stats line plus the last tool
+//! call and a live tail of the assistant's current text output ("whisper").
+//! On settlement the card **morphs** into the final reply (last text +
+//! run-trace panel, no header; abnormal endings get a notice line in the
+//! content). Runs without a reply (crash / lost events) freeze into a
+//! terminal header style instead. User messages received during the run are
+//! recorded as receipts — used only for the mid-run post detection (morph
+//! vs. new-message settle); no reactions are sent at settlement.
 
 use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolEvent};
 use crate::types::SessionId;
@@ -17,18 +24,21 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::warn;
 
+use super::reply::{self, FinalReply};
 use super::PlatformAdapter;
 
 /// Minimum interval between two in-place card updates (low-frequency updates).
-const PATCH_MIN_INTERVAL: Duration = Duration::from_millis(1500);
+const PATCH_MIN_INTERVAL: Duration = Duration::from_secs(3);
 /// Error summary truncation on terminal cards.
 const ERROR_MAX_CHARS: usize = 200;
+/// Whisper buffer cap (tail kept); bounds memory for long streamed answers.
+const WHISPER_BUFFER_CHARS: usize = 200;
+/// Max length (chars, ellipsis included) for dynamic text lines on the
+/// status card body (whisper, last tool).
+const STATUS_TEXT_MAX_CHARS: usize = 100;
 
 const PHASE_THINKING: &str = "💭 Thinking…";
 const PHASE_TYPING: &str = "🐾 Typing…";
-
-const EMOJI_DONE: &str = "DONE";
-const EMOJI_CROSS: &str = "CrossMark";
 
 /// Per-session live status card state.
 struct ObsCardState {
@@ -38,12 +48,19 @@ struct ObsCardState {
     chat_id: String,
     reply_msg_id: Option<String>,
     started_at: Instant,
-    /// Full card title text (icon + phase, e.g. "💭 Thinking…", "🐶 bash…").
+    /// Full card title text (icon + phase, e.g. "💭 Thinking…", "🐹 Bash…").
     phase: String,
     /// Total tool executions (per-tool breakdown is not kept).
     tool_count: u32,
+    /// Last tool call one-liner (`name · arg summary`), from `ToolEvent::Start`.
+    last_tool: Option<String>,
+    /// Live tail of the assistant's in-progress text output ("whisper").
+    whisper: String,
     token_footer: Option<String>,
     last_patch_at: Instant,
+    /// Set when the materialize send failed — no more attempts this run
+    /// (card APIs are best-effort; don't storm a struggling API endpoint).
+    send_failed: bool,
 }
 
 impl ObsCardState {
@@ -57,20 +74,27 @@ impl ObsCardState {
             started_at: now,
             phase: PHASE_THINKING.to_string(),
             tool_count: 0,
+            last_tool: None,
+            whisper: String::new(),
             token_footer: None,
             last_patch_at: now,
+            send_failed: false,
         }
     }
-}
 
-/// Receipts collected during a run: user messages that got an ack reaction,
-/// plus the latest content reply message (reaction target on completion).
-#[derive(Default)]
-pub(crate) struct RunReceipts {
-    /// (`message_id`, ack `reaction_id`) pairs of user messages.
-    items: Vec<(String, String)>,
-    /// Message ID of the most recent content reply sent to the platform.
-    last_content_msg_id: Option<String>,
+    /// Append a streamed text delta to the whisper (tail kept).
+    fn push_whisper(&mut self, delta: &str) {
+        self.whisper.push_str(delta);
+        if self.whisper.chars().count() > WHISPER_BUFFER_CHARS {
+            self.whisper = tail_chars(&self.whisper, WHISPER_BUFFER_CHARS);
+        }
+    }
+
+    /// Replace the whisper with the tail of a complete text (self-heal on
+    /// `ModelEvent::End`, guards against chunk loss on the event bus).
+    fn set_whisper(&mut self, text: &str) {
+        self.whisper = tail_chars(text, WHISPER_BUFFER_CHARS);
+    }
 }
 
 /// Terminal settlement kind.
@@ -85,12 +109,20 @@ enum Settle {
 }
 
 impl Settle {
-    /// Reaction to apply to run receipts; `None` leaves reactions untouched.
-    fn receipt_emoji(&self) -> Option<&'static str> {
+    /// Body notice line for abnormal endings, shown in the morphed card
+    /// content (the card has no header; errors go into the content).
+    /// `None` for completed/cancelled runs.
+    fn notice(&self) -> Option<String> {
         match self {
-            Settle::Completed => Some(EMOJI_DONE),
-            Settle::Failed(_) | Settle::Cancelled | Settle::MaxIterations(_) => Some(EMOJI_CROSS),
-            Settle::Timeout => None,
+            Settle::Completed | Settle::Cancelled => None,
+            Settle::Failed(error) => Some(format!(
+                "❌ **Error**  {}",
+                truncate_chars(error, ERROR_MAX_CHARS)
+            )),
+            Settle::MaxIterations(reached) => {
+                Some(format!("❌ Max iterations reached ({reached})"))
+            }
+            Settle::Timeout => Some("⏰ Session lost (timed out)".to_string()),
         }
     }
 }
@@ -98,7 +130,9 @@ impl Settle {
 /// Tracks per-session observability state and drives the platform adapter.
 pub(crate) struct ObsTracker {
     states: DashMap<SessionId, ObsCardState>,
-    receipts: DashMap<SessionId, RunReceipts>,
+    /// IDs of user messages received during each run (drives the mid-run
+    /// post detection); cleared at settlement.
+    receipts: DashMap<SessionId, Vec<String>>,
     patch_interval: Duration,
 }
 
@@ -119,26 +153,21 @@ impl ObsTracker {
         }
     }
 
-    /// Record the ack reaction of a user message (called when the message is
-    /// routed to a session, before the run starts/continues).
-    pub(crate) fn record_receipt(
-        &self,
-        session_id: &SessionId,
-        message_id: String,
-        reaction_id: String,
-    ) {
+    /// Record a user message routed to a session (before the run
+    /// starts/continues), for the mid-run post detection.
+    pub(crate) fn record_receipt(&self, session_id: &SessionId, message_id: String) {
         self.receipts
             .entry(session_id.clone())
             .or_default()
-            .items
-            .push((message_id, reaction_id));
+            .push(message_id);
     }
 
-    /// Record the message ID of a content reply (reaction target on completion).
-    pub(crate) fn record_content_msg(&self, session_id: &SessionId, message_id: String) {
-        if let Some(mut r) = self.receipts.get_mut(session_id) {
-            r.last_content_msg_id = Some(message_id);
-        }
+    /// Whether the user posted messages mid-run — receipts hold the run's
+    /// trigger message plus any mid-run posts (commands never record
+    /// receipts), so more than one means the reply should land below their
+    /// messages as a new message instead of morphing the status card.
+    pub(crate) fn has_mid_run_posts(&self, session_id: &SessionId) -> bool {
+        self.receipts.get(session_id).is_some_and(|r| r.len() > 1)
     }
 
     /// Feed one session event. Cheap state updates happen on every event;
@@ -157,7 +186,7 @@ impl ObsTracker {
             }) => {
                 // Running fires per turn; only the first one starts tracking.
                 // The card itself is materialized lazily on the first tool
-                // start — no-tool runs never show a status card.
+                // start or the first model output chunk.
                 if self.states.contains_key(session_id) {
                     return;
                 }
@@ -169,22 +198,28 @@ impl ObsTracker {
             Event::Agent(AgentEvent::Lifecycle {
                 state: AgentStatus::Stopped { reason },
             }) => {
-                let settle = match reason {
-                    StopReason::Completed { .. } => Settle::Completed,
-                    StopReason::Cancelled { .. } => Settle::Cancelled,
-                    StopReason::Failed { error } => Settle::Failed(error.clone()),
-                    StopReason::MaxIterations { reached } => Settle::MaxIterations(*reached),
-                };
-                self.settle_card(session_id, &settle).await;
-                if let Some(emoji) = settle.receipt_emoji() {
-                    self.settle_receipts(session_id, emoji, adapter).await;
-                }
+                // Degenerate path: settle without a reply (crash/lost
+                // events). The hub forwarder calls `handle_stopped` with
+                // the buffered reply instead.
+                self.handle_stopped(session_id, reason, None).await;
             }
-            Event::Tool(ToolEvent::Start { tool_name, .. }) => {
+            Event::Tool(ToolEvent::Start {
+                tool_name,
+                arguments,
+                ..
+            }) => {
                 let tool_name = tool_name.clone();
+                let summary = super::reply::summarize_args(&tool_name, arguments.as_deref());
                 self.update_running(session_id, |s| {
                     s.tool_count += 1;
-                    s.phase = format!("🐶 {}…", humanize_tool_name(&tool_name));
+                    s.phase = format!("🐹 {}…", humanize_tool_name(&tool_name));
+                    let line = if summary.is_empty() {
+                        tool_name.clone()
+                    } else {
+                        format!("{tool_name} · {summary}")
+                    };
+                    // -1: truncate_chars appends the ellipsis on top.
+                    s.last_tool = Some(truncate_chars(&line, STATUS_TEXT_MAX_CHARS - 1));
                 })
                 .await;
                 // First tool of a run materializes the status card.
@@ -227,17 +262,39 @@ impl ObsTracker {
             }
             Event::Model(ModelEvent::Request { .. }) => {
                 // A new model call (re-)starts: thinking until chunks arrive.
-                self.update_running(session_id, |s| s.phase = PHASE_THINKING.to_string())
-                    .await;
+                self.update_running(session_id, |s| {
+                    s.phase = PHASE_THINKING.to_string();
+                    s.whisper.clear();
+                })
+                .await;
             }
             Event::Model(ModelEvent::Chunk { content, .. }) => {
-                let phase = match content {
-                    crate::event::ContentChunk::Text(_) => PHASE_TYPING,
+                let (phase, delta) = match content {
+                    crate::event::ContentChunk::Text(text) => (PHASE_TYPING, Some(text.clone())),
                     crate::event::ContentChunk::Thinking { .. }
-                    | crate::event::ContentChunk::RedactedThinking => PHASE_THINKING,
+                    | crate::event::ContentChunk::RedactedThinking => (PHASE_THINKING, None),
                 };
-                self.update_running(session_id, |s| s.phase = phase.to_string())
-                    .await;
+                self.update_running(session_id, |s| {
+                    s.phase = phase.to_string();
+                    if let Some(delta) = delta {
+                        s.push_whisper(&delta);
+                    }
+                })
+                .await;
+                // Materialize on the first model output of any kind (text or
+                // thinking): the card shows up as soon as the model starts
+                // responding and later morphs into the final reply — one
+                // message per run.
+                self.materialize_card(session_id).await;
+            }
+            Event::Model(ModelEvent::End { content, .. }) => {
+                // Self-heal the whisper from the fully assembled text (not a
+                // settlement signal; the reply buffer in hub consumes it too).
+                let text = super::blocks_to_text(content);
+                if !text.is_empty() {
+                    self.update_running(session_id, |s| s.set_whisper(&text))
+                        .await;
+                }
             }
             Event::Model(ModelEvent::TokenUsage {
                 total_tokens,
@@ -257,6 +314,36 @@ impl ObsTracker {
         }
     }
 
+    /// Settle a run on `Lifecycle(Stopped)`: morph the status card into the
+    /// final reply (one message per run). Returns the reply back when
+    /// nothing was settled (no run state, or the settle send failed), so
+    /// the caller can fall back to a plain send.
+    pub(crate) async fn handle_stopped(
+        &self,
+        session_id: &SessionId,
+        reason: &StopReason,
+        reply: Option<FinalReply>,
+    ) -> Option<FinalReply> {
+        let settle = match reason {
+            StopReason::Completed { .. } => Settle::Completed,
+            StopReason::Cancelled { .. } => Settle::Cancelled,
+            StopReason::Failed { error } => Settle::Failed(error.clone()),
+            StopReason::MaxIterations { reached } => Settle::MaxIterations(*reached),
+        };
+        self.settle_card(session_id, &settle, reply).await
+    }
+
+    /// Watchdog settlement for a session whose agent died (crash / lost
+    /// `Stopped`): settle the card with whatever reply state remains.
+    /// Returns the reply back when nothing was settled.
+    pub(crate) async fn handle_timeout(
+        &self,
+        session_id: &SessionId,
+        reply: Option<FinalReply>,
+    ) -> Option<FinalReply> {
+        self.settle_card(session_id, &Settle::Timeout, reply).await
+    }
+
     /// Settle cards whose session no longer has a live, non-idle agent
     /// (called periodically from the event forwarder; covers agent crash /
     /// lost events where no `Stopped` ever arrives). Liveness is queried,
@@ -273,22 +360,23 @@ impl ObsTracker {
             .map(|e| e.key().clone())
             .collect();
         for sid in dead {
-            self.settle_card(&sid, &Settle::Timeout).await;
+            self.settle_card(&sid, &Settle::Timeout, None).await;
         }
     }
 
     // ── internals ─────────────────────────────────────────────────────
 
     /// Send the status card if not yet materialized (triggered by the first
-    /// tool start). State is tracked from `Running`, so the initial render
-    /// already carries any pre-tool phases and token usage.
+    /// tool start or the first model output chunk). State is tracked from
+    /// `Running`, so the initial render already carries earlier phases,
+    /// token usage, and the whisper.
     async fn materialize_card(&self, session_id: &SessionId) {
         let (card, chat_id, reply_msg_id, adapter) = {
             let Some(entry) = self.states.get(session_id) else {
                 return;
             };
             let s = entry.value();
-            if !s.status_msg_id.is_empty() {
+            if !s.status_msg_id.is_empty() || s.send_failed {
                 return;
             }
             (
@@ -311,12 +399,18 @@ impl ObsTracker {
             }
             // Platform without card support — silently skip.
             Ok(None) => {}
-            Err(e) => warn!(error = %e, "obs status card send failed"),
+            Err(e) => {
+                warn!(error = %e, "obs status card send failed");
+                // Don't retry on every subsequent chunk — one attempt per run.
+                if let Some(mut entry) = self.states.get_mut(session_id) {
+                    entry.value_mut().send_failed = true;
+                }
+            }
         }
     }
 
     /// Mutate a running card's state and PATCH if outside the throttle window.
-    /// Before the card is materialized (no tool ran yet) this is memory-only.
+    /// Before the card is materialized this is memory-only.
     async fn update_running(&self, session_id: &SessionId, mutate: impl FnOnce(&mut ObsCardState)) {
         let patch = if let Some(mut entry) = self.states.get_mut(session_id) {
             let s = entry.value_mut();
@@ -335,62 +429,62 @@ impl ObsTracker {
             None
         };
         if let Some((card, msg_id, adapter)) = patch {
-            if let Err(e) = adapter.update_card(&msg_id, &card).await {
-                warn!(error = %e, "obs status card patch failed");
-            }
+            send_card_patch(&*adapter, &msg_id, &card).await;
         }
     }
 
-    /// Freeze the status card into its terminal style and drop the state.
-    /// Cards never materialized (no-tool runs) are dropped silently — except
-    /// failures, which are sent as a terminal card so the user gets an
-    /// explanation, not just a `CrossMark` reaction.
-    async fn settle_card(&self, session_id: &SessionId, settle: &Settle) {
+    /// Settle the status card and clear the run's receipts. Returns the
+    /// reply back when nothing was settled (no run state existed, or the
+    /// settle send failed), so the caller can fall back to a plain send.
+    ///
+    /// With a reply, the card **morphs** into the final answer (no header;
+    /// abnormal endings get a notice line in the body) — one message per
+    /// run. Without a reply (crash/lost events), it freezes into the
+    /// terminal header style. Cards never materialized (no-tool runs) send
+    /// a new message only when there is something to show: a reply, or a
+    /// failure notice (failures always get an explanation).
+    async fn settle_card(
+        &self,
+        session_id: &SessionId,
+        settle: &Settle,
+        reply: Option<FinalReply>,
+    ) -> Option<FinalReply> {
+        // Receipts serve only the mid-run post detection, which the caller
+        // evaluates before settling — always drop them at run end (covers
+        // stopped/timeout/sweep, including truly-dead sessions whose real
+        // `Stopped` never arrives).
+        self.receipts.remove(session_id);
         let Some((_, state)) = self.states.remove(session_id) else {
-            return;
+            return reply;
         };
-        let card = render_terminal(&state, settle);
+        let notice = settle.notice();
+        let morphed = reply
+            .as_ref()
+            .and_then(|r| reply::render_card(r, notice.as_deref()));
+        let (card, is_reply) = match morphed {
+            Some(card) => (card, true),
+            None => (render_terminal(&state, settle), false),
+        };
+
         if state.status_msg_id.is_empty() {
-            if matches!(settle, Settle::Failed(_)) {
+            if is_reply || matches!(settle, Settle::Failed(_)) {
                 if let Err(e) = state
                     .adapter
                     .send_card(&state.chat_id, &card, state.reply_msg_id.as_deref())
                     .await
                 {
-                    warn!(error = %e, "obs terminal card send failed");
+                    warn!(error = %e, "obs settle card send failed");
+                    // The rich send failed (API error, card rejected) — the
+                    // caller can still deliver the reply as a plain message.
+                    return reply;
                 }
             }
-            return;
+            return None;
         }
         if let Err(e) = state.adapter.update_card(&state.status_msg_id, &card).await {
-            warn!(error = %e, "obs terminal card patch failed");
+            warn!(error = %e, "obs settle card patch failed");
         }
-    }
-
-    /// Replace ack reactions on all run receipts and react on the last
-    /// content reply, then drop the receipts.
-    async fn settle_receipts(
-        &self,
-        session_id: &SessionId,
-        emoji: &str,
-        adapter: &Arc<dyn PlatformAdapter>,
-    ) {
-        let Some((_, receipts)) = self.receipts.remove(session_id) else {
-            return;
-        };
-        for (msg_id, reaction_id) in &receipts.items {
-            if let Err(e) = adapter.remove_reaction(msg_id, reaction_id).await {
-                warn!(error = %e, "obs remove ack reaction failed");
-            }
-            if let Err(e) = adapter.send_reaction("", msg_id, emoji).await {
-                warn!(error = %e, "obs settle reaction failed");
-            }
-        }
-        if let Some(content_msg_id) = receipts.last_content_msg_id {
-            if let Err(e) = adapter.send_reaction("", &content_msg_id, emoji).await {
-                warn!(error = %e, "obs content reaction failed");
-            }
-        }
+        None
     }
 }
 
@@ -402,8 +496,44 @@ impl Default for ObsTracker {
 
 // ── Rendering ───────────────────────────────────────────────────────
 
+/// PATCH a card message in place; failures only warn (the next PATCH heals).
+async fn send_card_patch(adapter: &dyn PlatformAdapter, message_id: &str, card_json: &str) {
+    if let Err(e) = adapter.update_card(message_id, card_json).await {
+        warn!(error = %e, "obs status card patch failed");
+    }
+}
+
 fn render_running(s: &ObsCardState) -> String {
-    card_json("blue", &s.phase, &stats_line(s))
+    let mut lines = vec![stats_line(s)];
+    if let Some(last_tool) = &s.last_tool {
+        lines.push(format!("🔧 {last_tool}"));
+    }
+    if !s.whisper.is_empty() {
+        lines.push(format!(
+            "<font color='grey'>💬 {}</font>",
+            whisper_snippet(&s.whisper)
+        ));
+    }
+    card_json("blue", &s.phase, &lines.join("\n"))
+}
+
+/// Single-line whisper tail for the card body (≤ [`STATUS_TEXT_MAX_CHARS`]).
+fn whisper_snippet(whisper: &str) -> String {
+    let flat = reply::flatten_ws(whisper);
+    if flat.chars().count() > STATUS_TEXT_MAX_CHARS {
+        format!("…{}", tail_chars(&flat, STATUS_TEXT_MAX_CHARS - 1))
+    } else {
+        flat
+    }
+}
+
+/// Unicode-safe tail slice: the last `max` chars of `text`.
+fn tail_chars(text: &str, max: usize) -> String {
+    let count = text.chars().count();
+    if count <= max {
+        return text.to_string();
+    }
+    text.chars().skip(count - max).collect()
 }
 
 fn render_terminal(s: &ObsCardState, settle: &Settle) -> String {
@@ -462,7 +592,7 @@ fn stats_line(s: &ObsCardState) -> String {
     line
 }
 
-fn fmt_elapsed(d: Duration) -> String {
+pub(crate) fn fmt_elapsed(d: Duration) -> String {
     let secs = d.as_secs();
     if secs < 60 {
         format!("{secs}s")
@@ -496,7 +626,7 @@ fn humanize_tool_name(name: &str) -> String {
         .collect()
 }
 
-fn truncate_chars(text: &str, max: usize) -> String {
+pub(crate) fn truncate_chars(text: &str, max: usize) -> String {
     let text = text.trim();
     if text.chars().count() <= max {
         return text.to_string();

@@ -210,13 +210,3 @@ async fn send_reaction_posts_emoji_and_returns_reaction_id() {
         "DONE"
     );
 }
-
-#[tokio::test]
-async fn remove_reaction_deletes_by_ids() {
-    let stub = StubFeishu::start().await;
-    let adapter = stub_adapter(&stub.base_url);
-
-    adapter.remove_reaction("om_1", "rid_1").await.unwrap();
-
-    stub.find("DELETE", "/open-apis/im/v1/messages/om_1/reactions/rid_1");
-}

@@ -1,8 +1,9 @@
-use crate::event::{Event, ModelEvent};
+use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, ToolEvent};
 use crate::kernel::{CreateSessionInput, Kernel};
 use crate::storage::{format_age, SessionStore};
 use crate::types::{ContentBlock, Result, SessionId};
 use dashmap::DashMap;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -10,8 +11,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use super::{
-    obs::ObsTracker, ChannelConfig, ChannelInfo, ChannelMessage, ChannelStatus, ChannelStore,
-    PlatformAdapter, SessionRouting,
+    obs::ObsTracker, reply, ChannelConfig, ChannelInfo, ChannelMessage, ChannelStatus,
+    ChannelStore, PlatformAdapter, SessionRouting,
 };
 
 const STATUS_IDLE: u8 = 0;
@@ -225,9 +226,28 @@ impl ChannelHub {
         let obs = Arc::clone(&self.obs);
 
         tokio::spawn(async move {
-            let mut rx = event_bus.subscribe_all();
+            // `ToolCallDelta` floods (e.g. thousands of argument deltas for a
+            // large file write) would overflow this listener's 256-slot
+            // buffer while the loop is blocked in an inline card PATCH,
+            // silently dropping text `Chunk`/`End` events (bus delivery is
+            // try_send). The forwarder never consumes deltas, so filter them
+            // out at the source.
+            let mut rx = event_bus.subscribe_all_filtered(|envelope| {
+                !matches!(
+                    envelope.event,
+                    Event::Model(ModelEvent::ToolCallDelta { .. })
+                )
+            });
             let mut watchdog = tokio::time::interval(WATCHDOG_SWEEP_INTERVAL);
             watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            // Per-session run reply buffers: assistant texts and tool calls
+            // accumulate during a run; only the last text becomes a message
+            // bubble when the run ends (design: reply buffering). A buffer
+            // is (re)started by the first `Running` of a run and drained at
+            // `Stopped`/watchdog, so its presence doubles as the
+            // run-in-flight marker.
+            let mut reply_buffers: HashMap<SessionId, reply::RunReplyBuffer> = HashMap::new();
 
             loop {
                 tokio::select! {
@@ -236,6 +256,49 @@ impl ChannelHub {
                     _ = watchdog.tick() => {
                         // Kernel gone = shutting down; nothing to settle.
                         if let Some(kernel) = kernel.upgrade() {
+                            // Sessions whose agent died (crash / lost
+                            // `Stopped`): flush whatever reply state remains
+                            // so content is never silently lost, mirroring the
+                            // obs timeout settlement. Race note: a `Stopped`
+                            // already queued in the bus can lose to this flush
+                            // (the reply lands a beat early, from possibly
+                            // not-yet-processed events); the real `Stopped`
+                            // then finds no buffer and sends nothing.
+                            let dead: Vec<SessionId> = reply_buffers
+                                .keys()
+                                .filter(|sid| !kernel.is_session_running(sid))
+                                .cloned()
+                                .collect();
+                            for sid in dead {
+                                // Look up BEFORE draining the buffer: a
+                                // failed lookup must not drop the reply.
+                                let routing = match store.find_routing_by_session(&sid).await {
+                                    Ok(Some(r)) => r,
+                                    _ => continue,
+                                };
+                                let Some((adapter, tool_trace, observability)) = instances
+                                    .get(&routing.channel_name)
+                                    .map(|i| {
+                                        (
+                                            Arc::clone(&i.adapter),
+                                            i.config.tool_trace,
+                                            i.config.observability,
+                                        )
+                                    })
+                                else { continue };
+                                let Some(buf) = reply_buffers.remove(&sid) else { continue };
+                                deliver_reply(
+                                    &obs,
+                                    &adapter,
+                                    &routing,
+                                    Some(buf.into_reply()),
+                                    tool_trace,
+                                    observability,
+                                    &sid,
+                                    SettleKind::Timeout,
+                                )
+                                .await;
+                            }
                             obs.sweep_dead_sessions(|sid| kernel.is_session_running(sid)).await;
                         }
                     }
@@ -249,13 +312,90 @@ impl ChannelHub {
                             }
                         };
 
-                        let (adapter, observability) = {
+                        let (adapter, observability, tool_trace) = {
                             let Some(instance) = instances.get(&routing.channel_name) else { continue };
-                            (Arc::clone(&instance.adapter), instance.config.observability)
+                            (
+                                Arc::clone(&instance.adapter),
+                                instance.config.observability,
+                                instance.config.tool_trace,
+                            )
                         };
                         let supports_cards = adapter.supports_status_card();
 
-                        // Observability first: cheap state updates + throttled
+                        // Reply buffering: collect assistant texts and tool
+                        // calls for the run instead of sending each
+                        // intermediate text as its own bubble.
+                        match &envelope.event {
+                            Event::Agent(AgentEvent::Lifecycle {
+                                state: AgentStatus::Running,
+                            }) => {
+                                // `Running` fires per turn; `or_default`
+                                // keeps an existing buffer — buffers are
+                                // drained at `Stopped`/watchdog. (Crash then
+                                // quick restart within a watchdog interval
+                                // may blend the old run's trace in;
+                                // cosmetic, self-heals on the next run.)
+                                reply_buffers.entry(session_id.clone()).or_default();
+                            }
+                            Event::Model(ModelEvent::End { content, .. }) => {
+                                let text = super::blocks_to_text(content);
+                                if !text.is_empty() {
+                                    reply_buffers
+                                        .entry(session_id.clone())
+                                        .or_default()
+                                        .record_text(text);
+                                }
+                            }
+                            Event::Tool(ToolEvent::Start {
+                                tool_id,
+                                tool_name,
+                                arguments,
+                                ..
+                            }) => {
+                                reply_buffers
+                                    .entry(session_id.clone())
+                                    .or_default()
+                                    .record_tool_start(tool_id, tool_name, arguments.as_deref());
+                            }
+                            Event::Tool(ToolEvent::End {
+                                tool_id,
+                                elapsed_ms,
+                                is_error,
+                                ..
+                            }) => {
+                                if let Some(buf) = reply_buffers.get_mut(&session_id) {
+                                    buf.record_tool_end(tool_id, *elapsed_ms, *is_error);
+                                }
+                            }
+                            _ => {}
+                        }
+
+                        // Run end: deliver the buffered reply — morph the
+                        // status card (single message), or freeze it as a
+                        // terminal receipt and flush the reply at the bottom
+                        // when the user posted mid-run.
+                        if let Event::Agent(AgentEvent::Lifecycle {
+                            state: AgentStatus::Stopped { reason },
+                        }) = &envelope.event
+                        {
+                            let reply = reply_buffers
+                                .remove(&session_id)
+                                .map(reply::RunReplyBuffer::into_reply);
+                            deliver_reply(
+                                &obs,
+                                &adapter,
+                                &routing,
+                                reply,
+                                tool_trace,
+                                observability,
+                                &session_id,
+                                SettleKind::Stopped(reason),
+                            )
+                            .await;
+                            continue;
+                        }
+
+                        // Observability: cheap state updates + throttled
                         // in-place PATCHes (design: feishu-channel-observability).
                         if observability {
                             obs.handle_event(
@@ -267,38 +407,13 @@ impl ChannelHub {
                             ).await;
                         }
 
-                        // Content replies (unchanged behavior). Sent inline
-                        // (not spawned) so the final reply lands before the
-                        // subsequent `Stopped` settlement reacts on it.
-                        match envelope.event {
-                            // Typing indicator as the fallback progress
-                            // signal on platforms without status cards
-                            // (or when observability is disabled).
-                            Event::Model(ModelEvent::Request { .. })
-                                if !supports_cards || !observability =>
-                            {
-                                let _ = adapter.send_typing(&routing.external_chat_id).await;
-                            }
-                            Event::Model(ModelEvent::End { content, .. }) => {
-                                let text = super::blocks_to_text(&content);
-                                if !text.is_empty() {
-                                    let blocks = vec![ContentBlock::Text { text }];
-                                    match adapter.send_message(
-                                        &routing.external_chat_id,
-                                        blocks,
-                                        routing.reply_msg_id.as_deref(),
-                                    ).await {
-                                        Ok(Some(msg_id)) if observability => {
-                                            obs.record_content_msg(&session_id, msg_id);
-                                        }
-                                        Ok(_) => {}
-                                        Err(e) => {
-                                            error!(error = %e, "failed to send reply to platform");
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {}
+                        // Typing indicator as the fallback progress signal on
+                        // platforms without status cards (or when
+                        // observability is disabled).
+                        if matches!(envelope.event, Event::Model(ModelEvent::Request { .. }))
+                            && (!supports_cards || !observability)
+                        {
+                            let _ = adapter.send_typing(&routing.external_chat_id).await;
                         }
                     }
                 }
@@ -352,6 +467,117 @@ impl ChannelHub {
             self.store.find_routing_by_session(session_id).await,
             Ok(Some(_))
         )
+    }
+}
+
+/// Flush a run's final reply as a new message (observability off, platforms
+/// without card support, or the mid-run split where the status card freezes
+/// as a terminal receipt): send the final text as a single message bubble,
+/// with the run trace attached (collapsible panel on card-capable
+/// platforms, plain-text lines otherwise). Runs without any text are
+/// skipped, matching the pre-buffering behavior.
+async fn flush_reply(
+    adapter: &Arc<dyn PlatformAdapter>,
+    routing: &SessionRouting,
+    reply: reply::FinalReply,
+    tool_trace: bool,
+) {
+    if reply.text().is_none() {
+        return;
+    }
+    let sent = if tool_trace && adapter.supports_status_card() && reply.has_trace() {
+        match reply::render_card(&reply, None) {
+            Some(card) => {
+                adapter
+                    .send_card(
+                        &routing.external_chat_id,
+                        &card,
+                        routing.reply_msg_id.as_deref(),
+                    )
+                    .await
+            }
+            // Unreachable in practice (a text reply always renders) — skip
+            // rather than panic; the run's content was already delivered by
+            // the settle path or is simply absent.
+            None => return,
+        }
+    } else {
+        let text = if tool_trace {
+            reply::render_plain(&reply)
+        } else {
+            reply.into_text().unwrap_or_default()
+        };
+        adapter
+            .send_message(
+                &routing.external_chat_id,
+                vec![ContentBlock::Text { text }],
+                routing.reply_msg_id.as_deref(),
+            )
+            .await
+    };
+    if let Err(e) = sent {
+        error!(error = %e, "failed to send reply to platform");
+    }
+}
+
+/// How a run ends, for reply-delivery purposes.
+#[derive(Clone, Copy)]
+enum SettleKind<'a> {
+    Stopped(&'a crate::event::StopReason),
+    Timeout,
+}
+
+async fn settle_with(
+    obs: &Arc<ObsTracker>,
+    session_id: &SessionId,
+    kind: SettleKind<'_>,
+    reply: Option<reply::FinalReply>,
+) -> Option<reply::FinalReply> {
+    match kind {
+        SettleKind::Stopped(reason) => obs.handle_stopped(session_id, reason, reply).await,
+        SettleKind::Timeout => obs.handle_timeout(session_id, reply).await,
+    }
+}
+
+/// Deliver a run's final reply. Card-capable platforms with observability
+/// morph the status card into it (one message per run) — or, when the user
+/// posted mid-run, freeze the card as a terminal receipt and flush the
+/// reply as a new message at the bottom. All other cases flush as a new
+/// message and settle the obs state without a reply. When the rich settle
+/// comes back unsettled (no run state, or the settle send failed), the
+/// reply falls back to a plain flush so content is never silently lost.
+#[allow(clippy::too_many_arguments)]
+async fn deliver_reply(
+    obs: &Arc<ObsTracker>,
+    adapter: &Arc<dyn PlatformAdapter>,
+    routing: &SessionRouting,
+    reply: Option<reply::FinalReply>,
+    tool_trace: bool,
+    observability: bool,
+    session_id: &SessionId,
+    kind: SettleKind<'_>,
+) {
+    if observability && adapter.supports_status_card() {
+        if obs.has_mid_run_posts(session_id) {
+            let _ = settle_with(obs, session_id, kind, None).await;
+            if let Some(reply) = reply {
+                flush_reply(adapter, routing, reply, tool_trace).await;
+            }
+        } else if let Some(reply) = settle_with(obs, session_id, kind, reply).await {
+            // Nothing settled — fall back to a plain message instead of
+            // dropping the reply.
+            flush_reply(adapter, routing, reply, tool_trace).await;
+        }
+    } else {
+        // Platforms without card support cannot morph — the reply goes out
+        // as a plain message; obs still settles its memory-only state
+        // (typing fallback).
+        if let Some(reply) = reply {
+            flush_reply(adapter, routing, reply, tool_trace).await;
+        }
+        if observability {
+            let _ = settle_with(obs, session_id, kind, None).await;
+        }
     }
 }
 
@@ -540,9 +766,9 @@ async fn handle_incoming_message(
     }
 }
 
-/// Record the ack reaction of a user message for the observability
-/// reaction state machine (no-op when observability is disabled or the
-/// platform provided no receipt).
+/// Record a user message for the mid-run post detection (morph vs.
+/// new-message settle). No-op when observability is disabled or the
+/// message carries no platform ID.
 fn record_receipt(
     config: &ChannelConfig,
     obs: &ObsTracker,
@@ -552,9 +778,8 @@ fn record_receipt(
     if !config.observability {
         return;
     }
-    if let (Some(msg_id), Some(reaction_id)) = (&msg.external_message_id, &msg.receipt_reaction_id)
-    {
-        obs.record_receipt(session_id, msg_id.clone(), reaction_id.clone());
+    if let Some(msg_id) = &msg.external_message_id {
+        obs.record_receipt(session_id, msg_id.clone());
     }
 }
 

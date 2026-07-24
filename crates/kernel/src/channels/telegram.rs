@@ -169,7 +169,6 @@ impl TelegramAdapter {
             thread_id: None,
             root_id: None,
             is_group,
-            receipt_reaction_id: None,
         })
     }
 
@@ -258,6 +257,20 @@ fn reply_parameters(reply_msg_id: Option<&str>) -> Option<ReplyParameters> {
     let mut params = ReplyParameters::new(teloxide_core::types::MessageId(msg_id));
     params.allow_sending_without_reply = Some(true);
     Some(params)
+}
+
+/// Telegram caps message text at 4096 chars; oversize texts fail the whole
+/// send. Truncate char-safely with a marker instead (the Feishu adapter
+/// truncates likewise).
+const MAX_MESSAGE_CHARS: usize = 4000;
+
+fn cap_message_length(text: &str) -> String {
+    if text.chars().count() <= MAX_MESSAGE_CHARS {
+        return text.to_string();
+    }
+    let mut out = super::obs::truncate_chars(text, MAX_MESSAGE_CHARS);
+    out.push_str("\n\n...(内容已截断)");
+    out
 }
 
 #[async_trait::async_trait]
@@ -373,6 +386,7 @@ impl PlatformAdapter for TelegramAdapter {
         if text.is_empty() {
             return Ok(None);
         }
+        let text = cap_message_length(&text);
 
         let recipient = Recipient::Id(ChatId(chat_id));
 

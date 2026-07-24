@@ -211,6 +211,7 @@ async fn test_start_and_shutdown() {
             reply_in_thread: false,
             auto_approve_level: crate::permission::Level::Safe,
             observability: true,
+            tool_trace: true,
         },
         ChannelConfig {
             name: "mock2".to_string(),
@@ -226,6 +227,7 @@ async fn test_start_and_shutdown() {
             reply_in_thread: false,
             auto_approve_level: crate::permission::Level::Safe,
             observability: true,
+            tool_trace: true,
         },
     ];
 
@@ -314,6 +316,159 @@ async fn test_mock_adapter_send_message() {
     let out = adapter.outgoing.lock().await;
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].0, "chat1");
+}
+
+// ── flush_reply ─────────────────────────────────────────────────────
+
+/// Card-capable mock: records `send_card` payloads and `update_card` patches.
+pub struct CardMockAdapter {
+    pub cards: tokio::sync::Mutex<Vec<(String, String)>>,
+    pub patches: tokio::sync::Mutex<Vec<(String, String)>>,
+}
+
+impl CardMockAdapter {
+    fn new() -> Self {
+        Self {
+            cards: tokio::sync::Mutex::new(Vec::new()),
+            patches: tokio::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl PlatformAdapter for CardMockAdapter {
+    async fn run_receiver(
+        &self,
+        _incoming: mpsc::Sender<ChannelMessage>,
+        cancel: CancellationToken,
+    ) -> std::result::Result<(), crate::channels::ChannelError> {
+        cancel.cancelled().await;
+        Ok(())
+    }
+
+    async fn send_message(
+        &self,
+        _external_chat_id: &str,
+        _blocks: Vec<ContentBlock>,
+        _reply_msg_id: Option<&str>,
+    ) -> std::result::Result<Option<String>, crate::channels::ChannelError> {
+        Ok(None)
+    }
+
+    async fn send_card(
+        &self,
+        external_chat_id: &str,
+        card_json: &str,
+        _reply_msg_id: Option<&str>,
+    ) -> std::result::Result<Option<String>, crate::channels::ChannelError> {
+        self.cards
+            .lock()
+            .await
+            .push((external_chat_id.to_string(), card_json.to_string()));
+        Ok(Some("card-msg-1".to_string()))
+    }
+
+    async fn update_card(
+        &self,
+        message_id: &str,
+        card_json: &str,
+    ) -> std::result::Result<(), crate::channels::ChannelError> {
+        self.patches
+            .lock()
+            .await
+            .push((message_id.to_string(), card_json.to_string()));
+        Ok(())
+    }
+
+    fn supports_status_card(&self) -> bool {
+        true
+    }
+}
+
+fn test_routing() -> SessionRouting {
+    SessionRouting {
+        channel_name: "feishu".to_string(),
+        external_chat_id: "chat-1".to_string(),
+        reply_msg_id: None,
+    }
+}
+
+fn run_buffer() -> reply::RunReplyBuffer {
+    let mut buf = reply::RunReplyBuffer::new();
+    buf.record_text("Let me check.".to_string());
+    buf.record_tool_start("t1", "shell", Some(r#"{"command":"cargo test"}"#));
+    buf.record_tool_end("t1", 2000, false);
+    buf.record_text("final answer".to_string());
+    buf
+}
+
+#[tokio::test]
+async fn flush_reply_card_platform_sends_single_card_with_panel() {
+    let mock = Arc::new(CardMockAdapter::new());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+
+    flush_reply(&adapter, &test_routing(), run_buffer().into_reply(), true).await;
+
+    let cards = mock.cards.lock().await;
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].0, "chat-1");
+    let card = &cards[0].1;
+    assert!(card.contains("collapsible_panel"));
+    assert!(card.contains("final answer"));
+    assert!(card.contains("Let me check."), "narration joins the panel");
+    assert!(card.contains("cargo test"), "tool summary joins the panel");
+}
+
+#[tokio::test]
+async fn flush_reply_plain_platform_appends_trace_lines() {
+    let mock = Arc::new(MockAdapter::new("tg"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+
+    flush_reply(&adapter, &test_routing(), run_buffer().into_reply(), true).await;
+
+    let out = mock.outgoing.lock().await;
+    assert_eq!(out.len(), 1);
+    let ContentBlock::Text { text } = &out[0].1[0] else {
+        panic!("expected text block");
+    };
+    assert!(text.starts_with("final answer"));
+    assert!(text.contains("Run trace"));
+    assert!(text.contains("cargo test"));
+}
+
+#[tokio::test]
+async fn flush_reply_tool_trace_disabled_sends_bare_text() {
+    let mock = Arc::new(CardMockAdapter::new());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let plain = Arc::new(MockAdapter::new("plain"));
+    let plain_adapter: Arc<dyn PlatformAdapter> = plain.clone();
+
+    // Card platform with tool_trace off: falls back to send_message with the
+    // bare text (trace dropped entirely).
+    let routing = test_routing();
+    flush_reply(&adapter, &routing, run_buffer().into_reply(), false).await;
+    assert!(mock.cards.lock().await.is_empty(), "no card sent");
+
+    flush_reply(&plain_adapter, &routing, run_buffer().into_reply(), false).await;
+    let out = plain.outgoing.lock().await;
+    assert_eq!(out.len(), 1);
+    let ContentBlock::Text { text } = &out[0].1[0] else {
+        panic!("expected text block");
+    };
+    assert_eq!(text, "final answer");
+}
+
+#[tokio::test]
+async fn flush_reply_without_text_sends_nothing() {
+    let mock = Arc::new(MockAdapter::new("test"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+
+    let mut buf = reply::RunReplyBuffer::new();
+    buf.record_tool_start("t1", "read", None);
+    buf.record_tool_end("t1", 5, false);
+
+    flush_reply(&adapter, &test_routing(), buf.into_reply(), true).await;
+    assert!(mock.outgoing.lock().await.is_empty());
 }
 
 #[tokio::test]
@@ -483,7 +638,6 @@ fn channel_message(
         thread_id: thread_id.map(str::to_string),
         root_id: None,
         is_group,
-        receipt_reaction_id: None,
     }
 }
 
@@ -660,4 +814,155 @@ fn test_format_session_info() {
     assert!(out.contains("- Model: `kimi` · anthropic · `kimi-k2` · 256k ctx\n"));
     assert!(out.contains("- Subagents (running): 2"));
     assert!(out.contains("- Background Shell: `cargo test` (pid 42, 9m ago)"));
+}
+
+// ── deliver_reply ───────────────────────────────────────────────────
+
+use crate::event::{AgentEvent, AgentStatus, StopReason, ToolEvent};
+
+fn running_event() -> crate::event::Event {
+    crate::event::Event::Agent(AgentEvent::Lifecycle {
+        state: AgentStatus::Running,
+    })
+}
+
+fn tool_start_event() -> crate::event::Event {
+    crate::event::Event::Tool(ToolEvent::Start {
+        message_id: crate::types::MessageId::new(),
+        tool_id: "t1".to_string(),
+        tool_name: "bash".to_string(),
+        arguments: None,
+    })
+}
+
+fn completed() -> StopReason {
+    StopReason::Completed {
+        finish_reason: None,
+    }
+}
+
+#[tokio::test]
+async fn deliver_reply_morphs_status_card_when_no_mid_run_posts() {
+    let mock = Arc::new(CardMockAdapter::new());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(crate::channels::obs::ObsTracker::new());
+    let sid = SessionId::new();
+
+    // Drive obs to materialize the status card.
+    obs.handle_event(&adapter, &sid, "chat-1", None, &running_event())
+        .await;
+    obs.handle_event(&adapter, &sid, "chat-1", None, &tool_start_event())
+        .await;
+    assert_eq!(mock.cards.lock().await.len(), 1, "materialized");
+
+    deliver_reply(
+        &obs,
+        &adapter,
+        &test_routing(),
+        Some(run_buffer().into_reply()),
+        true,
+        true,
+        &sid,
+        SettleKind::Stopped(&completed()),
+    )
+    .await;
+
+    // The status card is PATCHed into the final reply — no new message.
+    assert_eq!(mock.cards.lock().await.len(), 1, "no extra card");
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1);
+    assert!(patches[0].1.contains("final answer"));
+    assert!(patches[0].1.contains("collapsible_panel"));
+}
+
+#[tokio::test]
+async fn deliver_reply_freezes_card_and_flushes_new_message_on_mid_run_posts() {
+    let mock = Arc::new(CardMockAdapter::new());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(crate::channels::obs::ObsTracker::new());
+    let sid = SessionId::new();
+
+    obs.handle_event(&adapter, &sid, "chat-1", None, &running_event())
+        .await;
+    obs.handle_event(&adapter, &sid, "chat-1", None, &tool_start_event())
+        .await;
+    // Trigger + a mid-run platform message.
+    obs.record_receipt(&sid, "m1".to_string());
+    obs.record_receipt(&sid, "m2".to_string());
+
+    deliver_reply(
+        &obs,
+        &adapter,
+        &test_routing(),
+        Some(run_buffer().into_reply()),
+        true,
+        true,
+        &sid,
+        SettleKind::Stopped(&completed()),
+    )
+    .await;
+
+    // The old card freezes as a terminal receipt …
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1);
+    assert!(patches[0].1.contains("✅ Done"), "frozen terminal card");
+    // … and the reply lands at the bottom as a NEW card.
+    let cards = mock.cards.lock().await;
+    assert_eq!(cards.len(), 2, "materialize + flushed reply");
+    assert!(cards[1].1.contains("final answer"));
+    assert!(cards[1].1.contains("collapsible_panel"));
+}
+
+#[tokio::test]
+async fn deliver_reply_plain_platform_flushes_without_morph() {
+    let mock = Arc::new(MockAdapter::new("tg"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(crate::channels::obs::ObsTracker::new());
+    let sid = SessionId::new();
+
+    deliver_reply(
+        &obs,
+        &adapter,
+        &test_routing(),
+        Some(run_buffer().into_reply()),
+        true,
+        true,
+        &sid,
+        SettleKind::Stopped(&completed()),
+    )
+    .await;
+
+    let out = mock.outgoing.lock().await;
+    assert_eq!(out.len(), 1);
+    let ContentBlock::Text { text } = &out[0].1[0] else {
+        panic!("expected text block");
+    };
+    assert!(text.contains("final answer"));
+    assert!(text.contains("Run trace"));
+}
+
+#[tokio::test]
+async fn deliver_reply_falls_back_to_flush_when_obs_state_missing() {
+    let mock = Arc::new(CardMockAdapter::new());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(crate::channels::obs::ObsTracker::new());
+    let sid = SessionId::new();
+
+    // No `Running` was ever fed (event lost): the morph has nothing to
+    // settle — the reply must still be delivered as a plain flush.
+    deliver_reply(
+        &obs,
+        &adapter,
+        &test_routing(),
+        Some(run_buffer().into_reply()),
+        true,
+        true,
+        &sid,
+        SettleKind::Stopped(&completed()),
+    )
+    .await;
+
+    let cards = mock.cards.lock().await;
+    assert_eq!(cards.len(), 1, "fallback flush via send_card");
+    assert!(cards[0].1.contains("final answer"));
 }
