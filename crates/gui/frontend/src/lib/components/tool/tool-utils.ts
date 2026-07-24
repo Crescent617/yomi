@@ -94,6 +94,7 @@ export function toolLabel(toolName: string, isSubagent = false): string {
     sleep: "Sleep",
     updategoal: "Update goal",
     sendmessage: "Send message",
+    cron: "Cron",
     taskcreate: "Create task",
     taskget: "Get task",
     tasklist: "List tasks",
@@ -151,6 +152,8 @@ export function extractTarget(tool_name: string, args: string): string {
       return firstText(question?.question) || firstText(question?.header);
     }
     case "todo":
+      return firstText(parsed.action);
+    case "cron":
       return firstText(parsed.action);
     case "reminder":
       return firstText(parsed.message);
@@ -213,6 +216,22 @@ export function extraMeta(tool_name: string, args: string): string {
     }
   } else if (name === "todo" && Array.isArray(parsed.todos)) {
     extras.push(`${parsed.todos.length} items`);
+  } else if (name === "cron") {
+    const cronAction = firstText(parsed.action);
+    if (cronAction === "create") {
+      if (parsed.name) extras.push(firstText(parsed.name));
+      if (parsed.schedule) extras.push(firstText(parsed.schedule));
+      if (parsed.type === "shell") extras.push("shell");
+      if (parsed.max_runs != null) extras.push(`max ${parsed.max_runs}`);
+    } else if (cronAction === "update") {
+      if (parsed.id) extras.push(firstText(parsed.id));
+      if (parsed.status) extras.push(`→ ${firstText(parsed.status)}`);
+      else if (parsed.schedule) extras.push(firstText(parsed.schedule));
+    } else if (cronAction === "delete" || cronAction === "trigger") {
+      if (parsed.id) extras.push(firstText(parsed.id));
+    } else if (cronAction === "list" && parsed.status) {
+      extras.push(firstText(parsed.status));
+    }
   } else if (name === "agent" && parsed.wait_for_completion === false) {
     extras.push("async");
   } else if (name === "sendmessage" && Array.isArray(parsed.files)) {

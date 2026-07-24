@@ -936,6 +936,8 @@ export async function updateCronJob(
     status?: string;
     max_runs?: number;
     expires_at?: string;
+    clear_max_runs?: boolean;
+    clear_expires_at?: boolean;
   },
 ): Promise<void> {
   return invokeCmd("update_cron_job", { job_id: job_id, ...input });

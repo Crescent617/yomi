@@ -58,6 +58,8 @@ pub struct Kernel {
     favorite_store: Arc<dyn crate::storage::FavoriteStore>,
     /// Cron store for scheduled job operations.
     pub(crate) cron_store: Option<Arc<dyn crate::cron::CronStore>>,
+    /// Shared slot for the running cron scheduler (shared with `AgentShared`).
+    pub(crate) cron_scheduler: Arc<std::sync::Mutex<Option<Arc<crate::cron::CronScheduler>>>>,
     pub(crate) channel_manager: Option<Arc<crate::channels::hub::ChannelHub>>,
     /// Global notification bus for state changes and other broadcasts.
     notification_bus: Arc<crate::notification::NotificationBus>,
@@ -128,6 +130,15 @@ impl Kernel {
     /// Get cron store if configured.
     pub fn cron_store(&self) -> Option<Arc<dyn crate::cron::CronStore>> {
         self.cron_store.clone()
+    }
+
+    /// Shared slot for the cron scheduler. `KernelServer` adopts this slot and
+    /// fills it on start, so agents (cron tool) and the RPC dispatcher notify
+    /// the same scheduler instance.
+    pub fn cron_scheduler_slot(
+        &self,
+    ) -> Arc<std::sync::Mutex<Option<Arc<crate::cron::CronScheduler>>>> {
+        Arc::clone(&self.cron_scheduler)
     }
 
     /// Get data directory from `agent_shared`
@@ -221,6 +232,15 @@ impl Kernel {
             );
         }
 
+        let cron_store = if enable_cron {
+            Some(storage.cron_store())
+        } else {
+            None
+        };
+        // Shared with `KernelServer`, which fills in the running scheduler on
+        // start so that agents (cron tool) can notify it of job changes.
+        let cron_scheduler = Arc::new(std::sync::Mutex::new(None));
+
         let agent_shared = AgentShared::with_data_dir(
             Arc::clone(&models_map),
             agent_config.default_model.clone(),
@@ -237,6 +257,7 @@ impl Kernel {
             data_dir,
         )
         .with_goal_store(goal_store)
+        .with_cron(cron_store.clone(), Arc::clone(&cron_scheduler))
         .with_message_interceptor(todo_interceptor);
 
         let channel_manager =
@@ -283,6 +304,7 @@ impl Kernel {
             pinned_session_store,
             favorite_store,
             cron_store,
+            cron_scheduler,
             channel_manager,
             notification_bus,
             shutdown: tokio_util::sync::CancellationToken::new(),
@@ -1411,6 +1433,17 @@ impl Kernel {
     // remember to do it manually.  This keeps both local (GUI in-process) and
     // remote (KernelServer) paths consistent.
 
+    /// Notify the running scheduler (if any) that cron jobs changed.
+    fn notify_cron_scheduler(&self) {
+        let slot = self
+            .cron_scheduler
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(ref scheduler) = *slot {
+            scheduler.reload();
+        }
+    }
+
     /// Create a new cron job.  Validates the schedule expression, computes the
     /// first `next_run_at`, persists, and notifies the scheduler.
     pub async fn create_cron_job(
@@ -1422,31 +1455,12 @@ impl Kernel {
             .as_ref()
             .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
 
-        let schedule = crate::cron::CronSchedule::parse(&input.schedule)
-            .map_err(|e| crate::types::KernelError::storage(e.to_string()))?;
-
-        let next_run = schedule.next_after(Utc::now());
-        let job = crate::cron::CronJob {
-            id: crate::cron::CronJobId::new(),
-            name: input.name,
-            schedule: input.schedule,
-            action: input.action,
-            status: crate::cron::CronJobStatus::Active,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            next_run_at: next_run,
-            last_run_at: None,
-            run_count: 0,
-            max_runs: input.max_runs,
-            expires_at: input.expires_at,
-            last_error: None,
-        };
-
-        let id = job.id.clone();
-        store.create(&job).await.map_err(|e| {
-            crate::types::KernelError::storage(format!("Failed to create cron job: {e}"))
-        })?;
-        Ok(id)
+        // The RPC path has no caller session to follow, so a newly bound
+        // session uses defaults.
+        let session_store = self.session_store().await;
+        let job = crate::cron::create_cron_job(store, Some(&session_store), None, input).await?;
+        self.notify_cron_scheduler();
+        Ok(job.id)
     }
 
     /// List cron jobs with optional status filter.
@@ -1494,12 +1508,36 @@ impl Kernel {
         if let Some(ref schedule_str) = input.schedule {
             let schedule = crate::cron::CronSchedule::parse(schedule_str)
                 .map_err(|e| crate::types::KernelError::storage(e.to_string()))?;
-            input.next_run_at = schedule.next_after(Utc::now());
+            input.next_run_at = Some(schedule.next_after(Utc::now()).ok_or_else(|| {
+                crate::types::KernelError::storage("schedule has no upcoming fire time")
+            })?);
         }
 
-        store.update(id, &input).await.map_err(|e| {
+        // A replacement `SendMessage` action without a session gets a
+        // dedicated new session bound, same as on create.
+        if let Some(action) = input.action.take() {
+            // Bail out on unknown ids before binding any session, and reuse
+            // the job's name for the new session title.
+            let Some(existing) = store.get(id).await.map_err(|e| {
+                crate::types::KernelError::storage(format!("Failed to get cron job: {e}"))
+            })?
+            else {
+                return Ok(false);
+            };
+            let session_store = self.session_store().await;
+            input.action = Some(
+                crate::cron::ensure_action_session(action, &existing.name, &session_store, None)
+                    .await?,
+            );
+        }
+
+        let updated = store.update(id, &input).await.map_err(|e| {
             crate::types::KernelError::storage(format!("Failed to update cron job: {e}"))
-        })
+        })?;
+        if updated {
+            self.notify_cron_scheduler();
+        }
+        Ok(updated)
     }
 
     /// Delete a cron job.  Returns `true` if the job existed.
@@ -1508,9 +1546,13 @@ impl Kernel {
             .cron_store
             .as_ref()
             .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
-        store.delete(id).await.map_err(|e| {
+        let deleted = store.delete(id).await.map_err(|e| {
             crate::types::KernelError::storage(format!("Failed to delete cron job: {e}"))
-        })
+        })?;
+        if deleted {
+            self.notify_cron_scheduler();
+        }
+        Ok(deleted)
     }
 
     /// Trigger a cron job manually (execute immediately, record result).
@@ -1528,7 +1570,17 @@ impl Kernel {
             })?
             .ok_or_else(|| crate::types::KernelError::storage("Cron job not found"))?;
 
-        let result = crate::cron::CronExecutor::execute_cron_action(self, &job.action).await;
+        let result = match tokio::time::timeout(
+            std::time::Duration::from_secs(crate::cron::worker::EXECUTION_TIMEOUT_SECS),
+            crate::cron::CronExecutor::execute_cron_action(self, &job.action),
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(_) => Err(crate::cron::CronError::Timeout(
+                crate::cron::worker::EXECUTION_TIMEOUT_SECS,
+            )),
+        };
 
         let error = match &result {
             Ok(()) => None,
@@ -1557,7 +1609,12 @@ impl crate::cron::CronExecutor for Kernel {
                 session_id,
                 content,
             } => {
-                let sid = SessionId::from(session_id.clone());
+                let session_id = session_id.as_deref().ok_or_else(|| {
+                    CronError::Session(crate::types::KernelError::storage(
+                        "cron job has no session bound",
+                    ))
+                })?;
+                let sid = SessionId::from(session_id.to_string());
                 let text = render_template(content);
                 let blocks = vec![ContentBlock::Text { text }];
                 self.send_message_inner(&sid, blocks, false)
@@ -1568,27 +1625,7 @@ impl crate::cron::CronExecutor for Kernel {
                 command,
                 working_dir,
             } => {
-                let output = tokio::process::Command::new("sh")
-                    .arg("-c")
-                    .arg(command)
-                    .current_dir(working_dir.as_deref().unwrap_or("."))
-                    .kill_on_drop(true)
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped())
-                    .env("GIT_PAGER", "cat")
-                    .env("GIT_EDITOR", "true")
-                    .env("GIT_SEQUENCE_EDITOR", "true")
-                    .env("GIT_TERMINAL_PROMPT", "0")
-                    .env("PAGER", "cat")
-                    .env("EDITOR", "true")
-                    .output()
-                    .await
-                    .map_err(CronError::Io)?;
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(CronError::ShellFailed(stderr.to_string()));
-                }
+                crate::cron::run_shell_command(command, working_dir.as_deref()).await?;
             }
             CronAction::Internal { .. } => {
                 return Err(CronError::UnsupportedAction("Internal".to_string()));

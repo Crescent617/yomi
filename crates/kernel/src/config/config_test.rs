@@ -229,6 +229,7 @@ fn features_default_to_disabled() {
     let features = FeaturesConfig::default();
 
     assert!(!features.update_session_title_enabled());
+    assert!(!features.cron_tool_enabled());
 }
 
 #[test]
@@ -243,6 +244,18 @@ update_session_title = false
     .unwrap();
 
     assert!(!parsed.features.update_session_title_enabled());
+    assert!(parsed.features.cron_tool_enabled());
+
+    let parsed: Config = toml::from_str(
+        r"
+[features]
+all = true
+cron_tool = false
+",
+    )
+    .unwrap();
+
+    assert!(!parsed.features.cron_tool_enabled());
 }
 
 #[test]
@@ -251,11 +264,13 @@ fn individual_feature_can_be_enabled_when_all_is_disabled() {
         r"
 [features]
 update_session_title = true
+cron_tool = true
 ",
     )
     .unwrap();
 
     assert!(parsed.features.update_session_title_enabled());
+    assert!(parsed.features.cron_tool_enabled());
 }
 
 #[test]

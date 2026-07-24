@@ -23,7 +23,7 @@ pub trait CronStore: Send + Sync {
     async fn delete(&self, id: &CronJobId) -> Result<bool, CronError>;
     /// 获取所有 active 任务（供 scheduler 加载）
     async fn list_active(&self) -> Result<Vec<CronJob>, CronError>;
-    /// `原子更新执行记录（run_count`++, `last_run_at`, `last_error`）
+    /// 原子更新执行记录（`run_count`++, `last_run_at`, `last_error`）
     async fn record_execution(
         &self,
         id: &CronJobId,
@@ -107,15 +107,16 @@ impl CronStore for SqliteCronStore {
     }
 
     async fn update(&self, id: &CronJobId, input: &UpdateCronJobInput) -> Result<bool, CronError> {
-        // 使用参数化查询，避免 SQL 注入
+        // 使用参数化查询，避免 SQL 注入。
+        // max_runs/expires_at 支持显式清除（clear flag → NULL）。
         let result = sqlx::query(
             r"UPDATE cron_jobs SET
                 name = COALESCE(?, name),
                 schedule = COALESCE(?, schedule),
                 action = COALESCE(?, action),
                 status = COALESCE(?, status),
-                max_runs = COALESCE(?, max_runs),
-                expires_at = COALESCE(?, expires_at),
+                max_runs = CASE WHEN ? THEN NULL ELSE COALESCE(?, max_runs) END,
+                expires_at = CASE WHEN ? THEN NULL ELSE COALESCE(?, expires_at) END,
                 next_run_at = COALESCE(?, next_run_at),
                 updated_at = ?
             WHERE id = ?",
@@ -129,7 +130,9 @@ impl CronStore for SqliteCronStore {
                 .and_then(|a| serde_json::to_string(a).ok()),
         )
         .bind(input.status.map(|s| s.as_str().to_string()))
+        .bind(input.clear_max_runs)
         .bind(input.max_runs.map(i64::from))
+        .bind(input.clear_expires_at)
         .bind(input.expires_at.map(|t| t.to_rfc3339()))
         .bind(input.next_run_at.map(|t| t.to_rfc3339()))
         .bind(Utc::now().to_rfc3339())

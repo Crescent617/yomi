@@ -25,10 +25,11 @@ mod tests {
         let next = schedule.next_after(now);
         assert!(next.is_some());
         let next = next.unwrap();
-        // Should be at 9:00 AM
-        assert_eq!(next.hour(), 9);
-        assert_eq!(next.minute(), 0);
-        assert_eq!(next.second(), 0);
+        // 表达式按本地时区解释：本地时间应为 9:00 AM
+        let local = next.with_timezone(&chrono::Local);
+        assert_eq!(local.hour(), 9);
+        assert_eq!(local.minute(), 0);
+        assert_eq!(local.second(), 0);
     }
 
     #[test]
@@ -38,9 +39,10 @@ mod tests {
         let upcoming = schedule.upcoming(now, 3);
         assert_eq!(upcoming.len(), 3);
         for t in &upcoming {
-            assert_eq!(t.hour(), 9);
-            assert_eq!(t.minute(), 0);
-            assert_eq!(t.second(), 0);
+            let local = t.with_timezone(&chrono::Local);
+            assert_eq!(local.hour(), 9);
+            assert_eq!(local.minute(), 0);
+            assert_eq!(local.second(), 0);
         }
     }
 
@@ -83,7 +85,7 @@ mod tests {
     #[test]
     fn test_cron_action_serde() {
         let action = CronAction::SendMessage {
-            session_id: "test-session".to_string(),
+            session_id: Some("test-session".to_string()),
             content: "Hello {{date}}".to_string(),
         };
         let json = serde_json::to_string(&action).unwrap();

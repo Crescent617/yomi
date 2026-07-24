@@ -51,6 +51,9 @@ impl KernelServer {
         config_path: Option<std::path::PathBuf>,
         restart_tx: Option<mpsc::Sender<()>>,
     ) -> Self {
+        // Adopt the kernel's slot so the RPC dispatcher and agents (cron
+        // tool) notify the same scheduler instance.
+        let cron_scheduler = kernel.cron_scheduler_slot();
         Self {
             kernel,
             config_path,
@@ -58,7 +61,7 @@ impl KernelServer {
             instance_id: Arc::from(ulid::Ulid::new().to_string()),
             connections: Arc::new(dashmap::DashMap::new()),
             next_conn_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
-            cron_scheduler: Arc::new(std::sync::Mutex::new(None)),
+            cron_scheduler,
             shutdown: tokio_util::sync::CancellationToken::new(),
             event_buffer: Arc::new(EventBuffer::new(10_000)),
             session_subscribers: Arc::new(SessionSubscribers::new(4096)),

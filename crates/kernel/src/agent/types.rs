@@ -25,6 +25,10 @@ pub struct AgentConfig {
     pub compactor: Compactor,
     /// Maximum tool output length in bytes (default `40_000`)
     pub max_tool_output_length: usize,
+    /// Enable the cron tool for agents. Plumbed from `[features] cron_tool`
+    /// in `build_agent_config`; not settable via the `[agent]` section.
+    #[serde(skip)]
+    pub enable_cron_tool: bool,
 }
 
 /// Configuration for spawning a new agent
@@ -40,6 +44,8 @@ pub struct AgentSpawnArgs {
     pub working_dir: std::path::PathBuf,
     /// Optional cancel token to share with parent (for cascading cancellation)
     pub cancel_token: Option<super::CancelToken>,
+    /// Enable the cron tool for this agent.
+    pub enable_cron_tool: bool,
     /// Optional file state store (for restoring from previous session)
     pub file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
     pub tool_blocklist: Vec<String>,
@@ -62,6 +68,7 @@ impl std::fmt::Debug for AgentSpawnArgs {
             .field("enable_sub_agents", &self.enable_subagent)
             .field("working_dir", &self.working_dir)
             .field("cancel_token", &self.cancel_token.is_some())
+            .field("enable_cron_tool", &self.enable_cron_tool)
             .field("file_state_store", &self.file_state_store.is_some())
             .field("tool_blocklist", &self.tool_blocklist)
             .field("max_tool_output_length", &self.max_tool_output_length)
@@ -89,6 +96,7 @@ impl AgentSpawnArgs {
             enable_subagent: true,
             working_dir: working_dir.into(),
             cancel_token: None,
+            enable_cron_tool: false,
             file_state_store: None,
             tool_blocklist: Vec::new(),
             max_tool_output_length: 40_000,
@@ -135,6 +143,13 @@ impl AgentSpawnArgs {
     #[must_use]
     pub const fn with_subagent(mut self, enabled: bool) -> Self {
         self.enable_subagent = enabled;
+        self
+    }
+
+    /// Enable the cron tool
+    #[must_use]
+    pub const fn with_cron_tool(mut self, enabled: bool) -> Self {
+        self.enable_cron_tool = enabled;
         self
     }
 
@@ -187,6 +202,7 @@ impl Default for AgentConfig {
             tool_blocklist: Vec::new(),
             compactor: Compactor::default(),
             max_tool_output_length: 40_000,
+            enable_cron_tool: false,
         }
     }
 }
@@ -336,6 +352,12 @@ pub struct AgentShared {
     pub event_bus: Option<Arc<crate::comms::EventBus>>,
     /// Runtime tracker for asynchronous background work grouped by session.
     pub background_tasks: Arc<BgTaskTracker>,
+    /// Cron store for scheduled job operations (None when cron is disabled).
+    pub cron_store: Option<Arc<dyn crate::cron::CronStore>>,
+    /// Shared slot for the running cron scheduler. Owned by `Kernel`, filled by
+    /// `KernelServer` on start; tools use it to notify the scheduler of job
+    /// changes. Empty when not running under a daemon.
+    pub cron_scheduler: Arc<std::sync::Mutex<Option<Arc<crate::cron::CronScheduler>>>>,
 }
 
 impl AgentShared {
@@ -406,6 +428,8 @@ impl AgentShared {
             channel_hub: None,
             event_bus: None,
             background_tasks: Arc::new(BgTaskTracker::default()),
+            cron_store: None,
+            cron_scheduler: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -443,6 +467,18 @@ impl AgentShared {
     #[must_use]
     pub fn with_goal_store(mut self, store: Arc<dyn crate::goal::GoalStore>) -> Self {
         self.goal_store = Some(store);
+        self
+    }
+
+    /// Set the cron store and the shared scheduler slot.
+    #[must_use]
+    pub fn with_cron(
+        mut self,
+        store: Option<Arc<dyn crate::cron::CronStore>>,
+        scheduler: Arc<std::sync::Mutex<Option<Arc<crate::cron::CronScheduler>>>>,
+    ) -> Self {
+        self.cron_store = store;
+        self.cron_scheduler = scheduler;
         self
     }
 

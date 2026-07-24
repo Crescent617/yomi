@@ -364,14 +364,9 @@ impl KernelServer {
                     expires_at,
                 };
                 match self.kernel.create_cron_job(input).await {
-                    Ok(job_id) => {
-                        if let Some(ref scheduler) = *self.cron_scheduler.lock().unwrap() {
-                            scheduler.reload();
-                        }
-                        ok_body(JobIdResponse {
-                            job_id: job_id.0.to_string(),
-                        })
-                    }
+                    Ok(job_id) => ok_body(JobIdResponse {
+                        job_id: job_id.0.to_string(),
+                    }),
                     Err(e) => RespBody::Err {
                         error: RpcError {
                             code: "create_cron_job_failed".to_string(),
@@ -459,16 +454,9 @@ impl KernelServer {
                     .update_cron_job(&CronJobId::from(job_id), input)
                     .await
                 {
-                    Ok(updated) => {
-                        if updated {
-                            if let Some(ref scheduler) = *self.cron_scheduler.lock().unwrap() {
-                                scheduler.reload();
-                            }
-                        }
-                        RespBody::Ok {
-                            result: serde_json::Value::Bool(updated),
-                        }
-                    }
+                    Ok(updated) => RespBody::Ok {
+                        result: serde_json::Value::Bool(updated),
+                    },
                     Err(e) => RespBody::Err {
                         error: RpcError {
                             code: "update_cron_job_failed".to_string(),
@@ -480,16 +468,9 @@ impl KernelServer {
             }
             ReqMethod::DeleteCronJob { job_id } => {
                 match self.kernel.delete_cron_job(&CronJobId::from(job_id)).await {
-                    Ok(deleted) => {
-                        if deleted {
-                            if let Some(ref scheduler) = *self.cron_scheduler.lock().unwrap() {
-                                scheduler.reload();
-                            }
-                        }
-                        RespBody::Ok {
-                            result: serde_json::Value::Bool(deleted),
-                        }
-                    }
+                    Ok(deleted) => RespBody::Ok {
+                        result: serde_json::Value::Bool(deleted),
+                    },
                     Err(e) => RespBody::Err {
                         error: RpcError {
                             code: "delete_cron_job_failed".to_string(),

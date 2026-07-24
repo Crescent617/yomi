@@ -140,7 +140,7 @@ impl Agent {
                 input_bus: args.input_bus.as_ref(),
                 file_state_store: None,
                 tool_blocklist: args.tool_blocklist.clone(),
-                flags: ToolFlags::new(enable_subagent),
+                flags: ToolFlags::new(enable_subagent).with_cron(args.enable_cron_tool),
             }
             .with_file_state_store(args.file_state_store.clone()),
         );

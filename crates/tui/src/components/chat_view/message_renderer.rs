@@ -927,6 +927,7 @@ enum ToolKind {
     Sleep,
     UpdateGoal,
     SendMessage,
+    Cron,
     TaskCreate,
     TaskGet,
     TaskList,
@@ -968,6 +969,7 @@ fn tool_kind(tool_name: &str) -> ToolKind {
         "sleep" => ToolKind::Sleep,
         "updategoal" => ToolKind::UpdateGoal,
         "sendmessage" | "message" => ToolKind::SendMessage,
+        "cron" => ToolKind::Cron,
         "taskcreate" => ToolKind::TaskCreate,
         "taskget" => ToolKind::TaskGet,
         "tasklist" => ToolKind::TaskList,
@@ -998,7 +1000,7 @@ fn tool_header_summary(tool_name: &str, args: Option<&str>) -> ToolHeaderSummary
             .and_then(|questions| questions.first())
             .and_then(|question| question["question"].as_str())
             .map(compact),
-        ToolKind::Todo => text("action").map(compact),
+        ToolKind::Todo | ToolKind::Cron => text("action").map(compact),
         ToolKind::Reminder => text("message").map(compact),
         ToolKind::Sleep => value
             .as_ref()
@@ -1116,6 +1118,43 @@ fn tool_header_summary(tool_name: &str, args: Option<&str>) -> ToolHeaderSummary
                 metadata.push(format!("{} items", items.len()));
             }
         }
+        ToolKind::Cron => match text("action") {
+            Some("create") => {
+                if let Some(name) = text("name") {
+                    metadata.push(compact(name));
+                }
+                if let Some(schedule) = text("schedule") {
+                    metadata.push(compact(schedule));
+                }
+                if text("type") == Some("shell") {
+                    metadata.push("shell".to_string());
+                }
+                if let Some(max_runs) = value.as_ref().and_then(|v| v["max_runs"].as_u64()) {
+                    metadata.push(format!("max {max_runs}"));
+                }
+            }
+            Some("update") => {
+                if let Some(id) = text("id") {
+                    metadata.push(compact(id));
+                }
+                if let Some(status) = text("status") {
+                    metadata.push(format!("→ {status}"));
+                } else if let Some(schedule) = text("schedule") {
+                    metadata.push(compact(schedule));
+                }
+            }
+            Some("delete" | "trigger") => {
+                if let Some(id) = text("id") {
+                    metadata.push(compact(id));
+                }
+            }
+            Some("list") => {
+                if let Some(status) = text("status") {
+                    metadata.push(status.to_string());
+                }
+            }
+            _ => {}
+        },
         ToolKind::Reminder => {
             if let Some(delay) = value.as_ref().and_then(|v| v["delay_seconds"].as_u64()) {
                 metadata.push(format!("{delay}s"));
@@ -1174,6 +1213,7 @@ fn tool_label(tool_name: &str) -> String {
         ToolKind::Sleep => "Sleep",
         ToolKind::UpdateGoal => "Update goal",
         ToolKind::SendMessage => "Send message",
+        ToolKind::Cron => "Cron",
         ToolKind::TaskCreate => "Create task",
         ToolKind::TaskGet => "Get task",
         ToolKind::TaskList => "List tasks",
@@ -1195,6 +1235,7 @@ pub fn tool_icon(tool_name: &str) -> &'static str {
         ToolKind::WebFetch => "󰖟 ",
         ToolKind::WebSearch => " ",
         ToolKind::PostMessage | ToolKind::SendMessage => "󰍩 ",
+        ToolKind::Cron => "󰥔 ",
         ToolKind::Reminder => "󰀠 ",
         ToolKind::Sleep => "󰒲 ",
         ToolKind::TaskCreate

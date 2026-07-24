@@ -149,12 +149,19 @@ pub struct FeaturesConfig {
     pub all: bool,
     /// Generate a session title with a model after receiving a user message.
     pub update_session_title: Option<bool>,
+    /// Expose the cron tool to agents (create/list/update/delete/trigger jobs).
+    pub cron_tool: Option<bool>,
 }
 
 impl FeaturesConfig {
     #[must_use]
     pub fn update_session_title_enabled(&self) -> bool {
         self.update_session_title.unwrap_or(self.all)
+    }
+
+    #[must_use]
+    pub fn cron_tool_enabled(&self) -> bool {
+        self.cron_tool.unwrap_or(self.all)
     }
 }
 

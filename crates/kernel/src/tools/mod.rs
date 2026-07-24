@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub mod ask_user;
+pub mod cron;
 pub mod edit;
 pub mod executor;
 pub mod glob;
@@ -34,6 +35,7 @@ pub use helper::{FileStateStore, DEFAULT_MAX_TOOL_OUTPUT_LENGTH, MAX_FILE_SIZE};
 pub use executor::{build_tool_result, ToolExecutionResult};
 
 pub use ask_user::{AskOption, AskQuestion, AskUserResponse, AskUserTool, ASK_USER_TOOL_NAME};
+pub use cron::{CronTool, CRON_TOOL_NAME};
 pub use edit::{EditTool, EDIT_TOOL_NAME};
 pub use glob::{GlobTool, GLOB_TOOL_NAME};
 pub use grep::{GrepTool, GREP_TOOL_NAME};
@@ -365,7 +367,21 @@ impl ToolRegistry {
 
         // Register Sleep tool if enabled
         if config.flags.sleep {
-            self.register(SleepTool::new());
+            self.register(SleepTool::new(config.input_bus.cloned()));
+        }
+
+        // Register cron tool if enabled and the cron store is available
+        if config.flags.cron {
+            if let Some(store) = config.shared.cron_store.clone() {
+                self.register(CronTool::new(
+                    store,
+                    Arc::clone(&config.shared.cron_scheduler),
+                    config.shared.session_store.clone(),
+                    config.input_bus.cloned(),
+                ));
+            } else {
+                tracing::warn!("Cron tool enabled but cron store not configured; skipping");
+            }
         }
 
         // Register ask_user tool if input_bus is available
@@ -415,6 +431,8 @@ pub struct ToolFlags {
     pub goal: bool,
     /// Enable sleep tool for testing.
     pub sleep: bool,
+    /// Enable cron tool for managing scheduled jobs.
+    pub cron: bool,
 }
 
 impl ToolFlags {
@@ -425,7 +443,15 @@ impl ToolFlags {
             reminder: false,
             goal: true,
             sleep: true,
+            cron: false,
         }
+    }
+
+    /// Set the cron tool flag.
+    #[must_use]
+    pub const fn with_cron(mut self, enabled: bool) -> Self {
+        self.cron = enabled;
+        self
     }
 }
 

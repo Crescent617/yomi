@@ -61,21 +61,14 @@ export class AutomationStore {
       await triggerCronJob(job_id);
       await this.load();
       const job = this.jobs.find((j) => j.id === job_id);
-      const session_id = job?.action?.session_id;
+      // shell 任务已完成；send_message 只是入队，agent 尚未运行
       sendDesktopNotification(
         "Yomi",
-        `Task "${job?.name ?? job_id}" completed`,
-        session_id,
+        `Task "${job?.name ?? job_id}" triggered`,
+        job?.action?.session_id,
       );
     } catch (e: unknown) {
       this.error = errorMessage(e);
-      const job = this.jobs.find((j) => j.id === job_id);
-      const session_id = job?.action?.session_id;
-      sendDesktopNotification(
-        "Yomi",
-        `Task "${job_id}" failed: ${this.error}`,
-        session_id,
-      );
     }
   }
 

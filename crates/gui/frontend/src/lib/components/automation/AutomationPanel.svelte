@@ -272,7 +272,11 @@
                       >{job.schedule}</code
                     >
                     <span aria-hidden="true">·</span>
-                    <span class="shrink-0">{timeUntil(job.next_run_at)}</span>
+                    <span class="shrink-0"
+                      >{job.status === "active"
+                        ? timeUntil(job.next_run_at)
+                        : job.status}</span
+                    >
                   </div>
                 </div>
               </div>
@@ -311,8 +315,10 @@
                 class="mt-1 flex items-center gap-2 text-xs text-muted-foreground"
               >
                 <code class="font-mono">{job.schedule}</code>
-                <span aria-hidden="true">·</span>
-                <span>{timeUntil(job.next_run_at)}</span>
+                {#if job.status === "active"}
+                  <span aria-hidden="true">·</span>
+                  <span>{timeUntil(job.next_run_at)}</span>
+                {/if}
               </div>
             </div>
           </div>

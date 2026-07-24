@@ -187,6 +187,7 @@ async fn repeated_token_usage_events_are_recorded_once() {
         enable_subagent: false,
         working_dir: working_dir.path().to_path_buf(),
         cancel_token: None,
+        enable_cron_tool: false,
         file_state_store: None,
         tool_blocklist: Vec::new(),
         max_tool_output_length: 1024,

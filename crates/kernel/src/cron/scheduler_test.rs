@@ -207,8 +207,10 @@ async fn test_fire_due_jobs_skips_running() {
 
     assert!(rx.try_recv().is_err());
 
+    // 执行中的 job 的过期 entry 会被丢弃（避免调度循环空转），
+    // 执行结束后由 job_finished 重新入队
     let q = scheduler.queue.read().await;
-    assert_eq!(q.len(), 1);
+    assert!(q.is_empty());
 }
 
 #[tokio::test]

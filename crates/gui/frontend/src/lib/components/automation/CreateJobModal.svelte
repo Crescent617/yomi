@@ -78,14 +78,15 @@
 
     if (actionType === "send_message") {
       if (!content.trim()) errors.content = "Message content is required";
-      if (!use_new_session && !session_id.trim()) {
+      // 编辑模式下留空 session_id 时 kernel 会自动绑定新 session
+      if (!editingJob && !use_new_session && !session_id.trim()) {
         errors.session_id = "Session ID is required";
       }
     } else if (!command.trim()) {
       errors.command = "Command is required";
     }
 
-    if (max_runs !== "") {
+    if (max_runs !== "" && max_runs != null) {
       const value = Number(max_runs);
       if (!Number.isInteger(value) || value < 1) {
         errors.max_runs = "Enter a positive whole number";
@@ -162,8 +163,16 @@
         schedule: schedule.trim(),
         action: JSON.stringify(action),
       };
-      if (max_runs !== "") payload.max_runs = Number(max_runs);
-      if (expires_at) payload.expires_at = new Date(expires_at).toISOString();
+      if (max_runs !== "" && max_runs != null) {
+        payload.max_runs = Number(max_runs);
+      } else if (editingJob?.max_runs != null) {
+        payload.clear_max_runs = true;
+      }
+      if (expires_at) {
+        payload.expires_at = new Date(expires_at).toISOString();
+      } else if (editingJob?.expires_at != null) {
+        payload.clear_expires_at = true;
+      }
 
       if (editingJob) {
         await updateCronJob(editingJob.id, payload);
@@ -272,7 +281,7 @@
           >
             {(attempted || Boolean(schedule)) && !scheduleValid
               ? scheduleError
-              : "5 fields, or 6 with an optional seconds prefix"}
+              : "5 fields, or 6 with an optional seconds prefix · local time"}
           </p>
         </div>
       </div>
@@ -358,13 +367,16 @@
                 for="task-session"
                 class="mb-1.5 block text-sm font-medium"
               >
-                Session ID <span class="text-error">*</span>
+                Session ID {#if !editingJob}<span class="text-error">*</span
+                  >{/if}
               </label>
               <input
                 id="task-session"
                 type="text"
                 bind:value={session_id}
-                placeholder="Session ID"
+                placeholder={editingJob
+                  ? "Leave empty to create a new session"
+                  : "Session ID"}
                 aria-invalid={attempted && Boolean(validationErrors.session_id)}
                 class="h-9 w-full rounded-md border border-input bg-background px-3 font-mono text-sm outline-none transition-shadow placeholder:text-muted-foreground/60 focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"
               />

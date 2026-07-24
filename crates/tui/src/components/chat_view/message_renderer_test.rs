@@ -27,6 +27,37 @@ fn tool_aliases_are_case_insensitive_and_compact() {
 }
 
 #[test]
+fn cron_uses_action_as_target_and_clock_icon() {
+    let args = r#"{"action":"create","name":"daily","schedule":"0 9 * * 1-5"}"#;
+    assert_eq!(
+        extract_tool_target("cron", Some(args)),
+        Some("create".to_string())
+    );
+    assert_eq!(tool_icon("cron"), "󰥔 ");
+}
+
+#[test]
+fn cron_metadata_summarizes_args() {
+    let summary = super::tool_header_summary(
+        "cron",
+        Some(
+            r#"{"action":"create","name":"daily","schedule":"0 9 * * 1-5","type":"shell","command":"make report","max_runs":5}"#,
+        ),
+    );
+    assert_eq!(summary.label, "Cron");
+    assert_eq!(
+        summary.metadata.as_deref(),
+        Some("daily · 0 9 * * 1-5 · shell · max 5")
+    );
+
+    let update = super::tool_header_summary(
+        "cron",
+        Some(r#"{"action":"update","id":"cron_1","status":"paused"}"#),
+    );
+    assert_eq!(update.metadata.as_deref(), Some("cron_1 · → paused"));
+}
+
+#[test]
 fn snake_case_builtins_extract_targets() {
     assert_eq!(
         extract_tool_target("web_search", Some(r#"{"query":"rust tui"}"#)),

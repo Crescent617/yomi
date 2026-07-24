@@ -38,11 +38,12 @@ impl CronScheduler {
 
     /// 启动调度主循环
     pub async fn run(self: Arc<Self>, token: CancellationToken) {
+        // 先订阅再加载，避免加载期间的 reload 信号丢失
+        let mut reload_rx = self.reload_tx.subscribe();
+
         if let Err(e) = self.load_jobs().await {
             tracing::error!("Failed to load cron jobs: {e}");
         }
-
-        let mut reload_rx = self.reload_tx.subscribe();
 
         loop {
             let (sleep_duration, has_jobs) = {
@@ -229,6 +230,7 @@ impl CronScheduler {
     async fn fire_due_jobs(&self) -> Result<(), CronError> {
         let now = Utc::now();
         let mut due_jobs = Vec::new();
+        let mut stale = Vec::new();
 
         // 收集所有到期且未在执行中的任务
         {
@@ -242,6 +244,9 @@ impl CronScheduler {
                 }
                 for job_id in job_ids {
                     if running.contains(job_id) {
+                        // 执行中的 job 被 reload 重新入队后到期：entry 已过期，
+                        // 丢弃它（job_finished 会重新入队），避免调度循环空转
+                        stale.push(job_id.clone());
                         continue;
                     }
                     if let Some(job) = jobs.get(job_id) {
@@ -249,6 +254,10 @@ impl CronScheduler {
                     }
                 }
             }
+        }
+
+        for job_id in stale {
+            self.remove_job(&job_id).await;
         }
 
         for job in due_jobs {
@@ -279,10 +288,13 @@ impl CronScheduler {
             // 发送任务到 worker
             if let Err(e) = self.task_tx.send(job.clone()).await {
                 tracing::error!("Failed to send cron job to worker: {}", e);
-                // 发送失败，从 running 中移除
+                // 发送失败（worker 已关闭）：移出 running，延迟 60s 重新入队重试
                 let mut running = self.running.write().await;
                 running.remove(&job.id);
-                // TODO: 重新将任务入队
+                drop(running);
+                let retry_at = Utc::now() + chrono::Duration::seconds(60);
+                let mut queue = self.queue.write().await;
+                queue.entry(retry_at).or_default().push(job.id.clone());
             }
         }
 
@@ -309,21 +321,14 @@ impl CronScheduler {
         jobs.remove(job_id);
     }
 
-    /// 从队列中移除指定任务
+    /// 从队列中移除指定任务（扫描所有 key，避免缓存的 `next_run_at`
+    /// 与队列不一致时留下残留 entry）
     async fn remove_job(&self, job_id: &CronJobId) {
-        let next_run = {
-            let jobs = self.jobs.read().await;
-            jobs.get(job_id).and_then(|j| j.next_run_at)
-        };
-        if let Some(t) = next_run {
-            let mut queue = self.queue.write().await;
-            if let Some(ids) = queue.get_mut(&t) {
-                ids.retain(|id| id != job_id);
-                if ids.is_empty() {
-                    queue.remove(&t);
-                }
-            }
-        }
+        let mut queue = self.queue.write().await;
+        queue.retain(|_, ids| {
+            ids.retain(|id| id != job_id);
+            !ids.is_empty()
+        });
     }
 }
 

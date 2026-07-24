@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 
 pub use crate::types::CronJobId;
@@ -13,7 +13,9 @@ pub use crate::types::CronJobId;
 pub enum CronAction {
     /// 向指定 Session 发送消息（触发 Agent 响应）
     SendMessage {
-        session_id: String,
+        /// 目标 session。创建 job 时可为空：kernel 会新建一个专用 session
+        /// 并在持久化前回填，之后每次触发都发往同一个 session。
+        session_id: Option<String>,
         /// 消息内容，支持模板变量：
         /// - {{timestamp}} — ISO8601 时间戳
         /// - {{date}} — YYYY-MM-DD
@@ -72,7 +74,7 @@ impl CronJobStatus {
 pub struct CronJob {
     pub id: CronJobId,
     pub name: String,
-    /// cron 表达式，如 "0 0 9 * * 1-5"（工作日 9:00）
+    /// cron 表达式，如 "0 0 9 * * 1-5"（工作日 9:00，按本地时区解释）
     pub schedule: String,
     pub action: CronAction,
     pub status: CronJobStatus,
@@ -111,6 +113,12 @@ pub struct UpdateCronJobInput {
     pub status: Option<CronJobStatus>,
     pub max_runs: Option<u32>,
     pub expires_at: Option<DateTime<Utc>>,
+    /// 显式清除 `max_runs`（设为 NULL，恢复无限次）
+    #[serde(default)]
+    pub clear_max_runs: bool,
+    /// 显式清除 `expires_at`（设为 NULL，永不过期）
+    #[serde(default)]
+    pub clear_expires_at: bool,
     /// 用于 scheduler 内部更新 `next_run_at`
     #[serde(skip)]
     pub next_run_at: Option<DateTime<Utc>>,
@@ -144,14 +152,28 @@ impl CronSchedule {
         })
     }
 
-    /// 计算下一次触发时间（从 from 之后开始）
+    /// 计算下一次触发时间（从 from 之后开始）。
+    ///
+    /// cron 表达式按**本地时区**解释（如 `0 0 9 * * *` = 本地 9:00），
+    /// 返回值统一转换为 UTC 便于存储与比较。不存在的本地时间（DST 春拨）
+    /// 会被跳过。
     pub fn next_after(&self, from: DateTime<Utc>) -> Option<DateTime<Utc>> {
-        self.schedule.after(&from).next()
+        self.schedule
+            .after(&from.with_timezone(&Local))
+            .map(|dt| dt.with_timezone(&Utc))
+            // DST 秋拨时 cron 会把歧义 wall time 解析为 earlier occurrence，
+            // 其绝对时间可能早于 from；过滤掉这些“过去”的结果。
+            .find(|dt| *dt > from)
     }
 
-    /// 计算 upcoming N 次触发时间
+    /// 计算 upcoming N 次触发时间（本地时区解释，返回 UTC）
     pub fn upcoming(&self, from: DateTime<Utc>, n: usize) -> Vec<DateTime<Utc>> {
-        self.schedule.after(&from).take(n).collect()
+        self.schedule
+            .after(&from.with_timezone(&Local))
+            .map(|dt| dt.with_timezone(&Utc))
+            .filter(|dt| *dt > from)
+            .take(n)
+            .collect()
     }
 
     pub fn source(&self) -> &str {
@@ -204,12 +226,12 @@ impl From<std::str::Utf8Error> for CronError {
     }
 }
 
-/// 渲染 cron 模板中的变量占位符：
-/// - `{{timestamp}}` → ISO8601 时间戳
+/// 渲染 cron 模板中的变量占位符（按本地时区取值）：
+/// - `{{timestamp}}` → ISO8601 时间戳（含本地时区偏移）
 /// - `{{date}}` → YYYY-MM-DD
 /// - `{{time}}` → HH:MM:SS
 pub fn render_template(template: &str) -> String {
-    let now = chrono::Utc::now();
+    let now = chrono::Local::now();
     template
         .replace("{{timestamp}}", &now.to_rfc3339())
         .replace("{{date}}", &now.format("%Y-%m-%d").to_string())

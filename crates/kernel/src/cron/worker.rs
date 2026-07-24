@@ -7,6 +7,9 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+/// 单次执行超时（worker 与 trigger 共用）
+pub(crate) const EXECUTION_TIMEOUT_SECS: u64 = 300;
+
 pub struct CronWorker {
     executor: Arc<dyn CronExecutor>,
     task_rx: mpsc::Receiver<CronJob>,
@@ -85,14 +88,13 @@ impl CronWorker {
     }
 
     async fn execute(executor: &dyn CronExecutor, job: &CronJob) -> Result<(), CronError> {
-        const TIMEOUT_SECS: u64 = 300;
-        let timeout = Duration::from_secs(TIMEOUT_SECS);
+        let timeout = Duration::from_secs(EXECUTION_TIMEOUT_SECS);
 
         let result = tokio::time::timeout(timeout, executor.execute_cron_action(&job.action)).await;
 
         match result {
             Ok(r) => r,
-            Err(_) => Err(CronError::Timeout(TIMEOUT_SECS)),
+            Err(_) => Err(CronError::Timeout(EXECUTION_TIMEOUT_SECS)),
         }
     }
 }

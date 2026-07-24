@@ -461,6 +461,7 @@ impl Conductor {
         .with_arc_history(history)
         .with_max_iterations(self.agent_config.max_iterations)
         .with_subagent(self.agent_config.enable_subagent)
+        .with_cron_tool(self.agent_config.enable_cron_tool)
         .with_file_state_store(Arc::clone(&file_state_store))
         .with_tool_blocklist(tool_blocklist)
         .with_max_tool_output_length(self.agent_config.max_tool_output_length)
