@@ -6,6 +6,42 @@
 use crate::event::ContentChunk;
 use crate::types::{ContentBlock, FinishReason, ToolCall};
 
+/// Interval (estimated tokens) at which streaming tool-call arguments emit a
+/// progress summary. Large arguments (e.g. big file writes) otherwise stream
+/// for a long time without leaving any trace in the logs.
+const TOOL_CALL_SUMMARY_TOKEN_INTERVAL: usize = 4_096;
+
+/// Max chars kept for the head/tail argument snippets in the summary.
+const TOOL_CALL_SUMMARY_SNIPPET_CHARS: usize = 80;
+
+/// Accumulator for one streaming tool call's argument deltas.
+#[derive(Debug)]
+struct ToolCallDeltaTracker {
+    id: String,
+    name: String,
+    /// Accumulated argument bytes; estimated tokens = bytes / 4.
+    bytes: usize,
+    /// Head snippet of the arguments (identifies what the call targets).
+    head: String,
+    /// Tail snippet of the arguments (shows what is being written now).
+    tail: String,
+    /// Next estimated-token threshold that triggers a summary.
+    next_threshold: usize,
+}
+
+impl ToolCallDeltaTracker {
+    fn new(id: &str, name: &str) -> Self {
+        Self {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            bytes: 0,
+            head: String::new(),
+            tail: String::new(),
+            next_threshold: TOOL_CALL_SUMMARY_TOKEN_INTERVAL,
+        }
+    }
+}
+
 /// Result of collecting stream output
 #[derive(Debug, Default)]
 pub struct StreamCollectionResult {
@@ -33,6 +69,9 @@ pub struct StreamCollectorState {
     response_id: Option<String>,
     /// Finish/stop reason
     finish_reason: Option<FinishReason>,
+    /// Accumulator for the tool call currently streaming. Deltas for one
+    /// call arrive contiguously, so a new tool call id replaces this state.
+    tool_call_delta: Option<ToolCallDeltaTracker>,
 }
 
 impl StreamCollectorState {
@@ -63,6 +102,67 @@ impl StreamCollectorState {
             name: request.name,
             arguments: request.arguments,
         });
+    }
+
+    /// Accumulate a streaming tool-call argument delta. Returns a summary
+    /// string each time the accumulated size crosses another
+    /// [`TOOL_CALL_SUMMARY_TOKEN_INTERVAL`] estimated-token boundary.
+    pub(crate) fn handle_tool_call_delta(
+        &mut self,
+        id: &str,
+        name: &str,
+        delta: &str,
+    ) -> Option<String> {
+        let tracker = self
+            .tool_call_delta
+            .get_or_insert_with(|| ToolCallDeltaTracker::new(id, name));
+        if tracker.id != id {
+            *tracker = ToolCallDeltaTracker::new(id, name);
+        }
+        // The name chunk may arrive after the first args delta (providers
+        // emit an empty name until then); fill it in once known.
+        if tracker.name.is_empty() && !name.is_empty() {
+            name.clone_into(&mut tracker.name);
+        }
+        tracker.bytes += delta.len();
+
+        // Grow the head snippet up to the cap (first deltas may be empty).
+        let head_len = tracker.head.chars().count();
+        if head_len < TOOL_CALL_SUMMARY_SNIPPET_CHARS {
+            tracker.head.extend(
+                delta
+                    .chars()
+                    .take(TOOL_CALL_SUMMARY_SNIPPET_CHARS - head_len),
+            );
+        }
+
+        // Keep only the tail of the stream, trimmed at a char boundary.
+        tracker.tail.push_str(delta);
+        let tail_len = tracker.tail.chars().count();
+        if tail_len > TOOL_CALL_SUMMARY_SNIPPET_CHARS {
+            let skip = tail_len - TOOL_CALL_SUMMARY_SNIPPET_CHARS;
+            if let Some((idx, _)) = tracker.tail.char_indices().nth(skip) {
+                tracker.tail.drain(..idx);
+            }
+        }
+
+        // 4 bytes ≈ 1 token, same heuristic as `utils::tokens::estimate_tokens`.
+        let tokens = tracker.bytes / 4;
+        if tokens < tracker.next_threshold {
+            return None;
+        }
+        // Advance past the current token count so one huge delta logs once.
+        tracker.next_threshold = tokens / TOOL_CALL_SUMMARY_TOKEN_INTERVAL
+            * TOOL_CALL_SUMMARY_TOKEN_INTERVAL
+            + TOOL_CALL_SUMMARY_TOKEN_INTERVAL;
+        // Debug-format the snippets to keep the summary on a single line.
+        Some(format!(
+            "tool call `{}` ({id}) streaming: {} tokens accumulated, args head: {:?}, tail: {:?}",
+            tracker.name,
+            crate::utils::tokens::format_estimated_tokens(tokens),
+            tracker.head,
+            tracker.tail
+        ))
     }
 
     pub(crate) fn handle_token_usage(&mut self, usage: crate::provider::TokenUsage) {
@@ -113,3 +213,7 @@ impl StreamCollectorState {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "stream_collector_test.rs"]
+mod tests;

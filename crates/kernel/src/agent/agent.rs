@@ -876,6 +876,11 @@ impl Agent {
                             }));
                         }
                         ModelStreamItem::ToolCallDelta { id, name, arguments_delta } => {
+                            if let Some(summary) =
+                                state.handle_tool_call_delta(&id, &name, &arguments_delta)
+                            {
+                                tracing::warn!("{}", summary);
+                            }
                             self.emit(Event::Model(ModelEvent::ToolCallDelta {
                                 message_id: message_id.clone(),
                                 tool_id: id,
