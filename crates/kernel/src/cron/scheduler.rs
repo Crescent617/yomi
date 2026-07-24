@@ -137,34 +137,52 @@ impl CronScheduler {
         }
 
         // 重新计算 next_run 并更新数据库 + 缓存
-        if let Ok(schedule) = CronSchedule::parse(&job.schedule) {
-            let next = schedule.next_after(now);
-            if let Some(next) = next {
-                if let Err(e) = self
-                    .store
-                    .update(
-                        job_id,
-                        &crate::cron::types::UpdateCronJobInput {
-                            next_run_at: Some(next),
-                            ..Default::default()
-                        },
-                    )
-                    .await
-                {
-                    tracing::warn!("Failed to update next_run_at for job {}: {}", job_id.0, e);
-                }
+        match CronSchedule::parse(&job.schedule) {
+            Ok(schedule) => {
+                let next = schedule.next_after(now);
+                if let Some(next) = next {
+                    if let Err(e) = self
+                        .store
+                        .update(
+                            job_id,
+                            &crate::cron::types::UpdateCronJobInput {
+                                next_run_at: Some(next),
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                    {
+                        tracing::warn!("Failed to update next_run_at for job {}: {}", job_id.0, e);
+                    }
 
-                let mut queue = self.queue.write().await;
-                let mut jobs = self.jobs.write().await;
-                queue.entry(next).or_default().push(job_id.clone());
-                if let Some(j) = jobs.get_mut(job_id) {
-                    j.next_run_at = Some(next);
-                } else {
-                    // load_jobs 可能已清空缓存，直接插入完整 job 保持 queue/jobs 一致
-                    let mut job = job;
-                    job.next_run_at = Some(next);
-                    jobs.insert(job_id.clone(), job);
+                    let mut queue = self.queue.write().await;
+                    let mut jobs = self.jobs.write().await;
+                    // A concurrent load_jobs may have reloaded the job (seeing
+                    // the next_run_at just persisted) and queued it already —
+                    // never queue a job twice; both copies would be collected
+                    // in one fire pass and the job would run twice.
+                    if !queue.values().any(|ids| ids.contains(job_id)) {
+                        queue.entry(next).or_default().push(job_id.clone());
+                    }
+                    if let Some(j) = jobs.get_mut(job_id) {
+                        j.next_run_at = Some(next);
+                    } else {
+                        // load_jobs 可能已清空缓存，直接插入完整 job 保持 queue/jobs 一致
+                        let mut job = job;
+                        job.next_run_at = Some(next);
+                        jobs.insert(job_id.clone(), job);
+                    }
                 }
+            }
+            // Parse failure used to silently drop the requeue: the job stays
+            // active in the DB but vanishes from the queue until the next
+            // full reload. Log it.
+            Err(e) => {
+                tracing::warn!(
+                    "Invalid schedule for cron job {}, skipping requeue: {}",
+                    job_id.0,
+                    e
+                );
             }
         }
     }
@@ -238,6 +256,7 @@ impl CronScheduler {
             let jobs = self.jobs.read().await;
             let running = self.running.read().await;
 
+            let mut seen = std::collections::HashSet::new();
             for (next_run, job_ids) in queue.iter() {
                 if *next_run > now {
                     break;
@@ -247,6 +266,10 @@ impl CronScheduler {
                         // 执行中的 job 被 reload 重新入队后到期：entry 已过期，
                         // 丢弃它（job_finished 会重新入队），避免调度循环空转
                         stale.push(job_id.clone());
+                        continue;
+                    }
+                    // 并发 reload 可能留下重复 entry，同一轮只取一次
+                    if !seen.insert(job_id.clone()) {
                         continue;
                     }
                     if let Some(job) = jobs.get(job_id) {
@@ -279,7 +302,10 @@ impl CronScheduler {
             // 标记为执行中，防止重复调度
             {
                 let mut running = self.running.write().await;
-                running.insert(job.id.clone());
+                if !running.insert(job.id.clone()) {
+                    // 已在执行中（并发路径下的重复 entry），跳过
+                    continue;
+                }
             }
 
             // 从队列中移除（避免重复触发）

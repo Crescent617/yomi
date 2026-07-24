@@ -18,6 +18,7 @@
 
 use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolEvent};
 use crate::types::SessionId;
+use crate::utils::strs::{tail_by_chars, truncate_by_chars};
 use dashmap::DashMap;
 use serde_json::json;
 use std::sync::Arc;
@@ -86,14 +87,14 @@ impl ObsCardState {
     fn push_whisper(&mut self, delta: &str) {
         self.whisper.push_str(delta);
         if self.whisper.chars().count() > WHISPER_BUFFER_CHARS {
-            self.whisper = tail_chars(&self.whisper, WHISPER_BUFFER_CHARS);
+            self.whisper = tail_by_chars(&self.whisper, WHISPER_BUFFER_CHARS);
         }
     }
 
     /// Replace the whisper with the tail of a complete text (self-heal on
     /// `ModelEvent::End`, guards against chunk loss on the event bus).
     fn set_whisper(&mut self, text: &str) {
-        self.whisper = tail_chars(text, WHISPER_BUFFER_CHARS);
+        self.whisper = tail_by_chars(text, WHISPER_BUFFER_CHARS);
     }
 }
 
@@ -115,16 +116,22 @@ impl Settle {
     fn notice(&self) -> Option<String> {
         match self {
             Settle::Completed | Settle::Cancelled => None,
-            Settle::Failed(error) => Some(format!(
-                "❌ **Error**  {}",
-                truncate_chars(error, ERROR_MAX_CHARS)
-            )),
+            Settle::Failed(error) => Some(format!("❌ {}", error_line(error))),
             Settle::MaxIterations(reached) => {
                 Some(format!("❌ Max iterations reached ({reached})"))
             }
             Settle::Timeout => Some("⏰ Session lost (timed out)".to_string()),
         }
     }
+}
+
+/// Truncated one-line error summary for card bodies — the single truncation
+/// budget shared by the morphed-card notice and the terminal card.
+fn error_line(error: &str) -> String {
+    format!(
+        "**Error**  {}",
+        truncate_by_chars(error, ERROR_MAX_CHARS, "…")
+    )
 }
 
 /// Tracks per-session observability state and drives the platform adapter.
@@ -153,8 +160,8 @@ impl ObsTracker {
         }
     }
 
-    /// Record a user message routed to a session (before the run
-    /// starts/continues), for the mid-run post detection.
+    /// Record a user message posted while the session's agent is running
+    /// (hub only records then), for the mid-run post detection.
     pub(crate) fn record_receipt(&self, session_id: &SessionId, message_id: String) {
         self.receipts
             .entry(session_id.clone())
@@ -162,12 +169,13 @@ impl ObsTracker {
             .push(message_id);
     }
 
-    /// Whether the user posted messages mid-run — receipts hold the run's
-    /// trigger message plus any mid-run posts (commands never record
-    /// receipts), so more than one means the reply should land below their
-    /// messages as a new message instead of morphing the status card.
+    /// Whether the user posted messages mid-run — receipts hold only
+    /// messages recorded while the agent was running (run triggers are never
+    /// recorded, and commands never record receipts), so any receipt means
+    /// the reply should land below their messages as a new message instead
+    /// of morphing the status card.
     pub(crate) fn has_mid_run_posts(&self, session_id: &SessionId) -> bool {
-        self.receipts.get(session_id).is_some_and(|r| r.len() > 1)
+        self.receipts.get(session_id).is_some_and(|r| !r.is_empty())
     }
 
     /// Feed one session event. Cheap state updates happen on every event;
@@ -218,8 +226,8 @@ impl ObsTracker {
                     } else {
                         format!("{tool_name} · {summary}")
                     };
-                    // -1: truncate_chars appends the ellipsis on top.
-                    s.last_tool = Some(truncate_chars(&line, STATUS_TEXT_MAX_CHARS - 1));
+                    // -1: the appended ellipsis goes on top.
+                    s.last_tool = Some(truncate_by_chars(&line, STATUS_TEXT_MAX_CHARS - 1, "…"));
                 })
                 .await;
                 // First tool of a run materializes the status card.
@@ -232,12 +240,12 @@ impl ObsTracker {
             }) => {
                 let phase = format!(
                     "🔁 Retrying {attempt}/{max_attempts}: {}",
-                    truncate_chars(reason, 30)
+                    truncate_by_chars(reason, 30, "…")
                 );
                 self.update_running(session_id, |s| s.phase = phase).await;
             }
             Event::Agent(AgentEvent::Error { error, .. }) => {
-                let phase = format!("⚠️ Error: {}", truncate_chars(error, 30));
+                let phase = format!("⚠️ Error: {}", truncate_by_chars(error, 30, "…"));
                 // Never settles — a mid-retry error may still recover (see design §3).
                 self.update_running(session_id, |s| s.phase = phase).await;
             }
@@ -521,19 +529,10 @@ fn render_running(s: &ObsCardState) -> String {
 fn whisper_snippet(whisper: &str) -> String {
     let flat = reply::flatten_ws(whisper);
     if flat.chars().count() > STATUS_TEXT_MAX_CHARS {
-        format!("…{}", tail_chars(&flat, STATUS_TEXT_MAX_CHARS - 1))
+        format!("…{}", tail_by_chars(&flat, STATUS_TEXT_MAX_CHARS - 1))
     } else {
         flat
     }
-}
-
-/// Unicode-safe tail slice: the last `max` chars of `text`.
-fn tail_chars(text: &str, max: usize) -> String {
-    let count = text.chars().count();
-    if count <= max {
-        return text.to_string();
-    }
-    text.chars().skip(count - max).collect()
 }
 
 fn render_terminal(s: &ObsCardState, settle: &Settle) -> String {
@@ -550,10 +549,7 @@ fn render_terminal(s: &ObsCardState, settle: &Settle) -> String {
     };
     let mut lines = vec![stats_line(s)];
     if let Settle::Failed(error) = settle {
-        lines.push(format!(
-            "**Error**  {}",
-            truncate_chars(error, ERROR_MAX_CHARS)
-        ));
+        lines.push(error_line(error));
     }
     card_json(template, &title, &lines.join("\n"))
 }
@@ -624,15 +620,6 @@ fn humanize_tool_name(name: &str) -> String {
             }
         })
         .collect()
-}
-
-pub(crate) fn truncate_chars(text: &str, max: usize) -> String {
-    let text = text.trim();
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let truncated: String = text.chars().take(max).collect();
-    format!("{truncated}…")
 }
 
 #[cfg(test)]

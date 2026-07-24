@@ -71,8 +71,9 @@ pub struct ChannelConfig {
     pub reply_in_thread: bool,
     #[serde(default)]
     pub auto_approve_level: Level,
-    /// Status card + run receipts for run observability.
-    /// When disabled, channels behave as before (ack reaction + final reply).
+    /// Status card + run receipts for run observability. When disabled,
+    /// no status card or run receipts are shown; reply buffering (only the
+    /// last assistant text becomes the reply bubble) still applies.
     #[serde(default = "default_observability")]
     pub observability: bool,
     /// Attach the run trace (tool calls + intermediate texts) to the final

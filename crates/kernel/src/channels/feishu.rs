@@ -426,21 +426,15 @@ impl PlatformAdapter for FeishuAdapter {
         blocks: Vec<ContentBlock>,
         reply_msg_id: Option<&str>,
     ) -> Result<Option<String>, ChannelError> {
+        // Feishu rejects oversized card payloads; cap the markdown body at
+        // 30KB (bytes, UTF-8 safe — a char count would undercut CJK text).
         const MAX_MD: usize = 30_000;
         let token = self.get_token().await?;
         let text = super::blocks_to_text(&blocks);
         if text.is_empty() {
             return Ok(None);
         }
-        let text = if text.len() > MAX_MD {
-            let split = text
-                .char_indices()
-                .nth(MAX_MD)
-                .map_or(text.len(), |(i, _)| i);
-            format!("{}\n\n...(内容已截断)", &text[..split])
-        } else {
-            text
-        };
+        let text = crate::utils::strs::truncate_with_suffix(&text, MAX_MD, "\n\n...(内容已截断)");
 
         let content = Self::build_card(&text);
 

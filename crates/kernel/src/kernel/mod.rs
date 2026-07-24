@@ -1506,15 +1506,15 @@ impl Kernel {
             .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
 
         if let Some(ref schedule_str) = input.schedule {
-            let schedule = crate::cron::CronSchedule::parse(schedule_str)
-                .map_err(|e| crate::types::KernelError::storage(e.to_string()))?;
-            input.next_run_at = Some(schedule.next_after(Utc::now()).ok_or_else(|| {
-                crate::types::KernelError::storage("schedule has no upcoming fire time")
-            })?);
+            input.next_run_at = Some(
+                crate::cron::next_run_from_schedule(schedule_str)
+                    .map_err(|e| crate::types::KernelError::storage(e.to_string()))?,
+            );
         }
 
         // A replacement `SendMessage` action without a session gets a
         // dedicated new session bound, same as on create.
+        let mut bound_session: Option<crate::types::SessionId> = None;
         if let Some(action) = input.action.take() {
             // Bail out on unknown ids before binding any session, and reuse
             // the job's name for the new session title.
@@ -1525,19 +1525,45 @@ impl Kernel {
                 return Ok(false);
             };
             let session_store = self.session_store().await;
-            input.action = Some(
-                crate::cron::ensure_action_session(action, &existing.name, &session_store, None)
-                    .await?,
+            let binds_new_session = matches!(
+                action,
+                crate::cron::CronAction::SendMessage {
+                    session_id: None,
+                    ..
+                }
             );
+            let action =
+                crate::cron::ensure_action_session(action, &existing.name, &session_store, None)
+                    .await?;
+            if binds_new_session {
+                if let crate::cron::CronAction::SendMessage {
+                    session_id: Some(sid),
+                    ..
+                } = &action
+                {
+                    bound_session = Some(crate::types::SessionId::from(sid.clone()));
+                }
+            }
+            input.action = Some(action);
         }
 
-        let updated = store.update(id, &input).await.map_err(|e| {
-            crate::types::KernelError::storage(format!("Failed to update cron job: {e}"))
-        })?;
-        if updated {
-            self.notify_cron_scheduler();
+        let updated = match store.update(id, &input).await {
+            Ok(updated) => updated,
+            Err(e) => {
+                rollback_bound_cron_session(&self.session_store().await, bound_session).await;
+                return Err(crate::types::KernelError::storage(format!(
+                    "Failed to update cron job: {e}"
+                )));
+            }
+        };
+        if !updated {
+            // The job vanished between the get above and this update — the
+            // freshly bound session would orphan; roll it back.
+            rollback_bound_cron_session(&self.session_store().await, bound_session).await;
+            return Ok(false);
         }
-        Ok(updated)
+        self.notify_cron_scheduler();
+        Ok(true)
     }
 
     /// Delete a cron job.  Returns `true` if the job existed.
@@ -1555,7 +1581,9 @@ impl Kernel {
         Ok(deleted)
     }
 
-    /// Trigger a cron job manually (execute immediately, record result).
+    /// Trigger a cron job manually (execute immediately). Manual triggers
+    /// are not recorded: they don't consume `run_count`/`max_runs` and
+    /// don't touch `last_run_at`/`last_error`.
     pub async fn trigger_cron_job(&self, id: &crate::cron::CronJobId) -> Result<()> {
         let store = self
             .cron_store
@@ -1582,16 +1610,18 @@ impl Kernel {
             )),
         };
 
-        let error = match &result {
-            Ok(()) => None,
-            Err(e) => Some(e.to_string()),
-        };
-
-        store.record_execution(id, error).await.map_err(|e| {
-            crate::types::KernelError::storage(format!("Failed to record execution: {e}"))
-        })?;
-
         result.map_err(|e| crate::types::KernelError::storage(e.to_string()))
+    }
+}
+
+/// Best-effort rollback of a dedicated session bound during a failed cron
+/// job update (the update erroring out, or the job having vanished).
+async fn rollback_bound_cron_session(
+    session_store: &Arc<dyn crate::storage::SessionStore>,
+    session: Option<crate::types::SessionId>,
+) {
+    if let Some(sid) = session {
+        let _ = session_store.delete(&sid).await;
     }
 }
 
@@ -1670,7 +1700,7 @@ fn session_title_lock_key(session_id: &SessionId) -> String {
 /// Normalize session title: collapse whitespace, trim, truncate to 20 chars.
 fn normalize_session_title(title: &str) -> String {
     let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
-    title.chars().take(20).collect::<String>()
+    crate::utils::strs::truncate_by_chars(&title, 20, "")
 }
 
 #[cfg(test)]

@@ -18,7 +18,7 @@ pub fn maybe_truncate_output(text: String, max_len: usize, offset: usize) -> Str
     }
 
     // Truncate at a safe UTF-8 boundary near the limit
-    let truncate_at = find_utf8_boundary(&text, max_len);
+    let truncate_at = strs::floor_char_boundary(&text, max_len);
     let mut result = text;
     result.truncate(truncate_at);
 
@@ -31,14 +31,6 @@ pub fn maybe_truncate_output(text: String, max_len: usize, offset: usize) -> Str
     );
     result.push_str(&notice);
     result
-}
-
-/// Find a valid UTF-8 boundary at or before the target byte position.
-fn find_utf8_boundary(text: &str, target: usize) -> usize {
-    text.char_indices()
-        .rev()
-        .find(|&(i, _)| i <= target)
-        .map_or(0, |(i, _)| i)
 }
 
 /// Truncate output if it exceeds max length (UTF-8 safe)

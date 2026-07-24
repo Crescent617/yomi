@@ -886,7 +886,7 @@ async fn deliver_reply_freezes_card_and_flushes_new_message_on_mid_run_posts() {
         .await;
     obs.handle_event(&adapter, &sid, "chat-1", None, &tool_start_event())
         .await;
-    // Trigger + a mid-run platform message.
+    // A mid-run platform message (receipts are recorded only while running).
     obs.record_receipt(&sid, "m1".to_string());
     obs.record_receipt(&sid, "m2".to_string());
 

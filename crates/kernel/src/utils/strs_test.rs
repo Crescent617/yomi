@@ -1,6 +1,67 @@
 use super::*;
 
 #[test]
+fn truncate_by_chars_basic() {
+    assert_eq!(truncate_by_chars("hello", 10, "…"), "hello");
+    assert_eq!(truncate_by_chars("hello", 5, "…"), "hello");
+    assert_eq!(truncate_by_chars("hello world", 5, "…"), "hello…");
+    // Multibyte chars count as one char each.
+    assert_eq!(truncate_by_chars("你好世界", 2, "…"), "你好…");
+    assert_eq!(truncate_by_chars("你好", 2, "…"), "你好");
+    // Empty suffix behaves like a plain char take.
+    assert_eq!(truncate_by_chars("hello world", 5, ""), "hello");
+}
+
+#[test]
+fn tail_by_chars_basic() {
+    assert_eq!(tail_by_chars("hello", 10), "hello");
+    assert_eq!(tail_by_chars("hello", 5), "hello");
+    assert_eq!(tail_by_chars("hello world", 5), "world");
+    assert_eq!(tail_by_chars("你好世界", 2), "世界");
+}
+
+#[test]
+fn floor_char_boundary_basic() {
+    assert_eq!(floor_char_boundary("hello", 3), 3);
+    assert_eq!(floor_char_boundary("hello", 10), 5);
+    // "你" spans bytes 0..3: targets inside it floor to 0.
+    assert_eq!(floor_char_boundary("你好", 1), 0);
+    assert_eq!(floor_char_boundary("你好", 2), 0);
+    assert_eq!(floor_char_boundary("你好", 3), 3);
+    assert_eq!(floor_char_boundary("ab你", 3), 2);
+}
+
+#[test]
+fn truncate_by_utf16_no_truncation() {
+    assert_eq!(truncate_by_utf16("hello", 10, "..."), "hello");
+    assert_eq!(truncate_by_utf16("hello", 5, "..."), "hello");
+    assert_eq!(truncate_by_utf16("你好", 4, "..."), "你好");
+    assert_eq!(truncate_by_utf16("🎉🎊", 4, "..."), "🎉🎊");
+}
+
+#[test]
+fn truncate_by_utf16_counts_units_not_chars() {
+    // Each emoji is 2 UTF-16 units: 5 units fit only 2 emoji + suffix.
+    let result = truncate_by_utf16("🎉🎉🎉🎉", 6, "…");
+    assert_eq!(result, "🎉🎉…");
+    assert!(result.encode_utf16().count() <= 6);
+}
+
+#[test]
+fn truncate_by_utf16_suffix_budget() {
+    // Budget too small for any content: suffix only.
+    assert_eq!(truncate_by_utf16("hello", 3, "..."), "...");
+    assert_eq!(truncate_by_utf16("hello", 0, "..."), "...");
+}
+
+#[test]
+fn truncate_by_utf16_mixed_bmp_non_bmp() {
+    // "a你🎉b" = 1+1+2+1 = 5 units; max 4 with a 1-unit suffix leaves 3
+    // units of content: "a你" (🎉 doesn't fit).
+    assert_eq!(truncate_by_utf16("a你🎉b", 4, "…"), "a你…");
+}
+
+#[test]
 fn test_truncate_keep_edges_no_truncation() {
     assert_eq!(truncate_keep_edges("hello", 10, "..."), "hello");
     assert_eq!(truncate_keep_edges("hello", 5, "..."), "hello");

@@ -81,8 +81,8 @@ impl Tool for SleepTool {
             ));
         }
 
-        // Subscribe BEFORE starting the timer to minimize the chance of
-        // missing an input that arrives right as the sleep starts.
+        // Subscribe BEFORE starting the timer: registration is synchronous,
+        // so any steer published after this point is seen by `recv_wake`.
         // The subscription is a fan-out peek: messages are still queued to
         // the session mailbox by the conductor and processed after we return.
         let mut subscriber = self.input_bus.as_ref().map(|bus| {
@@ -100,9 +100,8 @@ impl Tool for SleepTool {
                     "Sleep cancelled after {elapsed} seconds (planned {delay} seconds, not completed)"
                 )))
             }
-            input = recv_wake(&mut subscriber) => {
+            _input = recv_wake(&mut subscriber) => {
                 let elapsed = start.elapsed().as_secs();
-                debug_assert!(matches!(input, AgentInput::Steer(_)));
                 Ok(ToolOutput::text(format!(
                     "Sleep interrupted after {elapsed} seconds (planned {delay} seconds): a steer message arrived for this session. It will be processed next."
                 )))

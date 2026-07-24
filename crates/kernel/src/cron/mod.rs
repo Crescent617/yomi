@@ -60,15 +60,26 @@ pub async fn ensure_action_session(
         )
         .await
         .map_err(|e| CronError::Storage(format!("failed to create session for cron job: {e}")))?;
-    session_store
-        .update_title(&id, job_name)
-        .await
-        .map_err(|e| CronError::Storage(format!("failed to title cron session: {e}")))?;
+    if let Err(e) = session_store.update_title(&id, job_name).await {
+        // Roll back the just-created session instead of orphaning it.
+        let _ = session_store.delete(&id).await;
+        return Err(CronError::Storage(format!(
+            "failed to title cron session: {e}"
+        )));
+    }
 
     Ok(CronAction::SendMessage {
         session_id: Some(id.0.to_string()),
         content,
     })
+}
+
+/// 校验 schedule 并计算距离现在最近的触发时间。创建与更新路径共用，
+/// 保证"永不触发的 schedule"在两条路径上都被拒绝。
+pub fn next_run_from_schedule(schedule: &str) -> Result<chrono::DateTime<chrono::Utc>, CronError> {
+    CronSchedule::parse(schedule)?
+        .next_after(chrono::Utc::now())
+        .ok_or_else(|| CronError::InvalidSchedule("schedule has no upcoming fire time".into()))
 }
 
 /// 创建并持久化一个 cron job：校验 schedule、按需绑定专用 session、
@@ -81,10 +92,7 @@ pub async fn create_cron_job(
     follow: Option<&crate::storage::SessionInfo>,
     input: CreateCronJobInput,
 ) -> Result<CronJob, CronError> {
-    let schedule = CronSchedule::parse(&input.schedule)?;
-    let next_run = schedule
-        .next_after(chrono::Utc::now())
-        .ok_or_else(|| CronError::InvalidSchedule("schedule has no upcoming fire time".into()))?;
+    let next_run = next_run_from_schedule(&input.schedule)?;
 
     // `SendMessage` without a session gets a dedicated new session bound now,
     // so every fire lands in the same conversation.

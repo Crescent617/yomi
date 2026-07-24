@@ -30,12 +30,17 @@ fn cap_message_length_keeps_short_text() {
 }
 
 #[test]
-fn cap_message_length_truncates_char_safely() {
+fn cap_message_length_truncates_utf16_safely() {
+    // 汉 costs 1 UTF-16 unit per char.
     let long = "汉".repeat(5000);
     let capped = super::cap_message_length(&long);
     assert!(capped.ends_with("...(内容已截断)"));
-    let body = capped.trim_end_matches("...(内容已截断)").trim_end();
-    // truncate_chars keeps `max` chars and appends the ellipsis on top.
-    assert_eq!(body.chars().count(), super::MAX_MESSAGE_CHARS + 1);
-    assert!(body.ends_with('…'));
+    assert!(capped.encode_utf16().count() <= super::MAX_MESSAGE_UTF16_UNITS);
+
+    // Non-BMP chars cost 2 UTF-16 units each: a char-count cap would let
+    // 3000 emoji (6000 units) through and fail the whole send.
+    let emoji = "🎉".repeat(3000);
+    let capped = super::cap_message_length(&emoji);
+    assert!(capped.ends_with("...(内容已截断)"));
+    assert!(capped.encode_utf16().count() <= super::MAX_MESSAGE_UTF16_UNITS);
 }

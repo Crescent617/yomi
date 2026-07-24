@@ -274,7 +274,16 @@ impl ChannelHub {
                                 // failed lookup must not drop the reply.
                                 let routing = match store.find_routing_by_session(&sid).await {
                                     Ok(Some(r)) => r,
-                                    _ => continue,
+                                    // Routing gc'd: the reply is undeliverable
+                                    // — drop the buffer instead of re-querying
+                                    // the store every sweep forever.
+                                    Ok(None) => {
+                                        reply_buffers.remove(&sid);
+                                        continue;
+                                    }
+                                    // Transient store error: keep the buffer
+                                    // and retry next sweep.
+                                    Err(_) => continue,
                                 };
                                 let Some((adapter, tool_trace, observability)) = instances
                                     .get(&routing.channel_name)
@@ -285,7 +294,11 @@ impl ChannelHub {
                                             i.config.observability,
                                         )
                                     })
-                                else { continue };
+                                else {
+                                    // Channel instance gone: undeliverable.
+                                    reply_buffers.remove(&sid);
+                                    continue;
+                                };
                                 let Some(buf) = reply_buffers.remove(&sid) else { continue };
                                 deliver_reply(
                                     &obs,
@@ -485,36 +498,44 @@ async fn flush_reply(
     if reply.text().is_none() {
         return;
     }
-    let sent = if tool_trace && adapter.supports_status_card() && reply.has_trace() {
+    if tool_trace && adapter.supports_status_card() && reply.has_trace() {
         match reply::render_card(&reply, None) {
             Some(card) => {
-                adapter
+                let sent = adapter
                     .send_card(
                         &routing.external_chat_id,
                         &card,
                         routing.reply_msg_id.as_deref(),
                     )
-                    .await
+                    .await;
+                match sent {
+                    Ok(_) => return,
+                    // The card was rejected (oversize payload, API error) —
+                    // fall through to a plain text send so the reply content
+                    // is never dropped.
+                    Err(e) => {
+                        warn!(error = %e, "reply card send failed, falling back to plain text");
+                    }
+                }
             }
             // Unreachable in practice (a text reply always renders) — skip
             // rather than panic; the run's content was already delivered by
             // the settle path or is simply absent.
             None => return,
         }
+    }
+    let text = if tool_trace {
+        reply::render_plain(&reply)
     } else {
-        let text = if tool_trace {
-            reply::render_plain(&reply)
-        } else {
-            reply.into_text().unwrap_or_default()
-        };
-        adapter
-            .send_message(
-                &routing.external_chat_id,
-                vec![ContentBlock::Text { text }],
-                routing.reply_msg_id.as_deref(),
-            )
-            .await
+        reply.into_text().unwrap_or_default()
     };
+    let sent = adapter
+        .send_message(
+            &routing.external_chat_id,
+            vec![ContentBlock::Text { text }],
+            routing.reply_msg_id.as_deref(),
+        )
+        .await;
     if let Err(e) = sent {
         error!(error = %e, "failed to send reply to platform");
     }
@@ -620,7 +641,7 @@ async fn handle_incoming_message(
                 reply_msg_id.as_deref(),
             )
             .await?;
-            record_receipt(config, obs, &sid, &msg);
+            record_receipt(config, obs, &kernel, &sid, &msg);
             kernel.send_steer(&sid, vec![ContentBlock::Text { text }]);
             Ok(None)
         }
@@ -634,7 +655,7 @@ async fn handle_incoming_message(
                 reply_msg_id.as_deref(),
             )
             .await?;
-            record_receipt(config, obs, &sid, &msg);
+            record_receipt(config, obs, &kernel, &sid, &msg);
             kernel
                 .send_message(&sid, vec![ContentBlock::Text { text }])
                 .await?;
@@ -759,23 +780,30 @@ async fn handle_incoming_message(
                 reply_msg_id.as_deref(),
             )
             .await?;
-            record_receipt(config, obs, &sid, &msg);
+            record_receipt(config, obs, &kernel, &sid, &msg);
             kernel.send_steer(&sid, msg.content);
             Ok(None)
         }
     }
 }
 
-/// Record a user message for the mid-run post detection (morph vs.
-/// new-message settle). No-op when observability is disabled or the
-/// message carries no platform ID.
+/// Record a user message posted while the session's agent is running, for
+/// the mid-run post detection (morph vs. new-message settle). Messages that
+/// arrive while the session is idle are run triggers, not mid-run posts —
+/// recording only while running also means a receipt can never outlive its
+/// run into the next one (settlement clears them). No-op when observability
+/// is disabled or the message carries no platform ID.
 fn record_receipt(
     config: &ChannelConfig,
     obs: &ObsTracker,
+    kernel: &Kernel,
     session_id: &SessionId,
     msg: &ChannelMessage,
 ) {
     if !config.observability {
+        return;
+    }
+    if !kernel.is_session_running(session_id) {
         return;
     }
     if let Some(msg_id) = &msg.external_message_id {

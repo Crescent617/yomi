@@ -151,7 +151,7 @@ fn render_card_without_trace_is_a_single_markdown_element() {
 #[test]
 fn render_card_truncates_oversized_text() {
     let mut buf = RunReplyBuffer::new();
-    buf.record_text("x".repeat(FINAL_TEXT_MAX_CHARS + 100));
+    buf.record_text("x".repeat(FINAL_TEXT_MAX_BYTES + 100));
     let reply = buf.into_reply();
     let card = render_card(&reply, None).unwrap();
     assert!(card.contains("...(内容已截断)"));
@@ -199,9 +199,13 @@ fn render_plain_appends_trace_without_markup() {
     assert!(out.starts_with("All tests pass."));
     assert!(out.contains("🐾 Run trace · 2 tools"));
     assert!(out.contains("💬 Let me look at the code."));
-    assert!(out.contains("✅ shell · `cargo test -p kernel` · 1m05s"));
+    assert!(out.contains("✅ shell · cargo test -p kernel · 1m05s"));
     assert!(!out.contains("<font"), "no Feishu markup in plain fallback");
     assert!(!out.contains("**"), "no markdown bold in plain fallback");
+    assert!(
+        !out.contains('`'),
+        "no markdown backticks in plain fallback"
+    );
 }
 
 #[test]
@@ -251,7 +255,7 @@ fn render_plain_without_text_shows_trace_only() {
     let out = render_plain(&reply);
     assert!(!out.is_empty());
     assert!(out.starts_with("🐾 Run trace"));
-    assert!(out.contains("✅ read · `/tmp/a.rs` · 5ms"));
+    assert!(out.contains("✅ read · /tmp/a.rs · 5ms"));
 }
 
 // ── Multi-line arg summaries ────────────────────────────────────────
@@ -358,6 +362,6 @@ fn render_plain_also_uses_continuation_lines() {
     let reply = buf.into_reply();
     let out = render_plain(&reply);
     assert!(out.contains("✅ shell · 5ms\n"));
-    assert!(out.contains("↳ `a`\n"));
-    assert!(out.contains("↳ `b`"));
+    assert!(out.contains("↳ a\n"));
+    assert!(out.contains("↳ b"));
 }

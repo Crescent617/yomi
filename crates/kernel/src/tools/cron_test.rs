@@ -383,7 +383,7 @@ async fn delete_job() {
 }
 
 #[tokio::test]
-async fn trigger_shell_executes_and_records() {
+async fn trigger_shell_executes_without_recording() {
     let f = fixture(true, false).await;
     let out = exec(
         &f.tool,
@@ -401,19 +401,21 @@ async fn trigger_shell_executes_and_records() {
     assert_eq!(v["triggered"], json!(true));
     assert_eq!(v["stdout"], json!("hello-cron"));
 
+    // Manual triggers are not recorded: run_count / last_run_at stay unset
+    // so triggers never consume a job's max_runs budget.
     let job = f
         .cron_store
         .get(&CronJobId::from(job_id.as_str()))
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(job.run_count, 1);
-    assert!(job.last_run_at.is_some());
+    assert_eq!(job.run_count, 0);
+    assert!(job.last_run_at.is_none());
     assert!(job.last_error.is_none());
 }
 
 #[tokio::test]
-async fn trigger_shell_failure_records_error() {
+async fn trigger_shell_failure_is_not_recorded() {
     let f = fixture(true, false).await;
     let out = exec(
         &f.tool,
@@ -434,8 +436,8 @@ async fn trigger_shell_failure_records_error() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(job.run_count, 1);
-    assert!(job.last_error.unwrap().contains("oops"));
+    assert_eq!(job.run_count, 0);
+    assert!(job.last_error.is_none());
 }
 
 #[tokio::test]

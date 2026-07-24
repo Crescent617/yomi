@@ -37,7 +37,7 @@ fn test_maybe_truncate_output_no_truncation() {
 fn test_find_utf8_boundary() {
     let text = "Hello, 世界!";
     // "世界" is 6 bytes total (3 bytes each)
-    let boundary = find_utf8_boundary(text, 9);
+    let boundary = strs::floor_char_boundary(text, 9);
     // Should find a valid UTF-8 boundary
     assert!(text.is_char_boundary(boundary));
 }

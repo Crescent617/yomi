@@ -13,11 +13,13 @@ use serde_json::json;
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
-use super::obs::{fmt_elapsed, truncate_chars};
+use super::obs::fmt_elapsed;
+use crate::utils::strs::truncate_by_chars;
 
-/// Reply text budget. Feishu card payloads cap around 30KB; leave headroom
-/// for the trace panel and the JSON envelope.
-const FINAL_TEXT_MAX_CHARS: usize = 28_000;
+/// Reply text budget in bytes. Feishu card payloads cap around 30KB; leave
+/// headroom for the trace panel and the JSON envelope. Bytes, not chars —
+/// a char budget would let ~3x that size through for CJK text.
+const FINAL_TEXT_MAX_BYTES: usize = 28_000;
 /// Trace entries kept in the buffer (oldest dropped beyond this). Bounds
 /// memory for long goal-mode runs; the render cap is much lower, so this
 /// only needs to keep the recent tail intact.
@@ -205,11 +207,11 @@ pub(crate) fn render_card(reply: &FinalReply, notice: Option<&str>) -> Option<St
     }
 
     if let Some(text) = reply.text() {
-        let truncated = text.chars().count() > FINAL_TEXT_MAX_CHARS;
-        let mut text = truncate_chars(text, FINAL_TEXT_MAX_CHARS);
-        if truncated {
-            text.push_str("\n\n...(内容已截断)");
-        }
+        let text = crate::utils::strs::truncate_with_suffix(
+            text,
+            FINAL_TEXT_MAX_BYTES,
+            "\n\n...(内容已截断)",
+        );
         elements.push(json!({ "tag": "markdown", "content": text }));
     }
 
@@ -290,7 +292,7 @@ fn trace_lines(entries: &[TraceEntry], markdown: bool) -> (Vec<String>, TraceSta
     for entry in entries {
         match entry {
             TraceEntry::Narration(text) => {
-                let snippet = truncate_chars(&flatten_ws(text), NARRATION_MAX_CHARS);
+                let snippet = truncate_by_chars(&flatten_ws(text), NARRATION_MAX_CHARS, "…");
                 if markdown {
                     lines.push(format!("<font color='grey'>💬 {snippet}</font>"));
                 } else {
@@ -319,14 +321,24 @@ fn trace_lines(entries: &[TraceEntry], markdown: bool) -> (Vec<String>, TraceSta
                     _ => None,
                 };
                 if let Some(summary) = inline {
-                    let _ = write!(line, " · `{summary}`");
+                    if markdown {
+                        let _ = write!(line, " · `{summary}`");
+                    } else {
+                        let _ = write!(line, " · {summary}");
+                    }
                 }
                 if let Some(ms) = tool.elapsed_ms {
                     let _ = write!(line, " · {}", fmt_tool_elapsed(ms));
                 }
                 lines.push(line);
                 if inline.is_none() {
-                    lines.extend(tool.arg_lines.iter().map(|arg| format!("↳ `{arg}`")));
+                    lines.extend(tool.arg_lines.iter().map(|arg| {
+                        if markdown {
+                            format!("↳ `{arg}`")
+                        } else {
+                            format!("↳ {arg}")
+                        }
+                    }));
                 }
             }
         }
@@ -366,9 +378,10 @@ pub(crate) fn flatten_ws(text: &str) -> String {
 /// One-line arg summary for tight displays (status-card last-tool line):
 /// whitespace flattened, capped at [`ARG_SUMMARY_MAX_CHARS`].
 pub(crate) fn summarize_args(tool_name: &str, arguments: Option<&str>) -> String {
-    truncate_chars(
+    truncate_by_chars(
         &flatten_ws(&extract_arg_text(tool_name, arguments)),
         ARG_SUMMARY_MAX_CHARS,
+        "…",
     )
 }
 
@@ -381,7 +394,7 @@ fn summarize_args_trace(tool_name: &str, arguments: Option<&str>) -> Vec<String>
         .lines()
         .map(flatten_ws)
         .filter(|line| !line.is_empty())
-        .map(|line| truncate_chars(&line, TRACE_ARG_LINE_MAX_CHARS))
+        .map(|line| truncate_by_chars(&line, TRACE_ARG_LINE_MAX_CHARS, "…"))
         .collect();
     if lines.len() > TRACE_ARG_MAX_LINES {
         lines.truncate(TRACE_ARG_MAX_LINES);

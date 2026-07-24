@@ -5,7 +5,7 @@
 
 use crate::agent::AgentInput;
 use crate::comms::InputBus;
-use crate::cron::{CronAction, CronJobId, CronJobStatus, CronSchedule, CronScheduler, CronStore};
+use crate::cron::{CronAction, CronJobId, CronJobStatus, CronScheduler, CronStore};
 use crate::storage::SessionStore;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{ContentBlock, KernelError, Result, SessionId, ToolOutput};
@@ -154,11 +154,10 @@ impl CronTool {
             input.name = Some(name);
         }
         if let Some(schedule_str) = optional_str(args, "schedule") {
-            let schedule =
-                CronSchedule::parse(&schedule_str).map_err(|e| KernelError::tool(e.to_string()))?;
-            input.next_run_at = Some(schedule.next_after(Utc::now()).ok_or_else(|| {
-                KernelError::tool("schedule has no upcoming fire time".to_string())
-            })?);
+            input.next_run_at = Some(
+                crate::cron::next_run_from_schedule(&schedule_str)
+                    .map_err(|e| KernelError::tool(e.to_string()))?,
+            );
             input.schedule = Some(schedule_str);
         }
         if let Some(status) = args["status"].as_str() {
@@ -176,9 +175,7 @@ impl CronTool {
             if v.is_null() {
                 input.clear_max_runs = true;
             } else {
-                input.max_runs = Some(parse_max_runs(args)?.ok_or_else(|| {
-                    KernelError::tool("max_runs must be a positive integer".to_string())
-                })?);
+                input.max_runs = Some(parse_max_runs_value(v)?);
             }
         }
         if let Some(v) = args.get("expires_at") {
@@ -196,6 +193,7 @@ impl CronTool {
             || args.get("command").is_some()
             || args.get("working_dir").is_some()
             || args.get("session_id").is_some();
+        let mut bound_session: Option<SessionId> = None;
         if wants_action_edit {
             let job = self
                 .store
@@ -218,7 +216,7 @@ impl CronTool {
                     "{key} does not apply to this job type"
                 )));
             }
-            input.action = Some(match job.action {
+            let mut action = match job.action {
                 CronAction::SendMessage {
                     session_id,
                     content,
@@ -234,20 +232,58 @@ impl CronTool {
                     working_dir: optional_str(args, "working_dir").or(working_dir),
                 },
                 other @ CronAction::Internal { .. } => other,
-            });
+            };
+            // A SendMessage left without a session would fail every fire
+            // ("cron job has no session bound"); bind a dedicated session
+            // now, same as the create path and the Kernel RPC update path.
+            if matches!(
+                action,
+                CronAction::SendMessage {
+                    session_id: None,
+                    ..
+                }
+            ) {
+                if let Some(session_store) = &self.session_store {
+                    action =
+                        crate::cron::ensure_action_session(action, &job.name, session_store, None)
+                            .await
+                            .map_err(|e| KernelError::tool(e.to_string()))?;
+                    if let CronAction::SendMessage {
+                        session_id: Some(sid),
+                        ..
+                    } = &action
+                    {
+                        bound_session = Some(SessionId::from(sid.clone()));
+                    }
+                }
+            }
+            input.action = Some(action);
         }
 
-        let updated = self
-            .store
-            .update(&id, &input)
-            .await
-            .map_err(|e| KernelError::tool(format!("failed to update cron job: {e}")))?;
+        let updated = match self.store.update(&id, &input).await {
+            Ok(updated) => updated,
+            Err(e) => {
+                self.rollback_bound_session(bound_session).await;
+                return Err(KernelError::tool(format!("failed to update cron job: {e}")));
+            }
+        };
         if !updated {
+            // The job vanished between the get above and this update — the
+            // freshly bound session would orphan; roll it back.
+            self.rollback_bound_session(bound_session).await;
             return Err(KernelError::tool(format!("cron job '{}' not found", id.0)));
         }
         self.notify_scheduler();
 
         Ok(ToolOutput::text(json!({ "updated": true }).to_string()))
+    }
+
+    /// Best-effort rollback of a dedicated session bound during a failed
+    /// update (the update erroring out, or the job having vanished).
+    async fn rollback_bound_session(&self, session: Option<SessionId>) {
+        if let (Some(sid), Some(store)) = (session, &self.session_store) {
+            let _ = store.delete(&sid).await;
+        }
     }
 
     async fn handle_delete(&self, args: &Value) -> Result<ToolOutput> {
@@ -274,11 +310,8 @@ impl CronTool {
 
         let result = self.execute_action(&job.action).await;
 
-        let error = result.as_ref().err().map(|e| e.to_string());
-        if let Err(e) = self.store.record_execution(&id, error.clone()).await {
-            tracing::warn!("Failed to record cron trigger for {}: {}", id.0, e);
-        }
-
+        // Manual triggers are not recorded: they don't consume
+        // `run_count`/`max_runs` and don't touch `last_run_at`/`last_error`.
         match result {
             Ok(stdout) => {
                 let mut out = json!({ "triggered": true });
@@ -342,12 +375,12 @@ async fn execute_shell(command: &str, working_dir: Option<&str>) -> Result<Strin
     })?
     .map_err(|e| KernelError::tool(e.to_string()))?;
 
-    let mut stdout = stdout.trim().to_string();
-    if stdout.len() > MAX_STDOUT {
-        stdout.truncate(MAX_STDOUT);
-        stdout.push_str("... [truncated]");
-    }
-    Ok(stdout)
+    let stdout = stdout.trim();
+    Ok(crate::utils::strs::truncate_with_suffix(
+        stdout,
+        MAX_STDOUT,
+        "... [truncated]",
+    ))
 }
 
 /// Non-empty string arg, or a "required" tool error.
@@ -373,16 +406,16 @@ fn parse_job_id(args: &Value) -> Result<CronJobId> {
 fn parse_max_runs(args: &Value) -> Result<Option<u32>> {
     match args.get("max_runs") {
         None | Some(Value::Null) => Ok(None),
-        Some(v) => {
-            let n = v
-                .as_u64()
-                .filter(|n| *n > 0 && u32::try_from(*n).is_ok())
-                .ok_or_else(|| {
-                    KernelError::tool("max_runs must be a positive integer".to_string())
-                })?;
-            Ok(Some(n as u32))
-        }
+        Some(v) => Ok(Some(parse_max_runs_value(v)?)),
     }
+}
+
+fn parse_max_runs_value(v: &Value) -> Result<u32> {
+    let n = v
+        .as_u64()
+        .filter(|n| *n > 0 && u32::try_from(*n).is_ok())
+        .ok_or_else(|| KernelError::tool("max_runs must be a positive integer".to_string()))?;
+    Ok(n as u32)
 }
 
 fn parse_expires_at(args: &Value) -> Result<Option<DateTime<Utc>>> {

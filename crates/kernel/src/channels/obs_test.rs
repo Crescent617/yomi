@@ -654,15 +654,6 @@ fn humanize_tool_name_camelizes() {
 }
 
 #[test]
-fn truncate_chars_appends_ellipsis() {
-    assert_eq!(truncate_chars("short", 20), "short");
-    assert_eq!(
-        truncate_chars("a]very long piece of text here", 5),
-        "a]ver…"
-    );
-}
-
-#[test]
 fn token_footer_formats_compact() {
     assert_eq!(fmt_k(999), "999");
     assert_eq!(fmt_k(12_345), "12.3k");
@@ -1267,11 +1258,9 @@ async fn tool_start_updates_are_throttled_uniformly() {
 fn mid_run_posts_detection_uses_receipts() {
     let tracker = ObsTracker::new();
     let sid = sid();
-    // No receipts yet (or only the trigger) → no mid-run posts.
+    // Receipts hold only messages posted while the agent was running (run
+    // triggers are never recorded), so any receipt means mid-run posts.
     assert!(!tracker.has_mid_run_posts(&sid));
-    tracker.record_receipt(&sid, "trigger".into());
-    assert!(!tracker.has_mid_run_posts(&sid));
-    // A second platform message during the run → mid-run post.
     tracker.record_receipt(&sid, "mid-run".into());
     assert!(tracker.has_mid_run_posts(&sid));
 }
