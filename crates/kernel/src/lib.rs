@@ -158,6 +158,7 @@ pub fn build_agent_config(config: &Config, base_dir: &Path) -> AgentConfig {
     let mut agent = config.agent.clone();
     agent.skills = skills;
     agent.enable_cron_tool = config.features.cron_tool_enabled();
+    agent.enable_todo_tool = config.features.todo_tool_enabled();
     agent
 }
 

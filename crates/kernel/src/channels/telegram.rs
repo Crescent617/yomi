@@ -260,6 +260,54 @@ fn reply_parameters(reply_msg_id: Option<&str>) -> Option<ReplyParameters> {
     Some(params)
 }
 
+/// Telegram bot upload caps: photos 10MB, documents 50MB; empty uploads are
+/// rejected — all with a generic 400, so fail fast with a precise reason.
+const PHOTO_MAX_BYTES: usize = 10 * 1024 * 1024;
+const DOCUMENT_MAX_BYTES: usize = 50 * 1024 * 1024;
+
+/// Upload a single file as a photo (image MIME) or document, preserving
+/// the original file name for the download.
+async fn send_one_file(
+    bot: &Bot,
+    recipient: &Recipient,
+    path: &std::path::Path,
+    caption: Option<&str>,
+    reply_msg_id: Option<&str>,
+) -> Result<(), ChannelError> {
+    let upload = super::utils::read_upload(
+        path,
+        PHOTO_MAX_BYTES,
+        DOCUMENT_MAX_BYTES,
+        "photo",
+        "document",
+    )
+    .await?;
+    let input = InputFile::memory(upload.bytes).file_name(upload.file_name);
+
+    if upload.is_image {
+        let mut req = bot.send_photo(recipient.clone(), input);
+        if let Some(caption) = caption {
+            req.caption = Some(caption.to_string());
+            req.parse_mode = Some(ParseMode::MarkdownV2);
+        }
+        req.reply_parameters = reply_parameters(reply_msg_id);
+        req.send()
+            .await
+            .map_err(|e| ChannelError::Platform(format!("send_photo failed: {e}")))?;
+    } else {
+        let mut req = bot.send_document(recipient.clone(), input);
+        if let Some(caption) = caption {
+            req.caption = Some(caption.to_string());
+            req.parse_mode = Some(ParseMode::MarkdownV2);
+        }
+        req.reply_parameters = reply_parameters(reply_msg_id);
+        req.send()
+            .await
+            .map_err(|e| ChannelError::Platform(format!("send_document failed: {e}")))?;
+    }
+    Ok(())
+}
+
 /// Telegram caps message text at 4096 UTF-16 code units; oversize texts fail
 /// the whole send. Truncate with a marker instead — measured in UTF-16 units,
 /// not chars, so non-BMP text (emoji) can't slip past the cap.
@@ -413,37 +461,25 @@ impl PlatformAdapter for TelegramAdapter {
             .map_err(|e| ChannelError::Platform(format!("invalid chat_id: {e}")))?;
         let recipient = Recipient::Id(ChatId(chat_id));
 
+        // Per-file resilience: one bad file must not block the rest; the
+        // aggregated error names every failure so the caller can surface it.
+        let mut failures = Vec::new();
         for (path, caption) in files {
-            let bytes = tokio::fs::read(path)
-                .await
-                .map_err(|e| ChannelError::Platform(format!("read file: {e}")))?;
-            let input = InputFile::memory(bytes);
-
-            let mime = mime_guess::from_path(path).first_or_octet_stream();
-            if mime.type_() == "image" {
-                let mut req = self.bot.send_photo(recipient.clone(), input);
-                if let Some(caption) = caption {
-                    req.caption = Some(caption.to_string());
-                    req.parse_mode = Some(ParseMode::MarkdownV2);
-                }
-                req.reply_parameters = reply_parameters(reply_msg_id);
-                req.send()
-                    .await
-                    .map_err(|e| ChannelError::Platform(format!("send_photo failed: {e}")))?;
-            } else {
-                let mut req = self.bot.send_document(recipient.clone(), input);
-                if let Some(caption) = caption {
-                    req.caption = Some(caption.to_string());
-                    req.parse_mode = Some(ParseMode::MarkdownV2);
-                }
-                req.reply_parameters = reply_parameters(reply_msg_id);
-                req.send()
-                    .await
-                    .map_err(|e| ChannelError::Platform(format!("send_document failed: {e}")))?;
+            if let Err(e) = send_one_file(&self.bot, &recipient, path, *caption, reply_msg_id).await
+            {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+                warn!(error = %e, file = %path.display(), "failed to send file");
+                failures.push(format!("{name} ({e})"));
             }
         }
-
-        Ok(())
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(ChannelError::Platform(format!(
+                "attachment(s) not delivered: {}",
+                failures.join("; ")
+            )))
+        }
     }
 
     async fn send_reaction(

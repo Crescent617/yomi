@@ -7,6 +7,8 @@ use tokio_util::sync::CancellationToken;
 pub(crate) mod utils;
 pub(crate) use utils::MAX_RETRY_DELAY;
 
+pub(crate) mod attachments;
+
 /// Channel-level error type
 #[derive(Debug, thiserror::Error, Clone)]
 pub enum ChannelError {

@@ -171,6 +171,8 @@ SERPER_API_KEY = "..."
 |---|---|---|---|
 | `all` | boolean | 开启所有未被单项显式覆盖的 feature | `false` |
 | `update_session_title` | boolean | 使用模型自动生成会话标题（首条消息 fallback 标题不受影响） | 继承 `all` |
+| `cron_tool` | boolean | 向 agent 暴露 cron 工具（创建/列出/更新/删除/触发定时任务） | 继承 `all` |
+| `todo_tool` | boolean | 向 agent 暴露 todo 工具（任务清单跟踪），同时启用 todo 提醒拦截器 | 继承 `all` |
 
 ---
 

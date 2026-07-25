@@ -151,6 +151,8 @@ pub struct FeaturesConfig {
     pub update_session_title: Option<bool>,
     /// Expose the cron tool to agents (create/list/update/delete/trigger jobs).
     pub cron_tool: Option<bool>,
+    /// Expose the todo tool to agents (task list tracking).
+    pub todo_tool: Option<bool>,
 }
 
 impl FeaturesConfig {
@@ -162,6 +164,11 @@ impl FeaturesConfig {
     #[must_use]
     pub fn cron_tool_enabled(&self) -> bool {
         self.cron_tool.unwrap_or(self.all)
+    }
+
+    #[must_use]
+    pub fn todo_tool_enabled(&self) -> bool {
+        self.todo_tool.unwrap_or(self.all)
     }
 }
 

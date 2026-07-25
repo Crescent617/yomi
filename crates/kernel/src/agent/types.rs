@@ -29,6 +29,10 @@ pub struct AgentConfig {
     /// in `build_agent_config`; not settable via the `[agent]` section.
     #[serde(skip)]
     pub enable_cron_tool: bool,
+    /// Enable the todo tool for agents. Plumbed from `[features] todo_tool`
+    /// in `build_agent_config`; not settable via the `[agent]` section.
+    #[serde(skip)]
+    pub enable_todo_tool: bool,
 }
 
 /// Configuration for spawning a new agent
@@ -40,12 +44,12 @@ pub struct AgentSpawnArgs {
     pub session_id: String,
     pub parent_session_id: Option<String>,
     pub max_iterations: usize,
-    pub enable_subagent: bool,
     pub working_dir: std::path::PathBuf,
     /// Optional cancel token to share with parent (for cascading cancellation)
     pub cancel_token: Option<super::CancelToken>,
-    /// Enable the cron tool for this agent.
-    pub enable_cron_tool: bool,
+    /// Tool registration flags, resolved by the caller (conductor), which owns
+    /// session-level policy such as sub-agent recursion prevention.
+    pub tool_flags: crate::tools::ToolFlags,
     /// Optional file state store (for restoring from previous session)
     pub file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
     pub tool_blocklist: Vec<String>,
@@ -65,10 +69,9 @@ impl std::fmt::Debug for AgentSpawnArgs {
             .field("session_id", &self.session_id)
             .field("parent_session_id", &self.parent_session_id)
             .field("max_iterations", &self.max_iterations)
-            .field("enable_sub_agents", &self.enable_subagent)
             .field("working_dir", &self.working_dir)
             .field("cancel_token", &self.cancel_token.is_some())
-            .field("enable_cron_tool", &self.enable_cron_tool)
+            .field("tool_flags", &self.tool_flags)
             .field("file_state_store", &self.file_state_store.is_some())
             .field("tool_blocklist", &self.tool_blocklist)
             .field("max_tool_output_length", &self.max_tool_output_length)
@@ -93,10 +96,9 @@ impl AgentSpawnArgs {
             session_id: session_id.into(),
             parent_session_id: None,
             max_iterations: 100,
-            enable_subagent: true,
             working_dir: working_dir.into(),
             cancel_token: None,
-            enable_cron_tool: false,
+            tool_flags: crate::tools::ToolFlags::new(true),
             file_state_store: None,
             tool_blocklist: Vec::new(),
             max_tool_output_length: 40_000,
@@ -140,16 +142,10 @@ impl AgentSpawnArgs {
         self
     }
 
+    /// Set tool registration flags
     #[must_use]
-    pub const fn with_subagent(mut self, enabled: bool) -> Self {
-        self.enable_subagent = enabled;
-        self
-    }
-
-    /// Enable the cron tool
-    #[must_use]
-    pub const fn with_cron_tool(mut self, enabled: bool) -> Self {
-        self.enable_cron_tool = enabled;
+    pub const fn with_tool_flags(mut self, flags: crate::tools::ToolFlags) -> Self {
+        self.tool_flags = flags;
         self
     }
 
@@ -203,6 +199,7 @@ impl Default for AgentConfig {
             compactor: Compactor::default(),
             max_tool_output_length: 40_000,
             enable_cron_tool: false,
+            enable_todo_tool: false,
         }
     }
 }

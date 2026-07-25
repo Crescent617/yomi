@@ -14,6 +14,12 @@ use tracing::{debug, error, info, warn};
 use super::{ChannelError, ChannelMessage, PlatformAdapter, MAX_RETRY_DELAY};
 
 const FEISHU_BASE_URL: &str = "https://open.feishu.cn";
+
+/// Platform upload caps: images 10MB, files 30MB; empty uploads are also
+/// rejected. All violations surface as Feishu's generic API error 234001,
+/// so the adapter fails fast with a precise reason instead.
+const IMAGE_MAX_BYTES: usize = 10 * 1024 * 1024;
+const FILE_MAX_BYTES: usize = 30 * 1024 * 1024;
 const RECEIVE_ID_TYPE: &str = "chat_id";
 
 const FRAME_TYPE_CONTROL: i32 = 0;
@@ -234,6 +240,69 @@ impl FeishuAdapter {
     }
 
     // ── Send helpers ─────────────────────────────────────────────────
+
+    /// Upload and message a single file. Feishu expects `file_type` +
+    /// `file_name` (or `image_type` for images) as multipart **form
+    /// fields** — putting them in the URL query or omitting them yields
+    /// API error 234001.
+    async fn send_one_file(
+        &self,
+        token: &str,
+        chat_id: &str,
+        path: &std::path::Path,
+        caption: Option<&str>,
+        reply_msg_id: Option<&str>,
+    ) -> Result<(), ChannelError> {
+        let upload =
+            super::utils::read_upload(path, IMAGE_MAX_BYTES, FILE_MAX_BYTES, "image", "file")
+                .await?;
+        let kind = if upload.is_image { "image" } else { "file" };
+        let part =
+            reqwest::multipart::Part::bytes(upload.bytes).file_name(upload.file_name.clone());
+        let (form, upload_url, key_field) = if upload.is_image {
+            (
+                reqwest::multipart::Form::new()
+                    .text("image_type", "message")
+                    .part("image", part),
+                format!("{}/open-apis/im/v1/images", self.base_url),
+                "image_key",
+            )
+        } else {
+            (
+                reqwest::multipart::Form::new()
+                    .text("file_type", "stream")
+                    .text("file_name", upload.file_name)
+                    .part("file", part),
+                format!("{}/open-apis/im/v1/files", self.base_url),
+                "file_key",
+            )
+        };
+        let resp = self.upload(token, &upload_url, form).await?;
+
+        let key = resp["data"][key_field]
+            .as_str()
+            .ok_or_else(|| api_err("no upload key", ""))?;
+        let content = json!({ key_field: key }).to_string();
+
+        let _ = self
+            .send_or_reply(token, chat_id, reply_msg_id, &content, kind)
+            .await?;
+
+        if let Some(caption) = caption {
+            if !caption.is_empty() {
+                let content = Self::build_card(caption);
+                // The file itself is already delivered — a caption failure
+                // must not mark the file as undelivered.
+                if let Err(e) = self
+                    .send_or_reply(token, chat_id, reply_msg_id, &content, "interactive")
+                    .await
+                {
+                    warn!(error = %e, "failed to send file caption");
+                }
+            }
+        }
+        Ok(())
+    }
 
     /// Send or reply; returns the platform message ID when available.
     async fn send_or_reply(
@@ -504,48 +573,27 @@ impl PlatformAdapter for FeishuAdapter {
         reply_msg_id: Option<&str>,
     ) -> Result<(), ChannelError> {
         let token = self.get_token().await?;
+        // Per-file resilience: one bad file must not block the rest; the
+        // aggregated error names every failure so the caller can surface it.
+        let mut failures = Vec::new();
         for (path, caption) in files {
-            let bytes = tokio::fs::read(path)
+            if let Err(e) = self
+                .send_one_file(&token, external_chat_id, path, *caption, reply_msg_id)
                 .await
-                .map_err(|e| api_err("read file", e))?;
-            let (form_field, upload_url, key_field, msg_type) = file_upload_info(path);
-            let file_name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("file")
-                .to_string();
-
-            let form = reqwest::multipart::Form::new().part(
-                form_field,
-                reqwest::multipart::Part::bytes(bytes).file_name(file_name),
-            );
-            let resp = self.upload(&token, &upload_url, form).await?;
-
-            let key = resp["data"][key_field]
-                .as_str()
-                .ok_or_else(|| api_err("no upload key", ""))?;
-            let content = json!({ key_field: key }).to_string();
-
-            let _ = self
-                .send_or_reply(&token, external_chat_id, reply_msg_id, &content, msg_type)
-                .await?;
-
-            if let Some(caption) = caption {
-                if !caption.is_empty() {
-                    let content = Self::build_card(caption);
-                    let _ = self
-                        .send_or_reply(
-                            &token,
-                            external_chat_id,
-                            reply_msg_id,
-                            &content,
-                            "interactive",
-                        )
-                        .await?;
-                }
+            {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+                warn!(error = %e, file = %path.display(), "failed to send file");
+                failures.push(format!("{name} ({e})"));
             }
         }
-        Ok(())
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(ChannelError::Platform(format!(
+                "attachment(s) not delivered: {}",
+                failures.join("; ")
+            )))
+        }
     }
 
     /// refer: <https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce?lang=zh-CN>
@@ -1013,23 +1061,4 @@ fn check_api_resp(resp: serde_json::Value) -> Result<serde_json::Value, ChannelE
         )));
     }
     Ok(resp)
-}
-
-fn file_upload_info(path: &std::path::Path) -> (&'static str, String, &'static str, &'static str) {
-    let mime = mime_guess::from_path(path).first_or_octet_stream();
-    if mime.type_() == "image" {
-        (
-            "image",
-            format!("{FEISHU_BASE_URL}/open-apis/im/v1/images"),
-            "image_key",
-            "image",
-        )
-    } else {
-        (
-            "file",
-            format!("{FEISHU_BASE_URL}/open-apis/im/v1/files?file_type=stream"),
-            "file_key",
-            "file",
-        )
-    }
 }

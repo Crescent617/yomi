@@ -10,7 +10,7 @@ use crate::compactor::CompactionError;
 use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason};
 use crate::permission::Checker;
 use crate::prompt::SystemPromptBuilder;
-use crate::tools::{ToolFlags, ToolRegistry, ToolRegistryConfig};
+use crate::tools::{ToolRegistry, ToolRegistryConfig};
 use crate::types::{ContentBlock, Message, MessageId, MessageTokenUsage, Role, SessionId};
 use crate::FinishReason;
 use futures::TryStreamExt;
@@ -93,8 +93,6 @@ impl Agent {
         let cancel_token = args.cancel_token.clone().unwrap_or_default();
 
         let session_id = SessionId::from(args.session_id.clone());
-        let enable_subagent =
-            args.enable_subagent && !session_id.starts_with(crate::types::SUB_PREFIX);
         let event_bus = shared.event_bus.as_ref().map_or_else(
             || {
                 // No event bus configured: use a no-op fallback to avoid panic
@@ -140,7 +138,7 @@ impl Agent {
                 input_bus: args.input_bus.as_ref(),
                 file_state_store: None,
                 tool_blocklist: args.tool_blocklist.clone(),
-                flags: ToolFlags::new(enable_subagent).with_cron(args.enable_cron_tool),
+                flags: args.tool_flags,
             }
             .with_file_state_store(args.file_state_store.clone()),
         );

@@ -63,7 +63,7 @@
   <ListChecks class={cls} />
 {:else if name.includes("goal")}
   <Target class={cls} />
-{:else if name === "send_message" || name === "post_message"}
+{:else if name === "post_message"}
   <Send class={cls} />
 {:else if name === "cron"}
   <CalendarClock class={cls} />

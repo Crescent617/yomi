@@ -19,11 +19,10 @@ For non-trivial tasks:
 1. Create a concise execution plan before implementation.
 2. Ask clarifying questions when requirements are ambiguous or critical assumptions may affect the outcome.
 3. Request confirmation before proceeding only when the task requires major changes or substantial time investment.
-4. Keep todos up to date and communicate important assumptions, blockers, and unexpected issues.
+4. Communicate important assumptions, blockers, and unexpected issues.
 
 Do not:
 - skip planning for substantial work
-- leave todo status outdated
 - hide uncertainty, blockers, or failed assumptions
 
 # Research

@@ -93,7 +93,6 @@ export function toolLabel(toolName: string, isSubagent = false): string {
     reminder: "Reminder",
     sleep: "Sleep",
     updategoal: "Update goal",
-    sendmessage: "Send message",
     cron: "Cron",
     taskcreate: "Create task",
     taskget: "Get task",
@@ -157,10 +156,6 @@ export function extractTarget(tool_name: string, args: string): string {
       return firstText(parsed.action);
     case "reminder":
       return firstText(parsed.message);
-    case "sendmessage": {
-      const files = Array.isArray(parsed.files) ? parsed.files : [];
-      return firstText(parsed.content) || firstText(files[0]);
-    }
     case "sleep":
       return parsed.seconds == null ? "" : `${parsed.seconds}s`;
     case "updategoal":
@@ -234,8 +229,6 @@ export function extraMeta(tool_name: string, args: string): string {
     }
   } else if (name === "agent" && parsed.wait_for_completion === false) {
     extras.push("async");
-  } else if (name === "sendmessage" && Array.isArray(parsed.files)) {
-    extras.push(`${parsed.files.length} files`);
   } else if (name === "postmessage" && parsed.title) {
     extras.push(firstText(parsed.title));
   } else if (name === "reminder" && parsed.delay_seconds != null) {

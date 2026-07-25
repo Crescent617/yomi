@@ -451,22 +451,39 @@ impl Conductor {
             tool_blocklist.push(crate::tools::ask_user::ASK_USER_TOOL_NAME.to_string());
         }
 
-        let args = AgentSpawnArgs::new(
-            self.base_prompt.clone(),
-            sid.0.clone(),
-            mailbox,
-            working_dir,
+        // The channel-delivery prompt contract applies only to sessions with
+        // their own channel routing: a subagent's output never reaches the
+        // platform directly (the hub forwarder skips unrouted sessions), so
+        // its parent decides what becomes an attachment. Note the narrower
+        // predicate than the ask_user blocklist above, which walks parents.
+        let base_prompt = match &self.agent_shared.channel_hub {
+            Some(hub) if hub.is_channel_session(sid).await => format!(
+                "{}\n\n{}",
+                self.base_prompt,
+                crate::prompt::CHANNEL_DELIVERY_SECTION
+            ),
+            _ => self.base_prompt.clone(),
+        };
+
+        // Resolve tool flags here — session-level policy lives in the
+        // conductor, not the agent: sub-agent sessions must not spawn
+        // further sub-agents.
+        let tool_flags = crate::tools::ToolFlags::new(
+            self.agent_config.enable_subagent && !sid.starts_with(crate::types::SUB_PREFIX),
         )
-        .with_skills(skills)
-        .with_arc_history(history)
-        .with_max_iterations(self.agent_config.max_iterations)
-        .with_subagent(self.agent_config.enable_subagent)
-        .with_cron_tool(self.agent_config.enable_cron_tool)
-        .with_file_state_store(Arc::clone(&file_state_store))
-        .with_tool_blocklist(tool_blocklist)
-        .with_max_tool_output_length(self.agent_config.max_tool_output_length)
-        .with_cancel_token(cancel_token.clone())
-        .with_input_bus(self.input_bus.clone());
+        .with_cron(self.agent_config.enable_cron_tool)
+        .with_todo(self.agent_config.enable_todo_tool);
+
+        let args = AgentSpawnArgs::new(base_prompt, sid.0.clone(), mailbox, working_dir)
+            .with_skills(skills)
+            .with_arc_history(history)
+            .with_max_iterations(self.agent_config.max_iterations)
+            .with_tool_flags(tool_flags)
+            .with_file_state_store(Arc::clone(&file_state_store))
+            .with_tool_blocklist(tool_blocklist)
+            .with_max_tool_output_length(self.agent_config.max_tool_output_length)
+            .with_cancel_token(cancel_token.clone())
+            .with_input_bus(self.input_bus.clone());
 
         let agent = Agent::new(&shared, args).await;
 

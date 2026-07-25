@@ -146,6 +146,21 @@ impl Kernel {
         self.agent_shared.data_dir.clone()
     }
 
+    /// The session's effective working directory: its stored `working_dir`,
+    /// or the default workspace — the same rule the conductor applies at
+    /// spawn time, including when the store has no entry for the session.
+    pub(crate) async fn session_cwd(&self, session_id: &SessionId) -> std::path::PathBuf {
+        let stored = self
+            .session_store()
+            .await
+            .get(session_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|info| info.working_dir);
+        stored.map_or_else(|| self.agent_shared.data_dir.join("workspace"), Into::into)
+    }
+
     /// Get usage store from `agent_shared`
     pub async fn usage_store(&self) -> Arc<dyn UsageStore> {
         self.agent_shared
@@ -197,9 +212,12 @@ impl Kernel {
         let session_store = storage.session_store();
         let message_store = storage.message_store();
         let todo_storage = storage.todo_store();
-        let todo_interceptor = Arc::new(crate::agent::TodoReminderInterceptor::new(
-            todo_storage.clone(),
-        ));
+        // Todo reminder interceptor is only wired up when the todo tool is enabled.
+        let todo_interceptor = agent_config.enable_todo_tool.then(|| {
+            Arc::new(crate::agent::TodoReminderInterceptor::new(
+                todo_storage.clone(),
+            ))
+        });
         let checkpoint_store = storage.checkpoint_store();
         let data_dir = storage.data_dir().to_path_buf();
         let data_dir_for_conductor = data_dir.clone();
@@ -257,8 +275,12 @@ impl Kernel {
             data_dir,
         )
         .with_goal_store(goal_store)
-        .with_cron(cron_store.clone(), Arc::clone(&cron_scheduler))
-        .with_message_interceptor(todo_interceptor);
+        .with_cron(cron_store.clone(), Arc::clone(&cron_scheduler));
+
+        let agent_shared = match todo_interceptor {
+            Some(interceptor) => agent_shared.with_message_interceptor(interceptor),
+            None => agent_shared,
+        };
 
         let channel_manager =
             channel_store.map(|store| Arc::new(crate::channels::hub::ChannelHub::new(store)));

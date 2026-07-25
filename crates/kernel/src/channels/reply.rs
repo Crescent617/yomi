@@ -86,6 +86,11 @@ struct ToolTrace {
 #[derive(Debug)]
 pub(crate) struct RunReplyBuffer {
     entries: Vec<TraceEntry>,
+    /// Attachment paths declared via `<yomi:attachments>` blocks in
+    /// assistant texts. Blocks are stripped at record time so the XML
+    /// never renders on the platform (trace snippets, live card preview,
+    /// reply body).
+    attachments: Vec<String>,
     /// Entries dropped at the buffer cap (oldest first) — surfaced as a
     /// "··· and N earlier entries" marker at render time.
     dropped: usize,
@@ -96,15 +101,23 @@ impl RunReplyBuffer {
     pub(crate) fn new() -> Self {
         Self {
             entries: Vec::new(),
+            attachments: Vec::new(),
             dropped: 0,
             started_at: Instant::now(),
         }
     }
 
     /// Record a completed assistant text. The most recent one becomes the
-    /// reply body at flush time; all earlier ones stay in the trace.
-    pub(crate) fn record_text(&mut self, text: String) {
-        self.push_entry(TraceEntry::Narration(text));
+    /// reply body at flush time; all earlier ones stay in the trace. Each
+    /// `<yomi:attachments>` block outside a fenced code block is stripped
+    /// from the text and its paths collected for file delivery; a text
+    /// that held only blocks leaves no narration.
+    pub(crate) fn record_text(&mut self, text: &str) {
+        let (text, paths) = super::attachments::parse_attachments(text);
+        self.attachments.extend(paths);
+        if !text.is_empty() {
+            self.push_entry(TraceEntry::Narration(text));
+        }
     }
 
     pub(crate) fn record_tool_start(
@@ -148,7 +161,8 @@ impl RunReplyBuffer {
     }
 
     /// Split into the reply body (the most recent assistant text, if any)
-    /// and the remaining trace.
+    /// and the remaining trace, carrying the attachment paths collected
+    /// from `<yomi:attachments>` blocks at record time.
     pub(crate) fn into_reply(self) -> FinalReply {
         let body_idx = self
             .entries
@@ -163,6 +177,7 @@ impl RunReplyBuffer {
         });
         FinalReply {
             text,
+            attachments: self.attachments,
             entries,
             dropped_entries: self.dropped,
             elapsed: self.started_at.elapsed(),
@@ -200,6 +215,10 @@ impl Default for RunReplyBuffer {
 /// The deliverable reply: optional final text + the run trace (may be empty).
 pub(crate) struct FinalReply {
     text: Option<String>,
+    /// Attachment paths collected from `<yomi:attachments>` blocks in the
+    /// run's assistant texts (blocks already stripped from the recorded
+    /// texts).
+    attachments: Vec<String>,
     entries: Vec<TraceEntry>,
     /// Trace entries dropped at the buffer cap (shown as a marker line).
     dropped_entries: usize,
@@ -220,6 +239,35 @@ impl FinalReply {
     /// The bare final text (used when the trace is disabled by config).
     pub(crate) fn into_text(self) -> Option<String> {
         self.text
+    }
+
+    /// Attachment paths declared in the final text.
+    pub(crate) fn attachments(&self) -> &[String] {
+        &self.attachments
+    }
+
+    /// Take the declared attachment paths out of the reply (consumed by
+    /// the hub's file-delivery step).
+    pub(crate) fn take_attachments(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.attachments)
+    }
+
+    /// Append a delivery note (e.g. an attachment failure) to the reply
+    /// text, so it surfaces on the platform instead of vanishing.
+    pub(crate) fn push_note(&mut self, note: &str) {
+        match &mut self.text {
+            Some(text) => {
+                text.push_str("\n\n");
+                text.push_str(note);
+            }
+            None => self.text = Some(note.to_string()),
+        }
+    }
+
+    /// Test-only constructor helper: set the attachments list directly.
+    #[cfg(test)]
+    pub(crate) fn set_attachments(&mut self, attachments: Vec<String>) {
+        self.attachments = attachments;
     }
 }
 

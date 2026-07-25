@@ -1099,10 +1099,10 @@ async fn whisper_line_is_capped_at_100_chars() {
 
 fn reply_with(text: &str) -> crate::channels::reply::FinalReply {
     let mut buf = crate::channels::reply::RunReplyBuffer::new();
-    buf.record_text("intermediate thought".to_string());
+    buf.record_text("intermediate thought");
     buf.record_tool_start("t1", "shell", Some(r#"{"command":"cargo test"}"#));
     buf.record_tool_end("t1", 1200, false);
-    buf.record_text(text.to_string());
+    buf.record_text(text);
     buf.into_reply()
 }
 

@@ -390,10 +390,10 @@ fn test_routing() -> SessionRouting {
 
 fn run_buffer() -> reply::RunReplyBuffer {
     let mut buf = reply::RunReplyBuffer::new();
-    buf.record_text("Let me check.".to_string());
+    buf.record_text("Let me check.");
     buf.record_tool_start("t1", "shell", Some(r#"{"command":"cargo test"}"#));
     buf.record_tool_end("t1", 2000, false);
-    buf.record_text("final answer".to_string());
+    buf.record_text("final answer");
     buf
 }
 
@@ -904,6 +904,9 @@ async fn deliver_reply_morphs_status_card_when_no_mid_run_posts() {
         true,
         &sid,
         SettleKind::Stopped(&completed()),
+        // Attachment delivery is out of scope for these tests; a dangling
+        // Weak keeps the workspace lookup inert.
+        &std::sync::Weak::new(),
     )
     .await;
 
@@ -939,6 +942,9 @@ async fn deliver_reply_freezes_card_and_flushes_new_message_on_mid_run_posts() {
         true,
         &sid,
         SettleKind::Stopped(&completed()),
+        // Attachment delivery is out of scope for these tests; a dangling
+        // Weak keeps the workspace lookup inert.
+        &std::sync::Weak::new(),
     )
     .await;
 
@@ -972,6 +978,9 @@ async fn deliver_reply_plain_platform_flushes_without_morph() {
         true,
         &sid,
         SettleKind::Stopped(&completed()),
+        // Attachment delivery is out of scope for these tests; a dangling
+        // Weak keeps the workspace lookup inert.
+        &std::sync::Weak::new(),
     )
     .await;
 
@@ -1002,6 +1011,9 @@ async fn deliver_reply_falls_back_to_flush_when_obs_state_missing() {
         true,
         &sid,
         SettleKind::Stopped(&completed()),
+        // Attachment delivery is out of scope for these tests; a dangling
+        // Weak keeps the workspace lookup inert.
+        &std::sync::Weak::new(),
     )
     .await;
 

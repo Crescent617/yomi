@@ -384,7 +384,7 @@ impl ObsTracker {
                 let text = super::blocks_to_text(content);
                 self.update_running(session_id, |s| {
                     if !text.is_empty() {
-                        s.trace.record_text(text);
+                        s.trace.record_text(&text);
                     }
                     s.whisper.clear();
                 })

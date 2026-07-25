@@ -149,6 +149,12 @@ fn response_for(method: &str, path: &str) -> &'static str {
         "POST" if p == "/open-apis/im/v1/messages" => {
             r#"{"code":0,"msg":"ok","data":{"message_id":"om_new"}}"#
         }
+        "POST" if p == "/open-apis/im/v1/files" => {
+            r#"{"code":0,"msg":"ok","data":{"file_key":"fk_1"}}"#
+        }
+        "POST" if p == "/open-apis/im/v1/images" => {
+            r#"{"code":0,"msg":"ok","data":{"image_key":"ik_1"}}"#
+        }
         "POST" if p.starts_with("/open-apis/im/v1/messages/") && p.ends_with("/reply") => {
             r#"{"code":0,"msg":"ok","data":{"message_id":"om_reply"}}"#
         }
@@ -326,4 +332,115 @@ async fn fetch_history_edge_cases_and_millisecond_cursor() {
     assert_eq!(out[1].message_id, "e4");
     assert_eq!(out[1].text, "same second later");
     assert_eq!(out[1].create_time, 1_700_000_060_800);
+}
+
+// ── send_files: multipart form contract (regression for API error 234001) ──
+
+#[tokio::test]
+async fn send_files_uploads_file_with_required_form_fields() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("report.pdf");
+    std::fs::write(&file, b"%PDF-1 fake").unwrap();
+
+    adapter
+        .send_files("oc_chat", &[(file.as_path(), None)], None)
+        .await
+        .unwrap();
+
+    // file_type/file_name are multipart FORM FIELDS, not URL query params.
+    let (method, path, body) = stub.find("POST", "/open-apis/im/v1/files");
+    assert_eq!(method, "POST");
+    assert!(!path.contains("file_type"), "query param leaked: {path}");
+    for needle in [
+        "name=\"file_type\"",
+        "stream",
+        "name=\"file_name\"",
+        "report.pdf",
+        "name=\"file\"",
+        "%PDF-1 fake",
+    ] {
+        assert!(body.contains(needle), "missing {needle} in multipart body");
+    }
+
+    // … then the file message references the upload key.
+    let req = stub.find("POST", "/open-apis/im/v1/messages?receive_id_type=chat_id");
+    let v = StubFeishu::body_json(&req);
+    assert_eq!(v["msg_type"], "file");
+    assert!(v["content"].as_str().unwrap().contains("fk_1"));
+}
+
+#[tokio::test]
+async fn send_files_uploads_image_with_image_type_field() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("pic.png");
+    std::fs::write(&file, b"\x89PNG fake").unwrap();
+
+    adapter
+        .send_files("oc_chat", &[(file.as_path(), None)], None)
+        .await
+        .unwrap();
+
+    let (_, _, body) = stub.find("POST", "/open-apis/im/v1/images");
+    for needle in ["name=\"image_type\"", "message", "name=\"image\""] {
+        assert!(body.contains(needle), "missing {needle} in multipart body");
+    }
+
+    let req = stub.find("POST", "/open-apis/im/v1/messages?receive_id_type=chat_id");
+    let v = StubFeishu::body_json(&req);
+    assert_eq!(v["msg_type"], "image");
+    assert!(v["content"].as_str().unwrap().contains("ik_1"));
+}
+
+#[tokio::test]
+async fn send_files_rejects_empty_before_upload() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("empty.txt");
+    std::fs::write(&file, b"").unwrap();
+
+    let err = adapter
+        .send_files("oc_chat", &[(file.as_path(), None)], None)
+        .await
+        .unwrap_err();
+
+    let msg = err.to_string();
+    assert!(msg.contains("empty.txt"), "names the file: {msg}");
+    assert!(msg.contains("empty"), "reason: {msg}");
+    // The upload endpoint was never hit.
+    assert!(stub
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|(_, p, _)| !p.starts_with("/open-apis/im/v1/files")));
+}
+
+#[tokio::test]
+async fn send_files_one_bad_file_does_not_block_the_rest() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let dir = tempfile::tempdir().unwrap();
+    let empty = dir.path().join("empty.txt");
+    std::fs::write(&empty, b"").unwrap();
+    let good = dir.path().join("good.txt");
+    std::fs::write(&good, b"content").unwrap();
+
+    let err = adapter
+        .send_files(
+            "oc_chat",
+            &[(empty.as_path(), None), (good.as_path(), None)],
+            None,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(err.to_string().contains("empty.txt"));
+    // The good file was still uploaded and messaged.
+    stub.find("POST", "/open-apis/im/v1/files");
+    stub.find("POST", "/open-apis/im/v1/messages?receive_id_type=chat_id");
 }

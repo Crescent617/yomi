@@ -260,7 +260,7 @@ impl ChannelHub {
                     () = token.cancelled() => break,
                     _ = watchdog.tick() => {
                         // Kernel gone = shutting down; nothing to settle.
-                        if let Some(kernel) = kernel.upgrade() {
+                        if let Some(k) = kernel.upgrade() {
                             // Sessions whose agent died (crash / lost
                             // `Stopped`): flush whatever reply state remains
                             // so content is never silently lost, mirroring the
@@ -271,7 +271,7 @@ impl ChannelHub {
                             // then finds no buffer and sends nothing.
                             let dead: Vec<SessionId> = reply_buffers
                                 .keys()
-                                .filter(|sid| !kernel.is_session_running(sid))
+                                .filter(|sid| !k.is_session_running(sid))
                                 .cloned()
                                 .collect();
                             for sid in dead {
@@ -314,10 +314,11 @@ impl ChannelHub {
                                     observability,
                                     &sid,
                                     SettleKind::Timeout,
+                                    &kernel,
                                 )
                                 .await;
                             }
-                            obs.sweep_dead_sessions(|sid| kernel.is_session_running(sid)).await;
+                            obs.sweep_dead_sessions(|sid| k.is_session_running(sid)).await;
                         }
                     }
                     Some((session_id, envelope)) = rx.recv() => {
@@ -361,7 +362,7 @@ impl ChannelHub {
                                     reply_buffers
                                         .entry(session_id.clone())
                                         .or_default()
-                                        .record_text(text);
+                                        .record_text(&text);
                                 }
                             }
                             Event::Tool(ToolEvent::Start {
@@ -408,6 +409,7 @@ impl ChannelHub {
                                 observability,
                                 &session_id,
                                 SettleKind::Stopped(reason),
+                                &kernel,
                             )
                             .await;
                             continue;
@@ -565,7 +567,11 @@ async fn settle_with(
     }
 }
 
-/// Deliver a run's final reply. Card-capable platforms with observability
+/// Deliver a run's final reply, then its attachment files. Declared
+/// attachments (`<yomi:attachments>` blocks, stripped at record time) are
+/// resolved up front — resolution notes ride with the reply text — while
+/// the files themselves go out AFTER the reply, landing at the bottom of
+/// the chat. The reply itself: card-capable platforms with observability
 /// morph the status card into it (one message per run) — or, when the user
 /// posted mid-run, freeze the card as a terminal receipt and flush the
 /// reply as a new bare-text message at the bottom (no trace there: it was
@@ -583,7 +589,23 @@ async fn deliver_reply(
     observability: bool,
     session_id: &SessionId,
     kind: SettleKind<'_>,
+    kernel: &std::sync::Weak<Kernel>,
 ) {
+    let mut reply = reply;
+    // Split files off the reply up front: resolution failures become notes
+    // on the reply text; the files are sent after the reply below.
+    let files = match reply.as_mut() {
+        Some(reply) if !reply.attachments().is_empty() => {
+            // Best-effort workspace lookup for relative paths; a gone
+            // kernel still allows absolute-path attachments.
+            let cwd = match kernel.upgrade() {
+                Some(k) => Some(k.session_cwd(session_id).await),
+                None => None,
+            };
+            super::attachments::resolve_attachments(cwd.as_deref(), reply).await
+        }
+        _ => Vec::new(),
+    };
     if observability && adapter.supports_status_card() {
         if obs.has_mid_run_posts(session_id) {
             // The trace went live on the card only if the card
@@ -613,6 +635,10 @@ async fn deliver_reply(
             let _ = settle_with(obs, session_id, kind, None).await;
         }
     }
+
+    // Attachments last: files land at the bottom of the chat, below the
+    // reply text/card.
+    super::attachments::send_attachments(adapter, routing, files).await;
 }
 
 async fn handle_incoming_message(

@@ -25,12 +25,6 @@ describe("tool header summaries", () => {
       "Continue?",
     ],
     ["task_create", { subject: "Ship release" }, "Create task", "Ship release"],
-    [
-      "send_message",
-      { content: "Build finished" },
-      "Send message",
-      "Build finished",
-    ],
   ])("summarizes %s", (name, args, label, target) => {
     expect(toolLabel(name)).toBe(label);
     expect(extractTarget(name, JSON.stringify(args))).toBe(target);

@@ -26,8 +26,6 @@ pub mod webfetch;
 pub mod websearch;
 pub mod write;
 
-pub mod send_message;
-
 // Re-export from helper module
 pub use helper::{FileStateStore, DEFAULT_MAX_TOOL_OUTPUT_LENGTH, MAX_FILE_SIZE};
 
@@ -42,7 +40,6 @@ pub use grep::{GrepTool, GREP_TOOL_NAME};
 pub use post_message::{PostMessageTool, POST_MESSAGE_TOOL_NAME};
 pub use read::{ReadTool, READ_TOOL_NAME};
 pub use reminder::{ReminderTool, REMINDER_TOOL_NAME};
-pub use send_message::{SendMessageTool, SEND_MESSAGE_TOOL_NAME};
 pub use shell::{ShellTool, ShellToolCtx, SHELL_TOOL_NAME};
 pub use skill_load::{SkillTool, SKILL_FILENAME, SKILL_TOOL_NAME};
 pub use sleep::{SleepTool, SLEEP_TOOL_NAME};
@@ -321,9 +318,11 @@ impl ToolRegistry {
             ));
         }
 
-        // Register todo tool
-        if let Some(todo_storage) = config.shared.todo_storage.clone() {
-            self.register_todo_tool(todo_storage);
+        // Register todo tool if enabled
+        if config.flags.todo {
+            if let Some(todo_storage) = config.shared.todo_storage.clone() {
+                self.register_todo_tool(todo_storage);
+            }
         }
 
         // Register Reminder tool if enabled (main agent only)
@@ -395,7 +394,7 @@ impl ToolRegistry {
 }
 
 /// Feature flags for tool registration.
-#[derive(Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ToolFlags {
     /// Enable subagent tool for spawning child agents.
@@ -408,6 +407,8 @@ pub struct ToolFlags {
     pub sleep: bool,
     /// Enable cron tool for managing scheduled jobs.
     pub cron: bool,
+    /// Enable todo tool for agent task tracking.
+    pub todo: bool,
 }
 
 impl ToolFlags {
@@ -419,6 +420,7 @@ impl ToolFlags {
             goal: true,
             sleep: true,
             cron: false,
+            todo: false,
         }
     }
 
@@ -426,6 +428,13 @@ impl ToolFlags {
     #[must_use]
     pub const fn with_cron(mut self, enabled: bool) -> Self {
         self.cron = enabled;
+        self
+    }
+
+    /// Set the todo tool flag.
+    #[must_use]
+    pub const fn with_todo(mut self, enabled: bool) -> Self {
+        self.todo = enabled;
         self
     }
 }
