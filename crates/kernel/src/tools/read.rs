@@ -1,4 +1,4 @@
-use crate::tools::helper::{get_mtime, maybe_truncate_output, FileStateStore, MAX_FILE_SIZE};
+use crate::tools::helper::{maybe_truncate_output, FileStateStore, MAX_FILE_SIZE};
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
 use crate::utils::g_lock::{g_lock_timeout, DEFAULT_LOCK_TIMEOUT};
@@ -46,9 +46,7 @@ impl ReadTool {
             Some(data_url) => {
                 // Track file mtime if store is available
                 if let Some(ref store) = self.file_state_store {
-                    if let Some(mtime) = get_mtime(path).await {
-                        store.record(path.to_path_buf(), mtime).await;
-                    }
+                    store.refresh(path).await;
                 }
 
                 // Create output with image and metadata text
@@ -95,9 +93,7 @@ impl ReadTool {
         };
 
         if let Some(ref store) = self.file_state_store {
-            if let Some(mtime) = get_mtime(path).await {
-                store.record(path.to_path_buf(), mtime).await;
-            }
+            store.refresh(path).await;
         }
 
         let output = if end < total_lines {

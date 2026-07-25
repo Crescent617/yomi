@@ -1,5 +1,5 @@
 use crate::tools::helper::{get_mtime, FileStateStore};
-use crate::tools::{FileStateAwareTool, Tool, ToolExecCtx};
+use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
 use crate::utils::g_lock::{g_lock_timeout, DEFAULT_LOCK_TIMEOUT};
 use crate::utils::path::expand_tilde;
@@ -24,12 +24,6 @@ impl WriteTool {
     }
 }
 
-impl FileStateAwareTool for WriteTool {
-    fn file_state_store(&self) -> Option<&Arc<FileStateStore>> {
-        self.file_state_store.as_ref()
-    }
-}
-
 #[async_trait]
 impl Tool for WriteTool {
     fn name(&self) -> &'static str {
@@ -37,7 +31,7 @@ impl Tool for WriteTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Write a file to the local filesystem. Overwrites/append existing files or creates new ones."
+        "Write a file to the local filesystem. Overwrites/appends existing files or creates new ones. Overwriting an existing file requires reading it first; creating a new file or appending does not."
     }
 
     fn schema(&self) -> Value {
@@ -125,7 +119,9 @@ impl Tool for WriteTool {
                     )));
                 };
                 if let Err(error) = store.check_staleness(&path, mtime) {
-                    return Ok(ToolOutput::error(error));
+                    return Ok(ToolOutput::error(format!(
+                        "{error} (file: {file_path_str})"
+                    )));
                 }
             }
         }
@@ -145,10 +141,14 @@ impl Tool for WriteTool {
             tokio::fs::write(&path, content).await?;
         }
 
-        // Update file state store
+        // Update file state store. Appending to an existing, never-read file
+        // only refreshes known files — otherwise append would silently
+        // unlock blind overwrite.
         if let Some(ref store) = self.file_state_store {
-            if let Some(mtime) = get_mtime(&path).await {
-                store.record(path.clone(), mtime).await;
+            if is_append && file_exists {
+                store.refresh_if_known(&path).await;
+            } else {
+                store.refresh(&path).await;
             }
         }
 

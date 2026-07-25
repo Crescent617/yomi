@@ -110,6 +110,43 @@ async fn test_write_tool_update_after_read() {
 }
 
 #[tokio::test]
+async fn test_write_overwrite_stale_rejected() {
+    // Read-first gate, branch 2: a recorded file that was modified externally
+    // must be re-read before overwrite.
+    let temp_dir = TempDir::new().unwrap();
+    let base_path = temp_dir.path().canonicalize().unwrap();
+
+    let file_path = base_path.join("existing.txt");
+    tokio::fs::write(&file_path, "original").await.unwrap();
+
+    let store = Arc::new(FileStateStore::new());
+    // Simulate a prior read
+    let mtime = crate::tools::helper::get_mtime(&file_path).await.unwrap();
+    store.record(file_path.clone(), mtime).await;
+
+    // 外部修改（store 未更新）
+    // sleep 1.1s 确保 mtime 真的变化（超过秒级粒度文件系统的分辨率）
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    tokio::fs::write(&file_path, "externally modified")
+        .await
+        .unwrap();
+
+    let tool = WriteTool::new(store);
+    let args = serde_json::json!({
+        "file_path": "existing.txt",
+        "content": "overwrite"
+    });
+    let ctx = ToolExecCtx::new("test_tool_call", &base_path, "test-session");
+    let result = tool.exec(args, ctx).await.unwrap();
+    assert!(result.is_error);
+    assert!(result.error_text().contains("modified since it was read"));
+
+    // External content untouched by the rejected overwrite
+    let content = tokio::fs::read_to_string(&file_path).await.unwrap();
+    assert_eq!(content, "externally modified");
+}
+
+#[tokio::test]
 async fn test_write_tool_absolute_path() {
     let temp_dir = TempDir::new().unwrap();
     let base_path = temp_dir.path();
@@ -127,6 +164,89 @@ async fn test_write_tool_absolute_path() {
 
     let content = tokio::fs::read_to_string(absolute_path).await.unwrap();
     assert_eq!(content, "absolute path content");
+}
+
+#[tokio::test]
+async fn test_write_append_does_not_unlock_overwrite() {
+    // Appending to an existing, never-read file must not mark it as known,
+    // so a subsequent overwrite is still blocked by the read-first gate.
+    let temp_dir = TempDir::new().unwrap();
+    let base_path = temp_dir.path().canonicalize().unwrap();
+
+    tokio::fs::write(base_path.join("existing.txt"), "original")
+        .await
+        .unwrap();
+
+    let store = Arc::new(FileStateStore::new());
+    let tool = WriteTool::new(store);
+
+    // Append without reading: allowed
+    let args = serde_json::json!({
+        "file_path": "existing.txt",
+        "content": "+more",
+        "mode": "append"
+    });
+    let ctx = ToolExecCtx::new("test_tool_call", &base_path, "test-session");
+    let result = tool.exec(args, ctx).await.unwrap();
+    assert!(result.success());
+
+    // Overwrite without reading: still blocked
+    let args = serde_json::json!({
+        "file_path": "existing.txt",
+        "content": "blind overwrite"
+    });
+    let ctx = ToolExecCtx::new("test_tool_call_2", &base_path, "test-session");
+    let result = tool.exec(args, ctx).await.unwrap();
+    assert!(result.is_error);
+    assert!(result.error_text().contains("not been read"));
+
+    // Content untouched by the rejected overwrite
+    let content = tokio::fs::read_to_string(base_path.join("existing.txt"))
+        .await
+        .unwrap();
+    assert_eq!(content, "original+more");
+}
+
+#[tokio::test]
+async fn test_write_append_after_read_then_overwrite() {
+    // Appending to a previously-read file refreshes its recorded mtime,
+    // so a subsequent overwrite passes the staleness check.
+    let temp_dir = TempDir::new().unwrap();
+    let base_path = temp_dir.path().canonicalize().unwrap();
+
+    let file_path = base_path.join("existing.txt");
+    tokio::fs::write(&file_path, "original").await.unwrap();
+
+    let store = Arc::new(FileStateStore::new());
+    // Simulate a prior read
+    let mtime = crate::tools::helper::get_mtime(&file_path).await.unwrap();
+    store.record(file_path.clone(), mtime).await;
+
+    let tool = WriteTool::new(store);
+
+    let args = serde_json::json!({
+        "file_path": "existing.txt",
+        "content": "+more",
+        "mode": "append"
+    });
+    let ctx = ToolExecCtx::new("test_tool_call", &base_path, "test-session");
+    let result = tool.exec(args, ctx).await.unwrap();
+    assert!(result.success());
+
+    let args = serde_json::json!({
+        "file_path": "existing.txt",
+        "content": "overwritten"
+    });
+    let ctx = ToolExecCtx::new("test_tool_call_2", &base_path, "test-session");
+    let result = tool.exec(args, ctx).await.unwrap();
+    assert!(
+        result.success(),
+        "overwrite after append should succeed, got: {}",
+        result.error_text()
+    );
+
+    let content = tokio::fs::read_to_string(&file_path).await.unwrap();
+    assert_eq!(content, "overwritten");
 }
 
 #[tokio::test]

@@ -1,5 +1,5 @@
-use crate::tools::helper::{get_mtime, FileStateStore, MAX_FILE_SIZE};
-use crate::tools::{FileStateAwareTool, Tool, ToolExecCtx};
+use crate::tools::helper::{FileStateStore, MAX_FILE_SIZE};
+use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
 use crate::utils::g_lock::{g_lock_timeout, DEFAULT_LOCK_TIMEOUT};
 use crate::utils::path::expand_tilde;
@@ -23,11 +23,6 @@ impl EditTool {
     }
 }
 
-impl FileStateAwareTool for EditTool {
-    fn file_state_store(&self) -> Option<&Arc<FileStateStore>> {
-        self.file_state_store.as_ref()
-    }
-}
 struct Normalized {
     text: String,
     // 规范化文本中每个字符位置对应的原始文本字节起始位置
@@ -163,7 +158,7 @@ Rules:
 1. EXACT: old_str must be a VERBATIM copy from the file (indentation included).
 2. MINIMAL: just the line(s) being changed, never include large blocks.
 3. UNIQUE: If the text appears multiple times, add 1-2 surrounding lines to disambiguate. Or use replace_all=true for global replacement.
-4. READ FIRST: Read the file to get exact content before editing.
+4. ACCURACY: old_str must match the file's current bytes; if unsure of the current content, read the file first.
 5. PARALLEL: Make edits in parallel (in same response) rather than one by one."
     }
 
@@ -227,41 +222,25 @@ Rules:
             )));
         }
 
-        // Check if file has been read before editing
-        // Skip for simple single-line edits (old_str and new_str are both single lines)
-        let is_simple_edit = !old_str.contains('\n') && !new_str.contains('\n') && !replace_all;
-
-        if let Some(ref store) = self.file_state_store {
-            // Simple edits don't require read-first check
-            if !is_simple_edit && !store.has_recorded(&path) {
-                return Ok(ToolOutput::error(format!(
-                    "File has not been read yet. Read it first before editing: {path_str}"
-                )));
-            }
-        }
-
-        // Acquire lock to serialize concurrent tool calls
+        // Acquire lock to serialize concurrent tool calls.
+        // No read-first/staleness gate: old_str exact-match against current
+        // bytes is the safeguard — a mismatch simply errors and prompts a re-read.
         let _guard = g_lock_timeout(path.to_string_lossy(), DEFAULT_LOCK_TIMEOUT).await?;
-        // Re-check staleness under lock to catch concurrent modifications.
-        // If the file has disappeared since the exists-check above, treat it as a conflict.
-        if let Some(ref store) = self.file_state_store {
-            if !is_simple_edit {
-                let Some(mtime) = get_mtime(&path).await else {
-                    return Ok(ToolOutput::error(format!(
-                        "File is no longer accessible (deleted or permission denied): {path_str}"
-                    )));
-                };
-                if let Err(error) = store.check_staleness(&path, mtime) {
-                    return Ok(ToolOutput::error(error));
-                }
-            }
-        }
 
         // Track file for checkpoint before modification (under lock to avoid stale backup)
         ctx.track_edit(&path).await;
 
         // Read file content (now protected by exclusive lock)
-        let content = tokio::fs::read_to_string(&path).await?;
+        let content = match tokio::fs::read_to_string(&path).await {
+            Ok(content) => content,
+            // Existed at the check above but gone now (deleted concurrently)
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(ToolOutput::error(format!(
+                    "File is no longer accessible (deleted concurrently): {path_str}"
+                )));
+            }
+            Err(e) => return Err(e.into()),
+        };
 
         // Validate old_str is not empty (except for creating new files)
         if old_str.is_empty() && !content.is_empty() {
@@ -311,11 +290,11 @@ Rules:
         // Write the new content (exclusive lock still held)
         tokio::fs::write(&path, &new_content).await?;
 
-        // Update file mtime in store
+        // Refresh the recorded mtime for files already known to us.
+        // A blind edit (old_str happened to match) must not mark a never-read
+        // file as known — that would unlock write-overwrite without any read.
         if let Some(ref store) = self.file_state_store {
-            if let Some(mtime) = get_mtime(&path).await {
-                store.record(path.clone(), mtime).await;
-            }
+            store.refresh_if_known(&path).await;
         }
 
         // Build success message

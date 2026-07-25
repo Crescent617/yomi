@@ -1,3 +1,4 @@
+use super::file_utils::get_mtime;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -67,6 +68,24 @@ impl FileStateStore {
             if let Err(e) = store.record(key, mtime).await {
                 tracing::warn!("Failed to persist file state: {}", e);
             }
+        }
+    }
+
+    /// Stat the file and record its current mtime.
+    ///
+    /// No-op if the file's metadata cannot be read.
+    pub async fn refresh(&self, path: &Path) {
+        if let Some(mtime) = get_mtime(path).await {
+            self.record(path.to_path_buf(), mtime).await;
+        }
+    }
+
+    /// Like [`refresh`](Self::refresh), but only for files already known to the
+    /// store. Mutations that don't reveal content (edit, append) must use this
+    /// so they can't mark a never-read file as known and unlock write-overwrite.
+    pub async fn refresh_if_known(&self, path: &Path) {
+        if self.has_recorded(path) {
+            self.refresh(path).await;
         }
     }
 
