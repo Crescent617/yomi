@@ -13,6 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.7.1] - 2026-07-25
 
+### Added
+- 飞书群聊触发时注入最近聊天记录（`history_context`，默认 20 条、0 关闭）：拉取当前话题/频道自上次触发以来的消息（SQLite 毫秒精度游标），拼装 `<recent_chat_history>` 块随用户消息一并 steer 给 agent；仅群聊启用，命令不触发，拉取失败自动降级为无历史。开启 `reply_in_thread` 时频道级触发跳过注入（后移至 0.7.2 修正）。
+- 新增 `/help` 通道命令：列出全部可用命令，纯静态回复、不创建会话。命令前缀匹配改为精确或 `@bot` 后缀，避免 `/clearance` 之类的误触发。
+- 状态卡个性与实时轨迹：刚物化时显示随机 -ing 占位词（不再有只有计时器的空卡）；统计行 + 分割线 + 实时运行轨迹（工具调用与已完成的 assistant 文本逐条呈现，正在生成的文本作为 whisper 尾巴）；thinking/typing 标题每次 PATCH 随机换词；统计行显示 steps 与 ctx 用量；最终回复的轨迹面板完整渲染全部条目（每条单行截断），buffer 溢出丢弃以 `··· and N earlier entries` 标记；run 中途有用户消息时回复以纯文本沉底（轨迹已在卡片直播过），卡片未成功物化的边缘情况保留轨迹。
+
+### Fixed
+- cron：调度器双触发竞态（入队查重 + fire 去重 + running 守卫）；create/update 失败时回滚绑定的 session；手动 trigger 不再消耗 `run_count`/`max_runs`；tool 与 RPC 的 update 语义收敛（schedule 重算共享、无 session 的 SendMessage 统一绑定或显式报错）；stale 队列条目按时间戳精确清理，修掉 lost-requeue 洞。
+- 截断全部收敛到 `utils::strs` 的 UTF-8 安全实现（按字符/按字节/按 UTF-16 单元）：修复 cron stdout 非字符边界 panic、飞书字节/字符混用导致 CJK 永不截断、Telegram 上限按 UTF-16 计量、回复预算按字节（28KB）计；后缀超长时结果不再超过上限。
+- 事件总线：订阅注册改为共享注册表同步生效（修掉 sleep 丢失唤醒与 cmd channel 满时订阅静默丢弃），shutdown/drop 后 subscriber 的 `recv()` 正确返回 `None` 而不是永久挂起，并补上 subscribe 与 shutdown 竞态的插入后复查。
+- 飞书回复卡片发送被拒时回退纯文本发送；watchdog 丢弃不可投递的回复缓冲；run receipts 仅在 agent 运行中记录，杜绝跨 run 污染。
+
 ### Changed
 - edit 工具移除 read-before-edit 与 staleness 强制检查：编辑前不再要求先读文件，也不再因文件 mtime 变化拒绝编辑；唯一保障是 `old_str` 必须匹配文件当前字节（匹配失败即报错，自然促使重读）。外部改动只触及无关区域且 `old_str` 仍可匹配时，编辑直接生效，不再被误拒。
 - 文件「已知」状态现在只能由 read / grep（content 模式展示过的文件）/ write 创建来建立；edit 与 append 仅刷新已知文件的 mtime，不再能把从未读过的文件标记为已知——关闭 blind edit / blind append 解锁 blind overwrite 的侧门。record 样板收敛为 `FileStateStore::refresh` / `refresh_if_known`。
