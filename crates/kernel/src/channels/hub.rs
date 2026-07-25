@@ -847,6 +847,12 @@ async fn maybe_history_prefix(
     if config.history_context == 0 || !msg.is_group {
         return None;
     }
+    // With reply_in_thread, a channel-level trigger opens a fresh thread —
+    // the chat's cross-topic chatter is noise there, not context. Triggers
+    // inside an existing thread still get that thread's history.
+    if config.reply_in_thread && msg.thread_id.is_none() {
+        return None;
+    }
     let container = history_container(msg);
     let cursor = store
         .get_history_cursor(channel_name, container.id())

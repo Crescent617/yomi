@@ -1220,3 +1220,32 @@ async fn history_prefix_empty_fetch_keeps_cursor_unset() {
         "empty fetch must not advance the cursor"
     );
 }
+
+#[tokio::test]
+async fn history_prefix_skips_channel_level_when_reply_in_thread() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let mock = Arc::new(HistoryMockAdapter::default());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig {
+        reply_in_thread: true,
+        ..ChannelConfig::default()
+    };
+
+    // Channel-level trigger with reply_in_thread: no history (a fresh
+    // thread starts; cross-topic chatter is noise there).
+    let prefix = maybe_history_prefix(&adapter, &config, &store, "feishu", &group_msg(None)).await;
+    assert!(prefix.is_none());
+    assert!(mock.calls.lock().await.is_empty(), "no fetch issued");
+
+    // Inside an existing thread, that thread's history still applies.
+    let prefix = maybe_history_prefix(
+        &adapter,
+        &config,
+        &store,
+        "feishu",
+        &group_msg(Some("omt_1".into())),
+    )
+    .await;
+    assert!(prefix.is_some(), "thread history still injected");
+}
