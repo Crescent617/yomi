@@ -5,153 +5,148 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 编写要求
+
+- **写给用户**：只记录使用者能感知的变化（行为、配置、命令、界面表现）；不写内部实现（数据结构、锁、trait、重构过程本身）。
+- **一条一行一句话**：说清"什么变了、对用户意味着什么"；写不下就拆成多条，不堆从句。
+- **不写代码符号**：避免函数名、字段名、文件名和内部术语（buffer、游标、PATCH 等）；配置项与命令名除外。
+- **分类**：`Added` 新能力 / `Changed` 行为变化 / `Fixed` 问题修复 / `Removed` 移除能力。
+- **配置与命令必须点名**：新增或变更配置项、命令时，写出名称与默认值。
+
 ## [0.7.2] - 2026-07-25
 
 ### Fixed
-- 开启 `reply_in_thread` 时，频道级触发不再注入最近聊天记录（频道里跨话题的闲聊不再是新话题的上下文噪音）；话题内触发仍正常注入该话题的历史。
-- 历史上下文不再重复注入已消费消息：游标在每条被处理的群消息（触发与命令）后单调推进，bot 创建的话题的 root 消息（已在频道级被消费）不再被当作新历史注入。
+- `reply_in_thread` 开启时，频道级 @ 不再附带频道闲聊记录（跨话题噪音）；话题内 @ 仍附带本话题记录。
+- @bot 时注入的最近聊天记录不再包含 bot 已经处理过的消息（命令、触发消息、bot 自己创建的话题首条）。
 
 ## [0.7.1] - 2026-07-25
 
 ### Added
-- 飞书群聊触发时注入最近聊天记录（`history_context`，默认 20 条、0 关闭）：拉取当前话题/频道自上次触发以来的消息（SQLite 毫秒精度游标），拼装 `<recent_chat_history>` 块随用户消息一并 steer 给 agent；仅群聊启用，命令不触发，拉取失败自动降级为无历史。开启 `reply_in_thread` 时频道级触发跳过注入（后移至 0.7.2 修正）。
-- 新增 `/help` 通道命令：列出全部可用命令，纯静态回复、不创建会话。命令前缀匹配改为精确或 `@bot` 后缀，避免 `/clearance` 之类的误触发。
-- 状态卡个性与实时轨迹：刚物化时显示随机 -ing 占位词（不再有只有计时器的空卡）；统计行 + 分割线 + 实时运行轨迹（工具调用与已完成的 assistant 文本逐条呈现，正在生成的文本作为 whisper 尾巴）；thinking/typing 标题每次 PATCH 随机换词；统计行显示 steps 与 ctx 用量；最终回复的轨迹面板完整渲染全部条目（每条单行截断），buffer 溢出丢弃以 `··· and N earlier entries` 标记；run 中途有用户消息时回复以纯文本沉底（轨迹已在卡片直播过），卡片未成功物化的边缘情况保留轨迹。
+- 飞书群聊 @bot 时自动附带最近聊天记录作为上下文（`history_context`，默认 20 条，0 关闭）；私聊与命令不触发。
+- 新增 `/help` 通道命令。
+- 状态卡更有"个性"：开卡占位词、实时运行轨迹（工具与回复过程逐条展示）、thinking/typing 标题随机换词、统计行显示 steps 与 ctx 用量；最终回复附完整轨迹，run 中途有用户消息时回复以纯文本沉底。
 
 ### Fixed
-- cron：调度器双触发竞态（入队查重 + fire 去重 + running 守卫）；create/update 失败时回滚绑定的 session；手动 trigger 不再消耗 `run_count`/`max_runs`；tool 与 RPC 的 update 语义收敛（schedule 重算共享、无 session 的 SendMessage 统一绑定或显式报错）；stale 队列条目按时间戳精确清理，修掉 lost-requeue 洞。
-- 截断全部收敛到 `utils::strs` 的 UTF-8 安全实现（按字符/按字节/按 UTF-16 单元）：修复 cron stdout 非字符边界 panic、飞书字节/字符混用导致 CJK 永不截断、Telegram 上限按 UTF-16 计量、回复预算按字节（28KB）计；后缀超长时结果不再超过上限。
-- 事件总线：订阅注册改为共享注册表同步生效（修掉 sleep 丢失唤醒与 cmd channel 满时订阅静默丢弃），shutdown/drop 后 subscriber 的 `recv()` 正确返回 `None` 而不是永久挂起，并补上 subscribe 与 shutdown 竞态的插入后复查。
-- 飞书回复卡片发送被拒时回退纯文本发送；watchdog 丢弃不可投递的回复缓冲；run receipts 仅在 agent 运行中记录，杜绝跨 run 污染。
+- cron：任务可能被重复执行两次；操作失败会遗留闲置 session；手动 trigger 会误耗 max_runs 配额。
+- 多处长文本截断 bug：CJK / emoji 内容截断错误导致发送失败，极端情况 panic。
+- 事件总线：订阅后可能错过即时消息的唤醒；关闭后订阅者永久挂起。
+- 命令前缀误匹配：`/clearance` 会被当成 `/clear` 执行。
 
 ### Changed
-- edit 工具移除 read-before-edit 与 staleness 强制检查：编辑前不再要求先读文件，也不再因文件 mtime 变化拒绝编辑；唯一保障是 `old_str` 必须匹配文件当前字节（匹配失败即报错，自然促使重读）。外部改动只触及无关区域且 `old_str` 仍可匹配时，编辑直接生效，不再被误拒。
-- 文件「已知」状态现在只能由 read / grep（content 模式展示过的文件）/ write 创建来建立；edit 与 append 仅刷新已知文件的 mtime，不再能把从未读过的文件标记为已知——关闭 blind edit / blind append 解锁 blind overwrite 的侧门。record 样板收敛为 `FileStateStore::refresh` / `refresh_if_known`。
-- write 覆写成为唯一硬 gate（read-first + staleness，语义不变）；staleness 报错现携带文件路径，并行工具调用时可定位；edit 在读取前文件被并发删除时返回友好报错而非裸 IO 错误。
-
-### Removed
-- 删除无调用方的 `FileStateAwareTool` trait。
+- edit 工具不再要求先读后改、不再因文件被外部碰过而拒绝编辑；只要 `old_str` 能匹配当前内容就生效。
+- edit / append 不再能把"从未读过的文件"标记为已读，无法再借此绕过 write 的覆写校验。
 
 ## [0.7.0] - 2026-07-24
 
 ### Added
-- channel 状态卡运行中新增两行实时信息（≤100 字符截断）：last tool（`🔧 工具名 · 主参数摘要`）与 whisper（`💬` 灰色的当前输出文本尾部，流式累积、新模型调用清空、`End` 用完整文本自愈，3s 节流 PATCH 下呈打字感）。
-- 最终回复卡附可折叠运行轨迹面板（Feishu `collapsible_panel`，默认收起，需客户端 V7.9+；无卡平台为纯文本行）：工具成败图标、参数摘要（按工具取主参数；短参数内联，长/多行参数保留自带换行以 `↳` 续行，最多 3 行 × 100 字符）、耗时；agent loop 中间轮次文本降级为面板内灰色旁白。新增 `tool_trace` 配置开关（默认开启）。
+- 状态卡实时显示当前工具与正在生成的文本尾部。
+- 最终回复附运行轨迹（工具调用与中间过程）：Feishu 为可折叠面板（需客户端 V7.9+），其他平台为纯文本。新增 `tool_trace` 开关（默认开启）。
 
 ### Changed
-- channel 回复改为**自适应单/双消息**：run 期间用户未发新消息时，状态卡在 `Lifecycle(Stopped)` 原地 morph 为最终回复卡（无 header，正文 = 最后一个模型文本 + 轨迹面板），一段 run 一条消息；**run 期间用户发了新消息（平台消息，命令除外）时**，状态卡冻结为终态凭据留在上方（终态 header + 统计行），最终回复作为新消息沉底（锚定最新用户消息），避免答案出现在用户消息之上。异常结束（Failed/MaxIterations/watchdog 超时）以正文提示行呈现；结算发送失败或状态缺失时回退为普通消息，不丢内容。
-- 状态卡开卡时机由"首个工具"提前到"首个工具**或首个模型输出 chunk（文本或 thinking）**"：模型一开始响应卡片就到位（reasoning 模型长 thinking 期间标题为 `💭 Thinking…`），纯问答 run 也有状态卡且中途输出全程可见。
+- 一次 run 只发一条消息：状态卡原地变为最终回复；run 中途用户发了新消息时，卡片冻结为凭据、回复另发一条沉底，避免答案插到用户消息之上。
+- 状态卡出现更早：模型一开始输出（文本或 thinking）即显示，不再等首个工具。
 
 ### Removed
-- 结算时不再发送任何 reaction：移除 0.6.21 引入的用户消息 `OneSecond → DONE/CrossMark` 切换与回复卡完成 reaction（`OneSecond` 收到确认保留）；连带删除已无调用方的 `remove_reaction`（trait 默认方法 + Feishu 实现）与 `ChannelMessage.receipt_reaction_id` 字段。
+- 结算时不再发送 reaction（收到消息的 `OneSecond` 确认保留）。
 
 ### Fixed
-- channel forwarder 订阅改为过滤掉 `ToolCallDelta` 事件：大文件写入等场景会产生成百上千个参数 delta，打满 forwarder 的 256 事件缓冲（总线满即丢），导致文本 chunk/End 被静默丢弃（whisper 为空、回复文本丢失）。
-- Telegram 适配器补充消息长度截断（4000 字符上限，unicode 安全 + 截断标记）：此前超过 4096 字符的消息整条发送失败丢失，追加运行轨迹后更易超限。
+- 大文件写入等场景下回复文本可能丢失。
+- Telegram 超长消息整条发送失败：现在超长会截断并附标记。
 
 ## [0.6.22] - 2026-07-24
 
 ### Added
-- 流式工具调用参数摘要日志：单个 tool call 的流式参数每累积约 4k token（4 字节 ≈ 1 token 估算）输出一条 `tracing::warn!` 摘要，含工具名、调用 id、累计 token 估算及参数头/尾各 80 字符片段（unicode 安全、转义为单行），便于观测大文件写入等超长参数流；跟踪状态为单槽设计，新 tool call 的 delta 到达即替换旧状态，首个 delta 为空或缺工具名时由后续 delta 补全。
+- 超长工具参数（如大文件写入）现在会周期性输出摘要日志，便于观测。
 
 ## [0.6.21] - 2026-07-24
 
 ### Added
-- channel 运行可观测性（`observability` 配置开关，默认开启）：任务运行期间以一张紧凑卡片（400px 宽、12px 字号、英文文案）呈现进度，首个工具调用时才发卡（纯问答不产卡），标题实时区分 🧠 Thinking / ✍️ Typing / 🔧 工具 / 🔁 重试 / 🗜 压缩 / 🔀 降级等阶段，正文单行汇总耗时、工具总数与 token 用量（1.5s 节流原地更新）；`Lifecycle(Stopped)` 结算为终态（绿=✅ Done / 红=❌ Failed / 灰=⏹ Stopped / 灰=⏰ Timed out，watchdog 每分钟查询 session 活性兜底崩溃/panic/失联，长工具调用不误判），首个工具前失败的运行也会直接补发终态红卡。运行期间收到的用户消息 ack reaction（`OneSecond`）在结算时统一替换为 `DONE`/`CrossMark`，并给最后一条内容回复打上同样 reaction。Feishu 适配器新增 `send_card`/`update_card`/`remove_reaction`，`send_reaction` 修复为透传 emoji 并返回 reaction_id；无卡片能力的平台（Telegram）保留 typing 指示作为进度回退。
-
-### Removed
-- 删除从未有发射方的 `ModelEvent::Error` 死事件及其在 hub/TUI 的死消费分支（agent 错误统一走 `AgentEvent::Error`）。
+- 新增 channel 运行状态卡（`observability` 开关，默认开启）：任务运行时以紧凑卡片实时展示阶段（Thinking/Typing/工具/重试等）、耗时、工具数与 token 用量，结束后变为终态（成功/失败/停止/超时）；不支持卡片的平台退回 typing 指示。
 
 ## [0.6.20] - 2026-07-23
 
 ### Fixed
-- channel `/info` 的 Subagents 计数改为仅统计正在运行的 subagent（标签同步为 `Subagents (running)`），此前统计的是该 session 全部历史 subagent 会话（含已结束），与 Background Shell 的 running-only 语义不一致。
+- `/info` 的 Subagents 计数只算仍在运行的，不再包含已结束的。
 
 ## [0.6.19] - 2026-07-23
 
 ### Changed
-- 后台 shell 任务完成通知直接携带截断后的输出内容（keep-edges 截断，预算同工具输出上限），无需再手动读取日志文件；日志文件路径并入首行状态行，输出为空时显式标注 `[No output]`。
+- 后台 shell 任务完成通知直接附带输出内容（截断），不用再手动翻日志文件。
 
 ### Fixed
-- GUI steer 消息展开/收起按钮不再被文本遮挡：长消息时文本列为按钮预留底部空间，并移除收起态底部的渐变遮罩。
+- GUI steer 长消息的展开/收起按钮不再被文本遮挡。
 
 ## [0.6.17] - 2026-07-22
 
 ### Changed
-- `list_messages` API 的 `AssistantMsg` 不再携带 `tool_calls` 字段：`ToolMsg` 自包含（name/args/result），前端无需再按 `tool_call_id` 配对；TUI 历史加载改由 `ToolMsg` 直接构建工具条目（被中断回合中未执行的 tool call 不再以 running 占位出现）。
-- GUI activity group 的 header 统计与展开列表统一为仅基于 thinking 与已物化的 tool 消息，不再展示 pending 工具占位卡；无文本 assistant 消息（纯工具调用/纯 thinking/空）始终归入 activity group，不再拆组或渲染为空气泡。
+- `list_messages` 的消息结构简化：工具消息自包含（名称/参数/结果），前端不再需要按 id 配对。
 
 ### Fixed
-- GUI 修复流式期间 activity group header 显示 N 个"未知工具"、展开却只有 thinking 的统计/渲染不一致。
-- GUI 修复 `args.replace is not a function` 崩溃：历史加载中 `AssistantMsg.tool_calls[].arguments` 以 JSON 对象上线（声明类型为 string），对象透传进 `compactArgs` 触发 TypeError；字段移除后该路径不复存在。
+- GUI 流式期间 activity 分组的工具统计与展开内容不一致；历史加载时偶发 `args.replace is not a function` 崩溃。
 
 ## [0.6.16] - 2026-07-22
 
 ### Fixed
-- GUI `post_message` 工具图标修复：工具名改 snake_case 后匹配不到 Send 图标分支（旧判断为 `postmessage`），错误回退为 Wrench；判断条件同步改为 snake_case。
+- GUI `post_message` 工具图标显示错误（匹配条件未同步 snake_case 命名）。
 
 ## [0.6.15] - 2026-07-22
 
 ### Changed
-- 工具名统一为 snake_case：`webSearch`→`web_search`、`webFetch`→`web_fetch`、`askUser`→`ask_user`、`postMessage`→`post_message`、`updateGoal`→`update_goal`、`taskCreate/Get/List/Update`→`task_create/get/list/update`，goal/subagent prompt 中的工具名引用同步更新。TUI/GUI 展示层对旧 camelCase 名保持归一化识别，历史会话不受影响。
-- TUI/GUI 工具名展示新增 humanize（snake_case→CamelCase）：未知工具 label 兜底及 streaming inline 状态（TUI info bar、GUI InlineStreamStatus）中的工具名统一显示为 `WebSearch` 风格。
+- 工具名统一为 snake_case（`web_search`、`web_fetch`、`ask_user`、`post_message`、`task_*` 等）；展示层统一显示为 `WebSearch` 风格，历史会话不受影响。
 
 ## [0.6.14] - 2026-07-22
 
 ### Fixed
-- 聊天 markdown 下划线转义扩展到 CJK 文本：`变量_名`、`hello_世界` 等中文/混排词内下划线同样不再误渲染为斜体（词内判定从 ASCII 放宽到 Unicode 字母/数字）。
+- 中文/混排词内的下划线不再被 markdown 误渲染为斜体（如 `变量_名`）。
 
 ## [0.6.13] - 2026-07-22
 
 ### Fixed
-- GUI 聊天 markdown 渲染：`finish_reason` 等 snake_case 标识符中的词内下划线不再被误渲染为斜体（此前会斜体到段落结尾）。通过在渲染前转义词内下划线 run 解决，code block、inline code、链接 URL 不受影响，正常 `_斜体_` / `__粗体__` 语法保持可用。
+- GUI 聊天中 `finish_reason` 等 snake_case 标识符不再被误渲染为斜体（此前会斜体到段落结尾）。
 
 ## [0.6.12] - 2026-07-22
 
 ### Added
-- Channel 新命令 `/info`：查看当前 session 基本信息（ID、模型、运行状态、创建/活跃时间、权限、subagent 数、后台 shell）。thread 内显示 thread 的 session；reply_in_thread 群聊顶层显示 chat 级 session。
-- 支持 `repeat` finish_reason（如 Kimi 的重复检测停止）：按正常终止处理，不再产生 unknown 警告，且不会触发 auto-continue。
-
-### Changed
-- Channel 命令字符串字面量收敛为单一 `CMD_PREFIXES` 常量表，解析与命令前缀检测共用。
+- 新增 `/info` 命令：查看当前 session 的模型、状态、权限、subagent 与后台 shell 信息。
+- 支持 `repeat` finish_reason（如 Kimi 的重复检测停止），按正常结束处理。
 
 ## [0.6.11] - 2026-07-22
 
 ### Added
-- Feishu `reply_in_thread` 群聊中，在群里（非 thread）发送 `/model <key>` 切换整个群的所有 thread session，且新 thread 自动继承；thread 内发送仍只切换当前 thread。
+- `reply_in_thread` 群聊中，`/model <key>` 在群里发送可切换全群所有话题的模型（新话题自动继承）；话题内发送仍只切换当前话题。
 
 ## [0.6.10] - 2026-07-22
 
 ### Fixed
-- Feishu `reply_in_thread` 群聊模式下每个话题真正拥有独立 session：thread 由 bot 回复创建，发起消息不带 `thread_id`，此前所有顶层消息汇入同一个 chat 级 session（上下文互相污染），而 thread 内追问反而开出无上下文的新 session。现在利用话题内消息 `root_id` 指向话题根消息的语义，按根消息 id 归并 session。私聊与非 thread 模式行为不变。
+- `reply_in_thread` 群聊中各话题现在拥有真正独立的 session：此前顶层消息上下文互相污染、话题内追问反而没有上下文。
 
 ## [0.6.9] - 2026-07-22
 
 ### Fixed
-- Channel（Telegram/Feishu）会话及其 subagent 子会话不再注册 `askUser` 工具：此前 channel 会话创建时传入的 per-session `tool_blocklist` 未被持久化也未生效，模型调用 ask_user 后会空等到 2 分钟超时。现在 Conductor 在 spawn 时通过 channel mapping（沿 parent 链回溯）实时判断并追加 block。
+- channel 会话及其子会话不再提供 ask_user 工具：此前模型调用后会空等到超时。
 
 ## [0.6.6] - 2026-07-20
 
 ### Added
-- Assistant 消息持久化 `model_id`：存储实际请求使用的模型 id，随 JSONL 消息历史保存，并通过 `list_messages` API 暴露给前端；旧格式消息无该字段可正常读取。
+- Assistant 消息记录实际使用的模型 id，并在 `list_messages` API 中暴露。
 
 ## [0.6.5] - 2026-07-20
 
 ### Added
-- GUI inline stream status 实时显示估算 token 数：thinking 流按 ~4 字节/token、tool 参数 delta 按 ~2 字节/token 估算，与 kernel 估算逻辑一致。
+- GUI 流式状态实时显示估算 token 数。
 
 ### Fixed
-- Session title 生成的 max_tokens 从 64 提高到 1000：部分模型即使请求关闭 thinking 仍会输出推理内容，64 的预算被耗尽导致标题生成失败。
+- 会话标题生成可能因 token 预算过低（64）而失败，提高到 1000。
 
 ## [0.6.4] - 2026-07-20
 
 ### Fixed
-- Token usage 每个 stream 只记录一次：OpenAI 兼容流可能在 choice 级和顶层 chunk 重复携带 usage，此前每个事件都写库导致单次调用产生 2~3 条重复记录（约 18% 数据冗余）。
+- token 用量不再重复记录（OpenAI 兼容流重复携带 usage 导致一次调用写 2~3 条）。
 
 ## [0.6.3] - 2026-07-19
 
 ### Added
-- Requests 表格加回 Type 列，徽标按类型着色区分 normal / subagent / compactor。
+- Requests 表格恢复 Type 列，按类型着色（normal / subagent / compactor）。
 
 ## [0.6.2] - 2026-07-19
 

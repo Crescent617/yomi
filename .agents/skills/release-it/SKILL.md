@@ -38,7 +38,7 @@ fi
 
 ### 4. 若需要 bump 版本
 
-使用 `scripts/bump-version.py`。默认 bump `patch`；如需 `minor` 或 `major`，在命令中指定 `--level`。
+使用 `scripts/bump-version.py`。默认 bump `patch`，除非用户特别说明
 
 ```bash
 # 默认 patch
@@ -56,7 +56,13 @@ python scripts/bump-version.py --level minor
 - `crates/gui/frontend/package.json`
 - `crates/gui/frontend/package-lock.json`
 
-### 5. 打 tag
+### 5. CHANGELOG
+
+1. **先核对覆盖度**：`git log v<上个版本>..HEAD --oneline`，确保新条目覆盖本次发布包含的**全部**提交；若发现上个版本的条目漏写了已发布的内容，先补写再写新条目。
+2. **写法遵循 `CHANGELOG.md` 顶部的《编写要求》**：面向用户、一条一行一句话、不写内部实现、配置与命令点名。不要写成长段从句。
+3. **写完检查结构**：`grep -n '^## \[' CHANGELOG.md`，确认每个版本只有一个标题、版本号严格倒序、没有内容串到别的版本下。
+
+### 6. 打 tag
 
 用最终版本（bump 后的或原本的）打 tag：
 
@@ -65,20 +71,9 @@ RELEASE_VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
 git tag -a "v${RELEASE_VERSION}" -m "Release v${RELEASE_VERSION}"
 ```
 
-### 6. Push
+### 7. Push
 
 ```bash
 git push origin main
 git push origin "v${RELEASE_VERSION}"
 ```
-
-（若当前分支不是 `main`，请替换为实际分支名。）
-
-## 注意事项
-
-- `scripts/bump-version.py` 只修改文件内容，**不会自动 git commit**，发版前务必手动 add & commit。
-- 若需要设置精确版本而非自动 bump，可用 `--set`：
-  ```bash
-  python scripts/bump-version.py --set 0.6.0
-  ```
-- 打 tag 前请确保 CHANGELOG.md（如有）已更新对应版本内容。
