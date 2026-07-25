@@ -1,6 +1,6 @@
 {
   "name": "yomi-gui-frontend",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "description": "Yomi GUI frontend — SvelteKit + Svelte 5 + Tailwind v4",
   "type": "module",
   "scripts": {
