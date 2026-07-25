@@ -54,21 +54,7 @@ async fn create_test_pool() -> (sqlx::SqlitePool, Arc<SqliteChannelStore>) {
         .connect("sqlite::memory:")
         .await
         .unwrap();
-    sqlx::query(
-        r"CREATE TABLE channel_session_mappings (
-                channel_name TEXT NOT NULL,
-                external_chat_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                actual_chat_id TEXT NOT NULL,
-                reply_msg_id TEXT,
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (channel_name, external_chat_id)
-            );
-            CREATE INDEX idx_channel_mapping_session ON channel_session_mappings(session_id);",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
+    run_migrations(&pool).await.unwrap();
     let store = Arc::new(SqliteChannelStore::new(pool.clone()));
     (pool, store)
 }
@@ -212,6 +198,7 @@ async fn test_start_and_shutdown() {
             auto_approve_level: crate::permission::Level::Safe,
             observability: true,
             tool_trace: true,
+            history_context: 0,
         },
         ChannelConfig {
             name: "mock2".to_string(),
@@ -228,6 +215,7 @@ async fn test_start_and_shutdown() {
             auto_approve_level: crate::permission::Level::Safe,
             observability: true,
             tool_trace: true,
+            history_context: 0,
         },
     ];
 
@@ -324,6 +312,7 @@ async fn test_mock_adapter_send_message() {
 pub struct CardMockAdapter {
     pub cards: tokio::sync::Mutex<Vec<(String, String)>>,
     pub patches: tokio::sync::Mutex<Vec<(String, String)>>,
+    pub outgoing: tokio::sync::Mutex<Vec<String>>,
 }
 
 impl CardMockAdapter {
@@ -331,6 +320,7 @@ impl CardMockAdapter {
         Self {
             cards: tokio::sync::Mutex::new(Vec::new()),
             patches: tokio::sync::Mutex::new(Vec::new()),
+            outgoing: tokio::sync::Mutex::new(Vec::new()),
         }
     }
 }
@@ -352,7 +342,12 @@ impl PlatformAdapter for CardMockAdapter {
         _blocks: Vec<ContentBlock>,
         _reply_msg_id: Option<&str>,
     ) -> std::result::Result<Option<String>, crate::channels::ChannelError> {
-        Ok(None)
+        for block in &_blocks {
+            if let ContentBlock::Text { text } = block {
+                self.outgoing.lock().await.push(text.clone());
+            }
+        }
+        Ok(Some("msg-1".to_string()))
     }
 
     async fn send_card(
@@ -432,7 +427,7 @@ async fn flush_reply_plain_platform_appends_trace_lines() {
         panic!("expected text block");
     };
     assert!(text.starts_with("final answer"));
-    assert!(text.contains("Run trace"));
+    assert!(text.contains("Trace · 2 steps · 1 tools"));
     assert!(text.contains("cargo test"));
 }
 
@@ -584,6 +579,50 @@ fn test_parse_existing_commands_from_raw_text() {
     assert!(matches!(
         parse_channel_command(Some("/queue")),
         ChannelCommand::None
+    ));
+}
+
+#[test]
+fn test_parse_help_command() {
+    assert!(matches!(
+        parse_channel_command(Some("/help")),
+        ChannelCommand::Help
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/help@yomi_bot")),
+        ChannelCommand::Help
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/help extra")),
+        ChannelCommand::None
+    ));
+    assert!(HELP_TEXT.contains("/steer") && HELP_TEXT.contains("/models"));
+}
+
+#[test]
+fn test_longer_words_are_not_commands() {
+    // Prefix matching must not hijack longer words ("/clearance" would
+    // trigger the destructive /clear otherwise).
+    assert!(matches!(
+        parse_channel_command(Some("/clearance")),
+        ChannelCommand::None
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/helpful")),
+        ChannelCommand::None
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/stopping")),
+        ChannelCommand::None
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/information")),
+        ChannelCommand::None
+    ));
+    // … but the @bot suffix still works.
+    assert!(matches!(
+        parse_channel_command(Some("/clear@yomi_bot")),
+        ChannelCommand::Clear
     ));
 }
 
@@ -906,11 +945,14 @@ async fn deliver_reply_freezes_card_and_flushes_new_message_on_mid_run_posts() {
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 1);
     assert!(patches[0].1.contains("✅ Done"), "frozen terminal card");
-    // … and the reply lands at the bottom as a NEW card.
+    // … and the reply lands at the bottom as a NEW bare-text message —
+    // no trace panel (the trace was already live on the card mid-run).
     let cards = mock.cards.lock().await;
-    assert_eq!(cards.len(), 2, "materialize + flushed reply");
-    assert!(cards[1].1.contains("final answer"));
-    assert!(cards[1].1.contains("collapsible_panel"));
+    assert_eq!(cards.len(), 1, "materialize only; reply is bare text");
+    let outgoing = mock.outgoing.lock().await;
+    assert_eq!(outgoing.len(), 1);
+    assert!(outgoing[0].contains("final answer"));
+    assert!(!outgoing[0].contains("Trace ·"));
 }
 
 #[tokio::test]
@@ -938,7 +980,7 @@ async fn deliver_reply_plain_platform_flushes_without_morph() {
         panic!("expected text block");
     };
     assert!(text.contains("final answer"));
-    assert!(text.contains("Run trace"));
+    assert!(text.contains("Trace · 2 steps · 1 tools"));
 }
 
 #[tokio::test]
@@ -965,4 +1007,216 @@ async fn deliver_reply_falls_back_to_flush_when_obs_state_missing() {
     let cards = mock.cards.lock().await;
     assert_eq!(cards.len(), 1, "fallback flush via send_card");
     assert!(cards[0].1.contains("final answer"));
+}
+
+// ── History context injection ───────────────────────────────────────
+
+#[test]
+fn assemble_history_formats_chronological_capped_lines() {
+    let messages = [
+        HistoryMessage {
+            message_id: "m1".into(),
+            create_time: 1_700_000_000,
+            sender_id: "ou_alice".into(),
+            text: "  hello world  ".into(),
+        },
+        HistoryMessage {
+            message_id: "m2".into(),
+            create_time: 1_700_000_060,
+            sender_id: "ou_bob".into(),
+            text: "x".repeat(2500),
+        },
+    ];
+    let refs: Vec<&HistoryMessage> = messages.iter().collect();
+    let out = assemble_history(&refs);
+    assert!(out.starts_with("<recent_chat_history>\n"));
+    assert!(out.ends_with("</recent_chat_history>"));
+    assert!(out.contains("ou_alice: hello world"), "trimmed: {out}");
+    let bob_line = out.lines().find(|l| l.contains("ou_bob")).unwrap();
+    assert!(bob_line.ends_with('…'), "capped: {bob_line}");
+    assert!(bob_line.chars().count() <= 2000 + 40, "line: {bob_line}");
+}
+
+#[derive(Default)]
+struct HistoryMockAdapter {
+    calls: tokio::sync::Mutex<Vec<(Option<i64>, usize)>>,
+    fail: std::sync::atomic::AtomicBool,
+    empty: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl PlatformAdapter for HistoryMockAdapter {
+    async fn run_receiver(
+        &self,
+        _incoming: mpsc::Sender<ChannelMessage>,
+        cancel: CancellationToken,
+    ) -> std::result::Result<(), crate::channels::ChannelError> {
+        cancel.cancelled().await;
+        Ok(())
+    }
+
+    async fn send_message(
+        &self,
+        _external_chat_id: &str,
+        _blocks: Vec<ContentBlock>,
+        _reply_msg_id: Option<&str>,
+    ) -> std::result::Result<Option<String>, crate::channels::ChannelError> {
+        Ok(None)
+    }
+
+    async fn fetch_history(
+        &self,
+        _container: &HistoryContainer,
+        since_ts: Option<i64>,
+        limit: usize,
+    ) -> std::result::Result<Vec<HistoryMessage>, crate::channels::ChannelError> {
+        if self.fail.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(crate::channels::ChannelError::Platform(
+                "mock fetch failure".into(),
+            ));
+        }
+        if self.empty.load(std::sync::atomic::Ordering::Relaxed) {
+            return Ok(Vec::new());
+        }
+        self.calls.lock().await.push((since_ts, limit));
+        Ok(vec![
+            HistoryMessage {
+                message_id: "m0".into(),
+                create_time: 100,
+                sender_id: "ou_a".into(),
+                text: "earlier".into(),
+            },
+            HistoryMessage {
+                message_id: "m1".into(),
+                create_time: 200,
+                sender_id: "ou_a".into(),
+                text: "latest".into(),
+            },
+            HistoryMessage {
+                message_id: "trigger".into(),
+                create_time: 300,
+                sender_id: "ou_b".into(),
+                text: "trigger msg".into(),
+            },
+        ])
+    }
+}
+
+fn group_msg(thread_id: Option<String>) -> ChannelMessage {
+    ChannelMessage {
+        external_chat_id: "oc_1".into(),
+        external_user_id: "ou_b".into(),
+        external_message_id: Some("trigger".into()),
+        is_mention: true,
+        raw_text: None,
+        content: vec![],
+        thread_id,
+        root_id: None,
+        is_group: true,
+    }
+}
+
+#[tokio::test]
+async fn history_prefix_assembles_drops_trigger_and_advances_cursor() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let mock = Arc::new(HistoryMockAdapter::default());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig::default();
+    let msg = group_msg(None);
+
+    let prefix = maybe_history_prefix(&adapter, &config, &store, "feishu", &msg).await;
+    let prefix = prefix.expect("history prefix");
+    assert!(prefix.contains("earlier"));
+    assert!(prefix.contains("latest"));
+    assert!(!prefix.contains("trigger msg"), "trigger dropped: {prefix}");
+
+    // Cursor advanced to the newest fetched message (the trigger's ts).
+    let cursor = store.get_history_cursor("feishu", "oc_1").await.unwrap();
+    assert_eq!(cursor, Some(300));
+
+    // Second call passes the stored cursor through to the adapter.
+    let _ = maybe_history_prefix(&adapter, &config, &store, "feishu", &msg).await;
+    let calls = mock.calls.lock().await;
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0], (None, 20));
+    assert_eq!(calls[1], (Some(300), 20));
+}
+
+#[tokio::test]
+async fn history_prefix_skips_private_chats() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let adapter: Arc<dyn PlatformAdapter> = Arc::new(HistoryMockAdapter::default());
+    let config = ChannelConfig::default();
+    let mut msg = group_msg(None);
+    msg.is_group = false;
+
+    let prefix = maybe_history_prefix(&adapter, &config, &store, "feishu", &msg).await;
+    assert!(prefix.is_none());
+}
+
+#[tokio::test]
+async fn history_prefix_uses_thread_container_when_present() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let adapter: Arc<dyn PlatformAdapter> = Arc::new(HistoryMockAdapter::default());
+    let config = ChannelConfig::default();
+    let msg = group_msg(Some("omt_1".into()));
+
+    let _ = maybe_history_prefix(&adapter, &config, &store, "feishu", &msg).await;
+    // Cursor is keyed by the thread id, not the chat id.
+    let cursor = store.get_history_cursor("feishu", "omt_1").await.unwrap();
+    assert_eq!(cursor, Some(300));
+    assert_eq!(
+        store.get_history_cursor("feishu", "oc_1").await.unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn history_prefix_degrades_to_none_on_fetch_error() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let mock = Arc::new(HistoryMockAdapter::default());
+    mock.fail.store(true, std::sync::atomic::Ordering::Relaxed);
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig::default();
+
+    let prefix = maybe_history_prefix(&adapter, &config, &store, "feishu", &group_msg(None)).await;
+    assert!(prefix.is_none(), "fetch failure degrades to no context");
+}
+
+#[tokio::test]
+async fn history_prefix_disabled_by_zero_config() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let mock = Arc::new(HistoryMockAdapter::default());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig {
+        history_context: 0,
+        ..ChannelConfig::default()
+    };
+
+    let prefix = maybe_history_prefix(&adapter, &config, &store, "feishu", &group_msg(None)).await;
+    assert!(prefix.is_none());
+    assert!(mock.calls.lock().await.is_empty(), "no fetch issued");
+}
+
+#[tokio::test]
+async fn history_prefix_empty_fetch_keeps_cursor_unset() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let mock = Arc::new(HistoryMockAdapter::default());
+    mock.empty.store(true, std::sync::atomic::Ordering::Relaxed);
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig::default();
+
+    let prefix = maybe_history_prefix(&adapter, &config, &store, "feishu", &group_msg(None)).await;
+    assert!(prefix.is_none());
+    assert_eq!(
+        store.get_history_cursor("feishu", "oc_1").await.unwrap(),
+        None,
+        "empty fetch must not advance the cursor"
+    );
 }

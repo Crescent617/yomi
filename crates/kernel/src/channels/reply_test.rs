@@ -77,7 +77,10 @@ fn render_card_structure() {
     assert_eq!(panel["tag"], "collapsible_panel");
     assert_eq!(panel["expanded"], false);
     let title = panel["header"]["title"]["content"].as_str().unwrap();
-    assert!(title.contains("Run trace · 2 tools"), "title: {title}");
+    assert!(
+        title.contains("Trace · 2 steps · 2 tools"),
+        "title: {title}"
+    );
 
     let body = panel["elements"][0]["content"].as_str().unwrap();
     assert!(body.contains("💬 Let me look at the code."));
@@ -109,7 +112,7 @@ fn render_card_truncates_oversized_text() {
 }
 
 #[test]
-fn render_trace_caps_entries_and_notes_dropped() {
+fn render_trace_shows_all_entries() {
     let mut buf = RunReplyBuffer::new();
     for i in 0..30 {
         buf.record_tool_start(&format!("t{i}"), "read", None);
@@ -119,13 +122,14 @@ fn render_trace_caps_entries_and_notes_dropped() {
     let reply = buf.into_reply();
 
     let card = render_card(&reply, None).unwrap();
-    assert!(card.contains("··· and 10 earlier entries"));
     let panel_body = serde_json::from_str::<serde_json::Value>(&card).unwrap();
     let body = panel_body["body"]["elements"][1]["elements"][0]["content"]
         .as_str()
         .unwrap()
         .to_string();
-    assert_eq!(body.lines().count(), MAX_TRACE_ENTRIES + 1); // +1 marker line
+    // Complete trace: every entry rendered, no dropped marker.
+    assert_eq!(body.lines().count(), 30);
+    assert!(!body.contains("earlier entries"));
 }
 
 #[test]
@@ -141,6 +145,9 @@ fn buffer_drops_oldest_entries_beyond_cap() {
         Some(format!("text {}", BUFFER_MAX_ENTRIES + 19)).as_deref()
     );
     assert!(reply.entries.len() <= BUFFER_MAX_ENTRIES);
+    // … and the final render surfaces the dropped count as a marker line.
+    let card = render_card(&reply, None).unwrap();
+    assert!(card.contains("··· and 20 earlier entries"));
 }
 
 #[test]
@@ -148,7 +155,7 @@ fn render_plain_appends_trace_without_markup() {
     let reply = buffer_with_run().into_reply();
     let out = render_plain(&reply);
     assert!(out.starts_with("All tests pass."));
-    assert!(out.contains("🐾 Run trace · 2 tools"));
+    assert!(out.contains("🐾 Trace · 2 steps · 2 tools"));
     assert!(out.contains("💬 Let me look at the code."));
     assert!(out.contains("✅ shell · cargo test -p kernel · 1m05s"));
     assert!(!out.contains("<font"), "no Feishu markup in plain fallback");
@@ -205,47 +212,68 @@ fn render_plain_without_text_shows_trace_only() {
     let reply = buf.into_reply();
     let out = render_plain(&reply);
     assert!(!out.is_empty());
-    assert!(out.starts_with("🐾 Run trace"));
+    assert!(out.starts_with("🐾 Trace"));
     assert!(out.contains("✅ read · /tmp/a.rs · 5ms"));
 }
 
-// ── Multi-line arg summaries ────────────────────────────────────────
+// ── Arg summaries (single-line, flattened + truncated) ──────────────
 
 #[test]
-fn trace_args_preserve_line_breaks() {
-    let args = r#"{"command":"cargo build\ncargo test\n cargo clippy"}"#;
-    let lines = summarize_args_trace("shell", Some(args));
-    assert_eq!(
-        lines,
-        vec!["cargo build", "cargo test", "cargo clippy"],
-        "blank-stripped, per-line flattened"
+fn trace_arg_summary_flattens_multiline_args() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_tool_start(
+        "t1",
+        "shell",
+        Some(r#"{"command":"cargo build &&\n cargo test &&\n cargo clippy"}"#),
+    );
+    buf.record_tool_end("t1", 5, false);
+    buf.record_text("done".to_string());
+    let reply = buf.into_reply();
+    let card = render_card(&reply, None).unwrap();
+    // Multi-line args flatten to one inline line; no continuation lines.
+    assert!(card.contains("✅ **shell** · `cargo build && cargo test && cargo clippy` · 5ms"));
+    assert!(!card.contains('↳'));
+}
+
+#[test]
+fn trace_arg_summary_caps_long_values() {
+    let args = format!(r#"{{"command":"{}"}}"#, "x".repeat(300));
+    let mut buf = RunReplyBuffer::new();
+    buf.record_tool_start("t1", "shell", Some(&args));
+    buf.record_text("done".to_string());
+    let reply = buf.into_reply();
+    let card = render_card(&reply, None).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&card).unwrap();
+    let body = v["body"]["elements"][1]["elements"][0]["content"]
+        .as_str()
+        .unwrap();
+    let line = body.lines().next().unwrap();
+    // "⏳ **shell** · `" + 60 chars + "…`"
+    assert!(line.ends_with("…`"), "line: {line}");
+    assert!(
+        line.chars().count() <= 20 + ARG_SUMMARY_MAX_CHARS + 2,
+        "line: {line}"
     );
 }
 
 #[test]
-fn trace_args_cap_lines_and_mark_dropped() {
-    let args = r#"{"command":"l1\nl2\nl3\nl4\nl5"}"#;
-    let lines = summarize_args_trace("shell", Some(args));
-    assert_eq!(lines, vec!["l1", "l2", "l3", "…"]);
+fn trace_arg_summary_empty_when_no_known_key_or_args() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_tool_start("t1", "todo", Some(r#"{"items":[]}"#));
+    buf.record_tool_start("t2", "shell", None);
+    buf.record_text("done".to_string());
+    let reply = buf.into_reply();
+    let card = render_card(&reply, None).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&card).unwrap();
+    let body = v["body"]["elements"][1]["elements"][0]["content"]
+        .as_str()
+        .unwrap();
+    // No dangling arg bullets for summary-less tools.
+    assert!(body.lines().all(|l| !l.contains(" · `")), "body: {body}");
 }
 
 #[test]
-fn trace_args_cap_each_line() {
-    let args = format!(r#"{{"command":"{}"}}"#, "x".repeat(300));
-    let lines = summarize_args_trace("shell", Some(&args));
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].chars().count(), TRACE_ARG_LINE_MAX_CHARS + 1); // +1 for …
-    assert!(lines[0].ends_with('…'));
-}
-
-#[test]
-fn trace_args_empty_when_no_known_key_or_args() {
-    assert!(summarize_args_trace("todo", Some(r#"{"items":[]}"#)).is_empty());
-    assert!(summarize_args_trace("shell", None).is_empty());
-}
-
-#[test]
-fn render_trace_breaks_long_args_into_continuation_lines() {
+fn render_trace_long_args_stay_one_truncated_line() {
     let mut buf = RunReplyBuffer::new();
     let long_cmd = "cargo test ".repeat(20).trim().to_string();
     let args = format!(r#"{{"command":"{long_cmd}"}}"#);
@@ -262,17 +290,18 @@ fn render_trace_breaks_long_args_into_continuation_lines() {
     let mut iter = body.lines();
     let header = iter.next().unwrap();
     assert!(
-        header.starts_with("✅ **shell** · 100ms"),
+        header.starts_with("✅ **shell** · `cargo test cargo test"),
         "header: {header}"
     );
-    assert!(!header.contains('`'), "long args not inline: {header}");
-    let cont = iter.next().unwrap();
-    assert!(cont.starts_with("↳ `cargo test cargo test"), "cont: {cont}");
-    assert!(cont.ends_with("…`"), "truncated continuation: {cont}");
+    assert!(
+        header.contains("cargo…` · 100ms"),
+        "truncated inline: {header}"
+    );
+    assert!(iter.next().is_none(), "single line only: {body}");
 }
 
 #[test]
-fn render_trace_multiline_args_each_get_continuation_line() {
+fn render_trace_multiline_args_flatten_to_one_line() {
     let mut buf = RunReplyBuffer::new();
     buf.record_tool_start(
         "t1",
@@ -289,11 +318,10 @@ fn render_trace_multiline_args_each_get_continuation_line() {
         .as_str()
         .unwrap();
     let lines: Vec<&str> = body.lines().collect();
-    assert_eq!(lines[0], "✅ **shell** · 5ms");
-    assert_eq!(lines[1], "↳ `cargo build &&`");
-    assert_eq!(lines[2], "↳ `cargo test &&`");
-    assert_eq!(lines[3], "↳ `cargo clippy`");
-    assert_eq!(lines.len(), 4);
+    assert_eq!(
+        lines.as_slice(),
+        ["✅ **shell** · `cargo build && cargo test && cargo clippy` · 5ms"]
+    );
 }
 
 #[test]
@@ -305,14 +333,13 @@ fn render_trace_short_args_stay_inline() {
 }
 
 #[test]
-fn render_plain_also_uses_continuation_lines() {
+fn render_plain_flattens_multiline_args() {
     let mut buf = RunReplyBuffer::new();
     buf.record_tool_start("t1", "shell", Some(r#"{"command":"a\nb"}"#));
     buf.record_tool_end("t1", 5, false);
     buf.record_text("done".to_string());
     let reply = buf.into_reply();
     let out = render_plain(&reply);
-    assert!(out.contains("✅ shell · 5ms\n"));
-    assert!(out.contains("↳ a\n"));
-    assert!(out.contains("↳ b"));
+    assert!(out.contains("✅ shell · a b · 5ms"));
+    assert!(!out.contains('↳'));
 }

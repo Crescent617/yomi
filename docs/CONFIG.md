@@ -211,6 +211,7 @@ app_secret = "..."
 | `auto_approve_level` | string | 通道级别自动批准：`safe`/`caution`/`dangerous` | `safe` |
 | `observability` | boolean | 运行可观测性（状态卡片 + 运行回执记录）；关闭后退回"收到确认 + 最终回复"的旧行为 | `true` |
 | `tool_trace` | boolean | 最终回复气泡附带运行轨迹（工具调用 + 中间过程文本）：卡片平台（Feishu，需客户端 V7.9+）以可折叠面板呈现，其他平台以纯文本行附在正文后；关闭后最终回复仅为纯文本 | `true` |
+| `history_context` | number | 群聊中触发时注入的最近聊天记录条数上限（拉取当前话题/频道自上次触发以来的消息作为上下文；0 关闭；平台单页上限 50） | `20` |
 
 **Platform 配置：**
 

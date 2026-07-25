@@ -8,21 +8,9 @@ async fn create_test_pool() -> SqlitePool {
         .connect("sqlite::memory:")
         .await
         .unwrap();
-    sqlx::query(
-        r"CREATE TABLE channel_session_mappings (
-                channel_name TEXT NOT NULL,
-                external_chat_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                actual_chat_id TEXT NOT NULL,
-                reply_msg_id TEXT,
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (channel_name, external_chat_id)
-            );
-            CREATE INDEX idx_channel_mapping_session ON channel_session_mappings(session_id);",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
+    crate::storage::migrations::run_migrations(&pool)
+        .await
+        .unwrap();
     pool
 }
 
@@ -133,4 +121,50 @@ async fn test_update_routing() {
 
     let found = store.find_routing_by_session(&sid).await.unwrap();
     assert_eq!(found.unwrap().reply_msg_id, Some("msg2".to_string()));
+}
+
+#[tokio::test]
+async fn test_history_cursor_round_trip() {
+    let pool = create_test_pool().await;
+    let store = SqliteChannelStore::new(pool);
+
+    assert_eq!(
+        store.get_history_cursor("feishu", "oc_1").await.unwrap(),
+        None
+    );
+
+    store
+        .set_history_cursor("feishu", "oc_1", 1_700_000_060_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_history_cursor("feishu", "oc_1").await.unwrap(),
+        Some(1_700_000_060_000)
+    );
+
+    // Upsert advances; containers and channels are independent keys.
+    store
+        .set_history_cursor("feishu", "oc_1", 1_700_000_120_000)
+        .await
+        .unwrap();
+    store
+        .set_history_cursor("feishu", "omt_1", 42)
+        .await
+        .unwrap();
+    store
+        .set_history_cursor("telegram", "oc_1", 7)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_history_cursor("feishu", "oc_1").await.unwrap(),
+        Some(1_700_000_120_000)
+    );
+    assert_eq!(
+        store.get_history_cursor("feishu", "omt_1").await.unwrap(),
+        Some(42)
+    );
+    assert_eq!(
+        store.get_history_cursor("telegram", "oc_1").await.unwrap(),
+        Some(7)
+    );
 }

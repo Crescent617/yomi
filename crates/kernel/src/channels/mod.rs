@@ -81,6 +81,15 @@ pub struct ChannelConfig {
     /// (Feishu, requires client V7.9+), plain-text lines elsewhere.
     #[serde(default = "default_tool_trace")]
     pub tool_trace: bool,
+    /// Recent-chat messages injected as context when the bot is triggered
+    /// in a group (fetched since the last trigger in that thread/chat,
+    /// newest cap). 0 disables.
+    #[serde(default = "default_history_context")]
+    pub history_context: usize,
+}
+
+fn default_history_context() -> usize {
+    20
 }
 
 fn default_tool_trace() -> bool {
@@ -112,6 +121,7 @@ impl Default for ChannelConfig {
             auto_approve_level: Level::Safe,
             observability: true,
             tool_trace: true,
+            history_context: default_history_context(),
         }
     }
 }
@@ -194,6 +204,30 @@ pub trait ChannelStore: Send + Sync {
     /// Delete all mappings belonging to the given sessions (used by gc).
     /// Returns the number of rows deleted.
     async fn delete_by_sessions(&self, session_ids: &[SessionId]) -> KernelResult<u64>;
+
+    /// The history cursor for a container (thread or chat): the
+    /// `create_time` (unix **milliseconds**, same precision as the
+    /// platform) of the message last consumed as agent context. `None` =
+    /// never consumed (first trigger).
+    async fn get_history_cursor(
+        &self,
+        channel_name: &str,
+        container_id: &str,
+    ) -> KernelResult<Option<i64>> {
+        let _ = (channel_name, container_id);
+        Ok(None)
+    }
+
+    /// Advance the history cursor after a successful fetch+delivery.
+    async fn set_history_cursor(
+        &self,
+        channel_name: &str,
+        container_id: &str,
+        cursor_ts: i64,
+    ) -> KernelResult<()> {
+        let _ = (channel_name, container_id, cursor_ts);
+        Ok(())
+    }
 }
 
 // ── Platform adapter trait ─────────────────────────────────────────
@@ -291,6 +325,54 @@ pub trait PlatformAdapter: Send + Sync {
             "send_files not supported for this platform".into(),
         ))
     }
+
+    /// Fetch recent messages of a container (thread or chat), newest-first
+    /// up to `limit` (platform-capped at 50), strictly newer than
+    /// `since_ts` (unix **milliseconds**; `None` = fetch the latest page).
+    /// Note: one page only — bot/deleted messages filtered after the fetch
+    /// can shrink the result below `limit` (no top-up fetch). Used to
+    /// inject recent-chat context when the bot is triggered. Default: no
+    /// history (platforms without a history API or where it isn't
+    /// implemented).
+    async fn fetch_history(
+        &self,
+        _container: &HistoryContainer,
+        _since_ts: Option<i64>,
+        _limit: usize,
+    ) -> Result<Vec<HistoryMessage>, ChannelError> {
+        Ok(Vec::new())
+    }
+}
+
+/// A thread or chat a history fetch targets.
+#[derive(Debug, Clone)]
+pub enum HistoryContainer {
+    Chat(String),
+    Thread(String),
+}
+
+impl HistoryContainer {
+    /// The platform id of the container (`chat_id` or `thread_id`).
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Chat(id) | Self::Thread(id) => id,
+        }
+    }
+}
+
+/// One message from a container's history, ready for context assembly.
+#[derive(Debug, Clone)]
+pub struct HistoryMessage {
+    /// Platform message id (used to drop the triggering message itself).
+    pub message_id: String,
+    /// Unix milliseconds (the platform's native precision — cursors keep
+    /// it too, so two messages in one second can't be skipped by a
+    /// truncated comparison).
+    pub create_time: i64,
+    /// Full open id of the sender (attribution).
+    pub sender_id: String,
+    /// Extracted text (non-text messages become a `[type]` placeholder).
+    pub text: String,
 }
 
 // ── Internal helper: access control ──────────────────────────────────

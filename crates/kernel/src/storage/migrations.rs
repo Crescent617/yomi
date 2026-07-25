@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 14;
+pub const CURRENT_SCHEMA_VERSION: i64 = 15;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -186,6 +186,17 @@ const MIGRATIONS: &[Migration] = &[
             r"CREATE INDEX idx_favorite_answers_time
                ON favorite_answers(favorited_at DESC);",
         ],
+    },
+    Migration {
+        version: 15,
+        name: "add_channel_history_cursors",
+        sqls: &[r"CREATE TABLE channel_history_cursors (
+                channel_name TEXT NOT NULL,
+                container_id TEXT NOT NULL,
+                cursor_ts INTEGER NOT NULL,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (channel_name, container_id)
+            );"],
     },
 ];
 

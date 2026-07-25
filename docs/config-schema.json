@@ -227,6 +227,11 @@
             "description": "Attach the run trace (tool calls + intermediate texts) to the final reply bubble: a collapsible panel on card-capable platforms (Feishu, requires client V7.9+), plain-text lines elsewhere. When disabled, the final reply is the bare text.",
             "type": "boolean",
             "default": true
+          },
+          "history_context": {
+            "description": "Recent-chat messages injected as context when the bot is triggered in a group (fetched since the last trigger in that thread/chat, newest cap; 0 disables; capped at 50 per platform page).",
+            "type": "integer",
+            "default": 20
           }
         },
         "required": ["name", "platform"],

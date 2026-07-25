@@ -173,6 +173,26 @@ impl FeishuAdapter {
         self.api_json(self.client.patch(url), token, body).await
     }
 
+    async fn api_get(
+        &self,
+        token: &str,
+        url: &str,
+        query: &[(&str, String)],
+    ) -> Result<serde_json::Value, ChannelError> {
+        let resp = self
+            .client
+            .get(url)
+            .header("Authorization", format!("Bearer {token}"))
+            .query(query)
+            .send()
+            .await
+            .map_err(|e| api_err("API request", e))?
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| api_err("API parse", e))?;
+        check_api_resp(resp)
+    }
+
     async fn api_json(
         &self,
         builder: reqwest::RequestBuilder,
@@ -555,6 +575,80 @@ impl PlatformAdapter for FeishuAdapter {
     fn supports_status_card(&self) -> bool {
         true
     }
+
+    /// refer: <https://open.feishu.cn/document/server-docs/im-v1/message/list>
+    async fn fetch_history(
+        &self,
+        container: &super::HistoryContainer,
+        since_ts: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<super::HistoryMessage>, ChannelError> {
+        let (id_type, id) = match container {
+            super::HistoryContainer::Chat(id) => ("chat", id),
+            super::HistoryContainer::Thread(id) => ("thread", id),
+        };
+        let token = self.get_token().await?;
+
+        let mut query = vec![
+            ("container_id_type", id_type.to_string()),
+            ("container_id", id.clone()),
+            ("sort_type", "ByCreateTimeDesc".to_string()),
+            ("page_size", limit.clamp(1, 50).to_string()),
+        ];
+        if let Some(ts) = since_ts {
+            // start_time is a unix timestamp in seconds; the cursor keeps
+            // millisecond precision so same-second messages aren't lost.
+            query.push(("start_time", (ts / 1000).to_string()));
+        }
+
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.api_get(
+                &token,
+                &format!("{}/open-apis/im/v1/messages", self.base_url),
+                &query,
+            ),
+        )
+        .await
+        .map_err(|_| ChannelError::Platform("history fetch timed out".into()))??;
+
+        let Some(items) = resp["data"]["items"].as_array() else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::with_capacity(items.len());
+        for item in items {
+            if item["deleted"].as_bool().unwrap_or(false) {
+                continue;
+            }
+            // create_time is already milliseconds — keep the precision
+            // (second-granularity cursors would drop same-second messages).
+            let create_time = item["create_time"]
+                .as_str()
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or_default();
+            if since_ts.is_some_and(|ts| create_time <= ts) {
+                continue;
+            }
+            // Only humans — skips the bot itself and other apps.
+            let sender = &item["sender"];
+            if sender["sender_type"].as_str() != Some("user") {
+                continue;
+            }
+            let text = Self::extract_history_text(item);
+            if text.trim().is_empty() {
+                continue;
+            }
+            out.push(super::HistoryMessage {
+                message_id: item["message_id"].as_str().unwrap_or("").to_string(),
+                create_time,
+                sender_id: sender["id"].as_str().unwrap_or("").to_string(),
+                text,
+            });
+        }
+        // The API returns newest-first; assemble chronologically.
+        out.reverse();
+        Ok(out)
+    }
 }
 
 // ── Message handlers ────────────────────────────────────────────────
@@ -653,6 +747,54 @@ impl FeishuAdapter {
         let msg: serde_json::Value =
             serde_json::from_str(payload).map_err(|e| api_err("event JSON", e))?;
         self.parse_event_json(&msg, incoming).await
+    }
+
+    /// Extract display text from a history item: text messages get their
+    /// content, posts get concatenated text runs, everything else becomes a
+    /// `[msg_type]` placeholder.
+    fn extract_history_text(item: &serde_json::Value) -> String {
+        let msg_type = item["msg_type"].as_str().unwrap_or("unknown");
+        let content: serde_json::Value = item["body"]["content"]
+            .as_str()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default();
+        match msg_type {
+            "text" => content["text"].as_str().unwrap_or("").to_string(),
+            "post" => {
+                let text = Self::extract_post_text(&content);
+                if text.is_empty() {
+                    "[post]".to_string()
+                } else {
+                    text
+                }
+            }
+            other => format!("[{other}]"),
+        }
+    }
+
+    /// Concatenate the text runs of a post message's paragraphs, trying
+    /// the known locales (posts in other locales degrade to `[post]`).
+    fn extract_post_text(content: &serde_json::Value) -> String {
+        let mut parts = Vec::new();
+        let paragraphs = ["zh_cn", "en_us", "ja_jp"]
+            .iter()
+            .find_map(|k| content[k]["content"].as_array());
+        if let Some(paragraphs) = paragraphs {
+            for para in paragraphs {
+                let line: String = para
+                    .as_array()
+                    .map(|runs| {
+                        runs.iter()
+                            .filter_map(|r| r["text"].as_str())
+                            .collect::<String>()
+                    })
+                    .unwrap_or_default();
+                if !line.is_empty() {
+                    parts.push(line);
+                }
+            }
+        }
+        parts.join("\n")
     }
 
     /// Feishu `create_time` is in milliseconds, but some v1.x events may be in

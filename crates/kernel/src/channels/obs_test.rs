@@ -305,7 +305,11 @@ async fn tool_events_patch_card_with_stats() {
     assert_eq!(patches.len(), 3);
     let last = &patches[2].1;
     assert!(last.contains("2 tools"), "tools summary: {last}");
-    assert!(last.contains("🐹 Read"), "title: {last}");
+    // The title drops back to a thinking title after the tool ends.
+    assert!(
+        super::THINKING_TITLES.iter().any(|t| last.contains(t)),
+        "title: {last}"
+    );
     // The live trace shows the finished tool with elapsed and the failed
     // one with the error icon.
     assert!(last.contains("✅ **bash** · 2s"), "trace: {last}");
@@ -369,17 +373,23 @@ async fn title_reflects_thinking_typing_and_tool_states() {
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 3);
     assert!(
-        patches[0].1.contains("💭 Thinking…"),
+        super::THINKING_TITLES
+            .iter()
+            .any(|t| patches[0].1.contains(t)),
         "request: {}",
         patches[0].1
     );
     assert!(
-        patches[1].1.contains("🐾 Typing…"),
+        super::TYPING_TITLES
+            .iter()
+            .any(|t| patches[1].1.contains(t)),
         "text chunk: {}",
         patches[1].1
     );
     assert!(
-        patches[2].1.contains("💭 Thinking…"),
+        super::THINKING_TITLES
+            .iter()
+            .any(|t| patches[2].1.contains(t)),
         "thinking chunk: {}",
         patches[2].1
     );
@@ -707,7 +717,7 @@ async fn token_usage_adds_footer() {
     assert_eq!(patches.len(), 1);
     // Tokens merged into the ⏱ stats line.
     assert!(patches[0].1.contains("⏱"));
-    assert!(patches[0].1.contains("tokens: 12.3k / 200.0k"));
+    assert!(patches[0].1.contains("ctx: 12.3k / 200.0k"));
 }
 
 // ── Last tool & whisper ─────────────────────────────────────────────
@@ -728,6 +738,45 @@ fn end_with_text(text: &str) -> Event {
             text: text.to_string(),
         }],
     })
+}
+
+#[tokio::test]
+async fn fresh_card_shows_placeholder_until_first_content() {
+    let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    // A thinking chunk materializes the card with no tools and no text yet.
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &thinking_chunk("hmm"))
+        .await;
+
+    let cards = mock.cards.lock().await;
+    assert_eq!(cards.len(), 1);
+    assert!(
+        super::IDLE_PLACEHOLDERS
+            .iter()
+            .any(|p| cards[0].1.contains(p)),
+        "fresh card shows a placeholder: {}",
+        cards[0].1
+    );
+    drop(cards);
+
+    // First tool start: the placeholder is gone, the trace takes over.
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &tool_start("bash"))
+        .await;
+    let patches = mock.patches.lock().await;
+    let last = patches.last().unwrap();
+    assert!(
+        !super::IDLE_PLACEHOLDERS.iter().any(|p| last.1.contains(p)),
+        "placeholder replaced by trace: {}",
+        last.1
+    );
 }
 
 #[tokio::test]
@@ -799,7 +848,10 @@ async fn running_card_trace_caps_at_ten_entries() {
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap();
     let body: serde_json::Value = serde_json::from_str(&last.1).unwrap();
-    let content = body["body"]["elements"][0]["content"].as_str().unwrap();
+    let elements = body["body"]["elements"].as_array().unwrap();
+    // Layout: stats, a divider, then the trace element.
+    assert_eq!(elements[1]["tag"], "hr");
+    let content = elements[2]["content"].as_str().unwrap();
     assert!(content.contains("··· and 2 earlier entries"));
     assert!(content.contains("cmd-11"), "most recent kept");
     assert!(!content.contains("cmd-1`"), "oldest dropped");
@@ -858,7 +910,8 @@ async fn whisper_self_heals_from_end_text() {
     tracker
         .handle_event(&adapter, &sid, "chat-1", None, &tool_start("bash"))
         .await;
-    // No chunks at all (e.g. lost on the bus): End still restores the whisper.
+    // No chunks at all (e.g. lost on the bus): the completed text still
+    // lands in the trace as a narration (full text is authoritative).
     tracker
         .handle_event(
             &adapter,
@@ -875,7 +928,7 @@ async fn whisper_self_heals_from_end_text() {
 }
 
 #[tokio::test]
-async fn whisper_shows_single_line_tail_when_long() {
+async fn completed_text_renders_flattened_head_capped_narration() {
     let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
     let mock = MockAdapter::new();
     let sid = sid();
@@ -899,8 +952,11 @@ async fn whisper_shows_single_line_tail_when_long() {
 
     let patches = mock.patches.lock().await;
     let last = &patches.last().unwrap().1;
-    assert!(last.contains("💬 …"), "tail marker: {last}");
-    assert!(!last.contains("line one"), "flattened to tail: {last}");
+    // Narration: flattened, head-capped with an ellipsis — and shown
+    // exactly once (the whisper cleared instead of duplicating it).
+    assert!(last.contains("💬 line one line two"), "narration: {last}");
+    assert!(last.contains('…'), "head cap: {last}");
+    assert_eq!(last.matches("💬 line one").count(), 1, "shown once: {last}");
 }
 
 #[tokio::test]
@@ -981,20 +1037,21 @@ async fn trace_inline_arg_summary_is_capped() {
 
     let cards = mock.cards.lock().await;
     let body: serde_json::Value = serde_json::from_str(&cards[0].1).unwrap();
-    let content = body["body"]["elements"][0]["content"].as_str().unwrap();
-    // Long args don't render inline: the header stays bare and the arg
-    // drops to a `↳` continuation line capped at 100 chars (+ellipsis).
-    let header = content
+    let content = body["body"]["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["content"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    // Long args stay on one truncated inline line (60 chars + ellipsis).
+    let tool_line = content
         .lines()
         .find(|l| l.starts_with('⏳'))
         .expect("trace tool line");
-    assert_eq!(header, "⏳ **shell**");
-    let cont = content
-        .lines()
-        .find(|l| l.starts_with('↳'))
-        .expect("continuation line");
-    assert!(cont.chars().count() <= 105, "line: {cont}");
-    assert!(cont.ends_with("…`"));
+    assert!(tool_line.ends_with("…`"), "line: {tool_line}");
+    assert!(tool_line.chars().count() <= 80, "line: {tool_line}");
+    assert!(!content.lines().any(|l| l.starts_with('↳')));
 }
 
 #[tokio::test]
@@ -1010,19 +1067,22 @@ async fn whisper_line_is_capped_at_100_chars() {
     tracker
         .handle_event(&adapter, &sid, "chat-1", None, &tool_start("bash"))
         .await;
+    // Streamed chunks feed the live whisper (tail kept).
     tracker
         .handle_event(
             &adapter,
             &sid,
             "chat-1",
             None,
-            &end_with_text(&"y".repeat(300)),
+            &text_chunk(&"y".repeat(300)),
         )
         .await;
 
     let patches = mock.patches.lock().await;
     let body: serde_json::Value = serde_json::from_str(&patches.last().unwrap().1).unwrap();
-    let content = body["body"]["elements"][0]["content"].as_str().unwrap();
+    // Tools present → layout is [stats, hr, trace+whisper]; the whisper
+    // tail rides the trace element.
+    let content = body["body"]["elements"][2]["content"].as_str().unwrap();
     let whisper_line = content
         .lines()
         .find(|l| l.contains('💬'))
@@ -1235,7 +1295,7 @@ async fn first_text_chunk_materializes_card_without_tools() {
     let cards = mock.cards.lock().await;
     assert_eq!(cards.len(), 1, "text output materializes the card");
     assert!(cards[0].1.contains("💬 Hello"));
-    assert!(cards[0].1.contains("🐾 Typing"));
+    assert!(super::TYPING_TITLES.iter().any(|t| cards[0].1.contains(t)));
     drop(cards);
 
     // The run then morphs that very card into the final reply.
@@ -1271,7 +1331,9 @@ async fn thinking_chunk_materializes_card_with_thinking_title() {
     // it is still thinking (reasoning models can think for a long time).
     let cards = mock.cards.lock().await;
     assert_eq!(cards.len(), 1);
-    assert!(cards[0].1.contains("💭 Thinking"));
+    assert!(super::THINKING_TITLES
+        .iter()
+        .any(|t| cards[0].1.contains(t)));
     // Thinking content itself is never rendered (internal reasoning).
     assert!(!cards[0].1.contains("hmm"));
     assert!(!cards[0].1.contains("💬"));
@@ -1392,4 +1454,57 @@ async fn materialize_send_failure_disables_retries_for_the_run() {
     // against a struggling API endpoint.
     assert_eq!(mock.send_card_attempts.load(Ordering::Relaxed), 1);
     assert_eq!(mock.cards.lock().await.len(), 0);
+}
+
+#[test]
+fn random_title_picks_from_the_list() {
+    for _ in 0..50 {
+        let title = super::random_title(super::THINKING_TITLES);
+        assert!(super::THINKING_TITLES.contains(&title));
+    }
+    // Over 100 draws we are effectively guaranteed to see more than one
+    // distinct title ((1/6)^100 chance of flaking).
+    let distinct: std::collections::HashSet<_> = (0..100)
+        .map(|_| super::random_title(super::THINKING_TITLES))
+        .collect();
+    assert!(distinct.len() > 1);
+}
+
+#[tokio::test]
+async fn stats_line_shows_steps_after_first_completed_text() {
+    let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &tool_start("bash"))
+        .await;
+
+    // No completed text yet (the just-materialized card): tools only, no steps.
+    let cards = mock.cards.lock().await;
+    let first = cards[0].1.clone();
+    assert!(first.contains("1 tools"));
+    assert!(!first.contains("step"), "no steps yet: {first}");
+    drop(cards);
+
+    // First completed assistant message: the stats line gains a step.
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &end_with_text("done one"))
+        .await;
+    let patches = mock.patches.lock().await;
+    let last = patches.last().unwrap().1.clone();
+    assert!(last.contains("1 steps"), "one step: {last}");
+    drop(patches);
+
+    // The in-progress text of the next turn is not a step yet.
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &text_chunk("drafting"))
+        .await;
+    let patches = mock.patches.lock().await;
+    let last = patches.last().unwrap().1.clone();
+    assert!(last.contains("1 steps"), "still one step: {last}");
 }

@@ -138,6 +138,47 @@ impl ChannelStore for SqliteChannelStore {
         }
         Ok(deleted)
     }
+
+    async fn get_history_cursor(
+        &self,
+        channel_name: &str,
+        container_id: &str,
+    ) -> Result<Option<i64>> {
+        let row: Option<(i64,)> = sqlx::query_as(
+            "SELECT cursor_ts FROM channel_history_cursors
+             WHERE channel_name = ? AND container_id = ?",
+        )
+        .bind(channel_name)
+        .bind(container_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("Failed to get history cursor: {e}")))?;
+
+        Ok(row.map(|r| r.0))
+    }
+
+    async fn set_history_cursor(
+        &self,
+        channel_name: &str,
+        container_id: &str,
+        cursor_ts: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            r"INSERT INTO channel_history_cursors (channel_name, container_id, cursor_ts, updated_at)
+               VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(channel_name, container_id) DO UPDATE SET
+               cursor_ts = excluded.cursor_ts,
+               updated_at = CURRENT_TIMESTAMP",
+        )
+        .bind(channel_name)
+        .bind(container_id)
+        .bind(cursor_ts)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("Failed to set history cursor: {e}")))?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

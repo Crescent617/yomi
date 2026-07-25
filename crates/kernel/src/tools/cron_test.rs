@@ -604,3 +604,44 @@ async fn update_rejects_action_fields_of_wrong_type() {
     .await
     .is_err());
 }
+
+#[tokio::test]
+async fn update_sessionless_send_message_errors_without_session_store() {
+    let f = fixture(false, false).await;
+    // A job with no bound session can only come from older or external
+    // writes (both create paths either bind or require an explicit id).
+    let job = crate::cron::CronJob {
+        id: CronJobId::new(),
+        name: "legacy".to_string(),
+        schedule: "0 9 * * *".to_string(),
+        action: CronAction::SendMessage {
+            session_id: None,
+            content: "hi".to_string(),
+        },
+        status: CronJobStatus::Active,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+        next_run_at: None,
+        last_run_at: None,
+        run_count: 0,
+        max_runs: None,
+        expires_at: None,
+        last_error: None,
+    };
+    f.cron_store.create(&job).await.unwrap();
+
+    // An action edit would leave the job sessionless and failing every
+    // fire — with no session store available it must error explicitly,
+    // mirroring the create path.
+    let err = exec(
+        &f.tool,
+        json!({"action": "update", "id": job.id.0.to_string(), "content": "new"}),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("session store not available; pass session_id explicitly"),
+        "unexpected error: {err}"
+    );
+}

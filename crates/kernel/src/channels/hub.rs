@@ -12,7 +12,7 @@ use tracing::{error, info, warn};
 
 use super::{
     obs::ObsTracker, reply, ChannelConfig, ChannelInfo, ChannelMessage, ChannelStatus,
-    ChannelStore, PlatformAdapter, SessionRouting,
+    ChannelStore, HistoryContainer, HistoryMessage, PlatformAdapter, SessionRouting,
 };
 
 const STATUS_IDLE: u8 = 0;
@@ -167,6 +167,7 @@ impl ChannelHub {
                             coord,
                             msg.clone(),
                             &obs_proc,
+                            &adapter_proc,
                         ).await {
                             Ok(Some(reply_text)) => {
                                 let chat_id = msg.external_chat_id.clone();
@@ -563,10 +564,11 @@ async fn settle_with(
 /// Deliver a run's final reply. Card-capable platforms with observability
 /// morph the status card into it (one message per run) — or, when the user
 /// posted mid-run, freeze the card as a terminal receipt and flush the
-/// reply as a new message at the bottom. All other cases flush as a new
-/// message and settle the obs state without a reply. When the rich settle
-/// comes back unsettled (no run state, or the settle send failed), the
-/// reply falls back to a plain flush so content is never silently lost.
+/// reply as a new bare-text message at the bottom (no trace there: it was
+/// already live on the card during the run). All other cases flush as a
+/// new message and settle the obs state without a reply. When the rich
+/// settle comes back unsettled (no run state, or the settle send failed),
+/// the reply falls back to a plain flush so content is never silently lost.
 #[allow(clippy::too_many_arguments)]
 async fn deliver_reply(
     obs: &Arc<ObsTracker>,
@@ -580,9 +582,16 @@ async fn deliver_reply(
 ) {
     if observability && adapter.supports_status_card() {
         if obs.has_mid_run_posts(session_id) {
+            // The trace went live on the card only if the card
+            // materialized; keep it in the flush when it never did
+            // (double-failure edge: mid-run post + card send failure).
+            let keep_trace = tool_trace && obs.card_missing(session_id);
             let _ = settle_with(obs, session_id, kind, None).await;
             if let Some(reply) = reply {
-                flush_reply(adapter, routing, reply, tool_trace).await;
+                // The reply lands as a standalone message below the user's
+                // mid-run posts — bare final text, no trace (it was already
+                // live on the card during the run).
+                flush_reply(adapter, routing, reply, keep_trace).await;
             }
         } else if let Some(reply) = settle_with(obs, session_id, kind, reply).await {
             // Nothing settled — fall back to a plain message instead of
@@ -609,6 +618,7 @@ async fn handle_incoming_message(
     kernel: Arc<Kernel>,
     msg: ChannelMessage,
     obs: &Arc<ObsTracker>,
+    adapter: &Arc<dyn PlatformAdapter>,
 ) -> Result<Option<String>> {
     let chat_id = msg.external_chat_id.clone();
     let reply_msg_id = reply_anchor(&msg, config.reply_in_thread);
@@ -616,12 +626,23 @@ async fn handle_incoming_message(
 
     let cmd = parse_channel_command(msg.raw_text.as_deref());
     match cmd {
+        ChannelCommand::Help => Ok(Some(HELP_TEXT.to_string())),
         ChannelCommand::Clear => {
             if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
                 if let Err(e) = kernel.clear_session(&sid) {
                     tracing::warn!("Failed to clear session {}: {}", sid.0, e);
                 }
             }
+            // Fresh start for history injection too: nothing before this
+            // point is pulled into the next trigger's context.
+            let container = history_container(&msg);
+            let _ = store
+                .set_history_cursor(
+                    channel_name,
+                    container.id(),
+                    chrono::Utc::now().timestamp_millis(),
+                )
+                .await;
             Ok(Some("Context cleared.".to_string()))
         }
         ChannelCommand::Stop => {
@@ -642,6 +663,10 @@ async fn handle_incoming_message(
             )
             .await?;
             record_receipt(config, obs, &kernel, &sid, &msg);
+            let text = with_history(
+                maybe_history_prefix(adapter, config, store, channel_name, &msg).await,
+                &text,
+            );
             kernel.send_steer(&sid, vec![ContentBlock::Text { text }]);
             Ok(None)
         }
@@ -656,6 +681,10 @@ async fn handle_incoming_message(
             )
             .await?;
             record_receipt(config, obs, &kernel, &sid, &msg);
+            let text = with_history(
+                maybe_history_prefix(adapter, config, store, channel_name, &msg).await,
+                &text,
+            );
             kernel
                 .send_message(&sid, vec![ContentBlock::Text { text }])
                 .await?;
@@ -781,10 +810,107 @@ async fn handle_incoming_message(
             )
             .await?;
             record_receipt(config, obs, &kernel, &sid, &msg);
-            kernel.send_steer(&sid, msg.content);
+            let prefix = maybe_history_prefix(adapter, config, store, channel_name, &msg).await;
+            let mut content = msg.content;
+            if let Some(prefix) = prefix {
+                content.insert(0, ContentBlock::Text { text: prefix });
+            }
+            kernel.send_steer(&sid, content);
             Ok(None)
         }
     }
+}
+
+/// The history container for a triggering message: its thread when sent
+/// inside one, otherwise the chat itself.
+fn history_container(msg: &ChannelMessage) -> HistoryContainer {
+    match &msg.thread_id {
+        Some(tid) => HistoryContainer::Thread(tid.clone()),
+        None => HistoryContainer::Chat(msg.external_chat_id.clone()),
+    }
+}
+
+/// Fetch and assemble recent-chat context for a triggering group message:
+/// messages since the last trigger in this thread/chat, formatted as a
+/// `<recent_chat_history>` block. Best-effort — any failure degrades to no
+/// context. The cursor advances to the newest fetched message (usually the
+/// triggering message itself) so it isn't re-fetched next time; advancing
+/// happens at fetch time, so a downstream send failure can leave a small
+/// history gap (accepted).
+async fn maybe_history_prefix(
+    adapter: &Arc<dyn PlatformAdapter>,
+    config: &ChannelConfig,
+    store: &Arc<dyn ChannelStore>,
+    channel_name: &str,
+    msg: &ChannelMessage,
+) -> Option<String> {
+    if config.history_context == 0 || !msg.is_group {
+        return None;
+    }
+    let container = history_container(msg);
+    let cursor = store
+        .get_history_cursor(channel_name, container.id())
+        .await
+        .ok()
+        .flatten();
+    let messages = match adapter
+        .fetch_history(&container, cursor, config.history_context)
+        .await
+    {
+        Ok(m) => m,
+        Err(e) => {
+            warn!(error = %e, "history fetch failed, continuing without context");
+            return None;
+        }
+    };
+    // Advance the cursor to the newest fetched message so it isn't
+    // re-fetched next time.
+    if let Some(newest_ts) = messages.iter().map(|m| m.create_time).max() {
+        if let Err(e) = store
+            .set_history_cursor(channel_name, container.id(), newest_ts)
+            .await
+        {
+            warn!(error = %e, "failed to advance history cursor");
+        }
+    }
+    // Drop the triggering message itself — it's delivered verbatim below.
+    let trigger_id = msg.external_message_id.as_deref();
+    let history: Vec<&HistoryMessage> = messages
+        .iter()
+        .filter(|m| Some(m.message_id.as_str()) != trigger_id)
+        .collect();
+    if history.is_empty() {
+        return None;
+    }
+    Some(assemble_history(&history))
+}
+
+/// Prepend an assembled history block to the user's text (when present).
+fn with_history(prefix: Option<String>, text: &str) -> String {
+    match prefix {
+        Some(p) => format!("{p}\n\n{text}"),
+        None => text.to_string(),
+    }
+}
+
+/// Per-message cap in the injected history block (UTF-8 safe truncation).
+const HISTORY_MESSAGE_MAX_CHARS: usize = 2000;
+
+/// Format fetched messages as a context block: chronological, one line
+/// each (`[HH:MM] open_id: text`, per-message capped).
+fn assemble_history(messages: &[&HistoryMessage]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::from("<recent_chat_history>\n");
+    for m in messages {
+        let ts = chrono::DateTime::from_timestamp_millis(m.create_time)
+            .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M").to_string())
+            .unwrap_or_default();
+        let text =
+            crate::utils::strs::truncate_by_chars(m.text.trim(), HISTORY_MESSAGE_MAX_CHARS, "…");
+        let _ = writeln!(out, "[{ts}] {}: {text}", m.sender_id);
+    }
+    out.push_str("</recent_chat_history>");
+    out
 }
 
 /// Record a user message posted while the session's agent is running, for
@@ -925,12 +1051,27 @@ const CMD_STOP: &str = "/stop";
 const CMD_STEER: &str = "/steer";
 const CMD_QUEUE: &str = "/queue";
 const CMD_INFO: &str = "/info";
+const CMD_HELP: &str = "/help";
 
 /// All channel command prefixes, longest-first so `/models` is matched
 /// before `/model` (the latter is a prefix of the former).
 const CMD_PREFIXES: &[&str] = &[
-    CMD_MODELS, CMD_MODEL, CMD_CLEAR, CMD_STOP, CMD_STEER, CMD_QUEUE, CMD_INFO,
+    CMD_MODELS, CMD_MODEL, CMD_CLEAR, CMD_STOP, CMD_STEER, CMD_QUEUE, CMD_INFO, CMD_HELP,
 ];
+
+/// `/help` response: the channel command list.
+const HELP_TEXT: &str = "\
+**Commands**
+`/help` — this help
+`/info` — current session info
+`/models` — list configured models (current one marked)
+`/model` — show current model; `/model <key>` to switch
+`/clear` — clear context and start fresh
+`/stop` — stop the current run
+`/steer <text>` — inject a message into the current run
+`/queue <text>` — queue a message for a later turn
+
+Anything else is sent to the agent as a message.";
 
 /// Parsed channel command from an incoming message.
 enum ChannelCommand {
@@ -952,6 +1093,8 @@ enum ChannelCommand {
     InvalidModelCommand,
     /// Show basic info about the current session.
     Info,
+    /// Show the command list.
+    Help,
     /// Not a command.
     None,
 }
@@ -965,7 +1108,7 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
         return ChannelCommand::None;
     };
 
-    let Some(&command) = CMD_PREFIXES.iter().find(|prefix| cmd.starts_with(**prefix)) else {
+    let Some(&command) = CMD_PREFIXES.iter().find(|prefix| cmd_matches(cmd, prefix)) else {
         return ChannelCommand::None;
     };
 
@@ -973,6 +1116,7 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
         CMD_CLEAR if parts.next().is_none() => ChannelCommand::Clear,
         CMD_STOP if parts.next().is_none() => ChannelCommand::Stop,
         CMD_INFO if parts.next().is_none() => ChannelCommand::Info,
+        CMD_HELP if parts.next().is_none() => ChannelCommand::Help,
         CMD_STEER | CMD_QUEUE => {
             let rest = parts.collect::<Vec<_>>().join(" ");
             if rest.is_empty() {
@@ -993,11 +1137,21 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
     }
 }
 
+/// A command token matches a prefix exactly or with an `@bot` suffix
+/// (`/clear`, `/clear@yomi_bot`) — never a longer word (`/clearance` is
+/// not a command).
+fn cmd_matches(cmd: &str, prefix: &str) -> bool {
+    cmd == prefix
+        || cmd
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('@'))
+}
+
 pub(super) fn has_channel_command_prefix(raw_text: &str) -> bool {
     let command = raw_text.split_whitespace().next().unwrap_or_default();
     CMD_PREFIXES
         .iter()
-        .any(|prefix| command.starts_with(prefix))
+        .any(|prefix| cmd_matches(command, prefix))
 }
 
 fn format_model_list(models: &[crate::kernel::ModelInfo], current: &str) -> String {

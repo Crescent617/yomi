@@ -122,6 +122,12 @@ where
                 filter: Arc::new(filter),
             },
         );
+        if self.closed.load(Ordering::Relaxed) {
+            // Raced with shutdown(): undo the registration — dropping the
+            // listener (and its sender) makes the subscriber's first
+            // recv() return None instead of pending forever.
+            self.listeners.remove(&id);
+        }
 
         PubSubSubscriber {
             listeners: Arc::clone(&self.listeners),

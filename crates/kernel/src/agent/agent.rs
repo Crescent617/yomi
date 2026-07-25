@@ -900,13 +900,6 @@ impl Agent {
                             }));
                         }
                         ModelStreamItem::TokenUsage(usage) => {
-                            // NOTE: this is right because each response's prompt_tokens will contain whole history
-                            tracing::info!(
-                                "received token usage update: prompt={}, completion={}, total={}",
-                                usage.prompt_tokens,
-                                usage.completion_tokens,
-                                usage.total_tokens()
-                            );
                             let total = usage.total_tokens();
                             state.handle_token_usage(usage);
                             // Context window from the model resolved at stream start;

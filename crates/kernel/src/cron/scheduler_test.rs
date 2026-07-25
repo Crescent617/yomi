@@ -367,3 +367,41 @@ async fn test_job_finished_requeues() {
     assert_eq!(updates[0].0, "j1");
     assert!(updates[0].1.next_run_at.is_some());
 }
+
+#[tokio::test]
+async fn test_stale_removal_preserves_concurrent_requeue() {
+    let (tx, mut rx) = mpsc::channel(10);
+    let past = Utc::now() - chrono::Duration::seconds(60);
+    let future = Utc::now() + chrono::Duration::seconds(60);
+    let job = make_job("j1", "0 0 9 * * *", Some(future), None, None, 0);
+
+    let mut jobs = HashMap::new();
+    jobs.insert("j1".to_string(), job.clone());
+    let store = Arc::new(MockStore::new(jobs));
+    let scheduler = Arc::new(CronScheduler::new(store, tx));
+
+    // The job is running; a stale due entry exists (reload re-queued it),
+    // and job_finished has already pushed a fresh entry at a later time.
+    {
+        let mut running = scheduler.running.write().await;
+        running.insert(job.id.clone());
+        let mut q = scheduler.queue.write().await;
+        q.entry(past).or_default().push(job.id.clone());
+        q.entry(future).or_default().push(job.id.clone());
+        let mut j = scheduler.jobs.write().await;
+        j.insert(job.id.clone(), job.clone());
+    }
+
+    scheduler.fire_due_jobs().await.unwrap();
+
+    // The stale entry is dropped, but the fresh requeue at the different
+    // timestamp survives the scoped removal; nothing fired.
+    let q = scheduler.queue.read().await;
+    assert!(q.get(&past).is_none(), "stale entry removed");
+    assert_eq!(
+        q.get(&future).map(|ids| ids.len()),
+        Some(1),
+        "fresh requeue preserved"
+    );
+    assert!(rx.try_recv().is_err(), "nothing fired");
+}

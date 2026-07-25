@@ -21,20 +21,14 @@ use crate::utils::strs::truncate_by_chars;
 /// a char budget would let ~3x that size through for CJK text.
 const FINAL_TEXT_MAX_BYTES: usize = 28_000;
 /// Trace entries kept in the buffer (oldest dropped beyond this). Bounds
-/// memory for long goal-mode runs; the render cap is much lower, so this
-/// only needs to keep the recent tail intact.
+/// memory for long goal-mode runs; dropped entries are counted and shown
+/// as a marker line at render time.
 const BUFFER_MAX_ENTRIES: usize = 100;
-/// Trace entries rendered in the panel (most recent kept).
-const MAX_TRACE_ENTRIES: usize = 20;
 /// Intermediate-text snippet truncation inside the trace panel.
 const NARRATION_MAX_CHARS: usize = 80;
 /// Tool argument summary truncation (single-line displays: inline trace
-/// entries and the status-card last-tool line).
+/// entries).
 const ARG_SUMMARY_MAX_CHARS: usize = 60;
-/// Arg lines shown per tool in the trace panel (long/multi-line args).
-const TRACE_ARG_MAX_LINES: usize = 3;
-/// Per-line arg budget in the trace panel.
-const TRACE_ARG_LINE_MAX_CHARS: usize = 100;
 
 /// Preferred argument key per tool for the one-line summary.
 fn primary_arg_key(tool_name: &str) -> Option<&'static str> {
@@ -80,9 +74,9 @@ enum TraceEntry {
 struct ToolTrace {
     tool_id: String,
     tool_name: String,
-    /// Arg summary for display: a short single line renders inline after the
-    /// tool name; long or multi-line args render as `↳` continuation lines.
-    arg_lines: Vec<String>,
+    /// One-line arg summary (whitespace flattened, capped), rendered
+    /// inline after the tool name; empty when there is nothing to show.
+    arg_summary: String,
     /// `None` while the tool is still running (e.g. at cancel time).
     elapsed_ms: Option<u64>,
     is_error: bool,
@@ -92,6 +86,9 @@ struct ToolTrace {
 #[derive(Debug)]
 pub(crate) struct RunReplyBuffer {
     entries: Vec<TraceEntry>,
+    /// Entries dropped at the buffer cap (oldest first) — surfaced as a
+    /// "··· and N earlier entries" marker at render time.
+    dropped: usize,
     started_at: Instant,
 }
 
@@ -99,6 +96,7 @@ impl RunReplyBuffer {
     pub(crate) fn new() -> Self {
         Self {
             entries: Vec::new(),
+            dropped: 0,
             started_at: Instant::now(),
         }
     }
@@ -118,7 +116,11 @@ impl RunReplyBuffer {
         self.push_entry(TraceEntry::Tool(ToolTrace {
             tool_id: tool_id.to_string(),
             tool_name: tool_name.to_string(),
-            arg_lines: summarize_args_trace(tool_name, arguments),
+            arg_summary: truncate_by_chars(
+                &flatten_ws(&extract_arg_text(tool_name, arguments)),
+                ARG_SUMMARY_MAX_CHARS,
+                "…",
+            ),
             elapsed_ms: None,
             is_error: false,
         }));
@@ -140,6 +142,7 @@ impl RunReplyBuffer {
         if self.entries.len() >= BUFFER_MAX_ENTRIES {
             let overflow = self.entries.len() + 1 - BUFFER_MAX_ENTRIES;
             self.entries.drain(..overflow);
+            self.dropped += overflow;
         }
         self.entries.push(entry);
     }
@@ -161,6 +164,7 @@ impl RunReplyBuffer {
         FinalReply {
             text,
             entries,
+            dropped_entries: self.dropped,
             elapsed: self.started_at.elapsed(),
         }
     }
@@ -168,8 +172,22 @@ impl RunReplyBuffer {
     /// Render the most recent `max` trace entries as markdown lines — the
     /// live status-card preview of the run trace.
     pub(crate) fn trace_preview_lines(&self, max: usize) -> Vec<String> {
-        let (lines, _) = trace_lines(&self.entries, true);
-        cap_trace_lines(lines, max)
+        let capped = self.entries.len().saturating_sub(max);
+        let mut lines = trace_lines(&self.entries[capped..], true);
+        let dropped = self.dropped + capped;
+        if dropped > 0 {
+            lines.insert(0, dropped_marker(dropped));
+        }
+        lines
+    }
+
+    /// Completed assistant messages in the trace (the run's steps so far;
+    /// the in-progress text doesn't count until it completes).
+    pub(crate) fn step_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|e| matches!(e, TraceEntry::Narration(_)))
+            .count()
     }
 }
 
@@ -183,6 +201,8 @@ impl Default for RunReplyBuffer {
 pub(crate) struct FinalReply {
     text: Option<String>,
     entries: Vec<TraceEntry>,
+    /// Trace entries dropped at the buffer cap (shown as a marker line).
+    dropped_entries: usize,
     elapsed: Duration,
 }
 
@@ -270,37 +290,61 @@ pub(crate) fn render_plain(reply: &FinalReply) -> String {
     out
 }
 
-/// Render the trace lines (capped to the most recent) and the summary title.
+/// Render the trace lines (all of them — entries are single-line, so the
+/// full run stays compact) and the summary title.
 fn render_trace(reply: &FinalReply, markdown: bool) -> (Vec<String>, String) {
-    let (lines, stats) = trace_lines(&reply.entries, markdown);
-    let lines = cap_trace_lines(lines, MAX_TRACE_ENTRIES);
+    let stats = trace_stats(&reply.entries);
+    let mut lines = trace_lines(&reply.entries, markdown);
+    if reply.dropped_entries > 0 {
+        lines.insert(0, dropped_marker(reply.dropped_entries));
+    }
 
-    let mut title = format!("🐾 Run trace · {} tools", stats.tools);
+    // The reply body is an assistant message too — count it as a step.
+    let steps = stats.steps + usize::from(reply.text().is_some());
+    let mut title = format!(
+        "🐾 Trace · {} steps · {} tools · {}",
+        steps,
+        stats.tools,
+        fmt_elapsed(reply.elapsed)
+    );
     if stats.failed > 0 {
         let _ = write!(title, " · {} failed", stats.failed);
     }
-    let _ = write!(title, " · {}", fmt_elapsed(reply.elapsed));
     (lines, title)
 }
 
-/// Cap trace lines to the most recent `max`, noting the dropped count.
-fn cap_trace_lines(mut lines: Vec<String>, max: usize) -> Vec<String> {
-    if lines.len() > max {
-        let dropped = lines.len() - max;
-        lines.drain(..dropped);
-        lines.insert(0, format!("··· and {dropped} earlier entries"));
+/// The marker line noting trace entries dropped at the buffer/display cap.
+fn dropped_marker(dropped: usize) -> String {
+    format!("··· and {dropped} earlier entries")
+}
+
+/// Totals over the whole trace (title summary), independent of how many
+/// entries end up rendered.
+fn trace_stats(entries: &[TraceEntry]) -> TraceStats {
+    let mut stats = TraceStats::default();
+    for entry in entries {
+        match entry {
+            TraceEntry::Narration(_) => stats.steps += 1,
+            TraceEntry::Tool(tool) => {
+                stats.tools += 1;
+                if tool.is_error {
+                    stats.failed += 1;
+                }
+            }
+        }
     }
-    lines
+    stats
 }
 
 #[derive(Default)]
 struct TraceStats {
+    /// Assistant messages (narrations) — the run's steps.
+    steps: usize,
     tools: usize,
     failed: usize,
 }
 
-fn trace_lines(entries: &[TraceEntry], markdown: bool) -> (Vec<String>, TraceStats) {
-    let mut stats = TraceStats::default();
+fn trace_lines(entries: &[TraceEntry], markdown: bool) -> Vec<String> {
     let mut lines = Vec::with_capacity(entries.len());
     for entry in entries {
         match entry {
@@ -313,11 +357,9 @@ fn trace_lines(entries: &[TraceEntry], markdown: bool) -> (Vec<String>, TraceSta
                 }
             }
             TraceEntry::Tool(tool) => {
-                stats.tools += 1;
                 let icon = if tool.elapsed_ms.is_none() {
                     "⏳"
                 } else if tool.is_error {
-                    stats.failed += 1;
                     "❌"
                 } else {
                     "✅"
@@ -327,13 +369,8 @@ fn trace_lines(entries: &[TraceEntry], markdown: bool) -> (Vec<String>, TraceSta
                 } else {
                     format!("{icon} {}", tool.tool_name)
                 };
-                // Short single-line args stay inline; long or multi-line
-                // args get their own continuation lines below the header.
-                let inline = match tool.arg_lines.as_slice() {
-                    [only] if only.chars().count() <= ARG_SUMMARY_MAX_CHARS => Some(only.as_str()),
-                    _ => None,
-                };
-                if let Some(summary) = inline {
+                if !tool.arg_summary.is_empty() {
+                    let summary = &tool.arg_summary;
                     if markdown {
                         let _ = write!(line, " · `{summary}`");
                     } else {
@@ -344,19 +381,10 @@ fn trace_lines(entries: &[TraceEntry], markdown: bool) -> (Vec<String>, TraceSta
                     let _ = write!(line, " · {}", fmt_tool_elapsed(ms));
                 }
                 lines.push(line);
-                if inline.is_none() {
-                    lines.extend(tool.arg_lines.iter().map(|arg| {
-                        if markdown {
-                            format!("↳ `{arg}`")
-                        } else {
-                            format!("↳ {arg}")
-                        }
-                    }));
-                }
             }
         }
     }
-    (lines, stats)
+    lines
 }
 
 /// Extract the display text for a tool call's args: the tool's primary
@@ -386,24 +414,6 @@ fn extract_arg_text(tool_name: &str, arguments: Option<&str>) -> String {
 /// Collapse all whitespace runs (including newlines) into single spaces.
 pub(crate) fn flatten_ws(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// Multi-line arg summary for the trace panel: the arg's own line breaks are
-/// preserved (whitespace flattened within each line), capped at
-/// [`TRACE_ARG_MAX_LINES`] lines of [`TRACE_ARG_LINE_MAX_CHARS`] chars; a
-/// trailing `…` line marks dropped lines.
-fn summarize_args_trace(tool_name: &str, arguments: Option<&str>) -> Vec<String> {
-    let mut lines: Vec<String> = extract_arg_text(tool_name, arguments)
-        .lines()
-        .map(flatten_ws)
-        .filter(|line| !line.is_empty())
-        .map(|line| truncate_by_chars(&line, TRACE_ARG_LINE_MAX_CHARS, "…"))
-        .collect();
-    if lines.len() > TRACE_ARG_MAX_LINES {
-        lines.truncate(TRACE_ARG_MAX_LINES);
-        lines.push("…".to_string());
-    }
-    lines
 }
 
 fn fmt_tool_elapsed(ms: u64) -> String {

@@ -7,14 +7,19 @@
 //! thinking) — since the card morphs into the final reply on settlement,
 //! every run is exactly one message (two when the user posted mid-run: the
 //! card freezes as a terminal receipt and the reply lands at the bottom).
-//! While running, the card body shows the stats line plus the last tool
-//! call and a live tail of the assistant's current text output ("whisper").
+//! While running, the card body shows the stats line, the live run trace
+//! (most recent tool entries), and a tail of the assistant's current text
+//! ("whisper"); a rotating placeholder fills the fresh card until the
+//! first tool or text arrives, and idle phase titles rotate for fun.
 //! On settlement the card **morphs** into the final reply (last text +
 //! run-trace panel, no header; abnormal endings get a notice line in the
-//! content). Runs without a reply (crash / lost events) freeze into a
-//! terminal header style instead. User messages received during the run are
-//! recorded as receipts — used only for the mid-run post detection (morph
-//! vs. new-message settle); no reactions are sent at settlement.
+//! content). With mid-run posts the card freezes as a terminal receipt
+//! and the reply lands at the bottom as bare text (the trace was already
+//! live on the card during the run). Runs without a reply (crash / lost
+//! events) freeze into a terminal header style instead. User messages
+//! received during the run are recorded as receipts — used only for the
+//! mid-run post detection (morph vs. new-message settle); no reactions
+//! are sent at settlement.
 
 use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolEvent};
 use crate::types::SessionId;
@@ -35,13 +40,66 @@ const ERROR_MAX_CHARS: usize = 200;
 /// Whisper buffer cap (tail kept); bounds memory for long streamed answers.
 const WHISPER_BUFFER_CHARS: usize = 200;
 /// Max length (chars, ellipsis included) for dynamic text lines on the
-/// status card body (whisper, last tool).
+/// status card body (whisper).
 const STATUS_TEXT_MAX_CHARS: usize = 100;
 /// Trace entries shown live on the status card (most recent kept).
 const STATUS_TRACE_MAX_ENTRIES: usize = 10;
+/// Fresh-card placeholder lines (no tools or text yet): a random -ing
+/// verb, plain text (the title already carries the fun/emoji).
+const IDLE_PLACEHOLDERS: &[&str] = &[
+    "Pondering…",
+    "Cogitating…",
+    "Mulling…",
+    "Brewing…",
+    "Sniffing…",
+    "Scheming…",
+];
 
-const PHASE_THINKING: &str = "💭 Thinking…";
-const PHASE_TYPING: &str = "🐾 Typing…";
+/// Idle-phase card titles; a random one is picked on each render (free
+/// animation, no extra API calls).
+const THINKING_TITLES: &[&str] = &[
+    "🐹 Chewing on it…",
+    "🧠 Pondering…",
+    "🤔 Mulling it over…",
+    "🌩️ Brainstorming…",
+    "💭 Deep in thought…",
+    "💭 Thinking…",
+];
+const TYPING_TITLES: &[&str] = &[
+    "🐾 Typing…",
+    "✍️ Scribbling…",
+    "📝 Drafting…",
+    "⌨️ Hammering the keys…",
+];
+
+/// Pick a random title (thinking/typing phases get a fresh one per render).
+fn random_title(titles: &[&'static str]) -> &'static str {
+    use rand::prelude::IndexedRandom;
+    titles
+        .choose(&mut rand::rng())
+        .expect("title list is non-empty")
+}
+
+/// Card title phase. Idle phases draw a random fun title at render time;
+/// informative phases carry their payload verbatim.
+enum Phase {
+    Thinking,
+    Typing,
+    /// Humanized tool name (e.g. "Bash").
+    Tool(String),
+    /// Retry/error/goal/compact/fallback — informative text as-is.
+    Text(String),
+}
+
+/// The card title for the current phase.
+fn phase_title(s: &ObsCardState) -> String {
+    match &s.phase {
+        Phase::Thinking => random_title(THINKING_TITLES).to_string(),
+        Phase::Typing => random_title(TYPING_TITLES).to_string(),
+        Phase::Tool(name) => format!("🐹 {name}…"),
+        Phase::Text(text) => text.clone(),
+    }
+}
 
 /// Per-session live status card state.
 struct ObsCardState {
@@ -51,14 +109,20 @@ struct ObsCardState {
     chat_id: String,
     reply_msg_id: Option<String>,
     started_at: Instant,
-    /// Full card title text (icon + phase, e.g. "💭 Thinking…", "🐹 Bash…").
-    phase: String,
+    /// Card title phase (icon + phase, rotated for idle phases).
+    phase: Phase,
     /// Total tool executions (per-tool breakdown is not kept).
     tool_count: u32,
     /// The full run trace shown live on the status card.
     trace: reply::RunReplyBuffer,
-    /// Live tail of the assistant's in-progress text output ("whisper").
+    /// Live tail of the assistant's in-progress text output ("whisper") —
+    /// the one piece of not-yet-finished content on the card. Completed
+    /// texts move into `trace` as narrations at `ModelEvent::End`.
     whisper: String,
+    /// Any text chunk seen this run (never cleared): gates the fresh-card
+    /// placeholder so it can't reappear after a Request boundary cleared
+    /// the whisper.
+    seen_text: bool,
     token_footer: Option<String>,
     last_patch_at: Instant,
     /// Set when the materialize send failed — no more attempts this run
@@ -75,10 +139,11 @@ impl ObsCardState {
             chat_id: chat_id.to_string(),
             reply_msg_id: reply_msg_id.map(str::to_string),
             started_at: now,
-            phase: PHASE_THINKING.to_string(),
+            phase: Phase::Thinking,
             tool_count: 0,
             trace: reply::RunReplyBuffer::new(),
             whisper: String::new(),
+            seen_text: false,
             token_footer: None,
             last_patch_at: now,
             send_failed: false,
@@ -91,12 +156,6 @@ impl ObsCardState {
         if self.whisper.chars().count() > WHISPER_BUFFER_CHARS {
             self.whisper = tail_by_chars(&self.whisper, WHISPER_BUFFER_CHARS);
         }
-    }
-
-    /// Replace the whisper with the tail of a complete text (self-heal on
-    /// `ModelEvent::End`, guards against chunk loss on the event bus).
-    fn set_whisper(&mut self, text: &str) {
-        self.whisper = tail_by_chars(text, WHISPER_BUFFER_CHARS);
     }
 }
 
@@ -180,6 +239,15 @@ impl ObsTracker {
         self.receipts.get(session_id).is_some_and(|r| !r.is_empty())
     }
 
+    /// Whether the run's status card never materialized (send failed or
+    /// never sent): the trace never went live, so the final delivery
+    /// should keep it.
+    pub(crate) fn card_missing(&self, session_id: &SessionId) -> bool {
+        self.states
+            .get(session_id)
+            .is_none_or(|s| s.status_msg_id.is_empty() || s.send_failed)
+    }
+
     /// Feed one session event. Cheap state updates happen on every event;
     /// card updates are throttled to `patch_interval`.
     pub(crate) async fn handle_event(
@@ -224,7 +292,7 @@ impl ObsTracker {
                 let arguments = arguments.clone();
                 self.update_running(session_id, |s| {
                     s.tool_count += 1;
-                    s.phase = format!("🐹 {}…", humanize_tool_name(&tool_name));
+                    s.phase = Phase::Tool(humanize_tool_name(&tool_name));
                     s.trace
                         .record_tool_start(&tool_id, &tool_name, arguments.as_deref());
                 })
@@ -240,6 +308,8 @@ impl ObsTracker {
             }) => {
                 self.update_running(session_id, |s| {
                     s.trace.record_tool_end(tool_id, *elapsed_ms, *is_error);
+                    // Back to thinking until the next model request.
+                    s.phase = Phase::Thinking;
                 })
                 .await;
             }
@@ -248,53 +318,54 @@ impl ObsTracker {
                 max_attempts,
                 reason,
             }) => {
-                let phase = format!(
+                let phase = Phase::Text(format!(
                     "🔁 Retrying {attempt}/{max_attempts}: {}",
                     truncate_by_chars(reason, 30, "…")
-                );
+                ));
                 self.update_running(session_id, |s| s.phase = phase).await;
             }
             Event::Agent(AgentEvent::Error { error, .. }) => {
-                let phase = format!("⚠️ Error: {}", truncate_by_chars(error, 30, "…"));
+                let phase = Phase::Text(format!("⚠️ Error: {}", truncate_by_chars(error, 30, "…")));
                 // Never settles — a mid-retry error may still recover (see design §3).
                 self.update_running(session_id, |s| s.phase = phase).await;
             }
             Event::Agent(AgentEvent::GoalUpdated { status, .. }) => {
-                let phase = format!("🎯 Goal: {status}");
+                let phase = Phase::Text(format!("🎯 Goal: {status}"));
                 self.update_running(session_id, |s| s.phase = phase).await;
             }
             Event::Model(ModelEvent::Compacting { active }) => {
                 let active = *active;
                 self.update_running(session_id, |s| {
                     s.phase = if active {
-                        "📦 Compacting context…".to_string()
+                        Phase::Text("📦 Compacting context…".to_string())
                     } else {
-                        PHASE_THINKING.to_string()
+                        Phase::Thinking
                     };
                 })
                 .await;
             }
             Event::Model(ModelEvent::Fallback { from, to, .. }) => {
-                let phase = format!("↪️ Fallback: {from} → {to}");
+                let phase = Phase::Text(format!("↪️ Fallback: {from} → {to}"));
                 self.update_running(session_id, |s| s.phase = phase).await;
             }
             Event::Model(ModelEvent::Request { .. }) => {
                 // A new model call (re-)starts: thinking until chunks arrive.
                 self.update_running(session_id, |s| {
-                    s.phase = PHASE_THINKING.to_string();
+                    s.phase = Phase::Thinking;
                     s.whisper.clear();
                 })
                 .await;
             }
             Event::Model(ModelEvent::Chunk { content, .. }) => {
                 let (phase, delta) = match content {
-                    crate::event::ContentChunk::Text(text) => (PHASE_TYPING, Some(text.clone())),
+                    crate::event::ContentChunk::Text(text) => (Phase::Typing, Some(text.clone())),
                     crate::event::ContentChunk::Thinking { .. }
-                    | crate::event::ContentChunk::RedactedThinking => (PHASE_THINKING, None),
+                    | crate::event::ContentChunk::RedactedThinking => (Phase::Thinking, None),
                 };
                 self.update_running(session_id, |s| {
-                    s.phase = phase.to_string();
+                    s.phase = phase;
                     if let Some(delta) = delta {
+                        s.seen_text = true;
                         s.push_whisper(&delta);
                     }
                 })
@@ -306,24 +377,25 @@ impl ObsTracker {
                 self.materialize_card(session_id).await;
             }
             Event::Model(ModelEvent::End { content, .. }) => {
-                // Self-heal the whisper from the fully assembled text (not a
-                // settlement signal; the reply buffer in hub consumes it too).
+                // The completed text joins the trace as a narration entry
+                // (self-heals chunk loss on the bus — the full text is
+                // authoritative); the whisper always clears for the next
+                // turn instead of duplicating or going stale.
                 let text = super::blocks_to_text(content);
-                if !text.is_empty() {
-                    self.update_running(session_id, |s| s.set_whisper(&text))
-                        .await;
-                }
+                self.update_running(session_id, |s| {
+                    if !text.is_empty() {
+                        s.trace.record_text(text);
+                    }
+                    s.whisper.clear();
+                })
+                .await;
             }
             Event::Model(ModelEvent::TokenUsage {
                 total_tokens,
                 context_window,
                 ..
             }) => {
-                let footer = format!(
-                    "tokens: {} / {}",
-                    fmt_k(*total_tokens),
-                    fmt_k(*context_window)
-                );
+                let footer = format!("ctx: {} / {}", fmt_k(*total_tokens), fmt_k(*context_window));
                 self.update_running(session_id, |s| s.token_footer = Some(footer))
                     .await;
             }
@@ -522,15 +594,51 @@ async fn send_card_patch(adapter: &dyn PlatformAdapter, message_id: &str, card_j
 }
 
 fn render_running(s: &ObsCardState) -> String {
-    let mut lines = vec![stats_line(s)];
-    lines.extend(s.trace.trace_preview_lines(STATUS_TRACE_MAX_ENTRIES));
-    if !s.whisper.is_empty() {
-        lines.push(format!(
-            "<font color='grey'>💬 {}</font>",
-            whisper_snippet(&s.whisper)
-        ));
+    let trace = s.trace.trace_preview_lines(STATUS_TRACE_MAX_ENTRIES);
+    if trace.is_empty() && s.whisper.is_empty() && !s.seen_text {
+        // Brand-new card: a light random placeholder, no stats line yet
+        // (it would be a lone timer). Completed texts live in the trace and
+        // the current one lives in the whisper, so this can't reappear
+        // mid-run.
+        return card_json(
+            "blue",
+            &phase_title(s),
+            &format!(
+                "<font color='grey'>{}</font>",
+                random_title(IDLE_PLACEHOLDERS)
+            ),
+        );
     }
-    card_json("blue", &s.phase, &lines.join("\n"))
+    let whisper_line = || {
+        (!s.whisper.is_empty()).then(|| {
+            format!(
+                "<font color='grey'>💬 {}</font>",
+                whisper_snippet(&s.whisper)
+            )
+        })
+    };
+    let elements = if trace.is_empty() {
+        // No tools yet but text is flowing: stats + whisper in one block.
+        let mut body = stats_line(s);
+        if let Some(w) = whisper_line() {
+            body.push('\n');
+            body.push_str(&w);
+        }
+        vec![json!({ "tag": "markdown", "text_size": "notation", "content": body })]
+    } else {
+        // Stats line, a divider, then the live trace (+ whisper tail).
+        let mut body = trace.join("\n");
+        if let Some(w) = whisper_line() {
+            body.push('\n');
+            body.push_str(&w);
+        }
+        vec![
+            json!({ "tag": "markdown", "text_size": "notation", "content": stats_line(s) }),
+            json!({ "tag": "hr" }),
+            json!({ "tag": "markdown", "text_size": "notation", "content": body }),
+        ]
+    };
+    card_json_elements("blue", &phase_title(s), &elements)
 }
 
 /// Single-line whisper tail for the card body (≤ [`STATUS_TEXT_MAX_CHARS`]).
@@ -563,8 +671,15 @@ fn render_terminal(s: &ObsCardState, settle: &Settle) -> String {
 }
 
 fn card_json(template: &str, title: &str, body_md: &str) -> String {
-    // Compact layout: 400px width, slim header/body padding, 12px notation text,
-    // single markdown element.
+    card_json_elements(
+        template,
+        title,
+        &[json!({ "tag": "markdown", "text_size": "notation", "content": body_md })],
+    )
+}
+
+fn card_json_elements(template: &str, title: &str, elements: &[serde_json::Value]) -> String {
+    // Compact layout: 400px width, slim header/body padding, 12px notation text.
     json!({
         "schema": "2.0",
         "config": { "width_mode": "compact" },
@@ -575,18 +690,20 @@ fn card_json(template: &str, title: &str, body_md: &str) -> String {
         },
         "body": {
             "padding": "8px 12px 8px 12px",
-            "elements": [
-                { "tag": "markdown", "text_size": "notation", "content": body_md },
-            ],
+            "elements": elements,
         },
     })
     .to_string()
 }
 
-/// One-line run stats: elapsed · tool total · tokens (greyed).
+/// One-line run stats: elapsed · steps · tool total · tokens (greyed).
 fn stats_line(s: &ObsCardState) -> String {
     use std::fmt::Write as _;
     let mut line = format!("⏱ {}", fmt_elapsed(s.started_at.elapsed()));
+    let steps = s.trace.step_count();
+    if steps > 0 {
+        let _ = write!(line, " · {steps} steps");
+    }
     if s.tool_count > 0 {
         let _ = write!(line, " · {} tools", s.tool_count);
     }
