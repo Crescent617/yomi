@@ -56,6 +56,61 @@ fn diff_lines(old_str: &str, new_str: &str) -> Vec<(&'static str, String)> {
     result
 }
 
+/// Max diff lines shown for a folded Edit tool; browse-mode expand shows all.
+const FOLDED_EDIT_DIFF_LINES: usize = 10;
+
+/// Push one styled diff line (`add`/`del`/`context`) for the Edit tool view.
+fn push_edit_diff_line(lines: &mut Vec<Arc<Line<'static>>>, ty: &str, text: &str) {
+    let (sign, fg) = match ty {
+        "add" => ("+", colors::accent_success()),
+        "del" => ("−", colors::accent_error()),
+        _ => (" ", colors::text_secondary()),
+    };
+    lines.push(Arc::new(Line::from(vec![
+        Span::styled(
+            chars::MSG_INDENT2_GUIDE,
+            Style::default().fg(colors::text_secondary()),
+        ),
+        Span::styled(format!("{sign} "), Style::default().fg(fg)),
+        Span::styled(preprocess(text), Style::default().fg(fg)),
+    ])));
+}
+
+/// Parse Edit tool arguments into a line diff of `old_str` → `new_str`.
+fn edit_args_diff(arguments: Option<&str>) -> Option<Vec<(&'static str, String)>> {
+    let parsed: serde_json::Value = serde_json::from_str(arguments?).ok()?;
+    let old_str = parsed["old_str"].as_str()?;
+    let new_str = parsed["new_str"].as_str()?;
+    Some(diff_lines(old_str, new_str))
+}
+
+/// Folded Edit preview: render at most `FOLDED_EDIT_DIFF_LINES` diff lines
+/// with an overflow hint. Returns true when a diff was rendered.
+fn render_edit_diff_peek(lines: &mut Vec<Arc<Line<'static>>>, arguments: Option<&str>) -> bool {
+    let Some(diff) = edit_args_diff(arguments) else {
+        return false;
+    };
+    for (ty, text) in diff.iter().take(FOLDED_EDIT_DIFF_LINES) {
+        push_edit_diff_line(lines, ty, text);
+    }
+    let hidden = diff.len().saturating_sub(FOLDED_EDIT_DIFF_LINES);
+    if hidden > 0 {
+        lines.push(Arc::new(Line::from(vec![
+            Span::styled(
+                chars::MSG_INDENT2_GUIDE,
+                Style::default().fg(colors::text_secondary()),
+            ),
+            Span::styled(
+                format!("  +{hidden} more lines (Ctrl+E in browse mode to expand)"),
+                Style::default()
+                    .fg(colors::text_secondary())
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ])));
+    }
+    true
+}
+
 #[allow(clippy::cast_precision_loss)]
 pub fn render_message(msg: &HistoryMessage, width: usize) -> Vec<Arc<Line<'static>>> {
     match msg {
@@ -298,19 +353,28 @@ fn render_tool(
 
     // Output peek in folded mode (max 50 chars, indented)
     if folded {
-        // Show output peek in folded mode (max 2 lines based on width)
-        if let Some(out) = error.or(output) {
-            let trimmed = out.trim();
-            if !trimmed.is_empty() {
-                // Compact whitespace first, then truncate to 2 lines width
-                let compact = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
-                // Total width for 2 lines, minus the " ⎿ " prefix
-                let max_width = width * 2 - 3;
-                let peek = truncate_by_width(&compact, max_width, "...");
-                lines.push(Arc::new(Line::from(vec![
-                    Span::styled(" ⎿ ", Style::default().fg(colors::text_secondary())),
-                    Span::styled(peek, Style::default().fg(colors::text_secondary())),
-                ])));
+        // Edit tool: preview the pending change as a compact diff directly
+        // (capped at FOLDED_EDIT_DIFF_LINES; browse-mode Ctrl+E shows all).
+        let edit_diff_shown =
+            tool_kind(tool_name) == ToolKind::Edit && render_edit_diff_peek(&mut lines, arguments);
+
+        // Show output peek in folded mode (max 2 lines based on width). The
+        // diff already conveys a successful edit, so keep the peek only for
+        // errors or when no diff could be rendered.
+        if error.is_some() || !edit_diff_shown {
+            if let Some(out) = error.or(output) {
+                let trimmed = out.trim();
+                if !trimmed.is_empty() {
+                    // Compact whitespace first, then truncate to 2 lines width
+                    let compact = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
+                    // Total width for 2 lines, minus the " ⎿ " prefix
+                    let max_width = width * 2 - 3;
+                    let peek = truncate_by_width(&compact, max_width, "...");
+                    lines.push(Arc::new(Line::from(vec![
+                        Span::styled(" ⎿ ", Style::default().fg(colors::text_secondary())),
+                        Span::styled(peek, Style::default().fg(colors::text_secondary())),
+                    ])));
+                }
             }
         }
     } else {
@@ -318,28 +382,12 @@ fn render_tool(
         if let Some(args) = arguments {
             if !args.is_empty() {
                 if tool_kind(tool_name) == ToolKind::Edit {
-                    // Special diff view for edit tool
+                    // Special diff view for edit tool (full diff)
                     let mut diff_rendered = false;
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(args) {
-                        if let (Some(old_str), Some(new_str)) =
-                            (parsed["old_str"].as_str(), parsed["new_str"].as_str())
-                        {
-                            diff_rendered = true;
-                            for (ty, text) in diff_lines(old_str, new_str) {
-                                let (sign, fg) = match ty {
-                                    "add" => ("+", colors::accent_success()),
-                                    "del" => ("−", colors::accent_error()),
-                                    _ => (" ", colors::text_secondary()),
-                                };
-                                lines.push(Arc::new(Line::from(vec![
-                                    Span::styled(
-                                        chars::MSG_INDENT2_GUIDE,
-                                        Style::default().fg(colors::text_secondary()),
-                                    ),
-                                    Span::styled(format!("{sign} "), Style::default().fg(fg)),
-                                    Span::styled(preprocess(text), Style::default().fg(fg)),
-                                ])));
-                            }
+                    if let Some(diff) = edit_args_diff(arguments) {
+                        diff_rendered = true;
+                        for (ty, text) in diff {
+                            push_edit_diff_line(&mut lines, ty, &text);
                         }
                     }
                     if !diff_rendered {

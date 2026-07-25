@@ -1,5 +1,140 @@
-use super::{extract_tool_target, tool_icon};
+use super::{extract_tool_target, render_message, tool_icon};
+use crate::components::chat_view::{HistoryMessage, ToolStatus};
 use kernel::tools::POST_MESSAGE_TOOL_NAME;
+
+fn edit_tool_msg(
+    folded: bool,
+    arguments: Option<String>,
+    output: Option<String>,
+    error: Option<String>,
+) -> HistoryMessage {
+    HistoryMessage::Tool {
+        tool_name: "edit".to_string(),
+        tool_id: "call_1".to_string(),
+        status: if error.is_some() {
+            ToolStatus::Failed
+        } else {
+            ToolStatus::Completed
+        },
+        output,
+        error,
+        folded,
+        arguments,
+        elapsed_ms: None,
+        content_blocks: Vec::new(),
+        subagent: None,
+    }
+}
+
+fn rendered_line_texts(msg: &HistoryMessage) -> Vec<String> {
+    render_message(msg, 80)
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        })
+        .collect()
+}
+
+#[test]
+fn folded_edit_shows_compact_diff_instead_of_output_peek() {
+    let args = r#"{"path":"a.rs","old_str":"a\nb\nc","new_str":"a\nx\nc"}"#;
+    let msg = edit_tool_msg(true, Some(args.to_string()), Some("ok".to_string()), None);
+    let lines = rendered_line_texts(&msg);
+
+    assert!(
+        lines.iter().any(|l| l.ends_with("− b")),
+        "del line: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.ends_with("+ x")),
+        "add line: {lines:?}"
+    );
+    // Successful edit: the diff replaces the noisy output peek.
+    assert!(!lines.iter().any(|l| l.contains('⎿')), "peek: {lines:?}");
+    assert!(!lines.iter().any(|l| l.contains("Arguments:")));
+}
+
+#[test]
+fn folded_edit_caps_diff_at_ten_lines_with_expand_hint() {
+    let old = (1..=8)
+        .map(|i| format!("old{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let new = (1..=8)
+        .map(|i| format!("new{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let args = serde_json::json!({"path":"a.rs","old_str":old,"new_str":new}).to_string();
+    let msg = edit_tool_msg(true, Some(args), None, None);
+    let lines = rendered_line_texts(&msg);
+
+    // header + 10 diff lines + 1 overflow hint
+    assert_eq!(lines.len(), 12, "{lines:?}");
+    assert!(
+        lines.last().unwrap().contains("+6 more lines"),
+        "hint: {lines:?}"
+    );
+}
+
+#[test]
+fn unfolded_edit_shows_full_diff_without_hint() {
+    let old = (1..=8)
+        .map(|i| format!("old{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let new = (1..=8)
+        .map(|i| format!("new{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let args = serde_json::json!({"path":"a.rs","old_str":old,"new_str":new}).to_string();
+    let msg = edit_tool_msg(false, Some(args), None, None);
+    let lines = rendered_line_texts(&msg);
+
+    assert!(!lines.iter().any(|l| l.contains("more lines")));
+    assert!(lines.iter().any(|l| l.ends_with("− old8")));
+    assert!(lines.iter().any(|l| l.ends_with("+ new8")));
+}
+
+#[test]
+fn folded_edit_keeps_error_peek_alongside_diff() {
+    let args = serde_json::json!({"path":"a.rs","old_str":"a","new_str":"b"}).to_string();
+    let msg = edit_tool_msg(
+        true,
+        Some(args),
+        None,
+        Some("old_str not found".to_string()),
+    );
+    let lines = rendered_line_texts(&msg);
+
+    assert!(lines.iter().any(|l| l.ends_with("+ b")));
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains('⎿') && l.contains("old_str not found")),
+        "error peek: {lines:?}"
+    );
+}
+
+#[test]
+fn folded_edit_without_parseable_args_falls_back_to_output_peek() {
+    let msg = edit_tool_msg(
+        true,
+        Some("not json".to_string()),
+        Some("done ok".to_string()),
+        None,
+    );
+    let lines = rendered_line_texts(&msg);
+
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains('⎿') && l.contains("done ok")),
+        "peek: {lines:?}"
+    );
+}
 
 #[test]
 fn post_message_uses_recipient_as_target() {
