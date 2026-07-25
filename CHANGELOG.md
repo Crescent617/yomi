@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-07-25
+
+### Changed
+- edit 工具移除 read-before-edit 与 staleness 强制检查：编辑前不再要求先读文件，也不再因文件 mtime 变化拒绝编辑；唯一保障是 `old_str` 必须匹配文件当前字节（匹配失败即报错，自然促使重读）。外部改动只触及无关区域且 `old_str` 仍可匹配时，编辑直接生效，不再被误拒。
+- 文件「已知」状态现在只能由 read / grep（content 模式展示过的文件）/ write 创建来建立；edit 与 append 仅刷新已知文件的 mtime，不再能把从未读过的文件标记为已知——关闭 blind edit / blind append 解锁 blind overwrite 的侧门。record 样板收敛为 `FileStateStore::refresh` / `refresh_if_known`。
+- write 覆写成为唯一硬 gate（read-first + staleness，语义不变）；staleness 报错现携带文件路径，并行工具调用时可定位；edit 在读取前文件被并发删除时返回友好报错而非裸 IO 错误。
+
+### Removed
+- 删除无调用方的 `FileStateAwareTool` trait。
+
 ## [0.7.0] - 2026-07-24
 
 ### Added
