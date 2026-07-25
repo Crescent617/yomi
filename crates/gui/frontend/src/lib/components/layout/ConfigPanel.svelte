@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { Menu, MonitorCog, SlidersHorizontal } from "lucide-svelte";
+  import { Menu, MonitorCog, Palette, SlidersHorizontal } from "lucide-svelte";
   import { appState } from "../../state.svelte";
   import ApplicationConfigPanel from "./ApplicationConfigPanel.svelte";
   import ConfigEditor from "./ConfigEditor.svelte";
+  import ThemePanel from "./ThemePanel.svelte";
 
   interface Props {
     onToggleLeftPanel?: () => void;
@@ -10,7 +11,7 @@
 
   let { onToggleLeftPanel }: Props = $props();
 
-  type Section = "application" | "kernel";
+  type Section = "application" | "themes" | "kernel";
 
   let section = $state<Section>("application");
   let applicationDirty = $state(false);
@@ -56,16 +57,24 @@
       aria-current={section === "application" ? "page" : undefined}
     >
       <SlidersHorizontal size={15} />
-      <span>
-        <span class="block text-xs font-medium">Application</span>
-        <span class="hidden text-[10px] text-muted-foreground sm:block"
-          >Appearance and behavior</span
-        >
-      </span>
+      <span class="text-xs font-medium">Application</span>
       {#if applicationDirty}
         <span class="h-1.5 w-1.5 rounded-full bg-warning" aria-label="Unsaved"
         ></span>
       {/if}
+    </button>
+
+    <button
+      type="button"
+      onclick={() => selectSection("themes")}
+      class="group flex min-w-0 items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors {section ===
+      'themes'
+        ? 'bg-secondary text-foreground'
+        : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'}"
+      aria-current={section === "themes" ? "page" : undefined}
+    >
+      <Palette size={15} />
+      <span class="text-xs font-medium">Themes</span>
     </button>
 
     <button
@@ -78,12 +87,7 @@
       aria-current={section === "kernel" ? "page" : undefined}
     >
       <MonitorCog size={15} />
-      <span>
-        <span class="block text-xs font-medium">Kernel</span>
-        <span class="hidden text-[10px] text-muted-foreground sm:block"
-          >Models, agents and channels</span
-        >
-      </span>
+      <span class="text-xs font-medium">Kernel</span>
       {#if appState.config_dirty}
         <span class="h-1.5 w-1.5 rounded-full bg-warning" aria-label="Unsaved"
         ></span>
@@ -93,6 +97,8 @@
 
   {#if section === "application"}
     <ApplicationConfigPanel onDirtyChange={setApplicationDirty} />
+  {:else if section === "themes"}
+    <ThemePanel />
   {:else}
     <ConfigEditor />
   {/if}

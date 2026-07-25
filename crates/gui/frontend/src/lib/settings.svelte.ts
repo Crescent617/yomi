@@ -1,7 +1,12 @@
-import { Store } from "@tauri-apps/plugin-store";
+import type { Store } from "@tauri-apps/plugin-store";
 import type { PermissionLevel } from "./permission";
+import { getSettingsStore } from "./settings-store";
+import {
+  applyColorThemeById,
+  DEFAULT_THEME_ID,
+  initCustomThemes,
+} from "./themes/themes.svelte";
 
-const STORAGE_FILE = "yomi-gui-settings";
 const PREFERENCES_KEY = "gui_preferences";
 const LEGACY_SETTINGS_KEY = "settings";
 const LEGACY_HOME_MODEL_KEY = "home_model";
@@ -19,6 +24,8 @@ export interface GuiPreferences {
   schemaVersion: 1;
   appearance: {
     theme: ThemePreference;
+    /** Color theme id (builtin or custom), resolved by the themes module. */
+    theme_id: string;
     fontSize: FontSizePreference;
   };
   layout: {
@@ -61,6 +68,7 @@ export const defaultGuiPreferences: GuiPreferences = {
   schemaVersion: 1,
   appearance: {
     theme: "system",
+    theme_id: DEFAULT_THEME_ID,
     fontSize: "base",
   },
   layout: {
@@ -92,7 +100,6 @@ export const guiPreferences = $state<GuiPreferences>(
   cloneGuiPreferences(defaultGuiPreferences),
 );
 
-let store: Store | null = null;
 let initialized = false;
 let initialization: Promise<void> | null = null;
 const PREFERENCE_SAVE_DEBOUNCE_MS = 250;
@@ -152,6 +159,10 @@ function normalizeGuiPreferences(
     schemaVersion: 1,
     appearance: {
       theme: value?.appearance?.theme ?? defaultGuiPreferences.appearance.theme,
+      theme_id:
+        typeof value?.appearance?.theme_id === "string"
+          ? value.appearance.theme_id
+          : defaultGuiPreferences.appearance.theme_id,
       fontSize:
         value?.appearance?.fontSize ??
         defaultGuiPreferences.appearance.fontSize,
@@ -217,11 +228,6 @@ function assignGuiPreferences(value: GuiPreferences): void {
   Object.assign(guiPreferences.connection, value.connection);
 }
 
-async function getStore(): Promise<Store> {
-  if (!store) store = await Store.load(STORAGE_FILE);
-  return store;
-}
-
 async function loadLegacyPreferences(s: Store): Promise<GuiPreferences> {
   const legacySettings =
     (await s.get<LegacyAppSettings>(LEGACY_SETTINGS_KEY)) ?? {};
@@ -230,6 +236,7 @@ async function loadLegacyPreferences(s: Store): Promise<GuiPreferences> {
   return normalizeGuiPreferences({
     appearance: {
       theme: legacySettings.theme ?? defaultGuiPreferences.appearance.theme,
+      theme_id: defaultGuiPreferences.appearance.theme_id,
       fontSize:
         legacySettings.fontSize ?? defaultGuiPreferences.appearance.fontSize,
     },
@@ -265,7 +272,7 @@ async function loadLegacyPreferences(s: Store): Promise<GuiPreferences> {
 }
 
 async function loadGuiPreferences(): Promise<GuiPreferences> {
-  const s = await getStore();
+  const s = await getSettingsStore();
   const saved = await s.get<Partial<GuiPreferences>>(PREFERENCES_KEY);
   if (saved) return normalizeGuiPreferences(saved);
 
@@ -280,6 +287,8 @@ export async function initSettings(): Promise<void> {
   if (initialization) return initialization;
 
   initialization = (async () => {
+    // Custom themes must be loaded before the active palette can resolve.
+    await initCustomThemes();
     try {
       const loaded = await loadGuiPreferences();
       assignGuiPreferences(loaded);
@@ -312,7 +321,7 @@ async function persistGuiPreferences(
   normalized: GuiPreferences,
   revision: number,
 ): Promise<void> {
-  const s = await getStore();
+  const s = await getSettingsStore();
   await s.set(PREFERENCES_KEY, normalized);
   await s.save();
   if (revision === preferenceSaveRevision) {
@@ -373,6 +382,8 @@ export function applyTheme(theme: ThemePreference): void {
     (theme === "system" &&
       window.matchMedia("(prefers-color-scheme: dark)").matches);
   root.classList.toggle("dark", dark);
+  // Re-apply the active color theme so its palette matches the new mode.
+  applyColorThemeById(guiPreferences.appearance.theme_id, dark);
   window.dispatchEvent(new CustomEvent("theme-changed", { detail: { theme } }));
 }
 

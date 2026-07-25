@@ -6,18 +6,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <script>
       (function () {
-        const theme = localStorage.getItem("yomi-gui-settings");
-        let mode = "system";
+        // Apply the cached color theme pre-paint (mirrored by the themes
+        // module on every apply). Without a cache the app boots light and
+        // the settings module applies the real theme right after load.
         try {
-          mode = JSON.parse(theme)?.theme || "system";
+          var cache = JSON.parse(
+            localStorage.getItem("yomi-gui-active-theme") || "null",
+          );
+          if (cache && cache.vars) {
+            if (cache.dark) {
+              document.documentElement.classList.add("dark");
+            }
+            var style = document.documentElement.style;
+            for (var name in cache.vars) {
+              style.setProperty(name, cache.vars[name]);
+            }
+          }
         } catch (e) {}
-        if (
-          mode === "dark" ||
-          (mode === "system" &&
-            window.matchMedia("(prefers-color-scheme: dark)").matches)
-        ) {
-          document.documentElement.classList.add("dark");
-        }
       })();
     </script>
     %sveltekit.head%
