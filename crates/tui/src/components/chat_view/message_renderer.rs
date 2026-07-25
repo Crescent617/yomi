@@ -17,6 +17,7 @@ use crate::utils::text::{humanize_tool_name, preprocess, truncate_by_chars, trun
 
 use kernel::types::{ContentBlock, ToolOutputBlock};
 use kernel::utils::tokens;
+use unicode_width::UnicodeWidthStr;
 
 /// Line-level diff: returns a list of (type, text) pairs.
 fn diff_lines(old_str: &str, new_str: &str) -> Vec<(&'static str, String)> {
@@ -126,6 +127,7 @@ pub fn render_message(msg: &HistoryMessage, width: usize) -> Vec<Arc<Line<'stati
             thinking.as_deref(),
             *thinking_folded,
             *thinking_elapsed_ms,
+            width,
         ),
         HistoryMessage::Tool {
             tool_name,
@@ -244,13 +246,14 @@ fn render_assistant(
     thinking: Option<&str>,
     thinking_folded: bool,
     thinking_elapsed_ms: Option<u64>,
+    width: usize,
 ) -> Vec<Arc<Line<'static>>> {
     let mut lines = Vec::new();
 
     // Render thinking summary (folded) or detail (expanded)
     let thinking_lines = thinking
         .as_ref()
-        .map(|t| render_thinking_lines(t, thinking_folded, thinking_elapsed_ms))
+        .map(|t| render_thinking_lines(t, thinking_folded, thinking_elapsed_ms, false, width))
         .unwrap_or_default();
     let thinking_rendered = !thinking_lines.is_empty();
     lines.extend(thinking_lines);
@@ -805,43 +808,106 @@ pub fn render_queued_message(blocks: &[ContentBlock]) -> Vec<Arc<Line<'static>>>
     lines
 }
 
-/// Render thinking content with optional elapsed time
+/// Number of trailing thinking lines shown as preview when folded.
+const THINKING_PREVIEW_LINES: usize = 4;
+
+/// Render thinking content.
 ///
-/// Returns true if thinking was rendered (i.e., thinking was non-empty)
+/// - Folded: up to [`THINKING_PREVIEW_LINES`] preview rows showing the last
+///   non-empty lines (empty lines are filtered out), each truncated to a
+///   single visual row. Token/elapsed stats are appended inline to the last
+///   preview row once completed; while streaming no stats are shown (the
+///   `InfoBar` covers live status). Row count is identical between streaming
+///   and completed states (except whitespace-only thinking), so the block
+///   height never jumps on flush.
+/// - Expanded: full content, no stats.
+///
+/// Returns empty vec if thinking is empty.
 #[allow(clippy::cast_precision_loss)]
 pub fn render_thinking_lines(
     thinking: &str,
     is_folded: bool,
     elapsed_ms: Option<u64>,
+    is_streaming: bool,
+    width: usize,
 ) -> Vec<Arc<Line<'static>>> {
     if thinking.is_empty() {
         return Vec::new();
     }
 
+    let guide = || {
+        Span::styled(
+            chars::MSG_INDENT_GUIDE,
+            Style::default().fg(colors::text_secondary()),
+        )
+    };
+    // Italic marks thinking as internal monologue and visually separates it
+    // from tool output above/below, which is dim but never italic.
+    let content_style = Style::default()
+        .fg(colors::text_secondary())
+        .add_modifier(Modifier::ITALIC);
+
     let mut lines = Vec::new();
-    let tokens = tokens::estimate_tokens(thinking);
-    let elapsed_str = elapsed_ms
-        .map(|ms| format!(" · {:.1}s", ms as f64 / 1000.0))
-        .unwrap_or_default();
 
-    lines.push(Arc::new(Line::from(vec![Span::styled(
-        format!(" Thinking ({tokens} tokens){elapsed_str}"),
-        Style::default()
-            .fg(colors::text_secondary())
-            .add_modifier(Modifier::ITALIC),
-    )])));
+    if is_folded {
+        // "│ " guide occupies 2 display columns.
+        let avail = width.saturating_sub(2);
 
-    if !is_folded {
+        // Stats are appended inline to the last preview row (no dedicated
+        // row). Truncate stats itself so the row never exceeds `width`.
+        let stats = if is_streaming {
+            None
+        } else {
+            let token_count = tokens::estimate_tokens(thinking);
+            let elapsed_str = elapsed_ms
+                .map(|ms| format!(" · {:.1}s", ms as f64 / 1000.0))
+                .unwrap_or_default();
+            let raw = format!("··· {token_count} tokens{elapsed_str}");
+            Some(truncate_by_width(&raw, avail.saturating_sub(2), "…"))
+        };
+        let stats_reserve = stats
+            .as_ref()
+            .map_or(0, |s| UnicodeWidthStr::width(s.as_str()) + 2);
+
+        // Preview shows the last non-empty lines; empty lines are filtered.
+        let mut tail: Vec<&str> = thinking
+            .lines()
+            .rev()
+            .filter(|l| !l.trim().is_empty())
+            .take(THINKING_PREVIEW_LINES)
+            .collect();
+        tail.reverse();
+
+        let last_idx = tail.len().saturating_sub(1);
+        for (i, line) in tail.iter().enumerate() {
+            let is_last = i == last_idx;
+            let reserve = if is_last { stats_reserve } else { 0 };
+            let mut spans = vec![
+                guide(),
+                Span::styled(
+                    truncate_by_width(&preprocess(line), avail.saturating_sub(reserve), "..."),
+                    content_style,
+                ),
+            ];
+            if is_last {
+                if let Some(ref s) = stats {
+                    spans.push(Span::styled(format!("  {s}"), content_style));
+                }
+            }
+            lines.push(Arc::new(Line::from(spans)));
+        }
+
+        // Whitespace-only thinking: stats (when completed) still get a row.
+        if tail.is_empty() {
+            if let Some(s) = stats {
+                lines.push(Arc::new(Line::from(Span::styled(s, content_style))));
+            }
+        }
+    } else {
         for line in thinking.lines() {
             lines.push(Arc::new(Line::from(vec![
-                Span::styled(
-                    chars::MSG_INDENT_GUIDE,
-                    Style::default().fg(colors::text_secondary()),
-                ),
-                Span::styled(
-                    preprocess(line),
-                    Style::default().fg(colors::text_secondary()),
-                ),
+                guide(),
+                Span::styled(preprocess(line), content_style),
             ])));
         }
     }

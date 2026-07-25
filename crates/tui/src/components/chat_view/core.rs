@@ -708,7 +708,7 @@ impl ChatView {
         }
     }
 
-    fn render_streaming(&mut self) -> Vec<Arc<Line<'static>>> {
+    fn render_streaming(&mut self, width: usize) -> Vec<Arc<Line<'static>>> {
         let mut lines = Vec::new();
 
         // Render thinking if present (collapsed by default, expanded in expand_all mode)
@@ -716,6 +716,8 @@ impl ChatView {
             &self.streaming_thinking,
             !self.expand_all,
             None,
+            true,
+            width,
         ));
 
         // Render content (no indicator, status shown in status bar)
@@ -1294,7 +1296,7 @@ impl Component for ChatView {
             || !self.streaming_content.is_empty()
             || !self.streaming_thinking.is_empty();
         if has_streaming {
-            let streaming_lines = self.render_streaming();
+            let streaming_lines = self.render_streaming(width);
             self.all_lines.extend(streaming_lines);
         }
         if let Some(ref queued) = self.queued_message {
