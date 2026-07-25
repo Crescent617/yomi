@@ -1,6 +1,5 @@
 import type { ErrorMessage, Message } from "../../state.svelte";
 import { findThinking, hasText } from "../../session";
-import { isActivityTail } from "./activity-group";
 
 export type DisplayItem =
   | { type: "message"; message: Message; isStreaming: boolean }
@@ -9,7 +8,6 @@ export type DisplayItem =
       type: "action_group";
       messages: Message[];
       isStreaming: boolean;
-      isActiveActivity: boolean;
     };
 
 export type KeyedDisplayItem = DisplayItem & { key: string };
@@ -23,7 +21,6 @@ export interface DisplayItemSections {
 export function buildDisplayItems(
   messages: Message[],
   streaming: boolean,
-  activityActive: boolean,
 ): DisplayItem[] {
   const items: DisplayItem[] = [];
   let group: Message[] = [];
@@ -44,8 +41,6 @@ export function buildDisplayItems(
         type: "action_group",
         messages: [...group],
         isStreaming: streaming && isTailGroup,
-        isActiveActivity:
-          activityActive && isTailGroup && isActivityTail(messages.at(-1)),
       });
       group = [];
     }
@@ -136,6 +131,19 @@ export function keyDisplayItems(items: DisplayItem[]): KeyedDisplayItem[] {
 }
 
 /**
+ * Index of the live activity group: the last item, when it is an action group.
+ * Liveness is positional — the group holding the latest message stays live for
+ * the whole run regardless of what shape that message currently has. Folding on
+ * streamed text is deliberately avoided: interstitial text before further tool
+ * calls is indistinguishable from the final answer mid-stream, so a
+ * message-shape heuristic flaps (collapse, then sudden re-expand). Returns -1
+ * when the tail is not an activity group.
+ */
+export function liveActivityIndex(items: DisplayItem[]): number {
+  return items.at(-1)?.type === "action_group" ? items.length - 1 : -1;
+}
+
+/**
  * Incremental projection for append-only committed messages. A rewrite epoch
  * invalidates the projection. The last committed message always stays dynamic,
  * so streaming/activity flags never need to mutate sealed items.
@@ -153,7 +161,6 @@ export class DisplayItemProjection {
     rewriteRevision: number,
     streamingMessages: Message[],
     streaming: boolean,
-    activityActive: boolean,
   ): DisplayItemSections {
     const epoch = `${sessionId}:${rewriteRevision}`;
     if (
@@ -183,7 +190,7 @@ export class DisplayItemProjection {
       );
       this.sealedItems = [
         ...this.sealedItems,
-        ...buildDisplayItems(newlySealed, false, false),
+        ...buildDisplayItems(newlySealed, false),
       ];
       this.sealedMessageCount = sealEnd;
     }
@@ -195,11 +202,7 @@ export class DisplayItemProjection {
 
     return {
       stableItems: this.sealedItems,
-      dynamicItems: buildDisplayItems(
-        dynamicMessages,
-        streaming,
-        activityActive,
-      ),
+      dynamicItems: buildDisplayItems(dynamicMessages, streaming),
       tailMessages:
         dynamicMessages.length > 0
           ? dynamicMessages

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { textFromBlocks, hasText } from "../../session";
   import type { DisplayItem } from "./display-items";
-  import { keyDisplayItems } from "./display-items";
+  import { keyDisplayItems, liveActivityIndex } from "./display-items";
   import UserBubble from "./UserBubble.svelte";
   import AssistantBubble from "./AssistantBubble.svelte";
   import SteerBlock from "./SteerBlock.svelte";
@@ -17,11 +17,13 @@
     items,
     session_id,
     markLatest = true,
+    activityActive = false,
     expansionOverrides,
   }: {
     items: DisplayItem[];
     session_id: string;
     markLatest?: boolean;
+    activityActive?: boolean;
     expansionOverrides: Record<string, ActivityGroupOverride>;
   } = $props();
 
@@ -30,6 +32,9 @@
     markLatest
       ? keyedItems.findLastIndex((item) => item.type === "action_group")
       : -1,
+  );
+  const liveIndex = $derived(
+    activityActive ? liveActivityIndex(keyedItems) : -1,
   );
 </script>
 
@@ -78,7 +83,7 @@
     <div class="group relative -mb-2 space-y-1">
       <ActivityGroup
         messages={item.messages}
-        isActiveActivity={item.isActiveActivity}
+        isActiveActivity={itemIndex === liveIndex}
         isLatestActivity={itemIndex === lastActivityIndex}
         expansionOverride={expansionOverrides[item.key] ?? null}
         onExpansionOverride={(override) =>

@@ -28,7 +28,6 @@
       activeSession.message_rewrite_revision,
       streamingMessages[activeSession.id] ?? [],
       activeSession.phase === "streaming",
-      isActiveSessionPhase(activeSession.phase),
     );
   });
   const displayMessages = $derived(displaySections.tailMessages);
@@ -209,6 +208,7 @@
           <DisplayItemList
             items={displaySections.dynamicItems}
             session_id={activeSession.id}
+            activityActive={isActiveSessionPhase(activeSession.phase)}
             expansionOverrides={activityExpansionOverrides}
           />
           {#if isActiveSessionPhase(activeSession.phase)}

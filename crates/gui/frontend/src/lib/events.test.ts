@@ -2,7 +2,10 @@ import { describe, expect, test } from "vitest";
 import { sessionState, streamingMessages } from "./state.svelte";
 import { createSessionState } from "./session";
 import { isActiveSessionPhase } from "./session-phase";
-import { buildDisplayItems } from "./components/chat/display-items";
+import {
+  buildDisplayItems,
+  liveActivityIndex,
+} from "./components/chat/display-items";
 import { handleEvent } from "./events";
 
 describe("tool event streaming", () => {
@@ -131,13 +134,13 @@ describe("tool event streaming", () => {
     });
 
     const messages = streamingMessages[sessionId] ?? [];
-    const groups = buildDisplayItems(messages, true, true);
+    const groups = buildDisplayItems(messages, true);
 
     expect(groups).toHaveLength(1);
     expect(groups[0]).toMatchObject({
       type: "action_group",
-      isActiveActivity: true,
     });
+    expect(liveActivityIndex(groups)).toBe(0);
     expect(isActiveSessionPhase(session.phase)).toBe(true);
 
     handleEvent(sessionId, "follow-up-chunk", {
@@ -158,7 +161,6 @@ describe("tool event streaming", () => {
     const followUpGroups = buildDisplayItems(
       streamingMessages[sessionId] ?? [],
       true,
-      true,
     );
     expect(followUpGroups).toEqual(
       expect.arrayContaining([
@@ -168,12 +170,8 @@ describe("tool event streaming", () => {
         }),
       ]),
     );
-    expect(
-      followUpGroups.some(
-        (item) =>
-          item.type === "action_group" && item.isActiveActivity === true,
-      ),
-    ).toBe(false);
+    // The follow-up text takes over the tail, so no live activity group.
+    expect(liveActivityIndex(followUpGroups)).toBe(-1);
   });
 
   test("does not merge different message ids that reuse a tool id", () => {

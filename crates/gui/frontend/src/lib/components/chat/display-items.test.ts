@@ -12,6 +12,7 @@ import {
   buildDisplayItems,
   DisplayItemProjection,
   keyDisplayItems,
+  liveActivityIndex,
 } from "./display-items";
 
 describe("message display item projection", () => {
@@ -77,23 +78,13 @@ describe("message display item projection", () => {
               type: item.type,
               ids: item.messages.map((message) => message.id),
               ...(item.type === "action_group"
-                ? {
-                    isStreaming: item.isStreaming,
-                    isActiveActivity: item.isActiveActivity,
-                  }
+                ? { isStreaming: item.isStreaming }
                 : {}),
             },
       );
 
-    const compare = (label: string, streaming: boolean, active: boolean) => {
-      const sections = cache.update(
-        "session-a",
-        stable,
-        0,
-        stream,
-        streaming,
-        active,
-      );
+    const compare = (label: string, streaming: boolean) => {
+      const sections = cache.update("session-a", stable, 0, stream, streaming);
       const stableIds = new Set(stable.map((message) => message.id));
       const effectiveStream = stream.filter(
         (message) => !stableIds.has(message.id),
@@ -115,20 +106,19 @@ describe("message display item projection", () => {
               buildDisplayItems(
                 fullMessages,
                 streaming && (effectiveStream.length > 0 || stableTailIsOpen),
-                active,
               ),
             ),
           ),
       });
     };
 
-    compare("user boundary", false, false);
+    compare("user boundary", false);
 
     const streamingAssistant = assistant("a1", [
       { type: "thinking", thinking: "hmm" },
     ]);
     stream = [streamingAssistant];
-    compare("thinking", true, true);
+    compare("thinking", true);
 
     streamingAssistant.content.push({ type: "text", text: "calling" });
     streamingAssistant.tool_calls = [
@@ -136,27 +126,27 @@ describe("message display item projection", () => {
     ];
     const streamingTool = tool("t1");
     stream.push(streamingTool);
-    compare("thinking tool and text", true, true);
+    compare("thinking tool and text", true);
 
     streamingTool.status = "completed";
     stream.push(assistant("a2", [{ type: "text", text: "done" }]));
-    compare("plain streaming text", true, true);
+    compare("plain streaming text", true);
 
     stable = [...stable, ...stream];
     stream = [];
-    compare("committed stream", false, false);
+    compare("committed stream", false);
 
     stable = [...stable, error("e1"), error("e2")];
-    compare("trailing errors", false, false);
+    compare("trailing errors", false);
 
     const stableTool = tool("stable-tool");
     stable.push(stableTool);
-    compare("stable open tool", true, true);
+    compare("stable open tool", true);
     stableTool.status = "completed";
-    compare("mutated stable open tool", true, true);
+    compare("mutated stable open tool", true);
 
     stream = [steer("s1", "redirect")];
-    compare("steer boundary", true, true);
+    compare("steer boundary", true);
 
     stable = [...stable, ...stream];
     stream = [assistant("dup", [{ type: "text", text: "stable wins" }])];
@@ -164,13 +154,13 @@ describe("message display item projection", () => {
       ...stable,
       assistant("dup", [{ type: "text", text: "committed" }]),
     ];
-    compare("stable duplicate stream id", true, true);
+    compare("stable duplicate stream id", true);
 
     stream = [
       assistant("stream-dup", [{ type: "text", text: "one" }]),
       assistant("stream-dup", [{ type: "text", text: "two" }]),
     ];
-    compare("duplicates inside stream remain", true, true);
+    compare("duplicates inside stream remain", true);
 
     expect(results).toEqual(
       results.map(({ label }) => ({ label, equal: true })),
@@ -199,7 +189,7 @@ describe("message display item projection", () => {
     };
     const cache = new DisplayItemProjection();
 
-    const initial = cache.update("session-a", [user], 0, [], false, false);
+    const initial = cache.update("session-a", [user], 0, [], false);
     const initialItems = initial.stableItems;
     expect(initialItems).toHaveLength(1);
     expect(initialItems[0]).toMatchObject({
@@ -213,7 +203,6 @@ describe("message display item projection", () => {
       0,
       [streaming],
       true,
-      true,
     );
     expect(duringStream.stableItems).toBe(initialItems);
 
@@ -222,7 +211,6 @@ describe("message display item projection", () => {
       [user, assistant],
       0,
       [],
-      false,
       false,
     );
     expect(afterAppend.stableItems).not.toBe(initialItems);
@@ -234,7 +222,6 @@ describe("message display item projection", () => {
       [user, assistant],
       0,
       [streaming],
-      true,
       true,
     );
     expect(nextStream.stableItems).toBe(appendedItems);
@@ -257,19 +244,12 @@ describe("message display item projection", () => {
     const cache = new DisplayItemProjection();
     let revision = 0;
     const update = (session: string, stable: ReturnType<typeof message>[]) => {
-      const sections = cache.update(
-        session,
-        stable,
-        revision,
-        [],
-        false,
-        false,
-      );
+      const sections = cache.update(session, stable, revision, [], false);
       const optimized = ids([
         ...sections.stableItems,
         ...sections.dynamicItems,
       ]);
-      const full = ids(buildDisplayItems(stable, false, false));
+      const full = ids(buildDisplayItems(stable, false));
       return JSON.stringify(optimized) === JSON.stringify(full)
         ? optimized
         : ["cache-mismatch"];
@@ -318,15 +298,15 @@ test("invalidates cached groups when assistant structure changes in place", () =
   };
   const stable: Message[] = [assistant, tool, boundary];
   const cache = new DisplayItemProjection();
-  const before = cache.update("session-a", stable, 0, [], false, false);
+  const before = cache.update("session-a", stable, 0, [], false);
 
   assistant.content.push({ type: "text", text: "done" });
-  const after = cache.update("session-a", stable, 1, [], false, false);
+  const after = cache.update("session-a", stable, 1, [], false);
 
   expect(after.stableItems).not.toBe(before.stableItems);
   const projected = [...after.stableItems, ...after.dynamicItems];
   expect(projected.map((item) => item.type)).toEqual(
-    buildDisplayItems(stable, false, false).map((item) => item.type),
+    buildDisplayItems(stable, false).map((item) => item.type),
   );
   expect(projected).toHaveLength(3);
 });
@@ -351,12 +331,12 @@ test("preserves cached items for non-structural in-place mutations", () => {
   };
   const stable: Message[] = [tool, boundary];
   const cache = new DisplayItemProjection();
-  const before = cache.update("session-a", stable, 0, [], false, false);
+  const before = cache.update("session-a", stable, 0, [], false);
 
   tool.status = "completed";
   tool.result = [{ type: "text", text: "done" }];
   tool.elapsed_ms = 42;
-  const after = cache.update("session-a", stable, 0, [], false, false);
+  const after = cache.update("session-a", stable, 0, [], false);
 
   expect(after.stableItems).toBe(before.stableItems);
   expect(after.stableItems[0]).toBe(before.stableItems[0]);
@@ -381,7 +361,7 @@ test("seals a closed committed tail away from later streaming updates", () => {
   ];
   const cache = new DisplayItemProjection();
 
-  const first = cache.update("session-a", messages, 0, [], false, false);
+  const first = cache.update("session-a", messages, 0, [], false);
   expect(first.stableItems).toHaveLength(2);
   expect(first.dynamicItems).toEqual([]);
 
@@ -392,18 +372,46 @@ test("seals a closed committed tail away from later streaming updates", () => {
     content: [{ type: "text", text: "working" }],
     created_at,
   };
-  const second = cache.update(
-    "session-a",
-    messages,
-    0,
-    [streaming],
-    true,
-    false,
-  );
+  const second = cache.update("session-a", messages, 0, [streaming], true);
   expect(second.stableItems).toBe(sealedItems);
   expect(second.dynamicItems).toMatchObject([
     { type: "message", message: streaming, isStreaming: true },
   ]);
+});
+
+test("keeps the same live activity group while interstitial text streams", () => {
+  const created_at = "2026-01-01T00:00:00.000Z";
+  const message: BotMessage = {
+    id: "assistant-1",
+    type: "assistant",
+    content: [{ type: "thinking", thinking: "working" }],
+    created_at,
+  };
+
+  // Thinking streams first: the tail group is the live activity.
+  let items = buildDisplayItems([message], true);
+  expect(liveActivityIndex(items)).toBe(0);
+
+  // Interstitial text arrives: the group must stay live — the text may still
+  // be followed by tool calls, so it cannot be judged final mid-stream.
+  message.content.push({ type: "text", text: "Let me check a file" });
+  items = buildDisplayItems([message], true);
+  expect(liveActivityIndex(items)).toBe(0);
+
+  // Tool calls follow on the same message: same live group, no flap.
+  message.tool_calls = [{ id: "call-1", name: "read", arguments: "{}" }];
+  items = buildDisplayItems([message], true);
+  expect(liveActivityIndex(items)).toBe(0);
+
+  // A trailing standalone message (the final answer) takes over the tail.
+  const answer: BotMessage = {
+    id: "assistant-2",
+    type: "assistant",
+    content: [{ type: "text", text: "done" }],
+    created_at,
+  };
+  items = buildDisplayItems([message, answer], true);
+  expect(liveActivityIndex(items)).toBe(-1);
 });
 
 test("uses occurrence keys without coupling identity to absolute position", () => {
@@ -416,7 +424,6 @@ test("uses occurrence keys without coupling identity to absolute position", () =
   });
   const duplicateItems = buildDisplayItems(
     [assistant("dup", "one"), assistant("dup", "two")],
-    false,
     false,
   );
   const before = keyDisplayItems(duplicateItems).map((item) => item.key);
@@ -431,7 +438,6 @@ test("uses occurrence keys without coupling identity to absolute position", () =
       assistant("dup", "one"),
       assistant("dup", "two"),
     ],
-    false,
     false,
   );
   const after = keyDisplayItems(prefix).map((item) => item.key);
