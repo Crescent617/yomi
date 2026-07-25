@@ -37,6 +37,8 @@ const WHISPER_BUFFER_CHARS: usize = 200;
 /// Max length (chars, ellipsis included) for dynamic text lines on the
 /// status card body (whisper, last tool).
 const STATUS_TEXT_MAX_CHARS: usize = 100;
+/// Trace entries shown live on the status card (most recent kept).
+const STATUS_TRACE_MAX_ENTRIES: usize = 10;
 
 const PHASE_THINKING: &str = "💭 Thinking…";
 const PHASE_TYPING: &str = "🐾 Typing…";
@@ -53,8 +55,8 @@ struct ObsCardState {
     phase: String,
     /// Total tool executions (per-tool breakdown is not kept).
     tool_count: u32,
-    /// Last tool call one-liner (`name · arg summary`), from `ToolEvent::Start`.
-    last_tool: Option<String>,
+    /// The full run trace shown live on the status card.
+    trace: reply::RunReplyBuffer,
     /// Live tail of the assistant's in-progress text output ("whisper").
     whisper: String,
     token_footer: Option<String>,
@@ -75,7 +77,7 @@ impl ObsCardState {
             started_at: now,
             phase: PHASE_THINKING.to_string(),
             tool_count: 0,
-            last_tool: None,
+            trace: reply::RunReplyBuffer::new(),
             whisper: String::new(),
             token_footer: None,
             last_patch_at: now,
@@ -212,26 +214,34 @@ impl ObsTracker {
                 self.handle_stopped(session_id, reason, None).await;
             }
             Event::Tool(ToolEvent::Start {
+                tool_id,
                 tool_name,
                 arguments,
                 ..
             }) => {
+                let tool_id = tool_id.clone();
                 let tool_name = tool_name.clone();
-                let summary = super::reply::summarize_args(&tool_name, arguments.as_deref());
+                let arguments = arguments.clone();
                 self.update_running(session_id, |s| {
                     s.tool_count += 1;
                     s.phase = format!("🐹 {}…", humanize_tool_name(&tool_name));
-                    let line = if summary.is_empty() {
-                        tool_name.clone()
-                    } else {
-                        format!("{tool_name} · {summary}")
-                    };
-                    // -1: the appended ellipsis goes on top.
-                    s.last_tool = Some(truncate_by_chars(&line, STATUS_TEXT_MAX_CHARS - 1, "…"));
+                    s.trace
+                        .record_tool_start(&tool_id, &tool_name, arguments.as_deref());
                 })
                 .await;
                 // First tool of a run materializes the status card.
                 self.materialize_card(session_id).await;
+            }
+            Event::Tool(ToolEvent::End {
+                tool_id,
+                elapsed_ms,
+                is_error,
+                ..
+            }) => {
+                self.update_running(session_id, |s| {
+                    s.trace.record_tool_end(tool_id, *elapsed_ms, *is_error);
+                })
+                .await;
             }
             Event::Agent(AgentEvent::Retrying {
                 attempt,
@@ -513,9 +523,7 @@ async fn send_card_patch(adapter: &dyn PlatformAdapter, message_id: &str, card_j
 
 fn render_running(s: &ObsCardState) -> String {
     let mut lines = vec![stats_line(s)];
-    if let Some(last_tool) = &s.last_tool {
-        lines.push(format!("🔧 {last_tool}"));
-    }
+    lines.extend(s.trace.trace_preview_lines(STATUS_TRACE_MAX_ENTRIES));
     if !s.whisper.is_empty() {
         lines.push(format!(
             "<font color='grey'>💬 {}</font>",

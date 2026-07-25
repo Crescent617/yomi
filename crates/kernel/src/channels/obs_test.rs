@@ -300,15 +300,16 @@ async fn tool_events_patch_card_with_stats() {
         .await;
 
     let patches = mock.patches.lock().await;
-    // Tool ends are watchdog liveness only; only the second tool start PATCHes
-    // (the first one sent the card).
-    assert_eq!(patches.len(), 1);
-    let last = &patches[0].1;
+    // Every tool event PATCHes at ZERO interval: end1, start2, end2 (the
+    // first start sent the card instead).
+    assert_eq!(patches.len(), 3);
+    let last = &patches[2].1;
     assert!(last.contains("2 tools"), "tools summary: {last}");
     assert!(last.contains("🐹 Read"), "title: {last}");
-    // No per-tool elapsed or failure noise in the body.
-    assert!(!last.contains("last:"), "no last tool: {last}");
-    assert!(!last.contains("failed"), "no failed count: {last}");
+    // The live trace shows the finished tool with elapsed and the failed
+    // one with the error icon.
+    assert!(last.contains("✅ **bash** · 2s"), "trace: {last}");
+    assert!(last.contains("❌ **read**"), "trace: {last}");
     assert_eq!(mock.cards.lock().await.len(), 1);
 }
 
@@ -730,7 +731,7 @@ fn end_with_text(text: &str) -> Event {
 }
 
 #[tokio::test]
-async fn running_card_shows_last_tool_with_arg_summary() {
+async fn running_card_shows_live_trace() {
     let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
     let mock = MockAdapter::new();
     let sid = sid();
@@ -749,10 +750,59 @@ async fn running_card_shows_last_tool_with_arg_summary() {
         )
         .await;
 
-    // The materialized card already carries the last-tool line.
+    // The materialized card already carries the trace: the tool shows as
+    // running (⏳) with its arg summary inline.
     let cards = mock.cards.lock().await;
     assert_eq!(cards.len(), 1);
-    assert!(cards[0].1.contains("🔧 shell · cargo test -p kernel"));
+    assert!(cards[0].1.contains("⏳ **shell** · `cargo test -p kernel`"));
+    drop(cards);
+
+    // Tool end flips the line to ✅ with the elapsed time.
+    tracker
+        .handle_event(
+            &adapter,
+            &sid,
+            "chat-1",
+            None,
+            &tool_end("shell", 65_000, false),
+        )
+        .await;
+    let patches = mock.patches.lock().await;
+    let last = patches.last().expect("a patch after tool end");
+    assert!(last
+        .1
+        .contains("✅ **shell** · `cargo test -p kernel` · 1m05s"));
+}
+
+#[tokio::test]
+async fn running_card_trace_caps_at_ten_entries() {
+    let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    for i in 0..12 {
+        tracker
+            .handle_event(
+                &adapter,
+                &sid,
+                "chat-1",
+                None,
+                &tool_start_with_args("shell", &format!(r#"{{"command":"cmd-{i}"}}"#)),
+            )
+            .await;
+    }
+
+    let patches = mock.patches.lock().await;
+    let last = patches.last().unwrap();
+    let body: serde_json::Value = serde_json::from_str(&last.1).unwrap();
+    let content = body["body"]["elements"][0]["content"].as_str().unwrap();
+    assert!(content.contains("··· and 2 earlier entries"));
+    assert!(content.contains("cmd-11"), "most recent kept");
+    assert!(!content.contains("cmd-1`"), "oldest dropped");
 }
 
 #[tokio::test]
@@ -909,7 +959,7 @@ fn whisper_snippet_caps_at_100_chars() {
 }
 
 #[tokio::test]
-async fn last_tool_line_is_capped_at_100_chars() {
+async fn trace_inline_arg_summary_is_capped() {
     let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
     let mock = MockAdapter::new();
     let sid = sid();
@@ -932,15 +982,19 @@ async fn last_tool_line_is_capped_at_100_chars() {
     let cards = mock.cards.lock().await;
     let body: serde_json::Value = serde_json::from_str(&cards[0].1).unwrap();
     let content = body["body"]["elements"][0]["content"].as_str().unwrap();
-    let tool_line = content
+    // Long args don't render inline: the header stays bare and the arg
+    // drops to a `↳` continuation line capped at 100 chars (+ellipsis).
+    let header = content
         .lines()
-        .find(|l| l.starts_with('🔧'))
-        .expect("last-tool line");
-    // "🔧 " prefix + capped text (≤100 chars, ellipsis included). The
-    // arg summary itself caps at 60 (shared with the reply trace), so the
-    // composed line stays well under the limit.
-    assert!(tool_line.chars().count() <= 2 + 100, "line: {tool_line}");
-    assert!(tool_line.ends_with('…'));
+        .find(|l| l.starts_with('⏳'))
+        .expect("trace tool line");
+    assert_eq!(header, "⏳ **shell**");
+    let cont = content
+        .lines()
+        .find(|l| l.starts_with('↳'))
+        .expect("continuation line");
+    assert!(cont.chars().count() <= 105, "line: {cont}");
+    assert!(cont.ends_with("…`"));
 }
 
 #[tokio::test]

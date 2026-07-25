@@ -62,55 +62,6 @@ fn tool_end_matches_by_tool_id() {
 }
 
 #[test]
-fn summarize_args_prefers_tool_primary_key() {
-    assert_eq!(
-        summarize_args("shell", Some(r#"{"command":"ls -la","timeout":30}"#)),
-        "ls -la"
-    );
-    assert_eq!(
-        summarize_args("read", Some(r#"{"path":"/tmp/a.rs","offset":2}"#)),
-        "/tmp/a.rs"
-    );
-    assert_eq!(
-        summarize_args("write", Some(r#"{"file_path":"/tmp/b.rs","content":"…"}"#)),
-        "/tmp/b.rs"
-    );
-    assert_eq!(
-        summarize_args("web_search", Some(r#"{"query":"rust async"}"#)),
-        "rust async"
-    );
-}
-
-#[test]
-fn summarize_args_falls_back_to_known_keys_and_raw() {
-    // Unknown tool with a known key.
-    assert_eq!(
-        summarize_args("cron", Some(r#"{"command":"echo hi","schedule":"*"}"#)),
-        "echo hi"
-    );
-    // Unknown tool, unknown keys → empty (no meaningful summary).
-    assert_eq!(summarize_args("todo", Some(r#"{"items":[]}"#)), "");
-    // Non-JSON payload → truncated raw.
-    assert_eq!(summarize_args("shell", Some("not json")), "not json");
-    // Missing arguments.
-    assert_eq!(summarize_args("shell", None), "");
-    // Multi-line values are flattened for the one-line display.
-    assert_eq!(
-        summarize_args("shell", Some(r#"{"command":"line1\nline2"}"#)),
-        "line1 line2"
-    );
-}
-
-#[test]
-fn summarize_args_truncates_long_values() {
-    let long = "x".repeat(200);
-    let args = format!(r#"{{"command":"{long}"}}"#);
-    let summary = summarize_args("shell", Some(&args));
-    assert_eq!(summary.chars().count(), ARG_SUMMARY_MAX_CHARS + 1); // +1 for …
-    assert!(summary.ends_with('…'));
-}
-
-#[test]
 fn render_card_structure() {
     let reply = buffer_with_run().into_reply();
     let card: serde_json::Value =

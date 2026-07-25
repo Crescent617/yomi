@@ -164,6 +164,13 @@ impl RunReplyBuffer {
             elapsed: self.started_at.elapsed(),
         }
     }
+
+    /// Render the most recent `max` trace entries as markdown lines — the
+    /// live status-card preview of the run trace.
+    pub(crate) fn trace_preview_lines(&self, max: usize) -> Vec<String> {
+        let (lines, _) = trace_lines(&self.entries, true);
+        cap_trace_lines(lines, max)
+    }
 }
 
 impl Default for RunReplyBuffer {
@@ -265,12 +272,8 @@ pub(crate) fn render_plain(reply: &FinalReply) -> String {
 
 /// Render the trace lines (capped to the most recent) and the summary title.
 fn render_trace(reply: &FinalReply, markdown: bool) -> (Vec<String>, String) {
-    let (mut lines, stats) = trace_lines(&reply.entries, markdown);
-    if lines.len() > MAX_TRACE_ENTRIES {
-        let dropped = lines.len() - MAX_TRACE_ENTRIES;
-        lines.drain(..dropped);
-        lines.insert(0, format!("··· and {dropped} earlier entries"));
-    }
+    let (lines, stats) = trace_lines(&reply.entries, markdown);
+    let lines = cap_trace_lines(lines, MAX_TRACE_ENTRIES);
 
     let mut title = format!("🐾 Run trace · {} tools", stats.tools);
     if stats.failed > 0 {
@@ -278,6 +281,16 @@ fn render_trace(reply: &FinalReply, markdown: bool) -> (Vec<String>, String) {
     }
     let _ = write!(title, " · {}", fmt_elapsed(reply.elapsed));
     (lines, title)
+}
+
+/// Cap trace lines to the most recent `max`, noting the dropped count.
+fn cap_trace_lines(mut lines: Vec<String>, max: usize) -> Vec<String> {
+    if lines.len() > max {
+        let dropped = lines.len() - max;
+        lines.drain(..dropped);
+        lines.insert(0, format!("··· and {dropped} earlier entries"));
+    }
+    lines
 }
 
 #[derive(Default)]
@@ -373,16 +386,6 @@ fn extract_arg_text(tool_name: &str, arguments: Option<&str>) -> String {
 /// Collapse all whitespace runs (including newlines) into single spaces.
 pub(crate) fn flatten_ws(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// One-line arg summary for tight displays (status-card last-tool line):
-/// whitespace flattened, capped at [`ARG_SUMMARY_MAX_CHARS`].
-pub(crate) fn summarize_args(tool_name: &str, arguments: Option<&str>) -> String {
-    truncate_by_chars(
-        &flatten_ws(&extract_arg_text(tool_name, arguments)),
-        ARG_SUMMARY_MAX_CHARS,
-        "…",
-    )
 }
 
 /// Multi-line arg summary for the trace panel: the arg's own line breaks are
