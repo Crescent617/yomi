@@ -146,12 +146,6 @@ enum StreamText {
 /// Ticks per shimmer sweep cycle (100ms tick → 4.8s sweep).
 const SHIMMER_PERIOD_TICKS: usize = 48;
 
-/// Ticks between spinner frame advances (100ms tick → ~3.3 fps, 2.4s cycle).
-const SPINNER_TICKS_PER_FRAME: usize = 3;
-
-/// Spinner frames (breathing blob: grows then shrinks, 12 frames).
-const SPINNER_FRAMES: [char; 12] = ['⣀', '⣄', '⣤', '⣦', '⣶', '⣷', '⣿', '⣷', '⣶', '⣦', '⣤', '⣄'];
-
 /// Info bar component showing streaming progress and notifications
 /// Layout: [LEFT: status/tokens/time] [RIGHT: notifications]
 #[derive(Debug, Default)]
@@ -283,8 +277,8 @@ impl InfoBar {
 
         let mut spans = Vec::new();
 
-        // Static indicator for terminal states; active states get a braille
-        // spinner in front of the shimmering status word (added below).
+        // Static indicator for terminal states; active states show only the
+        // shimmering status word (with a leading space, added below).
         match self.state {
             InfoBarState::Cancelled => spans.push(Span::styled(
                 format!("{} ", chars::CANCELLED),
@@ -301,18 +295,9 @@ impl InfoBar {
             _ => {}
         }
 
-        // Status word with a shimmer wave sweeping through: `Running... `
+        // Status word with a shimmer wave sweeping through: ` Running... `
         if let Some(word) = self.status_word() {
-            // Braille spinner gives per-tick motion; the shimmer sweep
-            // alone looks static between waves.
-            if self.state.is_active() {
-                let frame = SPINNER_FRAMES
-                    [(self.tick_frame / SPINNER_TICKS_PER_FRAME) % SPINNER_FRAMES.len()];
-                spans.push(Span::styled(
-                    format!("{frame} "),
-                    Style::default().fg(colors::text_secondary()),
-                ));
-            }
+            spans.push(Span::raw(" "));
             let phase = self.shimmer_phase();
             let (base, peak) = match self.state {
                 InfoBarState::Compacting => (colors::accent_warning(), colors::text_primary()),
