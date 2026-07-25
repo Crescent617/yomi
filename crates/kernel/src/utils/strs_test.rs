@@ -49,9 +49,12 @@ fn truncate_by_utf16_counts_units_not_chars() {
 
 #[test]
 fn truncate_by_utf16_suffix_budget() {
-    // Budget too small for any content: suffix only.
+    // Suffix fits exactly: returned whole.
     assert_eq!(truncate_by_utf16("hello", 3, "..."), "...");
-    assert_eq!(truncate_by_utf16("hello", 0, "..."), "...");
+    // Suffix alone exceeds the cap: the suffix itself is hard-truncated so
+    // the result still never exceeds max_units.
+    assert_eq!(truncate_by_utf16("hello", 2, "..."), "..");
+    assert_eq!(truncate_by_utf16("hello", 0, "..."), "");
 }
 
 #[test]
@@ -259,9 +262,10 @@ fn test_truncate_mixed_unicode() {
 
 #[test]
 fn test_truncate_suffix_larger_than_limit() {
-    // When suffix itself is larger than max_bytes
-    assert_eq!(truncate_with_suffix("hello", 2, "..."), "...");
-    assert_eq!(truncate_with_suffix("hello", 0, "..."), "...");
+    // When the suffix itself is larger than max_bytes, it is hard-truncated
+    // so the result still never exceeds max_bytes.
+    assert_eq!(truncate_with_suffix("hello", 2, "..."), "..");
+    assert_eq!(truncate_with_suffix("hello", 0, "..."), "");
 }
 
 #[test]
@@ -271,10 +275,11 @@ fn test_truncate_different_suffixes() {
     assert_eq!(truncate_with_suffix("hello world", 8, "→"), "hello→");
     // With empty suffix: 8 chars for content
     assert_eq!(truncate_with_suffix("hello world", 8, ""), "hello wo");
-    // With long suffix " [truncated]" (12 bytes): 8 - 12 = 0, so just suffix
+    // With long suffix " [truncated]" (12 bytes > 8): the suffix itself is
+    // hard-truncated to the cap so the result never exceeds max_bytes
     assert_eq!(
         truncate_with_suffix("hello world", 8, " [truncated]"),
-        " [truncated]"
+        " [trunca"
     );
 }
 
@@ -294,8 +299,8 @@ fn test_truncate_single_char() {
     assert_eq!(truncate_with_suffix("a", 5, "..."), "a");
     // With max_bytes=1 and content "a" (1 byte): content fits exactly, no truncation
     assert_eq!(truncate_with_suffix("a", 1, "..."), "a");
-    // With max_bytes=0: can't fit anything, returns just suffix
-    assert_eq!(truncate_with_suffix("a", 0, "..."), "...");
+    // With max_bytes=0: can't fit anything, not even the suffix
+    assert_eq!(truncate_with_suffix("a", 0, "..."), "");
 }
 
 #[test]

@@ -60,7 +60,9 @@ pub fn truncate_with_suffix(s: &str, max_bytes: usize, suffix: &str) -> String {
 
     let target_len = max_bytes.saturating_sub(suffix.len());
     if target_len == 0 {
-        return suffix.to_string();
+        // The suffix alone meets/exceeds the cap — hard-truncate it so the
+        // result still never exceeds `max_bytes`.
+        return truncate_with_suffix(suffix, max_bytes, "");
     }
 
     let mut byte_idx = 0;
@@ -92,6 +94,11 @@ pub fn truncate_by_utf16(s: &str, max_units: usize, suffix: &str) -> String {
         return s.to_string();
     }
     let budget = max_units.saturating_sub(suffix.encode_utf16().count());
+    if budget == 0 {
+        // The suffix alone meets/exceeds the cap — hard-truncate it so the
+        // result still never exceeds `max_units`.
+        return truncate_by_utf16(suffix, max_units, "");
+    }
     let mut result = String::new();
     let mut used = 0;
     for ch in s.chars() {

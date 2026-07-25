@@ -82,6 +82,28 @@ pub fn next_run_from_schedule(schedule: &str) -> Result<chrono::DateTime<chrono:
         .ok_or_else(|| CronError::InvalidSchedule("schedule has no upcoming fire time".into()))
 }
 
+/// 提取 `SendMessage` action 绑定的 session（如有）。
+pub fn action_session_id(action: &CronAction) -> Option<crate::types::SessionId> {
+    match action {
+        CronAction::SendMessage {
+            session_id: Some(sid),
+            ..
+        } => Some(crate::types::SessionId::from(sid.clone())),
+        _ => None,
+    }
+}
+
+/// 回滚为 cron job 绑定后却未能成功入库的专用 session（尽力而为）。
+/// 只应传入**新绑定**的 session——用户显式提供的 session 绝不可删。
+pub async fn rollback_bound_session(
+    session_store: &Arc<dyn crate::storage::SessionStore>,
+    session: Option<crate::types::SessionId>,
+) {
+    if let Some(sid) = session {
+        let _ = session_store.delete(&sid).await;
+    }
+}
+
 /// 创建并持久化一个 cron job：校验 schedule、按需绑定专用 session、
 /// 计算 `next_run_at`、入库。若入库失败，回滚刚绑定的 session。
 ///
@@ -130,19 +152,11 @@ pub async fn create_cron_job(
     };
 
     if let Err(e) = store.create(&job).await {
-        // Best-effort rollback of the dedicated session bound above.
+        // Best-effort rollback of the dedicated session bound above (never
+        // a user-supplied session — needs_new_session gates it).
         if needs_new_session {
-            if let (
-                CronAction::SendMessage {
-                    session_id: Some(sid),
-                    ..
-                },
-                Some(session_store),
-            ) = (&job.action, session_store)
-            {
-                let _ = session_store
-                    .delete(&crate::types::SessionId::from(sid.clone()))
-                    .await;
+            if let Some(session_store) = session_store {
+                rollback_bound_session(session_store, action_session_id(&job.action)).await;
             }
         }
         return Err(e);

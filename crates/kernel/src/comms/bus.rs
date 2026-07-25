@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -19,6 +19,12 @@ use crate::types::SessionId;
 pub struct PubSub<T, K> {
     event_tx: mpsc::Sender<(K, T)>,
     listeners: Arc<DashMap<u64, Listener<T, K>>>,
+    /// Set on shutdown/drop: new subscriptions get an immediately-closed
+    /// receiver, and all registered listener senders are dropped so
+    /// existing subscribers see `recv() -> None` (the registry is shared
+    /// with subscribers — without the explicit clear, their own Arc would
+    /// keep the senders alive and `recv()` would pend forever).
+    closed: Arc<AtomicBool>,
     shutdown: Arc<Notify>,
     forwarder: tokio::task::JoinHandle<()>,
 }
@@ -26,6 +32,8 @@ pub struct PubSub<T, K> {
 impl<T, K> Drop for PubSub<T, K> {
     fn drop(&mut self) {
         self.forwarder.abort();
+        self.closed.store(true, Ordering::Relaxed);
+        self.listeners.clear();
     }
 }
 
@@ -49,6 +57,7 @@ where
         Arc::new(Self {
             event_tx,
             listeners,
+            closed: Arc::new(AtomicBool::new(false)),
             shutdown,
             forwarder,
         })
@@ -95,6 +104,15 @@ where
     {
         let (tx, rx) = mpsc::channel::<(K, T)>(256);
         let id = next_listener_id();
+        if self.closed.load(Ordering::Relaxed) {
+            // Bus already shut down: skip registration — `tx` drops here,
+            // so the subscriber's first `recv()` returns None immediately.
+            return PubSubSubscriber {
+                listeners: Arc::clone(&self.listeners),
+                id,
+                rx,
+            };
+        }
         self.listeners.insert(
             id,
             Listener {
@@ -113,6 +131,9 @@ where
     }
 
     pub fn shutdown(&self) {
+        self.closed.store(true, Ordering::Relaxed);
+        // Drop all listener senders so subscribers see recv() -> None.
+        self.listeners.clear();
         // notify_one 会留存一个 permit：即使 forwarder 还没在 await，
         // 它下一轮 select 也会立刻醒来退出。
         self.shutdown.notify_one();

@@ -243,19 +243,15 @@ impl CronTool {
                     ..
                 }
             ) {
-                if let Some(session_store) = &self.session_store {
-                    action =
-                        crate::cron::ensure_action_session(action, &job.name, session_store, None)
-                            .await
-                            .map_err(|e| KernelError::tool(e.to_string()))?;
-                    if let CronAction::SendMessage {
-                        session_id: Some(sid),
-                        ..
-                    } = &action
-                    {
-                        bound_session = Some(SessionId::from(sid.clone()));
-                    }
-                }
+                let Some(session_store) = &self.session_store else {
+                    return Err(KernelError::tool(
+                        "session store not available; pass session_id explicitly".to_string(),
+                    ));
+                };
+                action = crate::cron::ensure_action_session(action, &job.name, session_store, None)
+                    .await
+                    .map_err(|e| KernelError::tool(e.to_string()))?;
+                bound_session = crate::cron::action_session_id(&action);
             }
             input.action = Some(action);
         }
@@ -281,8 +277,8 @@ impl CronTool {
     /// Best-effort rollback of a dedicated session bound during a failed
     /// update (the update erroring out, or the job having vanished).
     async fn rollback_bound_session(&self, session: Option<SessionId>) {
-        if let (Some(sid), Some(store)) = (session, &self.session_store) {
-            let _ = store.delete(&sid).await;
+        if let Some(store) = &self.session_store {
+            crate::cron::rollback_bound_session(store, session).await;
         }
     }
 

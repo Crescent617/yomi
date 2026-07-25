@@ -69,3 +69,36 @@ async fn test_subscriber_filter_isolation() {
         .await
         .is_err());
 }
+
+#[tokio::test]
+async fn test_registration_is_synchronous() {
+    let bus: Arc<PubSub<i32, &'static str>> = PubSub::new();
+    let mut sub = bus.subscribe("alpha");
+    // No yield between subscribe and publish: the registration must
+    // already be visible to the forwarder.
+    bus.publish("alpha", 42).unwrap();
+    assert_eq!(
+        timeout(Duration::from_secs(1), sub.recv()).await.unwrap(),
+        Some(("alpha", 42))
+    );
+}
+
+#[tokio::test]
+async fn test_subscriber_recv_ends_on_shutdown() {
+    let bus: Arc<PubSub<i32, &'static str>> = PubSub::new();
+    let mut sub = bus.subscribe("alpha");
+    bus.shutdown();
+    // Listener senders are dropped at shutdown: recv() returns None
+    // instead of pending forever.
+    assert_eq!(
+        timeout(Duration::from_secs(1), sub.recv()).await.unwrap(),
+        None
+    );
+
+    // Subscribing after shutdown yields an immediately-closed receiver.
+    let mut late = bus.subscribe("alpha");
+    assert_eq!(
+        timeout(Duration::from_secs(1), late.recv()).await.unwrap(),
+        None
+    );
+}

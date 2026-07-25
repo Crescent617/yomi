@@ -1536,13 +1536,7 @@ impl Kernel {
                 crate::cron::ensure_action_session(action, &existing.name, &session_store, None)
                     .await?;
             if binds_new_session {
-                if let crate::cron::CronAction::SendMessage {
-                    session_id: Some(sid),
-                    ..
-                } = &action
-                {
-                    bound_session = Some(crate::types::SessionId::from(sid.clone()));
-                }
+                bound_session = crate::cron::action_session_id(&action);
             }
             input.action = Some(action);
         }
@@ -1550,7 +1544,8 @@ impl Kernel {
         let updated = match store.update(id, &input).await {
             Ok(updated) => updated,
             Err(e) => {
-                rollback_bound_cron_session(&self.session_store().await, bound_session).await;
+                crate::cron::rollback_bound_session(&self.session_store().await, bound_session)
+                    .await;
                 return Err(crate::types::KernelError::storage(format!(
                     "Failed to update cron job: {e}"
                 )));
@@ -1559,7 +1554,7 @@ impl Kernel {
         if !updated {
             // The job vanished between the get above and this update — the
             // freshly bound session would orphan; roll it back.
-            rollback_bound_cron_session(&self.session_store().await, bound_session).await;
+            crate::cron::rollback_bound_session(&self.session_store().await, bound_session).await;
             return Ok(false);
         }
         self.notify_cron_scheduler();
@@ -1611,17 +1606,6 @@ impl Kernel {
         };
 
         result.map_err(|e| crate::types::KernelError::storage(e.to_string()))
-    }
-}
-
-/// Best-effort rollback of a dedicated session bound during a failed cron
-/// job update (the update erroring out, or the job having vanished).
-async fn rollback_bound_cron_session(
-    session_store: &Arc<dyn crate::storage::SessionStore>,
-    session: Option<crate::types::SessionId>,
-) {
-    if let Some(sid) = session {
-        let _ = session_store.delete(&sid).await;
     }
 }
 

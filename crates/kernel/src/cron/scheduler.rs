@@ -265,7 +265,7 @@ impl CronScheduler {
                     if running.contains(job_id) {
                         // 执行中的 job 被 reload 重新入队后到期：entry 已过期，
                         // 丢弃它（job_finished 会重新入队），避免调度循环空转
-                        stale.push(job_id.clone());
+                        stale.push((*next_run, job_id.clone()));
                         continue;
                     }
                     // 并发 reload 可能留下重复 entry，同一轮只取一次
@@ -279,8 +279,19 @@ impl CronScheduler {
             }
         }
 
-        for job_id in stale {
-            self.remove_job(&job_id).await;
+        // 只移除本轮收集到的过期 entry（按时间戳精确匹配）：job_finished
+        // 可能同时在为同一个 job 重新入队，全量 remove_job 会误删它刚放入
+        // 的 entry，任务将一直静默到下次全量 reload。
+        {
+            let mut queue = self.queue.write().await;
+            for (ts, job_id) in stale {
+                if let Some(ids) = queue.get_mut(&ts) {
+                    ids.retain(|id| id != &job_id);
+                    if ids.is_empty() {
+                        queue.remove(&ts);
+                    }
+                }
+            }
         }
 
         for job in due_jobs {
