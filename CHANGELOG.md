@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **分类**：`Added` 新能力 / `Changed` 行为变化 / `Fixed` 问题修复 / `Removed` 移除能力。
 - **配置与命令必须点名**：新增或变更配置项、命令时，写出名称与默认值。
 
+## [0.7.4] - 2026-07-25
+
+### Changed
+- 收紧子代理（sub-agent）能力：不再提供 cron、goal、ask_user 工具，不再注入通道回复协议；避免子代理创建定时任务、被 goal 续跑带偏任务、或绕过主会话直接向用户提问（疑问改由父代理转达）。
+
 ## [0.7.3] - 2026-07-25
 
 ### Added
