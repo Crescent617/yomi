@@ -1,7 +1,7 @@
 <script lang="ts">
   import { textFromBlocks } from "../../session";
   import type { UserMessage } from "../../state.svelte";
-  import { resolveAssetUrl } from "../../utils";
+  import AssetImage from "../ui/AssetImage.svelte";
   import OperationBar from "./OperationBar.svelte";
   import { userTextForHeight } from "./user-text";
   import UserText from "./UserText.svelte";
@@ -27,50 +27,20 @@
   <div
     class="min-w-0 max-w-[80%] lg:max-w-[70%] rounded-2xl rounded-br-sm bg-secondary px-4 py-3 text-sm space-y-2 relative"
   >
+    <!-- Keep the absolutely-positioned actions first: with Tailwind v4
+         space-y (margin-block-end on :not(:last-child)), a trailing sibling
+         would add ghost bottom margin to the content above it. -->
+    <div
+      class="message-actions absolute right-full top-0 z-10 mr-1.5 translate-x-1 opacity-0 transition-[opacity,transform] duration-150 group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:translate-x-0 group-focus-within:opacity-100"
+    >
+      <OperationBar {message} {session_id} />
+    </div>
     <!-- Images -->
     {#if hasImages}
       <div class="flex flex-wrap gap-2">
         {#each message.content as block (block.type + (block.image_url?.url ?? block.text ?? ""))}
           {#if block.type === "image_url" && block.image_url?.url}
-            {#if block.image_url.url.startsWith("asset://")}
-              {#await resolveAssetUrl(block.image_url.url)}
-                <div
-                  class="w-[200px] h-[200px] rounded-lg bg-muted animate-pulse"
-                ></div>
-              {:then src}
-                <button
-                  type="button"
-                  class="rounded-lg"
-                  aria-label="Open uploaded image in a new tab"
-                  onclick={() => window.open(src, "_blank")}
-                >
-                  <img
-                    {src}
-                    alt="Uploaded attachment"
-                    class="max-w-[200px] max-h-[200px] rounded-lg object-cover border border-border cursor-pointer hover:opacity-90 transition-opacity"
-                  />
-                </button>
-              {:catch}
-                <div
-                  class="w-[200px] h-[200px] rounded-lg bg-muted flex items-center justify-center text-xs text-muted-foreground"
-                >
-                  Failed to load image
-                </div>
-              {/await}
-            {:else}
-              <button
-                type="button"
-                class="rounded-lg"
-                aria-label="Open uploaded image in a new tab"
-                onclick={() => window.open(block.image_url!.url, "_blank")}
-              >
-                <img
-                  src={block.image_url.url}
-                  alt="Uploaded attachment"
-                  class="max-w-[200px] max-h-[200px] rounded-lg object-cover border border-border cursor-pointer hover:opacity-90 transition-opacity"
-                />
-              </button>
-            {/if}
+            <AssetImage src={block.image_url.url} alt="Uploaded attachment" />
           {/if}
         {/each}
       </div>
@@ -103,11 +73,6 @@
         </button>
       {/if}
     {/if}
-    <div
-      class="message-actions absolute right-full top-0 z-10 mr-1.5 translate-x-1 opacity-0 transition-[opacity,transform] duration-150 group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:translate-x-0 group-focus-within:opacity-100"
-    >
-      <OperationBar {message} {session_id} />
-    </div>
   </div>
 </div>
 

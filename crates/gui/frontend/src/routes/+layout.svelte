@@ -10,6 +10,7 @@
   } from "../lib/state.svelte";
   import { EventFrameBuffer } from "../lib/event-frame-buffer";
   import ToastContainer from "../lib/components/ui/ToastContainer.svelte";
+  import ImagePreview from "../lib/components/ui/ImagePreview.svelte";
   import {
     initSettings,
     guiPreferences,
@@ -126,5 +127,5 @@
     : 'bg-background'}"
 >
   <slot />
-  {#if !isPetWindow}<ToastContainer />{/if}
+  {#if !isPetWindow}<ToastContainer /><ImagePreview />{/if}
 </div>

@@ -61,7 +61,7 @@
   >
     {#if parsed.source?.type === "user"}
       <span class="mb-0.5 inline-flex text-[11px] font-semibold text-primary">
-        User steer
+        User
       </span>
     {:else if parsed.source?.type === "agent"}
       <button

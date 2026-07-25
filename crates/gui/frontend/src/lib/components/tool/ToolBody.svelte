@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Loader2 } from "lucide-svelte";
   import type { ToolCall } from "../../state.svelte";
+  import AssetImage from "../ui/AssetImage.svelte";
   import {
     diffLines,
     parseEditArgs,
@@ -108,6 +109,14 @@
     <div class="text-xs italic opacity-50 flex items-center gap-1">
       <Loader2 class="w-3 h-3 animate-spin" /> Running…
       {#if tool.progress}<span>{tool.progress}</span>{/if}
+    </div>
+  {/if}
+
+  {#if tool.images && tool.images.length > 0}
+    <div class="flex flex-wrap gap-2">
+      {#each tool.images as src (src)}
+        <AssetImage {src} alt="Tool result" />
+      {/each}
     </div>
   {/if}
 

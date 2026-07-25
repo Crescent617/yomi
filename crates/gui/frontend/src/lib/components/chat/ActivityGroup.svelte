@@ -11,7 +11,7 @@
   } from "lucide-svelte";
   import type { ComponentType } from "svelte";
   import type { Message } from "../../state.svelte";
-  import { textFromBlocks } from "../../session";
+  import { imageUrlsFromBlocks, textFromBlocks } from "../../session";
   import { formatElapsed } from "../../utils";
   import { buildActivityTrail, computeActivityStats } from "./activity-group";
   import { guiPreferences } from "../../settings.svelte";
@@ -149,6 +149,7 @@
                 status: item.message.status,
                 arguments: item.message.arguments,
                 output: textFromBlocks(item.message.result),
+                images: imageUrlsFromBlocks(item.message.result),
                 elapsed_ms: item.message.elapsed_ms,
                 subagent_session_id: item.message.subagent_session_id,
               }}

@@ -254,6 +254,8 @@ export interface ToolCall {
   arguments?: string;
   parsed_args?: Record<string, unknown>;
   output?: string;
+  /** Image URLs from tool output blocks (e.g. read tool on an image file). */
+  images?: string[];
   error?: string;
   progress?: string;
   tokens?: number;

@@ -19,7 +19,11 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 import { sessionState } from "./state.svelte";
-import { createSessionState, forkSession } from "./session";
+import {
+  createSessionState,
+  forkSession,
+  imageUrlsFromBlocks,
+} from "./session";
 
 const hydratedSession = {
   id: "forked",
@@ -84,5 +88,45 @@ describe("forkSession", () => {
     expect(
       sessionState.sessions.some((session) => session.id === "forked"),
     ).toBe(false);
+  });
+});
+
+describe("imageUrlsFromBlocks", () => {
+  test("extracts live-event image blocks and keeps order", () => {
+    const blocks = [
+      { type: "image", url: "data:image/png;base64,AAA" },
+      { type: "text", text: "[Image: a.png | Size: 3 bytes]" },
+      {
+        type: "image",
+        url: "data:image/png;base64,BBB",
+        mime_type: "image/png",
+      },
+    ];
+    expect(imageUrlsFromBlocks(blocks)).toEqual([
+      "data:image/png;base64,AAA",
+      "data:image/png;base64,BBB",
+    ]);
+  });
+
+  test("extracts persisted image_url blocks (history shape)", () => {
+    const blocks = [
+      {
+        type: "image_url",
+        image_url: { url: "asset://deadbeef.png" },
+      },
+      { type: "text", text: "meta" },
+    ];
+    expect(imageUrlsFromBlocks(blocks)).toEqual(["asset://deadbeef.png"]);
+  });
+
+  test("handles mixed shapes and non-arrays", () => {
+    expect(
+      imageUrlsFromBlocks([
+        { type: "image", url: "data:image/png;base64,AAA" },
+        { type: "image_url", image_url: { url: "asset://x.png" } },
+      ]),
+    ).toEqual(["data:image/png;base64,AAA", "asset://x.png"]);
+    expect(imageUrlsFromBlocks("nope")).toEqual([]);
+    expect(imageUrlsFromBlocks(undefined)).toEqual([]);
   });
 });

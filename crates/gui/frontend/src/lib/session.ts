@@ -38,6 +38,26 @@ export function hasText(blocks: TaggedContentBlock[] | unknown): boolean {
   return blocks.some((b) => b.type === "text" && b.text && b.text.length > 0);
 }
 
+/** Extract image URLs from tool output blocks.
+ *
+ * Two wire shapes exist: live tool events carry `{ type: "image", url }`
+ * (ToolOutputBlock), while persisted history carries
+ * `{ type: "image_url", image_url: { url } }` (ContentBlock). */
+export function imageUrlsFromBlocks(
+  blocks: TaggedContentBlock[] | unknown,
+): string[] {
+  if (!Array.isArray(blocks)) return [];
+  const urls: string[] = [];
+  for (const b of blocks) {
+    if (b.type === "image" && typeof b.url === "string") {
+      urls.push(b.url);
+    } else if (b.type === "image_url" && typeof b.image_url?.url === "string") {
+      urls.push(b.image_url.url);
+    }
+  }
+  return urls;
+}
+
 export function findThinking(
   blocks: TaggedContentBlock[] | unknown,
 ): { content: string; elapsed_ms: number } | null {
