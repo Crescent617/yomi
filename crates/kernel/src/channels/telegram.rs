@@ -169,6 +169,7 @@ impl TelegramAdapter {
             thread_id: None,
             root_id: None,
             is_group,
+            create_time: None,
         })
     }
 

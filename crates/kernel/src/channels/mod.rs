@@ -153,6 +153,10 @@ pub struct ChannelMessage {
     pub root_id: Option<String>,
     /// Whether the message was sent in a group chat (vs. private/p2p).
     pub is_group: bool,
+    /// The platform's creation timestamp in unix **milliseconds** (Feishu;
+    /// `None` on platforms that don't provide one). Used to advance the
+    /// history cursor on every processed message.
+    pub create_time: Option<i64>,
 }
 
 /// Runtime info about a channel, for UI listing

@@ -913,6 +913,9 @@ impl FeishuAdapter {
             thread_id,
             root_id,
             is_group: chat_type == "group",
+            create_time: message["create_time"]
+                .as_str()
+                .and_then(|s| s.parse::<i64>().ok()),
         };
 
         if incoming.send(channel_msg).await.is_err() {

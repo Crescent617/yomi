@@ -677,6 +677,7 @@ fn channel_message(
         thread_id: thread_id.map(str::to_string),
         root_id: None,
         is_group,
+        create_time: None,
     }
 }
 
@@ -1042,6 +1043,7 @@ struct HistoryMockAdapter {
     calls: tokio::sync::Mutex<Vec<(Option<i64>, usize)>>,
     fail: std::sync::atomic::AtomicBool,
     empty: std::sync::atomic::AtomicBool,
+    with_root: std::sync::atomic::AtomicBool,
 }
 
 #[async_trait::async_trait]
@@ -1079,7 +1081,16 @@ impl PlatformAdapter for HistoryMockAdapter {
             return Ok(Vec::new());
         }
         self.calls.lock().await.push((since_ts, limit));
-        Ok(vec![
+        let mut messages = Vec::new();
+        if self.with_root.load(std::sync::atomic::Ordering::Relaxed) {
+            messages.push(HistoryMessage {
+                message_id: "root-msg".into(),
+                create_time: 50,
+                sender_id: "ou_a".into(),
+                text: "thread root".into(),
+            });
+        }
+        messages.extend([
             HistoryMessage {
                 message_id: "m0".into(),
                 create_time: 100,
@@ -1098,7 +1109,8 @@ impl PlatformAdapter for HistoryMockAdapter {
                 sender_id: "ou_b".into(),
                 text: "trigger msg".into(),
             },
-        ])
+        ]);
+        Ok(messages)
     }
 }
 
@@ -1113,6 +1125,7 @@ fn group_msg(thread_id: Option<String>) -> ChannelMessage {
         thread_id,
         root_id: None,
         is_group: true,
+        create_time: None,
     }
 }
 
@@ -1248,4 +1261,100 @@ async fn history_prefix_skips_channel_level_when_reply_in_thread() {
     )
     .await;
     assert!(prefix.is_some(), "thread history still injected");
+}
+
+#[tokio::test]
+async fn advance_cursor_is_monotonic_and_gated() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let config = ChannelConfig::default();
+    let mut msg = group_msg(None);
+
+    // Advances to the message ts.
+    msg.create_time = Some(1000);
+    advance_history_cursor(&config, &store, "feishu", &msg).await;
+    assert_eq!(
+        store.get_history_cursor("feishu", "oc_1").await.unwrap(),
+        Some(1000)
+    );
+
+    // Older messages never rewind.
+    msg.create_time = Some(500);
+    advance_history_cursor(&config, &store, "feishu", &msg).await;
+    assert_eq!(
+        store.get_history_cursor("feishu", "oc_1").await.unwrap(),
+        Some(1000)
+    );
+
+    // Newer advances.
+    msg.create_time = Some(2000);
+    advance_history_cursor(&config, &store, "feishu", &msg).await;
+    assert_eq!(
+        store.get_history_cursor("feishu", "oc_1").await.unwrap(),
+        Some(2000)
+    );
+
+    // Private chats are skipped.
+    msg.is_group = false;
+    msg.create_time = Some(3000);
+    advance_history_cursor(&config, &store, "feishu", &msg).await;
+    assert_eq!(
+        store.get_history_cursor("feishu", "oc_1").await.unwrap(),
+        Some(2000)
+    );
+
+    // Disabled by config.
+    msg.is_group = true;
+    let config_off = ChannelConfig {
+        history_context: 0,
+        ..ChannelConfig::default()
+    };
+    advance_history_cursor(&config_off, &store, "feishu", &msg).await;
+    assert_eq!(
+        store.get_history_cursor("feishu", "oc_1").await.unwrap(),
+        Some(2000)
+    );
+}
+
+#[tokio::test]
+async fn history_prefix_drops_consumed_thread_root_only() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let mock = Arc::new(HistoryMockAdapter::default());
+    mock.with_root
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig::default();
+    let mut msg = group_msg(Some("omt_1".into()));
+    msg.root_id = Some("root-msg".into());
+
+    // Bot-created thread: the root was consumed at channel level (chat
+    // cursor covers it) → dropped from the thread history.
+    store
+        .set_history_cursor("feishu", "oc_1", 100)
+        .await
+        .unwrap();
+    let prefix = maybe_history_prefix(&adapter, &config, &store, "feishu", &msg)
+        .await
+        .expect("history");
+    assert!(
+        !prefix.contains("thread root"),
+        "consumed root dropped: {prefix}"
+    );
+    assert!(prefix.contains("earlier"), "other entries kept: {prefix}");
+
+    // Human thread: chat cursor does NOT cover the root → kept.
+    let (_pool2, store2) = create_test_pool().await;
+    let store2: Arc<dyn ChannelStore> = store2;
+    store2
+        .set_history_cursor("feishu", "oc_1", 10)
+        .await
+        .unwrap();
+    let prefix = maybe_history_prefix(&adapter, &config, &store2, "feishu", &msg)
+        .await
+        .expect("history");
+    assert!(
+        prefix.contains("thread root"),
+        "unconsumed root kept: {prefix}"
+    );
 }

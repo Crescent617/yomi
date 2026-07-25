@@ -188,6 +188,10 @@ impl ChannelHub {
                                 error!(error = %e, "failed to handle incoming message");
                             }
                         }
+                        // Advance the history cursor for every processed
+                        // group message (triggers and commands alike), so
+                        // consumed messages are never re-injected later.
+                        advance_history_cursor(&config_proc, &store, &name_proc, &msg).await;
                     }
                     else => {
                         info!(channel = %name_proc, "incoming channel closed, exiting");
@@ -830,6 +834,34 @@ fn history_container(msg: &ChannelMessage) -> HistoryContainer {
     }
 }
 
+/// Advance the container's history cursor to a processed message's
+/// timestamp (group messages only, monotonic): anything the bot has seen
+/// — runs or commands — must not be re-fetched as context later.
+async fn advance_history_cursor(
+    config: &ChannelConfig,
+    store: &Arc<dyn ChannelStore>,
+    channel_name: &str,
+    msg: &ChannelMessage,
+) {
+    if config.history_context == 0 || !msg.is_group {
+        return;
+    }
+    let Some(ts) = msg.create_time else {
+        return;
+    };
+    let container = history_container(msg);
+    let current = store
+        .get_history_cursor(channel_name, container.id())
+        .await
+        .ok()
+        .flatten();
+    if current.is_none_or(|c| ts > c) {
+        let _ = store
+            .set_history_cursor(channel_name, container.id(), ts)
+            .await;
+    }
+}
+
 /// Fetch and assemble recent-chat context for a triggering group message:
 /// messages since the last trigger in this thread/chat, formatted as a
 /// `<recent_chat_history>` block. Best-effort — any failure degrades to no
@@ -881,9 +913,27 @@ async fn maybe_history_prefix(
     }
     // Drop the triggering message itself — it's delivered verbatim below.
     let trigger_id = msg.external_message_id.as_deref();
+    // A bot-created thread's root was consumed at channel level (it's the
+    // session's first message) — drop it too when the chat cursor covers
+    // it. Roots of human threads (never consumed) are kept.
+    let chat_floor = match &container {
+        HistoryContainer::Thread(_) => match &msg.root_id {
+            Some(_) => store
+                .get_history_cursor(channel_name, &msg.external_chat_id)
+                .await
+                .ok()
+                .flatten(),
+            None => None,
+        },
+        HistoryContainer::Chat(_) => None,
+    };
     let history: Vec<&HistoryMessage> = messages
         .iter()
         .filter(|m| Some(m.message_id.as_str()) != trigger_id)
+        .filter(|m| match (&msg.root_id, chat_floor) {
+            (Some(root), Some(floor)) => !(m.message_id == *root && m.create_time <= floor),
+            _ => true,
+        })
         .collect();
     if history.is_empty() {
         return None;
