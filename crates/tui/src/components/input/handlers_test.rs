@@ -37,6 +37,29 @@ fn test_parse_non_command_returns_none() {
 }
 
 #[test]
+fn test_parse_steer_command_with_content() {
+    assert_eq!(
+        InputComponent::parse_command("/steer focus on tests"),
+        Some(Msg::CommandSteer(vec![kernel::types::ContentBlock::Text {
+            text: "focus on tests".to_string(),
+        },]))
+    );
+}
+
+#[test]
+fn test_parse_bare_steer_promotes_queued_message() {
+    assert_eq!(
+        InputComponent::parse_command("/steer"),
+        Some(Msg::SteerQueuedMessage)
+    );
+    // Whitespace-only content is also treated as bare /steer
+    assert_eq!(
+        InputComponent::parse_command("/steer   "),
+        Some(Msg::SteerQueuedMessage)
+    );
+}
+
+#[test]
 fn test_parse_other_commands_still_work() {
     assert_eq!(
         InputComponent::parse_command("/sessions"),

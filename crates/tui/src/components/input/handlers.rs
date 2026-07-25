@@ -106,7 +106,8 @@ impl InputComponent {
             "/steer" => {
                 let content = parts[1..].join(" ");
                 if content.trim().is_empty() {
-                    None
+                    // Bare /steer: promote the queued message (if any) to steer
+                    Some(Msg::SteerQueuedMessage)
                 } else {
                     Some(Msg::CommandSteer(vec![ContentBlock::Text {
                         text: content,
@@ -284,7 +285,8 @@ impl InputComponent {
                     // Wrap with raw text for history tracking
                     Some(Msg::InputEntry(raw_text, Box::new(inner_msg)))
                 } else {
-                    None
+                    // Enter on an empty input: may steer a queued message
+                    Some(Msg::InputEnterEmpty)
                 }
             }
             Event::Keyboard(KeyEvent {
@@ -424,8 +426,13 @@ impl InputComponent {
                     self.file_completion_prev();
                     Some(Msg::Redraw)
                 } else if self.component.is_on_first_line() {
-                    self.history_prev();
-                    Some(Msg::InputChanged(self.component.content().to_string()))
+                    if self.has_queued_message && self.component.content().trim().is_empty() {
+                        // Up on empty input pulls the queued message back for editing
+                        Some(Msg::RecallQueuedMessage)
+                    } else {
+                        self.history_prev();
+                        Some(Msg::InputChanged(self.component.content().to_string()))
+                    }
                 } else {
                     self.component.move_and_clear_selection(|c| c.move_up());
                     Some(Msg::Redraw)
@@ -495,8 +502,11 @@ impl InputComponent {
                 code: Key::Esc,
                 modifiers: KeyModifiers::NONE,
             }) => {
-                if self.has_queued_message {
-                    Some(Msg::ClearQueuedMessage)
+                // Empty input + queued: pull the queue back for editing (a second
+                // Esc then cancels). With a draft, Esc cancels the request and
+                // leaves both the draft and the queued message untouched.
+                if self.has_queued_message && self.component.content().trim().is_empty() {
+                    Some(Msg::RecallQueuedMessage)
                 } else {
                     Some(Msg::CancelRequest)
                 }

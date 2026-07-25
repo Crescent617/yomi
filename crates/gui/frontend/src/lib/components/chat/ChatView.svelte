@@ -64,6 +64,8 @@
   import type { FileEntry } from "../../fs/provider";
   import FilePicker from "../filePicker/FilePicker.svelte";
   import { buildContentBlocks } from "../../types";
+  import { steerQueuedMessage } from "../../queued-messages.svelte";
+  import { isActiveSessionPhase } from "../../session-phase";
   import {
     guiPreferences,
     scheduleGuiPreferencesSave,
@@ -684,6 +686,27 @@
     if (!container.contains(e.relatedTarget as Node)) {
       homeFilePicker.close();
       showCommands = false;
+    }
+  }
+
+  /**
+   * Promote the queued message: steer it into the current run, or send it
+   * as a normal message when the session is idle. Keeps the queue on failure.
+   */
+  async function steerQueued() {
+    const session = activeSession;
+    if (!session) return;
+    const streaming = isActiveSessionPhase(session.phase);
+    try {
+      const sent = await steerQueuedMessage(session.id, streaming);
+      if (sent) {
+        showNotification(
+          streaming ? "Steer message queued for next step" : "Message sent",
+          "info",
+        );
+      }
+    } catch {
+      showNotification("Failed to send steer", "error");
     }
   }
 
@@ -1432,23 +1455,8 @@
               <QueuedInputBar
                 session={activeSession}
                 onEdit={(text) => chatInputRef?.setContent?.(text)}
-                onSteer={(blocks) => {
-                  if (!activeSession) return;
-                  api
-                    .sendSteer(activeSession.id, blocks)
-                    .then(() => {
-                      showNotification(
-                        "Steer message queued for next step",
-                        "info",
-                      );
-                    })
-                    .catch((e: unknown) => {
-                      console.error(
-                        "Failed to send steer:",
-                        e instanceof Error ? e.message : e,
-                      );
-                      showNotification("Failed to send steer", "error");
-                    });
+                onSteer={() => {
+                  void steerQueued();
                 }}
               />
               <PermissionBar />

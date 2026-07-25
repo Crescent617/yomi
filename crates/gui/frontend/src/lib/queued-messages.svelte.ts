@@ -56,3 +56,43 @@ export async function flushQueuedMessage(sessionId: string): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Promote the queued message for a session: steer it into the current run
+ * while streaming, or send it as a normal message when idle (a steer would
+ * otherwise sit in the mailbox until the next run). The queue is cleared
+ * only on success. Returns true when a queued message existed and was sent;
+ * rethrows the send error on failure so the caller can notify.
+ */
+export async function steerQueuedMessage(
+  sessionId: string,
+  isStreaming: boolean,
+): Promise<boolean> {
+  const queued = queuedMessages[sessionId];
+  if (!queued) return false;
+  // Claim synchronously so repeat keydowns / the idle flush can't double-send;
+  // restored below on failure (without clobbering a newer queued message).
+  delete queuedMessages[sessionId];
+  try {
+    if (isStreaming) {
+      await api.sendSteer(
+        sessionId,
+        queued.blocks && queued.blocks.length > 0
+          ? queued.blocks
+          : [{ type: "text", text: queued.text }],
+      );
+    } else if (queued.blocks && queued.blocks.length > 0) {
+      await api.sendMessageBlocks(sessionId, queued.blocks);
+    } else {
+      await api.sendMessage(sessionId, queued.text);
+    }
+  } catch (e) {
+    queuedMessages[sessionId] ??= queued;
+    console.error(
+      "Failed to steer queued message:",
+      e instanceof Error ? e.message : e,
+    );
+    throw e;
+  }
+  return true;
+}

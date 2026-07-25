@@ -243,8 +243,9 @@ pub fn default_help_sections() -> Vec<HelpSection> {
             .add_binding("Shift+Enter", "Insert newline")
             .add_binding("Ctrl+O", "Toggle browse mode")
             .add_binding("Ctrl+R", "Search history")
+            .add_binding("Enter (empty input)", "Steer queued message")
             .add_binding("Ctrl+C", "Clear input / Quit (double press)")
-            .add_binding("Esc", "Clear queue / Cancel request")
+            .add_binding("Esc", "Recall queued message / Cancel request")
             .add_binding("Ctrl+Z", "Suspend to background")
             .add_binding("@", "Mention file")
             .add_binding("/", "Show slash commands"),

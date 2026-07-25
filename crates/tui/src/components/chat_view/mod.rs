@@ -6,6 +6,9 @@ mod core;
 mod message_renderer;
 mod overlay;
 
+// Re-export from message_renderer
+pub use message_renderer::extract_text_from_blocks;
+
 // Re-export from core
 // Re-export from core
 pub use core::{

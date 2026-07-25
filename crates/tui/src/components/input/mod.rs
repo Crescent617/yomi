@@ -31,7 +31,7 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/compact", "Force message compaction"),
     (
         "/steer",
-        "<content> Inject message before next streaming turn",
+        "[content] Inject before next turn (bare: steer queued message)",
     ),
     ("/help", "Show keyboard shortcuts help"),
 ];

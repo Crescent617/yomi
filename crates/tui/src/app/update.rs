@@ -73,6 +73,13 @@ impl Model {
                     }
                     None
                 }
+                Msg::InputEnterEmpty => {
+                    // "Enter again" gesture: empty input steers the queued message
+                    if self.queued_message.is_some() {
+                        self.steer_queued_message();
+                    }
+                    None
+                }
                 // Scrolling - works in both modes
                 Msg::ScrollUp => {
                     let amount = if self.mode == AppMode::Browse { 1 } else { 3 };
@@ -105,8 +112,12 @@ impl Model {
                     let _ = self.ctrl_tx.try_send(Command::Cancel);
                     None
                 }
-                Msg::ClearQueuedMessage => {
-                    self.clear_queued_message();
+                Msg::RecallQueuedMessage => {
+                    self.recall_queued_message();
+                    None
+                }
+                Msg::SteerQueuedMessage => {
+                    self.steer_queued_message();
                     None
                 }
                 Msg::Redraw => {

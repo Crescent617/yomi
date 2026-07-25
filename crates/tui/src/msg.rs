@@ -32,6 +32,8 @@ pub enum Msg {
     // User input (supports multi-modal content blocks)
     InputSubmit(Vec<ContentBlock>),
     InputChanged(String),
+    /// Enter pressed with an empty input (used for the "Enter again to steer" gesture)
+    InputEnterEmpty,
 
     // Scrolling
     ScrollUp,
@@ -46,7 +48,8 @@ pub enum Msg {
 
     // Request control
     CancelRequest,
-    ClearQueuedMessage, // Clear queued message (ESC when queue is not empty)
+    RecallQueuedMessage, // Pull queued message back into input for editing (Up / Esc)
+    SteerQueuedMessage,  // Promote queued message to steer (Enter again / bare /steer)
 
     // Notification message with level and duration (shown in InfoBar)
     Notification(Notification),

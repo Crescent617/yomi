@@ -1,7 +1,6 @@
 <script lang="ts">
   import { Edit3, X, Send, Navigation } from "lucide-svelte";
   import type { SessionState } from "../../state.svelte";
-  import type { TaggedContentBlock } from "../../types";
   import { showNotification } from "../../state.svelte";
   import {
     clearQueuedMessage,
@@ -15,16 +14,14 @@
   }: {
     session: SessionState;
     onEdit: (text: string) => void;
-    onSteer: (blocks: TaggedContentBlock[]) => void;
+    onSteer: () => void;
   } = $props();
 
   const queued = $derived(queuedMessages[session.id]);
 
   function handleSteer() {
     if (!queued) return;
-    const blocks = queued.blocks ?? [{ type: "text", text: queued.text }];
-    onSteer(blocks);
-    clearQueuedMessage(session.id);
+    onSteer();
   }
 
   function handleEdit() {
@@ -46,7 +43,7 @@
     <Send class="w-3.5 h-3.5 text-muted-foreground shrink-0" />
     <div class="flex-1 min-w-0">
       <div class="text-xs text-muted-foreground mb-0.5">
-        Queued — will send when streaming ends
+        Queued — Enter again to steer · auto-send when streaming ends
       </div>
       <div class="text-sm truncate">{queued.text}</div>
     </div>
@@ -54,7 +51,7 @@
       type="button"
       onclick={handleSteer}
       class="shrink-0 inline-flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors"
-      title="Send as steer message"
+      title="Steer the message into the current run"
     >
       <Navigation class="w-3.5 h-3.5" />
       Steer

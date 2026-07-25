@@ -17,7 +17,11 @@
     showNotification,
     inputDrafts,
   } from "../../state.svelte";
-  import { queueMessage } from "../../queued-messages.svelte";
+  import {
+    queueMessage,
+    queuedMessages,
+    steerQueuedMessage,
+  } from "../../queued-messages.svelte";
   import { forkSession, textFromBlocks } from "../../session";
   import { isActiveSessionPhase } from "../../session-phase";
   import { SLASH_COMMANDS } from "../../commands";
@@ -216,6 +220,18 @@
     clearInlineImages();
     fileAttachments = [];
     requestAnimationFrame(autoResize);
+  }
+
+  /** Steer the queued message into the current run; keeps the queue on failure. */
+  async function steerQueued(sessionId: string) {
+    try {
+      const sent = await steerQueuedMessage(sessionId, true);
+      if (sent) {
+        showNotification("Steer message queued for next step", "info");
+      }
+    } catch {
+      showNotification("Failed to send steer", "error");
+    }
   }
 
   function queueInput() {
@@ -772,7 +788,18 @@
         return;
       }
       if (isStreaming) {
-        queueInput();
+        // "Enter again" gesture: empty input steers the queued message
+        const session = activeSession;
+        if (
+          session &&
+          !text &&
+          inlineImages.length === 0 &&
+          queuedMessages[session.id]
+        ) {
+          void steerQueued(session.id);
+        } else {
+          queueInput();
+        }
       } else {
         handleSubmit();
       }

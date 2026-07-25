@@ -724,7 +724,7 @@ pub fn render_queued_message(blocks: &[ContentBlock]) -> Vec<Arc<Line<'static>>>
 
     // Render header with indicator
     lines.push(Arc::new(Line::from(vec![Span::styled(
-        "󰔟 Queued (will send when streaming ends)",
+        "󰔟 Queued (Enter again: steer · ↑/Esc: edit · auto-send at stream end)",
         Style::default()
             .fg(colors::text_secondary())
             .add_modifier(Modifier::ITALIC),

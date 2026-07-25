@@ -479,8 +479,9 @@ impl Model {
         self.state.should_redraw = true;
     }
 
-    /// Clear the queued message (e.g., when session is interrupted)
-    pub(crate) fn clear_queued_message(&mut self) {
+    /// Take the queued message out, clearing its display state in ChatView/InputBox.
+    fn take_queued_message(&mut self) -> Option<Vec<ContentBlock>> {
+        let blocks = self.queued_message.take()?;
         if let Err(e) = self.app.attr(
             &Id::ChatView,
             Attribute::Custom(attr::CLEAR_QUEUED_MESSAGE),
@@ -488,7 +489,6 @@ impl Model {
         ) {
             tracing::warn!("Failed to clear queued message in ChatView: {}", e);
         }
-        // Update InputComponent to know there's no queued message
         if let Err(e) = self.app.attr(
             &Id::InputBox,
             Attribute::Custom(attr::HAS_QUEUED_MESSAGE),
@@ -496,38 +496,96 @@ impl Model {
         ) {
             tracing::warn!("Failed to clear has_queued_message in InputBox: {}", e);
         }
-        self.queued_message = None;
         self.state.should_redraw = true;
+        Some(blocks)
+    }
+
+    /// Clear the queued message (e.g., when session is interrupted)
+    pub(crate) fn clear_queued_message(&mut self) {
+        self.take_queued_message();
     }
 
     /// Send the queued message if any, returns true if a message was sent
     pub(crate) fn send_queued_message(&mut self) -> bool {
-        if let Some(blocks) = self.queued_message.take() {
-            // Clear the queued message display in ChatView
-            if let Err(e) = self.app.attr(
-                &Id::ChatView,
-                Attribute::Custom(attr::CLEAR_QUEUED_MESSAGE),
-                AttrValue::Flag(true),
-            ) {
-                tracing::warn!("Failed to clear queued message in ChatView: {}", e);
-            }
-            // Update InputComponent to know there's no queued message
-            if let Err(e) = self.app.attr(
-                &Id::InputBox,
-                Attribute::Custom(attr::HAS_QUEUED_MESSAGE),
-                AttrValue::Flag(false),
-            ) {
-                tracing::warn!("Failed to clear has_queued_message in InputBox: {}", e);
-            }
+        if let Some(blocks) = self.take_queued_message() {
             // Send to kernel (streaming will be started by ModelEvent::Request)
             if let Err(e) = self.input_tx.try_send(blocks) {
                 tracing::error!("Failed to send queued message to kernel: {}", e);
             }
-            self.state.should_redraw = true;
             true
         } else {
             false
         }
+    }
+
+    /// Promote the queued message to a steer message (Enter again / bare `/steer`).
+    ///
+    /// While streaming, the message is injected before the next streaming step.
+    /// When idle, a steer would sit in the mailbox until the next run, so the
+    /// message is sent normally instead.
+    pub(crate) fn steer_queued_message(&mut self) {
+        let Some(blocks) = self.take_queued_message() else {
+            self.show_notification(&Notification::info(
+                "No queued message — usage: /steer <content>",
+                3000,
+            ));
+            return;
+        };
+        if self.state.is_streaming {
+            match self.ctrl_tx.try_send(Command::Steer { content: blocks }) {
+                Ok(()) => {
+                    self.show_notification(&Notification::info(
+                        "Steer message queued for next step",
+                        3000,
+                    ));
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to send steer command: {}", e);
+                    // Restore so the message is not lost
+                    if let Command::Steer { content } = e.into_inner() {
+                        self.set_queued_message(content);
+                    }
+                    self.show_notification(&Notification::error(
+                        "Failed to send steer. Session may be disconnected.",
+                        5000,
+                    ));
+                }
+            }
+        } else if let Err(e) = self.input_tx.try_send(blocks) {
+            tracing::warn!("Failed to send message: {}", e);
+            // Restore so the message is not lost
+            self.set_queued_message(e.into_inner());
+            self.show_notification(&Notification::error(
+                "Failed to send message. Session may be disconnected.",
+                5000,
+            ));
+        } else {
+            self.show_notification(&Notification::info("Queued message sent", 3000));
+        }
+    }
+
+    /// Pull the queued message back into the input box for editing (Up / Esc).
+    pub(crate) fn recall_queued_message(&mut self) {
+        let Some(blocks) = self.take_queued_message() else {
+            return;
+        };
+        let has_attachments = blocks
+            .iter()
+            .any(|b| !matches!(b, ContentBlock::Text { .. }));
+        let text = crate::components::chat_view::extract_text_from_blocks(&blocks);
+        let _ = self.app.attr(
+            &Id::InputBox,
+            Attribute::Custom(attr::INPUT_CONTENT),
+            AttrValue::String(text),
+        );
+        if has_attachments {
+            self.show_notification(&Notification::warn(
+                "Attachments in the queued message were dropped",
+                3000,
+            ));
+        }
+        self.set_focus(&Id::InputBox);
+        self.state.should_redraw = true;
     }
 
     /// Convert input history to picker items for fuzzy search
