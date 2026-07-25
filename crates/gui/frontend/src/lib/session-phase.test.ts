@@ -2,7 +2,9 @@ import { describe, expect, test } from "vitest";
 import {
   applySessionPhaseIfUnchanged,
   captureSessionPhaseRevisions,
+  getRunStart,
   isActiveSessionPhase,
+  noteRunStart,
   reconcileRunningSessionPhases,
   setSessionPhase,
   type PhaseSession,
@@ -129,5 +131,57 @@ describe("applySessionPhaseIfUnchanged", () => {
       phase: "compacting",
       phase_revision: 1,
     });
+  });
+});
+
+describe("run start tracking", () => {
+  test("idle→active records the start, active→idle clears it", () => {
+    const session = phaseSession("run-tracking-1");
+    expect(getRunStart(session.id)).toBeUndefined();
+
+    setSessionPhase(session, "streaming");
+    const start = getRunStart(session.id);
+    expect(start).toBeTypeOf("number");
+
+    setSessionPhase(session, "idle");
+    expect(getRunStart(session.id)).toBeUndefined();
+  });
+
+  test("active→active transitions keep the original start", () => {
+    const session = phaseSession("run-tracking-2");
+    setSessionPhase(session, "streaming");
+    const start = getRunStart(session.id);
+
+    setSessionPhase(session, "executing_tool");
+    setSessionPhase(session, "compacting");
+    expect(getRunStart(session.id)).toBe(start);
+
+    setSessionPhase(session, "idle");
+  });
+
+  test("a new run after idle gets a fresh start", () => {
+    const session = phaseSession("run-tracking-3");
+    setSessionPhase(session, "streaming");
+    const first = getRunStart(session.id);
+    setSessionPhase(session, "idle");
+
+    setSessionPhase(session, "streaming");
+    const second = getRunStart(session.id);
+    expect(second).toBeTypeOf("number");
+    expect(second!).toBeGreaterThanOrEqual(first!);
+
+    setSessionPhase(session, "idle");
+  });
+
+  test("inactive→inactive records nothing", () => {
+    const session = phaseSession("run-tracking-4");
+    setSessionPhase(session, "closed");
+    expect(getRunStart(session.id)).toBeUndefined();
+  });
+
+  test("noteRunStart is an idempotent get-or-create fallback", () => {
+    const id = "run-tracking-5";
+    const first = noteRunStart(id);
+    expect(noteRunStart(id)).toBe(first);
   });
 });

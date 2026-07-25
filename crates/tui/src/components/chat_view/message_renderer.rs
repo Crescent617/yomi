@@ -674,9 +674,9 @@ fn render_subagent_inline(sa: &SubagentState, _width: usize) -> Vec<Arc<Line<'st
                 }) => {
                     let target = extract_tool_target(tool_name, arguments.as_deref());
                     if let Some(t) = target {
-                        format!("{tool_name} {t}")
+                        format!("{} {t}", tool_label(tool_name))
                     } else {
-                        tool_name.clone()
+                        tool_label(tool_name)
                     }
                 }
                 kernel::event::Event::Tool(kernel::event::ToolEvent::End {
@@ -685,9 +685,9 @@ fn render_subagent_inline(sa: &SubagentState, _width: usize) -> Vec<Arc<Line<'st
                     ..
                 }) => {
                     if *is_error {
-                        format!(" {tool_name}")
+                        format!(" {}", tool_label(tool_name))
                     } else {
-                        format!(" {tool_name}")
+                        format!(" {}", tool_label(tool_name))
                     }
                 }
                 kernel::event::Event::Agent(kernel::event::AgentEvent::Lifecycle {
@@ -1242,6 +1242,22 @@ pub fn extract_tool_target(tool_name: &str, args: Option<&str>) -> Option<String
     tool_header_summary(tool_name, args).target
 }
 
+/// Present-tense verb shown while a tool runs ("Editing foo.rs" instead of
+/// "Calling Edit"). Tools without a dedicated verb fall back to "Calling".
+pub fn tool_verb(tool_name: &str) -> &'static str {
+    match tool_kind(tool_name) {
+        ToolKind::Read => "Reading",
+        ToolKind::Write => "Writing",
+        ToolKind::Edit => "Editing",
+        ToolKind::Shell => "Running",
+        ToolKind::Glob | ToolKind::Grep | ToolKind::WebSearch => "Searching",
+        ToolKind::WebFetch => "Fetching",
+        ToolKind::Agent => "Delegating",
+        ToolKind::Sleep => "Sleeping",
+        _ => "Calling",
+    }
+}
+
 fn tool_label(tool_name: &str) -> String {
     match tool_kind(tool_name) {
         ToolKind::Read => "Read",
@@ -1250,22 +1266,22 @@ fn tool_label(tool_name: &str) -> String {
         ToolKind::Shell => "Shell",
         ToolKind::Glob => "Glob",
         ToolKind::Grep => "Grep",
-        ToolKind::WebFetch => "Web fetch",
-        ToolKind::WebSearch => "Web search",
+        ToolKind::WebFetch => "WebFetch",
+        ToolKind::WebSearch => "WebSearch",
         ToolKind::Skill => "Skill",
         ToolKind::Agent => "Agent",
-        ToolKind::PostMessage => "Post message",
-        ToolKind::AskUser => "Ask user",
+        ToolKind::PostMessage => "PostMessage",
+        ToolKind::AskUser => "AskUser",
         ToolKind::Todo => "Todo",
         ToolKind::Reminder => "Reminder",
         ToolKind::Sleep => "Sleep",
-        ToolKind::UpdateGoal => "Update goal",
-        ToolKind::SendMessage => "Send message",
+        ToolKind::UpdateGoal => "UpdateGoal",
+        ToolKind::SendMessage => "SendMessage",
         ToolKind::Cron => "Cron",
-        ToolKind::TaskCreate => "Create task",
-        ToolKind::TaskGet => "Get task",
-        ToolKind::TaskList => "List tasks",
-        ToolKind::TaskUpdate => "Update task",
+        ToolKind::TaskCreate => "TaskCreate",
+        ToolKind::TaskGet => "TaskGet",
+        ToolKind::TaskList => "TaskList",
+        ToolKind::TaskUpdate => "TaskUpdate",
         ToolKind::Other => return humanize_tool_name(tool_name),
     }
     .to_string()

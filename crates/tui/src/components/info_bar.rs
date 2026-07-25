@@ -1,6 +1,7 @@
 //! Info bar component for displaying streaming progress and notifications
 //!
-//! Shows spinner, token count, elapsed time on the left, and notifications on the right.
+//! Shows a shimmering status word, token count, elapsed time on the left,
+//! and notifications on the right.
 
 use tuirealm::{
     command::{Cmd, CmdResult},
@@ -19,8 +20,9 @@ use tuirealm::{
 
 use crate::{
     attr,
+    components::chat_view::tool_verb,
     msg::Msg,
-    theme::{chars, colors, spinner_char},
+    theme::{chars, colors, shimmer_spans},
     utils::{
         text::{humanize_tool_name, truncate_by_width},
         TimedMessage,
@@ -130,44 +132,22 @@ impl InfoBarState {
     const fn clears_timer(self) -> bool {
         matches!(self, Self::Idle | Self::Completed | Self::Cancelled)
     }
-
-    /// Get the spinner frame and style for this state
-    fn spinner(self, tick_frame: usize) -> (String, Style, &'static str) {
-        match self {
-            Self::Streaming => (
-                spinner_char(tick_frame).to_string(),
-                Style::default()
-                    .fg(colors::accent_system())
-                    .add_modifier(Modifier::BOLD),
-                "",
-            ),
-            Self::Compacting => (
-                spinner_char(tick_frame).to_string(),
-                Style::default()
-                    .fg(colors::accent_warning())
-                    .add_modifier(Modifier::BOLD),
-                "Compacting...",
-            ),
-            Self::Cancelled => (
-                chars::CANCELLED.to_string(),
-                Style::default()
-                    .fg(colors::accent_error())
-                    .add_modifier(Modifier::BOLD),
-                "",
-            ),
-            Self::Completed | Self::Idle => (
-                chars::COMPLETED.to_string(),
-                Style::default()
-                    .fg(colors::accent_success())
-                    .add_modifier(Modifier::BOLD),
-                "",
-            ),
-        }
-    }
 }
 
+/// What kind of text is currently streaming; drives the status word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum StreamText {
+    #[default]
+    None,
+    Thinking,
+    Writing,
+}
+
+/// Ticks per shimmer sweep cycle (100ms tick → 2.4s sweep).
+const SHIMMER_PERIOD_TICKS: usize = 24;
+
 /// Info bar component showing streaming progress and notifications
-/// Layout: [LEFT: spinner/tokens/time] [RIGHT: notifications]
+/// Layout: [LEFT: status/tokens/time] [RIGHT: notifications]
 #[derive(Debug, Default)]
 pub struct InfoBar {
     state: InfoBarState,
@@ -178,6 +158,8 @@ pub struct InfoBar {
     notification: TimedMessage<Notification>,
     /// Current tool call being streamed (`tool_name`)
     current_tool_call: Option<String>,
+    /// Kind of text currently streaming (thinking vs writing)
+    stream_text: StreamText,
 }
 
 impl InfoBar {
@@ -191,6 +173,8 @@ impl InfoBar {
             self.tick_frame = 0;
             if state == InfoBarState::Streaming {
                 self.token_count = 0.0;
+                self.current_tool_call = None;
+                self.stream_text = StreamText::None;
             }
             self.start_time = Some(std::time::Instant::now());
         } else if state.clears_timer() {
@@ -199,20 +183,21 @@ impl InfoBar {
     }
 
     pub fn append_content(&mut self, text: &str) {
+        self.stream_text = StreamText::Writing;
         self.token_count += tokens::estimate_tokens_f64(text);
     }
 
     pub fn append_thinking(&mut self, text: &str) {
+        self.stream_text = StreamText::Thinking;
         self.token_count += tokens::estimate_tokens_f64(text);
     }
 
-    /// Tick handler for animation. Returns true if spinner frame changed and needs redraw.
+    /// Tick handler for animation. Returns true while active: the shimmer
+    /// wave advances every tick (10 Hz).
     pub fn tick(&mut self) -> bool {
         if self.state.is_active() {
-            let old_spinner_idx = (self.tick_frame / 3) % 3;
             self.tick_frame = self.tick_frame.wrapping_add(1);
-            let new_spinner_idx = (self.tick_frame / 3) % 3;
-            old_spinner_idx != new_spinner_idx
+            true
         } else {
             false
         }
@@ -235,12 +220,14 @@ impl InfoBar {
         self.notification.check_timeout();
     }
 
-    /// Format elapsed time for display (e.g., " · 1.5s" or " · 2m30s")
+    /// Format elapsed time for display (e.g., " · 4s" or " · 2m03s").
+    /// Whole-second granularity: the bar redraws every tick while active,
+    /// and sub-second digits would churn at 10 Hz.
     fn format_elapsed(&self) -> Option<String> {
         let start = self.start_time?;
         let elapsed = start.elapsed().as_secs_f64();
         let time_str = if elapsed < 60.0 {
-            format!(" · {elapsed:.1}s")
+            format!(" · {}s", elapsed as u64)
         } else {
             let mins = (elapsed / 60.0) as u64;
             let secs = (elapsed % 60.0) as u64;
@@ -249,7 +236,36 @@ impl InfoBar {
         Some(time_str)
     }
 
-    /// Render the left section (spinner, tokens, elapsed time, tool call)
+    /// Shimmer wave position (0.0..1.0) for the current tick frame.
+    #[allow(clippy::cast_precision_loss)]
+    fn shimmer_phase(&self) -> f32 {
+        (self.tick_frame % SHIMMER_PERIOD_TICKS) as f32 / SHIMMER_PERIOD_TICKS as f32
+    }
+
+    /// Status word shown with the shimmer sweep: the tool verb while a
+    /// tool runs ("Running"), otherwise what the agent is currently doing.
+    fn status_word(&self) -> Option<String> {
+        match self.state {
+            InfoBarState::Compacting => Some("Compacting".to_string()),
+            InfoBarState::Streaming => Some(match self.current_tool_call.as_deref() {
+                Some(name) => {
+                    let verb = tool_verb(name);
+                    if verb == "Calling" {
+                        format!("Calling {}", humanize_tool_name(name))
+                    } else {
+                        verb.to_string()
+                    }
+                }
+                None => match self.stream_text {
+                    StreamText::Writing => "Writing".to_string(),
+                    StreamText::None | StreamText::Thinking => "Thinking".to_string(),
+                },
+            }),
+            _ => None,
+        }
+    }
+
+    /// Render the left section (status word, tokens, elapsed)
     fn render_left_section(&self) -> Line<'static> {
         // Show when streaming, compacting, or has tokens, or has tool call
         if self.state == InfoBarState::Idle
@@ -261,24 +277,33 @@ impl InfoBar {
 
         let mut spans = Vec::new();
 
-        // Get spinner/indicator and style from state
-        let (indicator, indicator_style, status_text) = self.state.spinner(self.tick_frame);
-        spans.push(Span::styled(format!("{indicator} "), indicator_style));
-
-        // Status text (e.g., "Compacting...")
-        if !status_text.is_empty() {
-            spans.push(Span::styled(format!("{status_text} "), indicator_style));
+        // Static indicator for terminal states; active states rely on the
+        // shimmering word alone (no spinner glyph)
+        match self.state {
+            InfoBarState::Cancelled => spans.push(Span::styled(
+                format!("{} ", chars::CANCELLED),
+                Style::default()
+                    .fg(colors::accent_error())
+                    .add_modifier(Modifier::BOLD),
+            )),
+            InfoBarState::Completed | InfoBarState::Idle => spans.push(Span::styled(
+                format!("{} ", chars::COMPLETED),
+                Style::default()
+                    .fg(colors::accent_success())
+                    .add_modifier(Modifier::BOLD),
+            )),
+            _ => {}
         }
 
-        // Show tool call in progress
-        if let Some(tool_name) = &self.current_tool_call {
-            let tool_style = Style::default()
-                .fg(colors::accent_info())
-                .add_modifier(Modifier::ITALIC);
-            spans.push(Span::styled(
-                format!("calling {}... ", humanize_tool_name(tool_name)),
-                tool_style,
-            ));
+        // Status word with a shimmer wave sweeping through: `Running... `
+        if let Some(word) = self.status_word() {
+            let phase = self.shimmer_phase();
+            let (base, peak) = match self.state {
+                InfoBarState::Compacting => (colors::accent_warning(), colors::text_primary()),
+                _ => (colors::text_secondary(), colors::text_primary()),
+            };
+            spans.extend(shimmer_spans(&format!("{word}..."), phase, base, peak));
+            spans.push(Span::raw(" "));
         }
 
         let token_style = Style::default().fg(colors::text_secondary());
@@ -383,10 +408,12 @@ impl Component for InfoBar {
             Attribute::Custom(attr::STOP_STREAMING) => {
                 self.set_state(InfoBarState::Completed);
                 self.current_tool_call = None;
+                self.stream_text = StreamText::None;
             }
             Attribute::Custom(attr::CANCEL_STREAMING) => {
                 self.set_state(InfoBarState::Cancelled);
                 self.current_tool_call = None;
+                self.stream_text = StreamText::None;
             }
             Attribute::Custom(attr::START_COMPACTING) => {
                 self.set_state(InfoBarState::Compacting);

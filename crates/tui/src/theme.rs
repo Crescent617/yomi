@@ -8,7 +8,10 @@
 
 use kernel::ENV_PREFIX;
 use std::sync::{LazyLock, RwLock};
-use tuirealm::ratatui::style::{Color, Modifier, Style};
+use tuirealm::ratatui::{
+    style::{Color, Modifier, Style},
+    text::Span,
+};
 
 /// Semantic color configuration - modify these to customize the theme
 /// NOTE: Should follow a consistent naming convention for easy access and maintenance. DO NOT add color like 'gray', 'blue', etc.
@@ -392,14 +395,59 @@ pub mod chars {
     // Status indicators
     pub const CANCELLED: &str = "✕";
     pub const COMPLETED: &str = "✓";
-
-    // Spinner frames
-    pub const SPINNER: &[&str] = &["∙∙", "●∙", "∙●"];
 }
 
-/// Get spinner character for frame index
-pub fn spinner_char(frame: usize) -> &'static str {
-    chars::SPINNER[(frame / 3) % chars::SPINNER.len()]
+/// Extract RGB components from a color, falling back to the default
+/// secondary text tone for non-RGB colors (e.g. `Color::Reset`).
+const fn rgb_components(color: Color) -> (u8, u8, u8) {
+    match color {
+        Color::Rgb(r, g, b) => (r, g, b),
+        _ => (0x90, 0x90, 0x9F),
+    }
+}
+
+/// Linearly interpolate between two colors (`t` = 0.0 → `base`, 1.0 → `peak`).
+#[allow(clippy::cast_precision_loss)]
+pub fn lerp_color(base: Color, peak: Color, t: f32) -> Color {
+    let (br, bg, bb) = rgb_components(base);
+    let (pr, pg, pb) = rgb_components(peak);
+    let t = t.clamp(0.0, 1.0);
+    let mix = |a: u8, b: u8| {
+        let (a, b) = (f32::from(a), f32::from(b));
+        (a + (b - a) * t).round() as u8
+    };
+    Color::Rgb(mix(br, pr), mix(bg, pg), mix(bb, pb))
+}
+
+/// Render text as per-character spans with a brightness wave sweeping
+/// left → right — the terminal equivalent of the GUI's shimmer text.
+/// Italic, to read as an ephemeral status rather than content.
+/// `phase` is the position within one sweep cycle (0.0..1.0).
+#[allow(clippy::cast_precision_loss)]
+pub fn shimmer_spans(text: &str, phase: f32, base: Color, peak: Color) -> Vec<Span<'static>> {
+    /// Highlight half-width, in characters.
+    const WAVE_WIDTH: f32 = 2.5;
+
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return Vec::new();
+    }
+    let travel = chars.len() as f32 + WAVE_WIDTH * 2.0;
+    let center = phase.clamp(0.0, 1.0) * travel - WAVE_WIDTH;
+    chars
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let distance = (i as f32 - center).abs();
+            let t = (1.0 - distance / WAVE_WIDTH).max(0.0);
+            Span::styled(
+                c.to_string(),
+                Style::default()
+                    .fg(lerp_color(base, peak, t))
+                    .add_modifier(Modifier::ITALIC),
+            )
+        })
+        .collect()
 }
 
 /// Helper to create a custom color from RGB values

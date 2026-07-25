@@ -15,10 +15,37 @@ export function isActiveSessionPhase(phase: string): boolean {
   return ACTIVE_PHASES.has(phase);
 }
 
+// Run start timestamps keyed by session id. Tracked at the phase-event
+// level (not in components) so runs that end while their chat view is not
+// mounted are still cleared, and switching sessions mid-run keeps the
+// clock. Sessions already running when the GUI loads have no entry; the
+// inline status falls back to `noteRunStart` for those.
+const runStarts = new Map<string, number>();
+
+/** Start time of the session's current run, if known. */
+export function getRunStart(sessionId: string): number | undefined {
+  return runStarts.get(sessionId);
+}
+
+/** Get or lazily create a run start (fallback for pre-observed runs). */
+export function noteRunStart(sessionId: string): number {
+  const existing = runStarts.get(sessionId);
+  if (existing != null) return existing;
+  const now = Date.now();
+  runStarts.set(sessionId, now);
+  return now;
+}
+
 /** Record an authoritative lifecycle phase event. */
 export function setSessionPhase(session: PhaseSession, phase: string): void {
+  const wasActive = isActiveSessionPhase(session.phase);
+  const isActive = isActiveSessionPhase(phase);
   session.phase = phase;
   session.phase_revision += 1;
+  // Track run boundaries for elapsed-time display: a run starts on the
+  // idle→active transition and ends when the session leaves active phases.
+  if (isActive && !wasActive) runStarts.set(session.id, Date.now());
+  if (!isActive && wasActive) runStarts.delete(session.id);
 }
 
 /** Infer a phase from activity without revising an already matching phase. */

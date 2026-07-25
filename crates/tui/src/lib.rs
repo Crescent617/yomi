@@ -62,6 +62,5 @@ pub fn daemon_mode() -> bool {
 
 // Re-export theme utilities
 pub use theme::{
-    chars, colors, current_theme, hex, presets, reset_theme, rgb, set_theme, spinner_char, Styles,
-    ThemeConfig,
+    chars, colors, current_theme, hex, presets, reset_theme, rgb, set_theme, Styles, ThemeConfig,
 };

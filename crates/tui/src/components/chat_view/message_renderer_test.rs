@@ -1,4 +1,4 @@
-use super::{extract_tool_target, render_message, tool_icon};
+use super::{extract_tool_target, render_message, tool_icon, tool_label, tool_verb};
 use crate::components::chat_view::{HistoryMessage, ToolStatus};
 use kernel::tools::POST_MESSAGE_TOOL_NAME;
 
@@ -202,4 +202,36 @@ fn snake_case_builtins_extract_targets() {
         extract_tool_target("task_update", Some(r#"{"taskId":"task-1"}"#)),
         Some("task-1".to_string())
     );
+}
+
+#[test]
+fn tool_verb_maps_known_tools() {
+    assert_eq!(tool_verb("edit"), "Editing");
+    assert_eq!(tool_verb("read"), "Reading");
+    assert_eq!(tool_verb("write"), "Writing");
+    assert_eq!(tool_verb("shell"), "Running");
+    assert_eq!(tool_verb("grep"), "Searching");
+    assert_eq!(tool_verb("web_fetch"), "Fetching");
+    assert_eq!(tool_verb("agent"), "Delegating");
+    assert_eq!(tool_verb("sleep"), "Sleeping");
+}
+
+#[test]
+fn tool_verb_falls_back_to_calling() {
+    assert_eq!(tool_verb("mcp__something"), "Calling");
+    assert_eq!(tool_verb("todo"), "Calling");
+}
+
+#[test]
+fn tool_label_uses_camel_case_for_multi_word_tools() {
+    assert_eq!(tool_label("web_search"), "WebSearch");
+    assert_eq!(tool_label("web_fetch"), "WebFetch");
+    assert_eq!(tool_label("post_message"), "PostMessage");
+    assert_eq!(tool_label("ask_user"), "AskUser");
+    assert_eq!(tool_label("task_create"), "TaskCreate");
+    assert_eq!(tool_label("update_goal"), "UpdateGoal");
+    // single-word tools keep their plain label
+    assert_eq!(tool_label("read"), "Read");
+    // unknown tools are humanized the same way
+    assert_eq!(tool_label("my_custom_tool"), "MyCustomTool");
 }

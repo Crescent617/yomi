@@ -9,6 +9,7 @@
   } from "lucide-svelte";
   import { getActiveSession, showNotification } from "../../state.svelte";
   import * as api from "../../api";
+  import { toolLabel as formatToolLabel } from "../tool/tool-utils";
 
   const activeSession = $derived(getActiveSession());
   const permissions = $derived(activeSession?.pending_permissions ?? []);
@@ -33,12 +34,8 @@
     permission?.tool_args ? summarizeArguments(permission.tool_args) : "",
   );
   const toolLabel = $derived(
-    permission?.tool_name ? capitalize(permission.tool_name) : "Tool",
+    permission?.tool_name ? formatToolLabel(permission.tool_name) : "Tool",
   );
-
-  function capitalize(value: string): string {
-    return value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
-  }
 
   function formatJson(value: string): string {
     try {

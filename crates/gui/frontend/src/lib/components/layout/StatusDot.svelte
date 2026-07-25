@@ -1,7 +1,8 @@
 <script lang="ts">
   /**
    * Session activity indicator.
-   * - running (streaming / executing_tool / compacting): 6-dot chase spinner
+   * - running (streaming / executing_tool / compacting): typing dots —
+   *   the "agent is producing" metaphor from chat apps
    * - attention (any other non-idle, non-closed phase, e.g. waiting for
    *   permission): ping halo to draw the eye — this state needs the user.
    */
@@ -14,9 +15,9 @@
 
 {#if active}
   {#if running}
-    <span class="spinner text-primary shrink-0" title="Running">
-      {#each Array(6) as _, i (i)}
-        <span class="spin-dot" style="--i: {i}"></span>
+    <span class="typing text-primary shrink-0" title="Running">
+      {#each Array(3) as _, i (i)}
+        <span class="typing-dot" style="--i: {i}"></span>
       {/each}
     </span>
   {:else}
@@ -31,37 +32,36 @@
 {/if}
 
 <style>
-  .spinner {
-    position: relative;
+  .typing {
     display: inline-flex;
-    width: 10px;
+    align-items: center;
+    gap: 2px;
     height: 10px;
+    padding: 0 1px;
   }
-  .spin-dot {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 2px;
-    height: 2px;
-    margin: -1px 0 0 -1px;
+  .typing-dot {
+    width: 3px;
+    height: 3px;
     border-radius: 9999px;
     background: currentColor;
-    transform: rotate(calc(var(--i) * 60deg)) translateY(-3.5px);
-    animation: dot-chase 0.9s linear infinite;
-    animation-delay: calc(var(--i) * -0.15s);
+    animation: typing-wave 1.2s ease-in-out infinite;
+    animation-delay: calc(var(--i) * 0.15s);
   }
-  @keyframes dot-chase {
+  @keyframes typing-wave {
     0%,
+    60%,
     100% {
-      opacity: 1;
+      transform: translateY(0);
+      opacity: 0.6;
     }
-    60% {
-      opacity: 0.15;
+    30% {
+      transform: translateY(-1.5px);
+      opacity: 1;
     }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .spin-dot {
+    .typing-dot {
       animation: none;
       opacity: 1;
     }

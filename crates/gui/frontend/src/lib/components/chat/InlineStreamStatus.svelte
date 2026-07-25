@@ -1,12 +1,15 @@
 <script lang="ts">
   import type { Message, SessionState } from "../../state.svelte";
   import { findThinking, hasText } from "../../session";
-  import { isActiveSessionPhase } from "../../session-phase";
+  import { isActiveSessionPhase, noteRunStart } from "../../session-phase";
   import { humanizeToolName } from "../tool/tool-utils";
   import {
     estimateJsonTokens,
     estimateTextTokens,
+    extractPartialTarget,
+    formatRunElapsed,
     formatStreamTokens,
+    toolVerb,
   } from "./stream-status";
 
   let {
@@ -17,8 +20,16 @@
     messages: Message[];
   } = $props();
 
-  const currentToolName = $derived.by(() => {
-    if (session.streaming_tool_name) return session.streaming_tool_name;
+  /** The tool currently running (or streaming its arguments), with raw args. */
+  const currentTool = $derived.by((): { name: string; args: string } | null => {
+    if (session.streaming_tool_name) {
+      const lastMsg = messages.at(-1);
+      const args =
+        lastMsg?.type === "assistant"
+          ? (lastMsg.tool_calls?.at(-1)?.arguments ?? "")
+          : "";
+      return { name: session.streaming_tool_name, args };
+    }
     if (session.phase !== "streaming" && session.phase !== "executing_tool") {
       return null;
     }
@@ -26,13 +37,16 @@
     for (let i = messages.length - 1; i >= 0; i--) {
       const message = messages[i];
       if (message.type === "tool") {
-        if (message.status === "running") return message.tool_name;
+        if (message.status === "running") {
+          return { name: message.tool_name, args: message.arguments };
+        }
         continue;
       }
       if (message.type === "assistant") {
         if (findThinking(message.content) || hasText(message.content))
           return null;
-        return message.tool_calls?.at(-1)?.name ?? null;
+        const call = message.tool_calls?.at(-1);
+        return call ? { name: call.name, args: call.arguments } : null;
       }
       return null;
     }
@@ -41,7 +55,7 @@
 
   const status = $derived.by(() => {
     if (session.phase === "compacting") return "Compacting";
-    if (currentToolName) return "Calling";
+    if (currentTool) return "Calling";
 
     for (let i = messages.length - 1; i >= 0; i--) {
       const message = messages[i];
@@ -58,8 +72,23 @@
     return "Thinking";
   });
 
-  const displayToolName = $derived(
-    currentToolName ? humanizeToolName(currentToolName) : null,
+  /** Present-tense verb for the current tool, null when not in a tool. */
+  const verb = $derived(currentTool ? toolVerb(currentTool.name) : null);
+  /** Leading status word: tool verb, or Thinking/Writing/Compacting. */
+  const leadWord = $derived(
+    currentTool && verb && verb !== "Calling" ? verb : status,
+  );
+  /** Accent beside the lead word: tool target, or the humanized name of
+   *  tools without a known verb. */
+  const target = $derived(
+    currentTool ? extractPartialTarget(currentTool.name, currentTool.args) : "",
+  );
+  const accent = $derived(
+    currentTool && verb && verb !== "Calling"
+      ? target
+      : currentTool
+        ? humanizeToolName(currentTool.name)
+        : null,
   );
 
   // Live token estimate for whatever is currently streaming: thinking text
@@ -83,6 +112,24 @@
   });
 
   const visible = $derived(isActiveSessionPhase(session.phase));
+
+  // Elapsed time of the current run. Run boundaries are tracked in
+  // session-phase (idle→active transitions), so the clock resets on every
+  // new run, survives switching sessions mid-run, and needs no cleanup
+  // here — this component only ticks the display.
+  let now = $state(Date.now());
+  const runStart = $derived(visible ? noteRunStart(session.id) : null);
+  const elapsed = $derived(
+    runStart != null ? Math.floor((now - runStart) / 1000) : 0,
+  );
+
+  $effect(() => {
+    if (!visible) return;
+    const timer = setInterval(() => {
+      now = Date.now();
+    }, 1000);
+    return () => clearInterval(timer);
+  });
 </script>
 
 {#if visible}
@@ -92,33 +139,25 @@
     aria-live="polite"
     aria-atomic="true"
   >
-    <span
-      class="stream-track relative h-2 w-[18px] shrink-0 overflow-hidden"
-      aria-hidden="true"
-    >
-      <span
-        class="absolute left-0 right-0 top-1/2 h-px -translate-y-1/2 bg-primary/15"
-      ></span>
-      <span class="stream-comet absolute inset-y-0 left-0 w-3">
+    <span>
+      <span class="status-shimmer">{leadWord}</span>{#if accent}
         <span
-          class="absolute left-0 top-1/2 h-px w-2.5 -translate-y-1/2 bg-gradient-to-r from-transparent via-primary/45 to-primary/80"
-        ></span>
-        <span
-          class="absolute right-0 top-1/2 size-1.5 -translate-y-1/2 rounded-full bg-primary"
-        ></span>
-      </span>
+          class="ml-1 inline-block max-w-72 truncate align-bottom font-mono font-medium text-primary/85"
+          title={accent}>{accent}</span
+        >
+      {/if}<span class="status-shimmer">...</span>
     </span>
-    {#key `${status}-${displayToolName ?? ""}`}
-      <span class="status-label">
-        {status}{#if displayToolName}
-          <span class="font-mono font-medium text-primary/85"
-            >&nbsp;{displayToolName}</span
-          >
-        {/if}...
-      </span>
-    {/key}
+    <!-- Elapsed and token counts tick constantly; keep them out of the
+         aria-live region so screen readers are not bombarded. -->
+    <span
+      aria-hidden="true"
+      class="font-mono tabular-nums text-muted-foreground/60"
+      >{formatRunElapsed(elapsed)}</span
+    >
     {#if streamTokens}
-      <span class="font-mono tabular-nums text-muted-foreground/60"
+      <span
+        aria-hidden="true"
+        class="font-mono tabular-nums text-muted-foreground/60"
         >{streamTokens}</span
       >
     {/if}
@@ -126,52 +165,41 @@
 {/if}
 
 <style>
-  @keyframes stream-flow {
-    0% {
-      opacity: 0;
-      transform: translateX(-0.75rem);
-    }
-    18% {
-      opacity: 1;
-    }
-    82% {
-      opacity: 1;
-    }
-    100% {
-      opacity: 0;
-      transform: translateX(1.125rem);
-    }
+  /* Shimmer sweep across the status word: muted base, foreground peak. */
+  .status-shimmer {
+    font-style: italic;
+    background: linear-gradient(
+      90deg,
+      var(--color-muted-foreground) 0%,
+      var(--color-muted-foreground) 40%,
+      var(--color-foreground) 50%,
+      var(--color-muted-foreground) 60%,
+      var(--color-muted-foreground) 100%
+    );
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    opacity: 0.8;
+    animation: shimmer-sweep 2s linear infinite;
   }
 
-  @keyframes status-enter {
+  @keyframes shimmer-sweep {
     from {
-      opacity: 0;
-      transform: translateX(-0.125rem);
+      background-position: 100% 0;
     }
     to {
-      opacity: 1;
-      transform: translateX(0);
+      background-position: -100% 0;
     }
-  }
-
-  .stream-comet {
-    animation: stream-flow 1.15s ease-in-out infinite;
-    will-change: transform, opacity;
-  }
-
-  .status-label {
-    animation: status-enter 0.16s ease-out;
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .stream-comet,
-    .status-label {
+    .status-shimmer {
       animation: none;
-    }
-
-    .stream-comet {
-      opacity: 1;
-      transform: translateX(0.375rem);
+      background: none;
+      color: inherit;
+      -webkit-text-fill-color: currentColor;
     }
   }
 </style>

@@ -31,7 +31,7 @@ export function compactArgs(args: string, maxLen = 120): string {
   }
 }
 
-function normalizeToolName(toolName: string): string {
+export function normalizeToolName(toolName: string): string {
   const name = toolName.toLowerCase().replace(/[_-]/g, "");
   const aliases: Record<string, string> = {
     readfile: "read",
@@ -84,20 +84,20 @@ export function toolLabel(toolName: string, isSubagent = false): string {
     command: "Shell",
     glob: "Glob",
     grep: "Grep",
-    webfetch: "Web fetch",
-    websearch: "Web search",
+    webfetch: "WebFetch",
+    websearch: "WebSearch",
     skill: "Skill",
-    postmessage: "Post message",
-    askuser: "Ask user",
+    postmessage: "PostMessage",
+    askuser: "AskUser",
     todo: "Todo",
     reminder: "Reminder",
     sleep: "Sleep",
-    updategoal: "Update goal",
+    updategoal: "UpdateGoal",
     cron: "Cron",
-    taskcreate: "Create task",
-    taskget: "Get task",
-    tasklist: "List tasks",
-    taskupdate: "Update task",
+    taskcreate: "TaskCreate",
+    taskget: "TaskGet",
+    tasklist: "TaskList",
+    taskupdate: "TaskUpdate",
   };
   return (
     labels[normalizeToolName(toolName)] ??

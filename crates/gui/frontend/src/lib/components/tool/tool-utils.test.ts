@@ -17,14 +17,14 @@ const argumentsJson = JSON.stringify({
 describe("tool header summaries", () => {
   test.each([
     ["read_file", { path: "src/main.rs" }, "Read", "src/main.rs"],
-    ["web_search", { query: "Svelte runes" }, "Web search", "Svelte runes"],
+    ["web_search", { query: "Svelte runes" }, "WebSearch", "Svelte runes"],
     [
       "ask_user",
       { questions: [{ question: "Continue?" }] },
-      "Ask user",
+      "AskUser",
       "Continue?",
     ],
-    ["task_create", { subject: "Ship release" }, "Create task", "Ship release"],
+    ["task_create", { subject: "Ship release" }, "TaskCreate", "Ship release"],
   ])("summarizes %s", (name, args, label, target) => {
     expect(toolLabel(name)).toBe(label);
     expect(extractTarget(name, JSON.stringify(args))).toBe(target);
