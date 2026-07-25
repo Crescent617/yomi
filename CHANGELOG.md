@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-07-25
+
+### Fixed
+- 开启 `reply_in_thread` 时，频道级触发不再注入最近聊天记录（频道里跨话题的闲聊不再是新话题的上下文噪音）；话题内触发仍正常注入该话题的历史。
+- 历史上下文不再重复注入已消费消息：游标在每条被处理的群消息（触发与命令）后单调推进，bot 创建的话题的 root 消息（已在频道级被消费）不再被当作新历史注入。
+
 ## [0.7.1] - 2026-07-25
 
 ### Changed
