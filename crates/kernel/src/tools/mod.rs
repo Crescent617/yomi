@@ -431,6 +431,13 @@ impl ToolFlags {
         self
     }
 
+    /// Set the goal tool flag.
+    #[must_use]
+    pub const fn with_goal(mut self, enabled: bool) -> Self {
+        self.goal = enabled;
+        self
+    }
+
     /// Set the todo tool flag.
     #[must_use]
     pub const fn with_todo(mut self, enabled: bool) -> Self {

@@ -437,16 +437,19 @@ impl Conductor {
 
         let working_dir = cwd.unwrap_or_default();
 
-        // Channel sessions (and their subagent descendants) have no
-        // interactive UI to answer ask_user; block the tool so the model
-        // doesn't hang waiting for an answer that can never arrive.
+        let is_sub_agent = sid.starts_with(crate::types::SUB_PREFIX);
+
+        // ask_user needs an interactive user to answer: channel sessions
+        // (and their subagent descendants) have none, and sub-agents never
+        // talk to the user directly — they report to the parent (async
+        // ones via post_message), which relays questions instead.
         // Temporary heuristic until per-session tool_blocklist is persisted
         // in session meta at creation time.
         let mut tool_blocklist = self.agent_config.tool_blocklist.clone();
         if !tool_blocklist
             .iter()
             .any(|p| p == crate::tools::ask_user::ASK_USER_TOOL_NAME)
-            && self.is_channel_routed(sid, session_info.as_ref()).await
+            && (is_sub_agent || self.is_channel_routed(sid, session_info.as_ref()).await)
         {
             tool_blocklist.push(crate::tools::ask_user::ASK_USER_TOOL_NAME.to_string());
         }
@@ -455,9 +458,10 @@ impl Conductor {
         // their own channel routing: a subagent's output never reaches the
         // platform directly (the hub forwarder skips unrouted sessions), so
         // its parent decides what becomes an attachment. Note the narrower
-        // predicate than the ask_user blocklist above, which walks parents.
+        // predicate than the ask_user blocklist above, which covers every
+        // sub-agent outright.
         let base_prompt = match &self.agent_shared.channel_hub {
-            Some(hub) if hub.is_channel_session(sid).await => format!(
+            Some(hub) if !is_sub_agent && hub.is_channel_session(sid).await => format!(
                 "{}\n\n{}",
                 self.base_prompt,
                 crate::prompt::CHANNEL_DELIVERY_SECTION
@@ -467,12 +471,14 @@ impl Conductor {
 
         // Resolve tool flags here — session-level policy lives in the
         // conductor, not the agent: sub-agent sessions must not spawn
-        // further sub-agents.
-        let tool_flags = crate::tools::ToolFlags::new(
-            self.agent_config.enable_subagent && !sid.starts_with(crate::types::SUB_PREFIX),
-        )
-        .with_cron(self.agent_config.enable_cron_tool)
-        .with_todo(self.agent_config.enable_todo_tool);
+        // further sub-agents, nor manage cron jobs, nor drive the goal
+        // loop (an active goal would auto-continue the sub past its task,
+        // bypassing max_iterations and hanging a waiting parent).
+        let tool_flags =
+            crate::tools::ToolFlags::new(self.agent_config.enable_subagent && !is_sub_agent)
+                .with_cron(self.agent_config.enable_cron_tool && !is_sub_agent)
+                .with_goal(!is_sub_agent)
+                .with_todo(self.agent_config.enable_todo_tool);
 
         let args = AgentSpawnArgs::new(base_prompt, sid.0.clone(), mailbox, working_dir)
             .with_skills(skills)
