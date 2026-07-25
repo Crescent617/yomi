@@ -13,6 +13,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **分类**：`Added` 新能力 / `Changed` 行为变化 / `Fixed` 问题修复 / `Removed` 移除能力。
 - **配置与命令必须点名**：新增或变更配置项、命令时，写出名称与默认值。
 
+## [0.7.3] - 2026-07-25
+
+### Added
+- 通道（Telegram / 飞书）会话支持回复附件：agent 在回复中以 `<yomi:attachments>` 块声明文件，随回复自动发送；相对路径限制在会话工作区内，失败会在回复中注明。
+- GUI 新增主题系统（Config → Themes）：5 套内置主题（Zed One、GitHub、Solarized、Nord、Dracula），可克隆为多个自定义主题并以 JSON 编辑、实时预览。
+- GUI 工具结果与用户消息中的图片渲染为缩略图，点击全屏预览（Esc / 点击背景关闭）。
+- TUI 折叠的 edit 工具改为预览紧凑 diff（最多 10 行，附展开提示）。
+- 运行中排队的消息支持 steer：输入框为空时按 Enter 将排队消息转为立即插话（TUI 与 GUI）；TUI 中 Up / Esc 可将排队消息召回输入框编辑。
+
+### Changed
+- todo 工具改为实验特性且默认关闭：`[features] todo_tool`（默认继承 `all`，即 `false`）；关闭时 todo 提醒一并停用。
+- GUI 运行中的活动区改为整个 run 期间保持展开，修复流式输出中途的折叠/展开闪烁。
+
+### Fixed
+- 飞书发送文件修复平台报错 234001；空文件与超限文件在发送前即报出具体原因；单个文件失败不再阻断其余文件。
+- Telegram 发送文件保留原始文件名。
+
 ## [0.7.2] - 2026-07-25
 
 ### Fixed
