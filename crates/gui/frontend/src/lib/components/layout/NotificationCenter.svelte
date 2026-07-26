@@ -11,6 +11,7 @@
   import { activateSession } from "../../session";
   import { clock } from "../../clock.svelte";
   import { relativeNotificationTime } from "../../notification-center";
+  import PopoverPanel from "../ui/PopoverPanel.svelte";
 
   let open = $state(false);
   let buttonRef = $state<HTMLButtonElement>();
@@ -88,35 +89,29 @@
   </button>
 
   {#if open}
-    <div
+    <PopoverPanel
+      bind:ref={panelRef}
       id="notification-center-panel"
       role="dialog"
       aria-label="Notifications"
-      bind:this={panelRef}
-      class="absolute bottom-full right-0 z-40 mb-2 w-[22rem] max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl"
+      title="Notifications"
+      class="absolute bottom-full right-0 z-40 mb-1 w-[22rem] max-w-[calc(100vw-1.5rem)]"
     >
-      <header
-        class="flex items-center justify-between border-b border-border px-3 py-2"
-      >
-        <div class="flex min-w-0 items-baseline gap-2">
-          <h2 class="text-sm font-semibold">Notifications</h2>
-          {#if unreadCount > 0}
-            <span class="text-[11px] text-muted-foreground">
-              {unreadCount} unread
-            </span>
-          {/if}
-        </div>
+      {#snippet headerActions()}
         {#if unreadCount > 0}
+          <span class="text-[10px] text-muted-foreground">
+            {unreadCount} unread
+          </span>
           <button
             type="button"
-            class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+            class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
             onclick={markAllSessionNotificationsRead}
           >
             <CheckCheck class="size-3" />
             Mark all read
           </button>
         {/if}
-      </header>
+      {/snippet}
 
       {#if sessionNotifications.length === 0}
         <div class="grid place-items-center px-6 py-10 text-center">
@@ -131,53 +126,51 @@
           </p>
         </div>
       {:else}
-        <div class="max-h-80 overflow-y-auto py-1">
-          {#each sessionNotifications as notification (notification.id)}
-            {@const project = projectName(notification.projectId)}
-            <button
-              type="button"
-              class="popover-list-item flex w-full items-start gap-2 px-3 py-2 text-left"
-              onclick={() =>
-                void openNotification(notification.id, notification.sessionId)}
-            >
-              <span
-                class="mt-1.5 size-1.5 shrink-0 rounded-full {notification.read
-                  ? 'bg-transparent'
-                  : 'bg-primary'}"
-                aria-label={notification.read ? undefined : "Unread"}
-              ></span>
-              <span class="min-w-0 flex-1">
-                <span class="flex items-center gap-2">
-                  <span
-                    class="min-w-0 flex-1 truncate text-xs {notification.read
-                      ? 'font-normal text-muted-foreground'
-                      : 'font-medium text-foreground'}"
-                  >
-                    {notification.title}
-                  </span>
-                  <time
-                    datetime={notification.completedAt}
-                    class="shrink-0 text-[10px] tabular-nums text-muted-foreground/80"
-                    title={new Date(notification.completedAt).toLocaleString()}
-                  >
-                    {relativeNotificationTime(
-                      notification.completedAt,
-                      clock.now,
-                    )}
-                  </time>
+        {#each sessionNotifications as notification (notification.id)}
+          {@const project = projectName(notification.projectId)}
+          <button
+            type="button"
+            class="popover-list-item flex w-full items-start gap-2 px-3 py-2 text-left"
+            onclick={() =>
+              void openNotification(notification.id, notification.sessionId)}
+          >
+            <span
+              class="mt-1.5 size-1.5 shrink-0 rounded-full {notification.read
+                ? 'bg-transparent'
+                : 'bg-primary'}"
+              aria-label={notification.read ? undefined : "Unread"}
+            ></span>
+            <span class="min-w-0 flex-1">
+              <span class="flex items-center gap-2">
+                <span
+                  class="min-w-0 flex-1 truncate text-xs {notification.read
+                    ? 'font-normal text-muted-foreground'
+                    : 'font-medium text-foreground'}"
+                >
+                  {notification.title}
                 </span>
-                {#if project}
-                  <span
-                    class="mt-0.5 block truncate text-[10px] text-muted-foreground"
-                  >
-                    {project}
-                  </span>
-                {/if}
+                <time
+                  datetime={notification.completedAt}
+                  class="shrink-0 text-[10px] tabular-nums text-muted-foreground/80"
+                  title={new Date(notification.completedAt).toLocaleString()}
+                >
+                  {relativeNotificationTime(
+                    notification.completedAt,
+                    clock.now,
+                  )}
+                </time>
               </span>
-            </button>
-          {/each}
-        </div>
+              {#if project}
+                <span
+                  class="mt-0.5 block truncate text-[10px] text-muted-foreground"
+                >
+                  {project}
+                </span>
+              {/if}
+            </span>
+          </button>
+        {/each}
       {/if}
-    </div>
+    </PopoverPanel>
   {/if}
 </div>

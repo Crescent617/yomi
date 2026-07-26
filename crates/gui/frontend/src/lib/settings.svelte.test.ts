@@ -184,4 +184,31 @@ describe("GUI preference normalization", () => {
       }),
     );
   });
+
+  test("an awaited save is visible to the next snapshot", async () => {
+    // Regression for the select-then-toggle race: the debounced snapshot
+    // captured right after an awaited save must carry the saved values,
+    // not resurrect the previous ones and clobber them in the store.
+    vi.useFakeTimers();
+    const selected = snapshotGuiPreferences();
+    selected.appearance.theme_id = "custom-x";
+    await saveGuiPreferences(selected);
+
+    const next = snapshotGuiPreferences();
+    expect(next.appearance.theme_id).toBe("custom-x");
+
+    next.appearance.theme = "dark";
+    scheduleGuiPreferencesSave(next);
+    await vi.runAllTimersAsync();
+
+    expect(storeMocks.set).toHaveBeenLastCalledWith(
+      "gui_preferences",
+      expect.objectContaining({
+        appearance: expect.objectContaining({
+          theme: "dark",
+          theme_id: "custom-x",
+        }),
+      }),
+    );
+  });
 });

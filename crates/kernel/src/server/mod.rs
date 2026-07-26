@@ -1,4 +1,4 @@
-use crate::event::{AgentEvent, AgentStatus, Event, InternalEvent};
+use crate::event::{AgentEvent, AgentStatus, Envelope, Event, InternalEvent};
 use crate::kernel::Kernel;
 use crate::transport::{recv_frame, send_frame};
 use crate::types::{Result, Role};
@@ -17,6 +17,59 @@ fn should_clear_event_buffer(event: &Event) -> bool {
         Event::Internal(InternalEvent::MessageAdded { message })
             if matches!(message.role, Role::System | Role::User | Role::Assistant)
     )
+}
+
+/// Handle one envelope from the kernel event bus: buffer it for replay and
+/// fan it out to real-time wire subscribers.
+///
+/// `Event::Internal` is never put on the wire: those events are for
+/// in-process consumers (e.g. Conductor persistence) only. In particular,
+/// `InternalEvent::MessageReplaced` carries the full message history, which
+/// can exceed the wire frame limit and kill the connection — and every
+/// subsequent replay on re-subscribe. Wire clients learn about replaced
+/// history via the lightweight `AgentEvent::MessageReplaced` re-published by
+/// the conductor and reload messages on demand.
+fn forward_envelope(
+    sid: &crate::types::SessionId,
+    envelope: &Envelope,
+    event_buffer: &EventBuffer,
+    session_subscribers: &SessionSubscribers,
+) {
+    if should_clear_event_buffer(&envelope.event) {
+        event_buffer.clear(sid);
+        return;
+    }
+    if matches!(envelope.event, Event::Internal(_)) {
+        return;
+    }
+
+    event_buffer.push(envelope.clone());
+
+    if matches!(
+        &envelope.event,
+        Event::Agent(AgentEvent::Lifecycle {
+            state: AgentStatus::Stopped { .. }
+        })
+    ) {
+        event_buffer.remove(sid);
+    }
+
+    session_subscribers.publish(sid, envelope);
+}
+
+/// Short human-readable summary for error logs — avoids dumping full payloads.
+fn wire_msg_summary(msg: &WireMsg) -> String {
+    match msg {
+        WireMsg::Request { id, .. } => format!("request id={id}"),
+        WireMsg::Response { id, .. } => format!("response id={id}"),
+        WireMsg::Event(envelope) => format!(
+            "event session_id={} event_id={}",
+            envelope.session_id, envelope.event_id
+        ),
+        WireMsg::Noti(_) => "notification".to_owned(),
+        WireMsg::Ping => "ping".to_owned(),
+        WireMsg::Pong => "pong".to_owned(),
+    }
 }
 
 /// Kernel daemon server. Bridges external connections to the local Kernel.
@@ -119,21 +172,7 @@ impl KernelServer {
                     biased;
                     () = cancel.cancelled() => break,
                     Some((sid, envelope)) = subscriber.recv() => {
-                        // Buffer first, then forward.
-                        event_buffer.push(envelope.clone());
-
-                        if should_clear_event_buffer(&envelope.event) {
-                            event_buffer.clear(&sid);
-                        } else if matches!(
-                            &envelope.event,
-                            Event::Agent(AgentEvent::Lifecycle {
-                                state: AgentStatus::Stopped { .. }
-                            })
-                        ) {
-                            event_buffer.remove(&sid);
-                        }
-
-                        session_subscribers.publish(&sid, &envelope);
+                        forward_envelope(&sid, &envelope, &event_buffer, &session_subscribers);
                     }
                 }
             }
@@ -237,7 +276,21 @@ impl KernelServer {
                         match maybe_msg {
                             Some(msg) => {
                                 if let Err(e) = send_frame(&mut write_half, &msg).await {
-                                    tracing::debug!("Send frame error: {e}");
+                                    if e.kind() == std::io::ErrorKind::InvalidData {
+                                        // Our own frame exceeded MAX_FRAME_SIZE or
+                                        // failed to serialize: a payload bug on our
+                                        // side, not a network issue. Log loudly —
+                                        // a silent drop here is how an oversized
+                                        // event kills connections unnoticed.
+                                        tracing::error!(
+                                            "Outbound frame rejected ({}): {e}",
+                                            wire_msg_summary(&msg)
+                                        );
+                                    } else {
+                                        tracing::warn!(
+                                            "Send frame error, closing connection: {e}"
+                                        );
+                                    }
                                     break;
                                 }
                             }
@@ -263,7 +316,7 @@ impl KernelServer {
                                 if let Err(e) = notification_send_tx.try_send(WireMsg::Noti(noti)) {
                                     match e {
                                         mpsc::error::TrySendError::Full(_) => {
-                                            tracing::debug!("Outbound channel full, dropping notification");
+                                            tracing::warn!("Outbound channel full, dropping notification");
                                         }
                                         mpsc::error::TrySendError::Closed(_) => break,
                                     }
@@ -290,7 +343,12 @@ impl KernelServer {
                 result = recv_frame(&mut read_half) => match result {
                     Ok(m) => m,
                     Err(e) => {
-                        tracing::debug!("Recv frame error: {e}");
+                        if e.kind() == std::io::ErrorKind::InvalidData {
+                            // Peer sent an oversized or malformed frame.
+                            tracing::warn!("Inbound frame rejected: {e}");
+                        } else {
+                            tracing::warn!("Recv frame error, closing connection: {e}");
+                        }
                         break;
                     }
                 },
@@ -317,7 +375,7 @@ impl KernelServer {
                         )
                         .await;
                     if let Err(e) = send_tx.send(WireMsg::Response { id, body }).await {
-                        tracing::debug!(
+                        tracing::warn!(
                             "Outbound channel closed, dropping response for id={id}: {e}"
                         );
                         break;
@@ -345,3 +403,5 @@ impl KernelServer {
 
 #[cfg(test)]
 mod event_buffer_test;
+#[cfg(test)]
+mod mod_test;

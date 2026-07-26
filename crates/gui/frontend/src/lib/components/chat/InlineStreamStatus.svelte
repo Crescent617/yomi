@@ -7,8 +7,8 @@
     estimateJsonTokens,
     estimateTextTokens,
     extractPartialTarget,
-    formatRunElapsed,
     formatStreamTokens,
+    formatTapeElapsed,
     toolVerb,
   } from "./stream-status";
 
@@ -73,7 +73,9 @@
   });
 
   /** Present-tense verb for the current tool, null when not in a tool. */
-  const verb = $derived(currentTool ? toolVerb(currentTool.name) : null);
+  const verb = $derived(
+    currentTool ? toolVerb(currentTool.name, currentTool.args) : null,
+  );
   /** Leading status word: tool verb, or Thinking/Writing/Compacting. */
   const leadWord = $derived(
     currentTool && verb && verb !== "Calling" ? verb : status,
@@ -134,38 +136,85 @@
 
 {#if visible}
   <div
-    class="inline-flex min-h-5 -mt-1.5 items-center gap-2 pl-0.5 text-[12px] font-normal text-muted-foreground/75"
+    class="relative pl-0.5 pr-1 text-[12px] font-normal text-muted-foreground/75"
     role="status"
     aria-live="polite"
     aria-atomic="true"
   >
-    <span>
-      <span class="status-shimmer" data-text={leadWord}>{leadWord}</span
-      >{#if accent}
+    <div class="flex min-h-5 items-center gap-1.5">
+      <span class="status-shimmer shrink-0 font-mono text-sm" data-text={leadWord}
+        >{leadWord}</span
+      >
+      {#if accent}
         <span
-          class="ml-1 inline-block max-w-72 truncate align-bottom font-mono font-medium text-primary/85"
+          class="min-w-0 truncate font-mono font-medium text-primary/85"
           title={accent}>{accent}</span
         >
-      {/if}<span class="status-shimmer" data-text="...">...</span>
-    </span>
-    <!-- Elapsed and token counts tick constantly; keep them out of the
-         aria-live region so screen readers are not bombarded. -->
-    <span
-      aria-hidden="true"
-      class="font-mono tabular-nums text-muted-foreground/60"
-      >{formatRunElapsed(elapsed)}</span
-    >
-    {#if streamTokens}
+      {/if}
+      <span class="flex-1"></span>
+      <!-- Telemetry ticks constantly; kept out of the aria-live
+           region so screen readers are not bombarded. -->
+      {#if streamTokens}
+        <span
+          aria-hidden="true"
+          class="shrink-0 font-mono tabular-nums text-muted-foreground/60"
+          >{streamTokens}</span
+        >
+      {/if}
       <span
         aria-hidden="true"
-        class="font-mono tabular-nums text-muted-foreground/60"
-        >{streamTokens}</span
+        class="shrink-0 font-mono tabular-nums text-muted-foreground/60"
+        >{formatTapeElapsed(elapsed)}</span
       >
-    {/if}
+    </div>
+    <!-- Signature scan line: the single motion accent of the status row. -->
+    <span class="tape-scan" aria-hidden="true"></span>
   </div>
 {/if}
 
 <style>
+  /* 1px theme-color gradient sweeping the underside of the status row. */
+  .tape-scan {
+    position: absolute;
+    bottom: -2px;
+    left: 0;
+    right: 0;
+    height: 1px;
+    overflow: hidden;
+  }
+
+  .tape-scan::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 40%;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      hsl(var(--primary) / 0.55),
+      transparent
+    );
+    animation: tape-scan-sweep 2.4s linear infinite;
+  }
+
+  @keyframes tape-scan-sweep {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(250%);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tape-scan::before {
+      animation: none;
+      transform: translateX(80%);
+      opacity: 0.5;
+    }
+  }
+
   /* Shimmer sweep across the status word: muted base, foreground peak. */
   .status-shimmer {
     position: relative;
@@ -183,7 +232,7 @@
     background-clip: text;
     color: transparent;
     -webkit-text-fill-color: transparent;
-    animation: shimmer-sweep 1.6s linear infinite;
+    animation: shimmer-sweep 2.4s linear infinite;
   }
 
   /* Halo copy layered on top: only the peak band is opaque, so the glow
@@ -208,7 +257,7 @@
     color: transparent;
     -webkit-text-fill-color: transparent;
     filter: blur(3.5px);
-    animation: shimmer-sweep 1.6s linear infinite;
+    animation: shimmer-sweep 2.4s linear infinite;
   }
 
   @keyframes shimmer-sweep {

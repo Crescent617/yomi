@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- 修复会话回退到检查点后 GUI 与 daemon 反复断连、持续报错的问题：回退不再向客户端推送完整消息历史，改为通知后由客户端自行拉取。
+
 ## [0.7.6] - 2026-07-26
 
 ### Added

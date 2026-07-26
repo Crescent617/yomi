@@ -316,6 +316,7 @@ sequenceDiagram
    - **TUI subscriber**：过滤掉 `InternalEvent`，只接收 `User`/`Agent`/`Model`/`Tool`/`System` 事件。
    - **Conductor subscriber**：订阅全部事件（含 `InternalEvent`），用于消息持久化（`MessageAdded` / `MessageReplaced`）。
    - **ChannelHub subscriber**：接收特定事件用于外部渠道回复。
+   - **Wire server forwarder**：不向 wire 客户端转发 `InternalEvent`（也不进 replay buffer），避免携带全量消息历史的 `MessageReplaced` 超过帧上限；历史变更由 Conductor 重发的轻量 `AgentEvent::MessageReplaced` 通知，客户端自行拉取消息。
 3. **持久化**：`Conductor` 在收到 `InternalEvent::MessageAdded` 时，将消息追加到 `MessageStore`（JSONL）；`InternalEvent::MessageReplaced` 用于 compaction 后的全量替换。
 4. **取消传播**：用户按 `Ctrl-C` 时，TUI 发送 `ControlCommand::Cancel`，经 `Kernel` → `Conductor` → `Agent` 的 `cancel_token`（`tokio_util::sync::CancellationToken`）传播，Agent 在 `stream` 或 `tool_exec` 中检查取消状态并优雅退出。
 

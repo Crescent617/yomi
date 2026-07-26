@@ -109,9 +109,9 @@ pub async fn read_selected_pet_spritesheet(
     pet_id: String,
     sprite_version_number: u32,
 ) -> Result<tauri::ipc::Response, GuiError> {
-    if window.label() != "pet" {
+    if window.label() != "pet" && window.label() != "main" {
         return Err(GuiError::unknown(
-            "pet spritesheet may only be read by the pet window",
+            "pet spritesheet may only be read by the pet or main window",
         ));
     }
     let selected_id =

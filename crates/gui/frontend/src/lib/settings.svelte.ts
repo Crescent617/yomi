@@ -103,9 +103,7 @@ export const guiPreferences = $state<GuiPreferences>(
 let initialized = false;
 let initialization: Promise<void> | null = null;
 const PREFERENCE_SAVE_DEBOUNCE_MS = 250;
-let pendingPreferenceSave: GuiPreferences | null = null;
 let preferenceSaveTimer: ReturnType<typeof setTimeout> | null = null;
-let preferenceSaveRevision = 0;
 let preferenceSaveQueue: Promise<void> = Promise.resolve();
 
 function cloneGuiPreferences(value: GuiPreferences): GuiPreferences {
@@ -319,24 +317,16 @@ export function replaceGuiPreferences(value: GuiPreferences): void {
 
 async function persistGuiPreferences(
   normalized: GuiPreferences,
-  revision: number,
 ): Promise<void> {
   const s = await getSettingsStore();
   await s.set(PREFERENCES_KEY, normalized);
   await s.save();
-  if (revision === preferenceSaveRevision) {
-    assignGuiPreferences(normalized);
-    applyGuiPreferences(normalized);
-  }
 }
 
-function enqueueGuiPreferencesSave(
-  value: GuiPreferences,
-  revision: number,
-): Promise<void> {
+function enqueueGuiPreferencesSave(value: GuiPreferences): Promise<void> {
   const normalized = normalizeGuiPreferences(value);
   const save = preferenceSaveQueue.then(() =>
-    persistGuiPreferences(normalized, revision),
+    persistGuiPreferences(normalized),
   );
   preferenceSaveQueue = save.catch(() => undefined);
   return save;
@@ -347,23 +337,25 @@ export async function saveGuiPreferences(value: GuiPreferences): Promise<void> {
     clearTimeout(preferenceSaveTimer);
     preferenceSaveTimer = null;
   }
-  pendingPreferenceSave = null;
-  const revision = ++preferenceSaveRevision;
-  await enqueueGuiPreferencesSave(value, revision);
+  const normalized = normalizeGuiPreferences(value);
+  // Apply eagerly: state is the source of truth, persistence is just I/O.
+  // An awaited save's values must be visible to the next snapshot (e.g.
+  // select theme, then toggle light/dark) — without this, a debounced
+  // snapshot captured right after resurrects the pre-save value and
+  // clobbers this write in the store.
+  assignGuiPreferences(normalized);
+  applyGuiPreferences(normalized);
+  await enqueueGuiPreferencesSave(normalized);
 }
 
 export function scheduleGuiPreferencesSave(
   value: GuiPreferences = snapshotGuiPreferences(),
 ): void {
-  pendingPreferenceSave = cloneGuiPreferences(value);
-  const revision = ++preferenceSaveRevision;
+  const pending = cloneGuiPreferences(value);
   if (preferenceSaveTimer) clearTimeout(preferenceSaveTimer);
   preferenceSaveTimer = setTimeout(() => {
     preferenceSaveTimer = null;
-    const pending = pendingPreferenceSave;
-    pendingPreferenceSave = null;
-    if (!pending) return;
-    void enqueueGuiPreferencesSave(pending, revision).catch((error) => {
+    void enqueueGuiPreferencesSave(pending).catch((error) => {
       console.error("[Settings] Failed to save GUI preferences:", error);
     });
   }, PREFERENCE_SAVE_DEBOUNCE_MS);

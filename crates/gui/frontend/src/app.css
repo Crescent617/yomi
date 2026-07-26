@@ -1,3 +1,6 @@
+@import "@fontsource-variable/space-grotesk";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
 @import "tailwindcss";
 
 @custom-variant dark (&:is(.dark *));
@@ -8,7 +11,13 @@
   --breakpoint-lg: 1024px;
   --breakpoint-xl: 1280px;
 
-  --font-sans: "Inter", system-ui, sans-serif;
+  /* Yomi identity type: Space Grotesk for UI prose, IBM Plex Mono for
+     code, paths, commands, IDs, tool names, and data readouts. */
+  --font-sans:
+    "Space Grotesk Variable", "Inter", "Hiragino Kaku Gothic ProN",
+    "Yu Gothic UI", system-ui, sans-serif;
+  --font-mono:
+    "IBM Plex Mono", ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
   --radius-lg: 0.75rem;
   --radius-xl: 1rem;
 
@@ -46,72 +55,75 @@
 }
 
 :root {
-  /* Zed One Light palette */
-  --background: 0 0% 98%; /* #fafafa — editor background */
-  --foreground: 228 6.5% 15.1%; /* #242529 — UI text */
-  --card: 240 2.3% 94.9%; /* #f2f2f3 — between editor and elevated surface */
-  --card-foreground: 228 6.5% 15.1%; /* #242529 */
-  --popover: 240 2.6% 92.4%; /* #ebebec */
-  --popover-foreground: 228 6.5% 15.1%; /* #242529 */
-  --primary: 227.5 69.8% 62.4%; /* #5c78e2 — accent text */
-  --primary-foreground: 0 0% 98%; /* #fafafa */
-  --secondary: 240 2.6% 92.4%; /* #ebebec — element background */
-  --secondary-foreground: 228 6.5% 15.1%; /* #242529 */
-  --muted: 240 2.6% 92.4%; /* #ebebec */
-  --muted-foreground: 240 1.1% 34.9%; /* #58585a — muted UI text */
-  --accent: 240 1.6% 87.6%; /* #dfdfe0 — hover */
-  --accent-foreground: 228 6.5% 15.1%; /* #242529 */
-  --destructive: 7.4 59.6% 57.3%; /* #d36151 */
-  --destructive-foreground: 0 0% 98%;
-  --overlay: hsl(0 0% 0% / 0.4);
-  --subtle: hsl(240 1.1% 34.9% / 0.1);
-  --code-bg: hsl(240 2.6% 92.4%); /* #ebebec — code surface */
-  --success: 108.9 28.2% 48.6%; /* #669f59 */
-  --success-foreground: 0 0% 98%;
-  --warning: 47.9 73.5% 37.1%; /* #a48819 */
-  --warning-foreground: 0 0% 98%;
-  --error: 7.4 59.6% 57.3%; /* #d36151 */
-  --error-foreground: 0 0% 98%;
-  --info: 227.5 69.8% 62.4%; /* #5c78e2 */
-  --info-foreground: 0 0% 98%;
-  --border: 240 0.9% 79%; /* #c9c9ca */
-  --input: 240 0.9% 79%; /* #c9c9ca */
-  --ring: 237.2 69.9% 70%; /* #7d82e8 */
+  /* Kakishibu Light — washi paper, sumi ink, persimmon accent.
+     Mirrors the "yomi-ink" builtin theme so boot matches the resolved
+     theme; keep in sync with palettes.ts. */
+  --background: 43.6 40.7% 94.7%; /* #f7f4ec */
+  --foreground: 45 19.4% 12.2%; /* #252219 */
+  --card: 45 33.3% 90.6%; /* #efebdf */
+  --card-foreground: 45 19.4% 12.2%;
+  --popover: 44.2 30.2% 87.6%; /* #e9e4d6 */
+  --popover-foreground: 45 19.4% 12.2%;
+  --primary: 24.2 72% 42%; /* #b85c1e — kakishibu persimmon */
+  --primary-foreground: 43.6 40.7% 94.7%;
+  --secondary: 44.2 30.2% 87.6%; /* #e9e4d6 */
+  --secondary-foreground: 45 19.4% 12.2%;
+  --muted: 44.2 30.2% 87.6%;
+  --muted-foreground: 39 10% 39.2%; /* #6e675a */
+  --accent: 43.2 28.7% 82.9%; /* #e0d9c7 */
+  --accent-foreground: 45 19.4% 12.2%;
+  --destructive: 349.8 58.9% 41%; /* #a62b40 — benihi crimson */
+  --destructive-foreground: 43.6 40.7% 94.7%;
+  --overlay: hsl(45 19.4% 12.2% / 0.35);
+  --subtle: hsl(39 10% 39.2% / 0.1);
+  --code-bg: hsl(44.2 32.2% 88.4%); /* #ebe6d8 */
+  --success: 86.6 33.3% 35.9%; /* #5f7a3d — matcha */
+  --success-foreground: 43.6 40.7% 94.7%;
+  --warning: 39.6 81.2% 33.3%; /* #9a6b10 — yamabuki gold */
+  --warning-foreground: 43.6 40.7% 94.7%;
+  --error: 349.8 58.9% 41%;
+  --error-foreground: 43.6 40.7% 94.7%;
+  --info: 222.5 43.6% 43.1%; /* #3e5a9e — indigo */
+  --info-foreground: 43.6 40.7% 94.7%;
+  --border: 43.8 23.2% 78%; /* #d4cdba */
+  --input: 43.8 23.2% 78%;
+  --ring: 26.9 65.3% 57.1%; /* #d98a4a */
 }
 
 .dark {
   color-scheme: dark;
-  /* Zed One Dark palette */
-  --background: 218.2 12.1% 17.8%; /* #282c33 — editor background */
-  --foreground: 213.3 14.8% 88%; /* #dce0e5 — UI text */
-  --card: 220 13.8% 21.4%; /* #2f343e — elevated surface */
-  --card-foreground: 213.3 14.8% 88%; /* #dce0e5 */
-  --popover: 220 13.8% 21.4%; /* #2f343e */
-  --popover-foreground: 213.3 14.8% 88%; /* #dce0e5 */
-  --primary: 210.5 71.6% 68.2%; /* #74ade8 — accent text */
-  --primary-foreground: 218.2 12.1% 17.8%; /* #282c33 */
-  --secondary: 217.5 14.8% 21.2%; /* #2e343e — element background */
-  --secondary-foreground: 213.3 14.8% 88%; /* #dce0e5 */
-  --muted: 217.5 14.8% 21.2%; /* #2e343e */
-  --muted-foreground: 221.1 12.4% 70%; /* #a9afbc — muted UI text */
-  --accent: 217.5 12.9% 24.3%; /* #363c46 — hover */
-  --accent-foreground: 213.3 14.8% 88%; /* #dce0e5 */
-  --destructive: 356.8 50% 63.1%; /* #d07277 */
-  --destructive-foreground: 218.2 12.1% 17.8%;
+  /* Kakishibu Dark — sumi ink with warm paper text and a lighter
+     persimmon. Mirrors the "yomi-ink" builtin dark variant. */
+  --background: 45 8% 9.8%; /* #1b1a17 */
+  --foreground: 45 27% 85.5%; /* #e4dfd0 */
+  --card: 40 4.5% 13.1%; /* #232220 */
+  --card-foreground: 45 27% 85.5%;
+  --popover: 40 4% 14.7%; /* #272624 */
+  --popover-foreground: 45 27% 85.5%;
+  --primary: 26.5 70.3% 59%; /* #e08e4d */
+  --primary-foreground: 45 8% 9.8%;
+  --secondary: 40 4% 14.7%; /* #272624 */
+  --secondary-foreground: 45 27% 85.5%;
+  --muted: 40 4% 14.7%;
+  --muted-foreground: 41.5 12.3% 58.4%; /* #a29a88 */
+  --accent: 40 6.7% 17.6%; /* #302e2a */
+  --accent-foreground: 45 27% 85.5%;
+  --destructive: 346.5 54.1% 59.8%; /* #d0617a */
+  --destructive-foreground: 45 8% 9.8%;
   --overlay: hsl(0 0% 0% / 0.6);
-  --subtle: hsl(221.1 12.4% 70% / 0.1);
-  --code-bg: hsl(220 13.8% 21.4%); /* #2f343e — code surface */
-  --success: 90 34% 63.1%; /* #a1c181 */
-  --success-foreground: 218.2 12.1% 17.8%;
-  --warning: 40.7 57.7% 69.4%; /* #dec184 */
-  --warning-foreground: 218.2 12.1% 17.8%;
-  --error: 356.8 50% 63.1%; /* #d07277 */
-  --error-foreground: 218.2 12.1% 17.8%;
-  --info: 210.5 71.6% 68.2%; /* #74ade8 */
-  --info-foreground: 218.2 12.1% 17.8%;
-  --border: 222.4 10.8% 30.8%; /* #464b57 */
-  --input: 222.4 10.8% 30.8%; /* #464b57 */
-  --ring: 217.9 38% 44.9%; /* #47679e */
+  --subtle: hsl(41.5 12.3% 58.4% / 0.1);
+  --code-bg: hsl(45 5.6% 14.1%); /* #262522 */
+  --success: 81.7 29% 60.8%; /* #a3b87e */
+  --success-foreground: 45 8% 9.8%;
+  --warning: 41.4 59.5% 56.5%; /* #d2a94e */
+  --warning-foreground: 45 8% 9.8%;
+  --error: 346.5 54.1% 59.8%;
+  --error-foreground: 45 8% 9.8%;
+  --info: 221.1 50.7% 70.6%; /* #8ea6da */
+  --info-foreground: 45 8% 9.8%;
+  --border: 45 7.1% 22%; /* #3c3a34 */
+  --input: 45 7.1% 22%;
+  --ring: 26.6 43.5% 43.7%; /* #a06a3f */
 }
 
 html,
@@ -197,9 +209,7 @@ body.pet-window {
   }
 
   .animate-ping,
-  .animate-pulse,
-  .animate-breathe,
-  .roll-num {
+  .animate-pulse {
     animation: none !important;
   }
 }
@@ -217,4 +227,32 @@ body.pet-window {
 .message-flash {
   animation: message-flash 1.8s ease-out;
   border-radius: 0.5rem;
+}
+
+/* ── Yomi signature elements ────────────────────────────────────────── */
+
+/* Mono micro-label: the house style for metadata, section headers, and
+   data readouts (StatusBar, popover section titles). */
+@utility micro-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* Paper grain: a faint static film over the whole workspace. Purely
+   decorative — it never intercepts input and is absent in the pet window. */
+body:not(.pet-window)::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  pointer-events: none;
+  opacity: 0.032;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.dark body:not(.pet-window)::after {
+  opacity: 0.05;
 }

@@ -22,6 +22,7 @@
   import MessageList from "./MessageList.svelte";
   import ChatInput from "./ChatInput.svelte";
   import LoadingPlaceholder from "../ui/LoadingPlaceholder.svelte";
+  import PopoverPanel from "../ui/PopoverPanel.svelte";
   import FilePreview from "../editor/FilePreview.svelte";
   import FileEditor from "../editor/FileEditor.svelte";
   import HeaderBreadcrumb from "./HeaderBreadcrumb.svelte";
@@ -850,16 +851,14 @@
               <Info size={13} />
             </button>
             {#if showSessionInfo}
-              <div
-                bind:this={infoTooltipRef}
-                class="absolute left-0 top-full z-50 mt-1.5 w-80 overflow-hidden rounded-md border border-border bg-popover shadow-xl"
+              <PopoverPanel
+                bind:ref={infoTooltipRef}
+                title="Session information"
+                padded
+                bodyClass="space-y-3"
+                class="absolute left-0 top-full z-50 mt-1.5 w-80"
               >
-                <div
-                  class="flex items-center justify-between border-b border-border/70 bg-secondary/40 px-3 py-2"
-                >
-                  <span class="text-xs font-semibold text-foreground">
-                    Session information
-                  </span>
+                {#snippet headerActions()}
                   <span
                     class="inline-flex items-center gap-1 text-[10px] font-medium capitalize text-muted-foreground"
                   >
@@ -873,65 +872,61 @@
                     ></span>
                     {activeSession.phase}
                   </span>
-                </div>
-                <div class="space-y-3 p-3 text-[11px]">
-                  <div class="grid grid-cols-2 gap-2">
-                    <div class="rounded-sm bg-secondary/35 px-2 py-1.5">
-                      <div class="text-[10px] text-muted-foreground">
-                        Messages
-                      </div>
-                      <div class="mt-0.5 font-semibold text-foreground">
-                        {activeSession.messages.length}
-                      </div>
+                {/snippet}
+                <div class="grid grid-cols-2 gap-2">
+                  <div class="rounded-sm bg-secondary/35 px-2 py-1.5">
+                    <div class="micro-label text-muted-foreground">
+                      Messages
                     </div>
-                    <div class="rounded-sm bg-secondary/35 px-2 py-1.5">
-                      <div class="text-[10px] text-muted-foreground">
-                        Permission
-                      </div>
-                      <div
-                        class="mt-0.5 font-semibold capitalize {activeSession.permission_level ===
-                        'safe'
-                          ? 'text-success'
-                          : activeSession.permission_level === 'dangerous'
-                            ? 'text-error'
-                            : 'text-warning'}"
-                      >
-                        {activeSession.permission_level || "Caution"}
-                      </div>
+                    <div class="mt-0.5 font-semibold text-foreground">
+                      {activeSession.messages.length}
                     </div>
                   </div>
-                  <div class="space-y-1.5">
-                    <div
-                      class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
-                    >
-                      Working directory
+                  <div class="rounded-sm bg-secondary/35 px-2 py-1.5">
+                    <div class="micro-label text-muted-foreground">
+                      Permission
                     </div>
                     <div
-                      class="rounded-sm bg-code-bg px-2 py-1.5 font-mono text-foreground break-all"
+                      class="mt-0.5 font-semibold capitalize {activeSession.permission_level ===
+                      'safe'
+                        ? 'text-success'
+                        : activeSession.permission_level === 'dangerous'
+                          ? 'text-error'
+                          : 'text-warning'}"
                     >
-                      {activeSession.project_path || "N/A"}
+                      {activeSession.permission_level || "Caution"}
                     </div>
                   </div>
-                  <div class="grid grid-cols-[3.5rem_1fr] gap-x-3 gap-y-1.5">
-                    <span class="text-muted-foreground">Updated</span>
-                    <span class="text-foreground">
-                      {new Date(activeSession.updated_at).toLocaleString()}
-                    </span>
-                    <span class="text-muted-foreground">Session ID</span>
-                    <span
-                      class="rounded-sm bg-code-bg px-1.5 py-0.5 font-mono text-foreground break-all"
-                    >
-                      {activeSession.id}
-                    </span>
-                    {#if activeSession.parent_session_id}
-                      <span class="text-muted-foreground">Parent</span>
-                      <span class="font-mono text-foreground break-all">
-                        {activeSession.parent_session_id}
-                      </span>
-                    {/if}
+                </div>
+                <div class="space-y-1.5">
+                  <div class="micro-label text-muted-foreground">
+                    Working directory
+                  </div>
+                  <div
+                    class="rounded-sm bg-code-bg px-2 py-1.5 font-mono text-foreground break-all"
+                  >
+                    {activeSession.project_path || "N/A"}
                   </div>
                 </div>
-              </div>
+                <div class="grid grid-cols-[3.5rem_1fr] gap-x-3 gap-y-1.5">
+                  <span class="text-muted-foreground">Updated</span>
+                  <span class="text-foreground">
+                    {new Date(activeSession.updated_at).toLocaleString()}
+                  </span>
+                  <span class="text-muted-foreground">Session ID</span>
+                  <span
+                    class="rounded-sm bg-code-bg px-1.5 py-0.5 font-mono text-foreground break-all"
+                  >
+                    {activeSession.id}
+                  </span>
+                  {#if activeSession.parent_session_id}
+                    <span class="text-muted-foreground">Parent</span>
+                    <span class="font-mono text-foreground break-all">
+                      {activeSession.parent_session_id}
+                    </span>
+                  {/if}
+                </div>
+              </PopoverPanel>
             {/if}
           </div>
           {#if activeSession.project_path}

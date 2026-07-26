@@ -65,7 +65,7 @@ describe("resolveCssVars", () => {
   test("code-bg is a full hsl() value, others are triplets", () => {
     const vars = resolveCssVars(palette, true);
     expect(vars["--code-bg"]).toMatch(/^hsl\(/);
-    expect(vars["--background"]).toBe("218.2 12.1% 17.8%");
+    expect(vars["--background"]).toBe("45 8% 9.8%");
   });
 
   test("derives overlay alpha from the variant", () => {
@@ -87,6 +87,8 @@ describe("resolveCssVars", () => {
 describe("builtin themes", () => {
   test("ship the expected set", () => {
     expect(BUILTIN_THEMES.map((t) => t.id)).toEqual([
+      "yomi-ink",
+      "yomi-ai",
       "zed-one",
       "github",
       "solarized",
@@ -113,7 +115,7 @@ describe("builtin themes", () => {
 describe("resolveTheme", () => {
   test("finds by id and falls back to the first theme", () => {
     expect(resolveTheme(BUILTIN_THEMES, "nord").id).toBe("nord");
-    expect(resolveTheme(BUILTIN_THEMES, "missing").id).toBe("zed-one");
+    expect(resolveTheme(BUILTIN_THEMES, "missing").id).toBe("yomi-ink");
   });
 });
 

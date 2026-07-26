@@ -234,7 +234,7 @@ where
                         Some(data) => {
                             let msg = tokio_tungstenite::tungstenite::Message::Binary(data.into());
                             if let Err(e) = ws_stream.send(msg).await {
-                                tracing::debug!("WebSocket send error: {e}");
+                                tracing::warn!("WebSocket send error: {e}");
                                 break;
                             }
                         }
@@ -264,7 +264,7 @@ where
                         Some(Ok(Message::Close(_))) | None => break,
                         Some(Ok(_)) => {} // Ping/Pong handled by tungstenite internally
                         Some(Err(e)) => {
-                            tracing::debug!("WebSocket recv error: {e}");
+                            tracing::warn!("WebSocket recv error: {e}");
                             break;
                         }
                     }

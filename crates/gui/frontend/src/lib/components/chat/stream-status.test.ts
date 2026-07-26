@@ -3,8 +3,8 @@ import {
   estimateJsonTokens,
   estimateTextTokens,
   extractPartialTarget,
-  formatRunElapsed,
   formatStreamTokens,
+  formatTapeElapsed,
   toolVerb,
 } from "./stream-status";
 
@@ -47,14 +47,51 @@ describe("toolVerb", () => {
     expect(toolVerb("read")).toBe("Reading");
     expect(toolVerb("write")).toBe("Writing");
     expect(toolVerb("shell")).toBe("Running");
-    expect(toolVerb("grep")).toBe("Searching");
+    expect(toolVerb("grep")).toBe("Finding");
     expect(toolVerb("web_fetch")).toBe("Fetching");
     expect(toolVerb("agent")).toBe("Delegating");
-    expect(toolVerb("sleep")).toBe("Sleeping");
+    expect(toolVerb("todo")).toBe("Planning");
+    expect(toolVerb("ask_user")).toBe("Asking");
+    expect(toolVerb("post_message")).toBe("Messaging");
   });
 
   test("falls back to Calling for unknown tools", () => {
     expect(toolVerb("mcp__something")).toBe("Calling");
+  });
+
+  test("shell verbs follow the command being run", () => {
+    expect(toolVerb("shell", '{"command": "cargo build --release"}')).toBe(
+      "Building",
+    );
+    expect(toolVerb("shell", '{"command": "npm test"}')).toBe("Testing");
+    expect(toolVerb("shell", '{"command": "npm install"}')).toBe("Installing");
+    expect(toolVerb("shell", '{"command": "git push origin main"}')).toBe(
+      "Pushing",
+    );
+    expect(toolVerb("shell", '{"command": "git diff --stat"}')).toBe(
+      "Inspecting",
+    );
+    expect(toolVerb("shell", '{"command": "rg pattern src/"}')).toBe(
+      "Searching",
+    );
+    expect(toolVerb("shell", '{"command": "ls -la"}')).toBe("Exploring");
+    expect(toolVerb("shell", '{"command": "curl -s example.com"}')).toBe(
+      "Fetching",
+    );
+    expect(toolVerb("shell", '{"command": "some-custom-tool --flag"}')).toBe(
+      "Running",
+    );
+  });
+
+  test("shell verbs work with compound and partial commands", () => {
+    expect(toolVerb("shell", '{"command": "cargo test && echo done"}')).toBe(
+      "Testing",
+    );
+    // Arguments still streaming (truncated JSON) still resolve, as long as
+    // the command word itself is complete.
+    expect(toolVerb("shell", '{"command": "cargo build --rel')).toBe(
+      "Building",
+    );
   });
 });
 
@@ -99,20 +136,20 @@ describe("extractPartialTarget", () => {
   });
 });
 
-describe("formatRunElapsed", () => {
+describe("formatTapeElapsed", () => {
   test("bare seconds under a minute", () => {
-    expect(formatRunElapsed(0)).toBe("0s");
-    expect(formatRunElapsed(8)).toBe("8s");
-    expect(formatRunElapsed(59.9)).toBe("59s");
+    expect(formatTapeElapsed(0)).toBe("0s");
+    expect(formatTapeElapsed(8)).toBe("8s");
+    expect(formatTapeElapsed(59.9)).toBe("59s");
   });
 
   test("NmNs under an hour", () => {
-    expect(formatRunElapsed(60)).toBe("1m0s");
-    expect(formatRunElapsed(84)).toBe("1m24s");
+    expect(formatTapeElapsed(60)).toBe("1m0s");
+    expect(formatTapeElapsed(84)).toBe("1m24s");
   });
 
   test("NhNmNs beyond an hour", () => {
-    expect(formatRunElapsed(3600)).toBe("1h0m0s");
-    expect(formatRunElapsed(3753)).toBe("1h2m33s");
+    expect(formatTapeElapsed(3600)).toBe("1h0m0s");
+    expect(formatTapeElapsed(3753)).toBe("1h2m33s");
   });
 });

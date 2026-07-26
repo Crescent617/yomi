@@ -726,7 +726,12 @@ impl RemoteKernel {
                         let msg = match result {
                             Ok(m) => m,
                             Err(e) => {
-                                tracing::debug!("Remote reader error: {e}");
+                                if e.kind() == std::io::ErrorKind::InvalidData {
+                                    // Daemon sent an oversized or malformed frame.
+                                    tracing::warn!("Inbound frame rejected: {e}");
+                                } else {
+                                    tracing::warn!("Remote reader error: {e}");
+                                }
                                 break;
                             }
                         };
@@ -824,7 +829,7 @@ impl RemoteKernel {
                 {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => {
-                        tracing::debug!("Heartbeat send_frame failed: {e}");
+                        tracing::warn!("Heartbeat send_frame failed: {e}");
                         cancel.cancel();
                         break;
                     }

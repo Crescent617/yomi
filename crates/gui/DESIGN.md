@@ -21,11 +21,22 @@ Yomi is a focused agent workspace: calm, dense, and direct. The interface should
 
 ## Visual Language
 
-- Typography: regular UI font for prose and labels; monospace only for code, paths, commands, IDs, and tool names.
+- Typography: Space Grotesk for UI prose and labels; IBM Plex Mono for code, paths, commands, IDs, tool names, and data readouts.
 - Surfaces: `background` for work areas, subtle semantic tints for selected or pending states, `code-bg` for machine-readable content.
 - Borders: use pane dividers and light outlines; avoid double borders and card-inside-card layouts.
 - Radius: modest and consistent. Panels and dialogs may be rounded; editors and full-size workspaces should usually meet their pane edges.
 - Icons: use Lucide consistently. Do not mix emoji with interface icons.
+
+## Signature Elements
+
+Yomi's identity lives in a small set of repeatable elements. Use them
+consistently; do not invent per-component variations.
+
+- **Kakishibu theme.** The default `yomi-ink` palette: warm washi-paper light / sumi-ink dark neutrals with a persimmon (kakishibu) `primary`; its sibling `yomi-ai` ("Aizome") swaps the accent for true indigo. Other builtin themes remain selectable; the static `:root`/`.dark` boot palettes in `app.css` mirror yomi-ink and must stay in sync with `palettes.ts`.
+- **Micro-labels.** Metadata, section headers, and readouts use the `micro-label` utility (10 px uppercase mono, wide tracking). Examples: StatusBar segments, popover section titles.
+- **Stream shimmer.** The streaming status line pairs a mono gradient-shimmer verb (Thinking/Writing/tool verb) with a mono target, quiet mono telemetry (elapsed, estimated tokens), and a single 1 px theme-color scan line sweeping its underside as the only other motion. Keep both slow and subtle. Honors `prefers-reduced-motion`.
+- **Pet mood chip.** The StatusBar shows the aggregate agent mood as a mini pet sprite plus a mood micro-label (idle/working/curious/alert), derived in `status-activity.ts` from the same priority ladder as the Rust `PetMood`.
+- **Paper grain.** A faint static grain overlays the workspace (never the pet window, never interactive). It stays near-invisible; if it is noticeable in screenshots, it is too strong.
 
 ## Desktop Pet
 

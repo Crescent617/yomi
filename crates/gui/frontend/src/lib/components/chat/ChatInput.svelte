@@ -884,7 +884,7 @@
 </script>
 
 <div
-  class="relative mb-1 rounded-md bg-card px-2 py-0 transition-shadow focus-within:ring-1 focus-within:ring-border"
+  class="relative mb-2 rounded-md bg-card px-2 py-0 transition-shadow focus-within:ring-1 focus-within:ring-border"
   onfocusout={handleFocusOut}
 >
   <!-- Command completion dropdown -->
