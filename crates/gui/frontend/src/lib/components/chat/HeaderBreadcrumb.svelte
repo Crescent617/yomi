@@ -16,7 +16,7 @@
   } from "../../state.svelte";
   import { activateSession } from "../../session";
   import * as api from "../../api";
-  import { formatTimeAgo } from "../../utils";
+  import { formatTimeAgo, focusAndSelect } from "../../utils";
   import { buildSessionBreadcrumb } from "./session-breadcrumb";
 
   let { session }: { session: SessionState } = $props();
@@ -71,6 +71,10 @@
 
   function closeMenus(event: MouseEvent) {
     if (menuRef && !menuRef.contains(event.target as Node)) menu = null;
+  }
+
+  function handleWindowKeydown(event: KeyboardEvent) {
+    if (event.key === "Escape" && menu && !renaming) menu = null;
   }
 
   async function openSessions(projectId = selectedProjectId) {
@@ -128,7 +132,7 @@
   }
 </script>
 
-<svelte:window onclick={closeMenus} />
+<svelte:window onclick={closeMenus} onkeydown={handleWindowKeydown} />
 
 <div
   bind:this={menuRef}
@@ -262,9 +266,13 @@
             <div class="flex gap-1 p-1">
               <input
                 bind:value={renameValue}
+                use:focusAndSelect
                 onkeydown={(event: KeyboardEvent) => {
                   if (event.key === "Enter") void saveRename();
-                  if (event.key === "Escape") renaming = false;
+                  if (event.key === "Escape") {
+                    event.stopPropagation();
+                    renaming = false;
+                  }
                 }}
                 class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
               />

@@ -196,7 +196,7 @@
 
 {#if shouldShow}
   <div class="sticky top-0 z-20 shrink-0 bg-background/95 backdrop-blur-sm">
-    <div class="container mx-auto px-4 py-2 lg:px-6">
+    <div class="mx-auto w-full max-w-4xl px-4 py-2 lg:px-6">
       <section
         class="relative rounded-lg border border-border/70 bg-background shadow-sm"
         aria-labelledby="task-dock-title"

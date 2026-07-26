@@ -196,7 +196,7 @@
       <TaskDock />
       <div
         bind:this={messageContent}
-        class="container mx-auto px-4 lg:px-6 pt-2 pb-4"
+        class="mx-auto w-full max-w-4xl px-4 lg:px-6 pt-2 pb-4"
       >
         <div class="flex flex-col gap-3">
           <DisplayItemList

@@ -113,8 +113,6 @@ impl Agent {
 
     /// Execute `pending_calls` in parallel, after permission checks.
     async fn execute_tools(&mut self, pending_calls: Vec<ToolCall>) -> Result<(), AgentError> {
-        tracing::info!("Executing {} tool(s) in parallel", pending_calls.len());
-
         // Pre-assign MessageIds so Start/End events share one stable ID.
         let message_ids = assign_message_ids(&pending_calls);
 

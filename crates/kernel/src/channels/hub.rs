@@ -568,7 +568,7 @@ async fn settle_with(
 }
 
 /// Deliver a run's final reply, then its attachment files. Declared
-/// attachments (`<yomi:attachments>` blocks, stripped at record time) are
+/// attachments (`<yomi_attachments>` blocks, stripped at record time) are
 /// resolved up front — resolution notes ride with the reply text — while
 /// the files themselves go out AFTER the reply, landing at the bottom of
 /// the chat. The reply itself: card-capable platforms with observability

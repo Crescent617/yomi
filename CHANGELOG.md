@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **分类**：`Added` 新能力 / `Changed` 行为变化 / `Fixed` 问题修复 / `Removed` 移除能力。
 - **配置与命令必须点名**：新增或变更配置项、命令时，写出名称与默认值。
 
+## [Unreleased]
+
 ## [0.7.5] - 2026-07-25
 
 ### Changed
@@ -33,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.7.3] - 2026-07-25
 
 ### Added
-- 通道（Telegram / 飞书）会话支持回复附件：agent 在回复中以 `<yomi:attachments>` 块声明文件，随回复自动发送；相对路径限制在会话工作区内，失败会在回复中注明。
+- 通道（Telegram / 飞书）会话支持回复附件：agent 在回复中以 `<yomi_attachments>` 块声明文件，随回复自动发送；相对路径限制在会话工作区内，失败会在回复中注明。
 - GUI 新增主题系统（Config → Themes）：5 套内置主题（Zed One、GitHub、Solarized、Nord、Dracula），可克隆为多个自定义主题并以 JSON 编辑、实时预览。
 - GUI 工具结果与用户消息中的图片渲染为缩略图，点击全屏预览（Esc / 点击背景关闭）。
 - TUI 折叠的 edit 工具改为预览紧凑 diff（最多 10 行，附展开提示）。

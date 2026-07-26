@@ -3,6 +3,7 @@
   import * as api from "../../api";
   import { projectState, appState } from "../../state.svelte";
   import {
+    defaultGuiPreferences,
     guiPreferences,
     scheduleGuiPreferencesSave,
     snapshotGuiPreferences,
@@ -22,6 +23,13 @@
 
   let mobileSidebarOpen = $state(false);
   let isDraggingLeft = $state(false);
+
+  const SIDEBAR_MIN_WIDTH = 160;
+  const SIDEBAR_MAX_WIDTH = 400;
+
+  function clampSidebarWidth(width: number): number {
+    return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, width));
+  }
 
   onMount(() => {
     startClock();
@@ -67,6 +75,22 @@
     }
   }
 
+  function resetSidebarWidth() {
+    guiPreferences.layout.sidebarWidth =
+      defaultGuiPreferences.layout.sidebarWidth;
+    scheduleGuiPreferencesSave(snapshotGuiPreferences());
+  }
+
+  function handleResizeKeydown(e: KeyboardEvent) {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    const delta = e.key === "ArrowRight" ? 16 : -16;
+    guiPreferences.layout.sidebarWidth = clampSidebarWidth(
+      guiPreferences.layout.sidebarWidth + delta,
+    );
+    scheduleGuiPreferencesSave(snapshotGuiPreferences());
+  }
+
   function startDragLeft(e: MouseEvent) {
     e.preventDefault();
     const startX = e.clientX;
@@ -78,9 +102,8 @@
 
     function onMove(ev: MouseEvent) {
       const delta = ev.clientX - startX;
-      guiPreferences.layout.sidebarWidth = Math.max(
-        160,
-        Math.min(400, startWidth + delta),
+      guiPreferences.layout.sidebarWidth = clampSidebarWidth(
+        startWidth + delta,
       );
     }
     function onUp() {
@@ -119,10 +142,19 @@
             <ProjectSidebar collapsed={false} />
             <button
               type="button"
-              class="absolute right-0 top-0 bottom-0 w-[2px] cursor-col-resize hover:bg-primary/50 z-10"
+              class="group absolute right-0 top-0 bottom-0 z-10 w-1.5 cursor-col-resize focus-visible:outline-none"
               onmousedown={startDragLeft}
+              ondblclick={resetSidebarWidth}
+              onkeydown={handleResizeKeydown}
               aria-label="Resize sidebar"
-            ></button>
+              title="Drag to resize, double-click to reset, arrow keys to adjust"
+            >
+              <span
+                class="absolute right-0 top-0 bottom-0 w-[2px] transition-colors group-hover:bg-primary/50 group-focus-visible:bg-primary/50 {isDraggingLeft
+                  ? 'bg-primary/50'
+                  : ''}"
+              ></span>
+            </button>
           {/if}
         </aside>
 

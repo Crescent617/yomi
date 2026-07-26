@@ -3,7 +3,13 @@
   import * as api from "../../api";
   import type { ModelUsage } from "../../api";
   import { requestActivePanel } from "../../state.svelte";
-  import { Flame, ArrowUpRight, ArrowDownLeft, Hash } from "lucide-svelte";
+  import {
+    Flame,
+    ArrowUpRight,
+    ArrowDownLeft,
+    ArrowRight,
+    Hash,
+  } from "lucide-svelte";
 
   let todayUsage = $state<ModelUsage[]>([]);
   let loaded = $state(false);
@@ -67,7 +73,7 @@
       <Flame class="w-4 h-4" />
     </span>
     <span class="flex items-baseline gap-1.5 shrink-0">
-      <span class="text-lg font-bold font-mono leading-none"
+      <span class="text-lg font-bold tabular-nums leading-none"
         >{fmt(grandTotal)}</span
       >
       <span class="text-[11px] text-muted-foreground">tokens today</span>
@@ -91,9 +97,9 @@
       {/if}
     </span>
     <span
-      class="ml-auto text-[11px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+      class="ml-auto inline-flex items-center gap-1 text-[11px] text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity shrink-0"
     >
-      View details →
+      View details <ArrowRight class="w-3 h-3" />
     </span>
   </button>
 {/if}

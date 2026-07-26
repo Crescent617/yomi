@@ -157,3 +157,9 @@ export async function resolveAssetUrl(url: string): Promise<string> {
     return url;
   }
 }
+
+/** Svelte action: focus the input and select its contents on mount. */
+export function focusAndSelect(node: HTMLInputElement) {
+  node.focus();
+  node.select();
+}

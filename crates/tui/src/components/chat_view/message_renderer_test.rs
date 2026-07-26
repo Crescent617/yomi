@@ -357,3 +357,78 @@ mod thinking {
         assert!(render_thinking_lines("", false, None, false, 80).is_empty());
     }
 }
+
+#[test]
+fn user_message_pads_background_to_full_width() {
+    use kernel::types::ContentBlock;
+    use unicode_width::UnicodeWidthStr;
+
+    let msg = HistoryMessage::User(vec![ContentBlock::Text {
+        text: "hello world".to_string(),
+    }]);
+    let lines = render_message(&msg, 80);
+    assert_eq!(lines.len(), 1);
+
+    let line = &lines[0];
+    let total: usize = line
+        .spans
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
+    assert_eq!(total, 80, "user line must fill the full row width");
+
+    let last = line.spans.last().unwrap();
+    assert!(
+        last.content.chars().all(|c| c == ' '),
+        "padding span must be spaces: {:?}",
+        last.content
+    );
+    assert_eq!(
+        last.style.bg,
+        Some(crate::theme::colors::user_msg_bg()),
+        "padding must carry the user message background"
+    );
+}
+
+#[test]
+fn folded_peek_shows_first_two_real_output_lines() {
+    let msg = HistoryMessage::Tool {
+        tool_name: "shell".to_string(),
+        tool_id: "call_1".to_string(),
+        status: ToolStatus::Completed,
+        output: Some("\nfirst line\nsecond line\nthird line\nfourth line\n".to_string()),
+        error: None,
+        folded: true,
+        arguments: Some(r#"{"command":"ls"}"#.to_string()),
+        elapsed_ms: None,
+        content_blocks: Vec::new(),
+        subagent: None,
+    };
+    let lines = rendered_line_texts(&msg);
+
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains('⎿') && l.contains("first line")),
+        "first peek line: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("second line") && l.contains("+2")),
+        "second peek line with overflow hint: {lines:?}"
+    );
+    // Structure is preserved: no whitespace-collapsed single line.
+    assert!(!lines.iter().any(|l| l.contains("first line second line")));
+}
+
+#[test]
+fn edit_header_shows_diff_stats() {
+    let args = r#"{"path":"a.rs","old_str":"a\nb\nc","new_str":"a\nx\nc"}"#;
+    let msg = edit_tool_msg(true, Some(args.to_string()), Some("ok".to_string()), None);
+    let lines = rendered_line_texts(&msg);
+    let header = &lines[0];
+
+    assert!(header.contains("+1"), "add stats: {header}");
+    assert!(header.contains("\u{2212}1"), "del stats: {header}");
+}

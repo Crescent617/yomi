@@ -28,7 +28,7 @@ impl JsonlMessageStore {
         self.base_dir.join(format!("{safe_id}.jsonl"))
     }
 
-    async fn read_lines(&self, path: &Path) -> Result<Vec<Message>> {
+    async fn read_lines(&self, path: &Path, inline_assets: bool) -> Result<Vec<Message>> {
         if !path.exists() {
             return Ok(Vec::new());
         }
@@ -49,22 +49,8 @@ impl JsonlMessageStore {
                 continue;
             }
             if let Ok(mut msg) = serde_json::from_str::<Message>(&line) {
-                for block in &mut msg.content {
-                    if let crate::types::ContentBlock::ImageUrl { image_url } = block {
-                        if image_url.url.starts_with("asset://") {
-                            image_url.url = crate::utils::asset::resolve_asset_url(
-                                &image_url.url,
-                                &self.data_dir,
-                            )
-                            .await
-                            .ok_or_else(|| {
-                                storage_err(format!(
-                                    "failed to resolve stored asset: {}",
-                                    image_url.url
-                                ))
-                            })?;
-                        }
-                    }
+                if inline_assets {
+                    crate::utils::asset::inline_assets_in_message(&mut msg, &self.data_dir).await;
                 }
                 messages.push(msg);
             }
@@ -116,7 +102,11 @@ impl MessageStore for JsonlMessageStore {
     }
 
     async fn get(&self, session_id: &str) -> Result<Vec<Message>> {
-        self.read_lines(&self.file_path(session_id)).await
+        self.read_lines(&self.file_path(session_id), false).await
+    }
+
+    async fn get_inlined(&self, session_id: &str) -> Result<Vec<Message>> {
+        self.read_lines(&self.file_path(session_id), true).await
     }
 
     async fn replace(&self, session_id: &str, messages: &[Message]) -> Result<()> {

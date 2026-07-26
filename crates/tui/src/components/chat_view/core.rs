@@ -156,7 +156,6 @@ pub struct ChatView {
     streaming_content: String,
     streaming_thinking: String,
     is_streaming: bool,
-    tick_frame: usize,
     md_renderer: StreamingMarkdownRenderer,
 
     // Expand all mode (ctrl-o): show all thinking and tool details
@@ -201,7 +200,6 @@ impl Default for ChatView {
             streaming_content: String::new(),
             streaming_thinking: String::new(),
             is_streaming: false,
-            tick_frame: 0,
             md_renderer: StreamingMarkdownRenderer::new(),
 
             expand_all: false,
@@ -529,7 +527,6 @@ impl ChatView {
         self.streaming_content.clear();
         self.streaming_thinking.clear();
         self.md_renderer = StreamingMarkdownRenderer::new();
-        self.tick_frame = 0;
         // Note: Don't reset scroll_offset here - respect user's scroll position
     }
 
@@ -584,21 +581,10 @@ impl ChatView {
         // Note: streaming content is rendered separately, don't mark history cache dirty
     }
 
-    /// Tick handler for animation. Returns true if visual state changed and needs redraw.
-    pub fn tick(&mut self) -> bool {
-        let mut needs_redraw = false;
-
-        // Check if streaming spinner frame changed
-        if self.is_streaming {
-            let old_spinner_idx = (self.tick_frame / 3) % 3;
-            self.tick_frame = self.tick_frame.wrapping_add(1);
-            let new_spinner_idx = (self.tick_frame / 3) % 3;
-            if old_spinner_idx != new_spinner_idx {
-                needs_redraw = true;
-            }
-        }
-
-        needs_redraw
+    /// Tick handler. The chat view has no per-frame animations (streaming
+    /// status lives in the info bar shimmer), so it never requests redraws.
+    pub const fn tick(&mut self) -> bool {
+        false
     }
 
     pub fn scroll_up(&mut self, amount: usize) {
@@ -725,6 +711,7 @@ impl ChatView {
         if !self.streaming_thinking.is_empty() && !self.streaming_content.is_empty() {
             lines.push(Arc::new(Line::from("")));
         }
+        self.md_renderer.set_width(width);
         let md_lines = self.md_renderer.lines();
 
         for line in md_lines {
@@ -901,7 +888,7 @@ impl ChatView {
         // Find start of word: scan backwards from col to first non-word char
         let mut start_char_idx = 0;
         for (i, c) in line_text.chars().enumerate().take(col) {
-            if !(c.is_alphanumeric() || c == '_') {
+            if !is_word_char(c) {
                 start_char_idx = i + 1;
             }
         }
@@ -909,7 +896,7 @@ impl ChatView {
         // Find end of word: scan forwards from col to first non-word char
         let mut end_char_idx = char_count;
         for (i, c) in line_text.chars().enumerate().skip(col) {
-            if !(c.is_alphanumeric() || c == '_') {
+            if !is_word_char(c) {
                 end_char_idx = i;
                 break;
             }
@@ -1670,7 +1657,8 @@ impl AppComponent<Msg, crate::msg::UserEvent> for ChatViewComponent {
 
         match *ev {
             Event::Tick => {
-                // Tick returns true if spinner frame changed or mascot blinked
+                // Chat view has no per-frame animations; tick() never
+                // requests a redraw. Kept as a hook for future animations.
                 if self.component.tick() {
                     Some(Msg::Redraw)
                 } else {
@@ -1741,6 +1729,17 @@ impl AppComponent<Msg, crate::msg::UserEvent> for ChatViewComponent {
             _ => None,
         }
     }
+}
+
+/// Word characters for double-click selection. Beyond alphanumeric and `_`,
+/// include characters common in paths and URLs so a double-click selects a
+/// whole path/URL instead of a fragment.
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric()
+        || matches!(
+            c,
+            '_' | '-' | '.' | '/' | ':' | '~' | '@' | '%' | '+' | '=' | '?' | '&' | '#'
+        )
 }
 
 /// Convert a terminal column position to a character index within a text segment.

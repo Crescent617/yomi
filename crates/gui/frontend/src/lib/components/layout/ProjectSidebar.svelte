@@ -55,7 +55,7 @@
     forkSession as forkSessionState,
     activateSession as stateActivateSession,
   } from "../../session";
-  import { formatTimeAgo } from "../../utils";
+  import { formatTimeAgo, focusAndSelect } from "../../utils";
   import { groupSessionsByTime } from "./session-time-groups";
   import { createFromSessionParams } from "./session-create";
   import { isActiveSessionPhase } from "../../session-phase";
@@ -104,9 +104,46 @@
   let allSessionsError = $state(false);
   let allSessionsCursor = $state<string | null>(null);
 
-  function focusAndSelect(node: HTMLInputElement) {
-    node.focus();
-    node.select();
+  /**
+   * Force-refetch the first page of sessions, ignoring the loaded cache.
+   * Runs silently whenever the sessions view is entered: failures only
+   * surface inline when there is nothing to show yet.
+   */
+  async function refreshAllSessions() {
+    const scope = sessionListScope;
+    if (allSessionsLoadPromise[scope]) return;
+    // Show the inline loading state only when there is nothing to show yet;
+    // revalidation with existing data stays silent.
+    const initial = !allSessionsLoadedShared[scope];
+    if (initial) {
+      allSessionsLoading = true;
+      allSessionsError = false;
+    }
+    allSessionsLoadPromise[scope] = (async () => {
+      const result = await api.listSessions(undefined, scope, undefined, 30);
+      for (const session of result.sessions) mergeSessionInfo(session);
+      allSessionsCursorShared[scope] = result.next_cursor;
+      allSessionsLoadedShared[scope] = true;
+    })();
+    try {
+      await allSessionsLoadPromise[scope];
+      // The view scope may have changed while the fetch was in flight;
+      // don't let a stale completion overwrite the active scope's state.
+      if (scope !== sessionListScope) return;
+      allSessionsCursor = allSessionsCursorShared[scope];
+      allSessionsLoaded = true;
+      allSessionsError = false;
+    } catch (e: unknown) {
+      console.error(
+        "Failed to refresh sessions:",
+        e instanceof Error ? e.message : e,
+      );
+      if (scope === sessionListScope && !allSessionsLoadedShared[scope])
+        allSessionsError = true;
+    } finally {
+      delete allSessionsLoadPromise[scope];
+      if (initial) allSessionsLoading = false;
+    }
   }
 
   onMount(() => {
@@ -245,7 +282,7 @@
   }
 
   $effect(() => {
-    if (sidebarView === "sessions") void loadAllSessions();
+    if (sidebarView === "sessions") void refreshAllSessions();
   });
 
   function switchSidebarView(view: SidebarViewPreference) {
@@ -857,7 +894,7 @@
   {/if}
 
   <div
-    class="scrollbar-hidden flex-1 min-h-0 overflow-y-auto py-1 {collapsed
+    class="scrollbar-hidden flex-1 min-h-0 overflow-y-auto overscroll-y-contain py-1 {collapsed
       ? 'px-1'
       : 'px-2'}"
     onscroll={closeMenus}

@@ -16,7 +16,7 @@
   <div class="max-w-[90%]">
     {#if isShort}
       <div
-        class="inline-flex items-center gap-1.5 text-xs text-muted-foreground/60 bg-muted/30 rounded-md px-2 py-1"
+        class="inline-flex items-center gap-1.5 text-xs text-muted-foreground bg-muted/30 rounded-md px-2 py-1"
       >
         <Terminal size={10} />
         <span class="font-mono">{content}</span>
@@ -24,7 +24,7 @@
     {:else}
       <button
         type="button"
-        class="inline-flex items-center gap-1.5 text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors cursor-pointer select-none bg-muted/30 rounded-md px-2 py-1"
+        class="inline-flex items-center gap-1.5 text-xs text-muted-foreground/80 hover:text-muted-foreground transition-colors cursor-pointer select-none bg-muted/30 rounded-md px-2 py-1"
         onclick={() => (expanded = !expanded)}
       >
         <Terminal size={10} />

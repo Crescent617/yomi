@@ -32,10 +32,13 @@
   import {
     ChevronDown,
     ArrowUp,
+    Check,
     PanelLeftOpen,
     PanelLeftClose,
     ExternalLink,
     Paperclip,
+    Plus,
+    Search,
     X,
     Code,
     Zap,
@@ -57,7 +60,6 @@
   import { formatTimeAgo } from "../../utils";
   import ProjectDot from "../ui/ProjectDot.svelte";
   import { clock } from "../../clock.svelte";
-  import { Search, Plus, Check } from "lucide-svelte";
   import ChangesWorkspace from "../layout/ChangesWorkspace.svelte";
   import PermissionSelector from "./PermissionSelector.svelte";
 
@@ -1451,7 +1453,7 @@
             <MessageList />
           </div>
           <div class="shrink-0 w-full">
-            <div class="container mx-auto px-4 lg:px-6">
+            <div class="mx-auto w-full max-w-4xl px-4 lg:px-6">
               <QueuedInputBar
                 session={activeSession}
                 onEdit={(text) => chatInputRef?.setContent?.(text)}

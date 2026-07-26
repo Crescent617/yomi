@@ -86,7 +86,7 @@ struct ToolTrace {
 #[derive(Debug)]
 pub(crate) struct RunReplyBuffer {
     entries: Vec<TraceEntry>,
-    /// Attachment paths declared via `<yomi:attachments>` blocks in
+    /// Attachment paths declared via `<yomi_attachments>` blocks in
     /// assistant texts. Blocks are stripped at record time so the XML
     /// never renders on the platform (trace snippets, live card preview,
     /// reply body).
@@ -109,7 +109,7 @@ impl RunReplyBuffer {
 
     /// Record a completed assistant text. The most recent one becomes the
     /// reply body at flush time; all earlier ones stay in the trace. Each
-    /// `<yomi:attachments>` block outside a fenced code block is stripped
+    /// `<yomi_attachments>` block outside a fenced code block is stripped
     /// from the text and its paths collected for file delivery; a text
     /// that held only blocks leaves no narration.
     pub(crate) fn record_text(&mut self, text: &str) {
@@ -162,7 +162,7 @@ impl RunReplyBuffer {
 
     /// Split into the reply body (the most recent assistant text, if any)
     /// and the remaining trace, carrying the attachment paths collected
-    /// from `<yomi:attachments>` blocks at record time.
+    /// from `<yomi_attachments>` blocks at record time.
     pub(crate) fn into_reply(self) -> FinalReply {
         let body_idx = self
             .entries
@@ -215,7 +215,7 @@ impl Default for RunReplyBuffer {
 /// The deliverable reply: optional final text + the run trace (may be empty).
 pub(crate) struct FinalReply {
     text: Option<String>,
-    /// Attachment paths collected from `<yomi:attachments>` blocks in the
+    /// Attachment paths collected from `<yomi_attachments>` blocks in the
     /// run's assistant texts (blocks already stripped from the recorded
     /// texts).
     attachments: Vec<String>,

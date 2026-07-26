@@ -883,7 +883,10 @@
   }
 </script>
 
-<div class="border-t border-border relative" onfocusout={handleFocusOut}>
+<div
+  class="relative mb-1 rounded-md bg-card px-2 py-0 transition-shadow focus-within:ring-1 focus-within:ring-border"
+  onfocusout={handleFocusOut}
+>
   <!-- Command completion dropdown -->
   {#if showCommands && filteredCommands.length > 0}
     <div
@@ -978,9 +981,9 @@
     </div>
   {/if}
 
-  <div class="rounded-lg bg-background overflow-hidden">
+  <div>
     {#if inlineImages.length > 0}
-      <div class="flex flex-wrap gap-2 px-3 pt-3 pb-1">
+      <div class="flex flex-wrap gap-2 px-2 pt-3 pb-1">
         {#each inlineImages as img (img.id)}
           <div class="relative group shrink-0">
             <img
@@ -1000,7 +1003,7 @@
         {/each}
       </div>
     {/if}
-    <div class="flex items-end gap-2 p-2">
+    <div class="flex items-end gap-2 p-1 px-2">
       <textarea
         bind:this={textareaRef}
         bind:value={content}
@@ -1055,7 +1058,7 @@
   {#if activeSession}
     <!-- File attachments -->
     {#if fileAttachments.length > 0}
-      <div class="flex items-center gap-2 mt-1.5 px-1 flex-wrap">
+      <div class="flex items-center gap-2 mt-1.5 px-2 flex-wrap">
         {#each fileAttachments as path (path)}
           <div
             class="flex items-center gap-1.5 rounded-md border border-border bg-secondary px-2 py-0.5"

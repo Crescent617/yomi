@@ -191,3 +191,24 @@ fn test_add_steer_flushes_streaming_before_message() {
             && matches!(blocks.as_slice(), [ContentBlock::Text { text }] if text == "change direction")
     ));
 }
+
+#[test]
+fn test_tick_never_requests_redraw() {
+    // The chat view has no per-frame animations (streaming status lives in
+    // the info bar), so ticking must stay free of redraw churn.
+    let mut cv = ChatView::new();
+    cv.start_streaming();
+    for _ in 0..12 {
+        assert!(!cv.tick());
+    }
+}
+
+#[test]
+fn test_is_word_char_covers_paths_and_urls() {
+    for c in "abcXYZ019_-. /:~@%+=?&#".chars().filter(|c| *c != ' ') {
+        assert!(super::is_word_char(c), "'{c}' should be a word char");
+    }
+    for c in [' ', '(', ')', ',', ';', '"', '\''] {
+        assert!(!super::is_word_char(c), "'{c}' should not be a word char");
+    }
+}

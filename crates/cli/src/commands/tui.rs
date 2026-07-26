@@ -52,7 +52,10 @@ pub struct TuiArgs {
     #[allow(clippy::option_option)]
     pub fork: Option<Option<String>>,
 
-    /// Run with background daemon (external kernel)
+    /// Run with background daemon (external kernel), spawning it if needed.
+    ///
+    /// Without --bg, the TUI always uses the local in-process kernel and
+    /// never connects to the daemon.
     #[arg(long, visible_alias = "bg")]
     pub daemon: bool,
 
@@ -148,6 +151,10 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     let app_storage = Arc::new(AppStorage::new(config.data_dir.clone())?);
     let _log_guard = kernel::utils::logging::init_logging(&config, "tui", false)?;
 
+    // Kernel selection:
+    // - --daemon/--bg: connect to the daemon, spawning it when needed.
+    // - default: local in-process kernel, never touching the daemon.
+    let daemon_mode = args.daemon;
     let kernel: Arc<dyn KernelApi> = if args.daemon {
         daemon::spawn_daemon().await?;
         Arc::new(RemoteKernel::new(daemon::socket_addr()))
@@ -159,7 +166,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
 
     // Initialize global config for TUI
     tui::init_config(config.clone(), feature_gates);
-    tui::init_daemon_mode(args.daemon);
+    tui::init_daemon_mode(daemon_mode);
 
     let session_ctx = SessionContext {
         working_dir: working_dir.clone(),
@@ -269,3 +276,7 @@ fn print_startup_info(config: &Config) {
         println!("API Key: {key_preview}\n");
     }
 }
+
+#[cfg(test)]
+#[path = "tui_test.rs"]
+mod tests;

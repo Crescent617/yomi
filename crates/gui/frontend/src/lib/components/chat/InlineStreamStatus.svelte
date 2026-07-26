@@ -140,12 +140,13 @@
     aria-atomic="true"
   >
     <span>
-      <span class="status-shimmer">{leadWord}</span>{#if accent}
+      <span class="status-shimmer" data-text={leadWord}>{leadWord}</span
+      >{#if accent}
         <span
           class="ml-1 inline-block max-w-72 truncate align-bottom font-mono font-medium text-primary/85"
           title={accent}>{accent}</span
         >
-      {/if}<span class="status-shimmer">...</span>
+      {/if}<span class="status-shimmer" data-text="...">...</span>
     </span>
     <!-- Elapsed and token counts tick constantly; keep them out of the
          aria-live region so screen readers are not bombarded. -->
@@ -167,13 +168,14 @@
 <style>
   /* Shimmer sweep across the status word: muted base, foreground peak. */
   .status-shimmer {
+    position: relative;
     font-style: italic;
     background: linear-gradient(
       90deg,
       var(--color-muted-foreground) 0%,
-      var(--color-muted-foreground) 40%,
+      var(--color-muted-foreground) 30%,
       var(--color-foreground) 50%,
-      var(--color-muted-foreground) 60%,
+      var(--color-muted-foreground) 70%,
       var(--color-muted-foreground) 100%
     );
     background-size: 200% 100%;
@@ -181,8 +183,32 @@
     background-clip: text;
     color: transparent;
     -webkit-text-fill-color: transparent;
-    opacity: 0.8;
-    animation: shimmer-sweep 2s linear infinite;
+    animation: shimmer-sweep 1.6s linear infinite;
+  }
+
+  /* Halo copy layered on top: only the peak band is opaque, so the glow
+     exists solely where the sweep currently is. Blur turns the clipped
+     glyphs into a bloom. Runs the same keyframes to stay in sync. */
+  .status-shimmer::before {
+    content: attr(data-text);
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      transparent 34%,
+      hsl(var(--primary) / 0.3) 50%,
+      transparent 66%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    filter: blur(3.5px);
+    animation: shimmer-sweep 1.6s linear infinite;
   }
 
   @keyframes shimmer-sweep {
@@ -200,6 +226,9 @@
       background: none;
       color: inherit;
       -webkit-text-fill-color: currentColor;
+    }
+    .status-shimmer::before {
+      content: none;
     }
   }
 </style>

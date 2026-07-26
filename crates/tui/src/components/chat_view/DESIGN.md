@@ -112,7 +112,6 @@ pub struct ChatView {
     streaming_content: String,
     streaming_thinking: String,
     is_streaming: bool,
-    tick_frame: usize,
     md_renderer: StreamingMarkdownRenderer,
     queued_message: Option<Vec<ContentBlock>>,
 

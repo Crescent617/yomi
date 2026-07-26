@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use tuirealm::ratatui::{
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
 };
 
@@ -86,11 +86,8 @@ fn edit_args_diff(arguments: Option<&str>) -> Option<Vec<(&'static str, String)>
 }
 
 /// Folded Edit preview: render at most `FOLDED_EDIT_DIFF_LINES` diff lines
-/// with an overflow hint. Returns true when a diff was rendered.
-fn render_edit_diff_peek(lines: &mut Vec<Arc<Line<'static>>>, arguments: Option<&str>) -> bool {
-    let Some(diff) = edit_args_diff(arguments) else {
-        return false;
-    };
+/// with an overflow hint.
+fn render_edit_diff_peek(lines: &mut Vec<Arc<Line<'static>>>, diff: &[(&str, String)]) {
     for (ty, text) in diff.iter().take(FOLDED_EDIT_DIFF_LINES) {
         push_edit_diff_line(lines, ty, text);
     }
@@ -109,13 +106,12 @@ fn render_edit_diff_peek(lines: &mut Vec<Arc<Line<'static>>>, arguments: Option<
             ),
         ])));
     }
-    true
 }
 
 #[allow(clippy::cast_precision_loss)]
 pub fn render_message(msg: &HistoryMessage, width: usize) -> Vec<Arc<Line<'static>>> {
     match msg {
-        HistoryMessage::User(blocks) => render_user(blocks),
+        HistoryMessage::User(blocks) => render_user(blocks, width),
         HistoryMessage::Steer(blocks) => render_steer(blocks),
         HistoryMessage::Assistant {
             content,
@@ -157,7 +153,23 @@ pub fn render_message(msg: &HistoryMessage, width: usize) -> Vec<Arc<Line<'stati
     }
 }
 
-fn render_user(content_blocks: &[ContentBlock]) -> Vec<Arc<Line<'static>>> {
+/// Pad a line with background-colored spaces so its background fills the
+/// full row width (user message bubble effect). A line padded to exactly
+/// `width` still occupies a single visual row after wrapping.
+fn push_bg_padding(spans: &mut Vec<Span<'static>>, width: usize, bg: Color) {
+    let used: usize = spans
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
+    if used < width {
+        spans.push(Span::styled(
+            " ".repeat(width - used),
+            Style::default().bg(bg),
+        ));
+    }
+}
+
+fn render_user(content_blocks: &[ContentBlock], width: usize) -> Vec<Arc<Line<'static>>> {
     let mut lines = Vec::new();
 
     let user_bg = colors::user_msg_bg();
@@ -171,7 +183,7 @@ fn render_user(content_blocks: &[ContentBlock]) -> Vec<Arc<Line<'static>>> {
                     } else {
                         chars::INPUT_PROMPT_MULTI
                     };
-                    lines.push(Arc::new(Line::from(vec![
+                    let mut spans = vec![
                         Span::styled(
                             prefix,
                             Style::default()
@@ -183,7 +195,9 @@ fn render_user(content_blocks: &[ContentBlock]) -> Vec<Arc<Line<'static>>> {
                             preprocess(line),
                             Style::default().fg(colors::text_primary()).bg(user_bg),
                         ),
-                    ])));
+                    ];
+                    push_bg_padding(&mut spans, width, user_bg);
+                    lines.push(Arc::new(Line::from(spans)));
                     line_idx += 1;
                 }
             }
@@ -193,7 +207,7 @@ fn render_user(content_blocks: &[ContentBlock]) -> Vec<Arc<Line<'static>>> {
                 } else {
                     chars::INPUT_PROMPT_MULTI
                 };
-                lines.push(Arc::new(Line::from(vec![
+                let mut spans = vec![
                     Span::styled(
                         prefix,
                         Style::default()
@@ -205,7 +219,9 @@ fn render_user(content_blocks: &[ContentBlock]) -> Vec<Arc<Line<'static>>> {
                         "[Image]",
                         Style::default().fg(colors::text_secondary()).bg(user_bg),
                     ),
-                ])));
+                ];
+                push_bg_padding(&mut spans, width, user_bg);
+                lines.push(Arc::new(Line::from(spans)));
                 line_idx += 1;
             }
             _ => {}
@@ -267,6 +283,7 @@ fn render_assistant(
     // Note: no empty line here, thinking already adds one if present
     if !content.is_empty() {
         let mut md_renderer = StreamingMarkdownRenderer::new();
+        md_renderer.set_width(width);
         md_renderer.set_content(content.to_string());
         let md_lines = md_renderer.lines();
 
@@ -300,6 +317,14 @@ fn render_tool(
         ToolStatus::Cancelled => colors::text_secondary(),
     };
     let icon = tool_icon(tool_name);
+    let kind = tool_kind(tool_name);
+    // Parse the Edit diff once: used for header stats, folded peek and the
+    // expanded diff view.
+    let edit_diff = if kind == ToolKind::Edit {
+        edit_args_diff(arguments)
+    } else {
+        None
+    };
 
     // Build header with execution time (only show if >= 1s)
     let time_str = elapsed_ms
@@ -352,31 +377,64 @@ fn render_tool(
         ));
     }
 
+    // Edit diff stats: "+3 −1" appended to the header (skipped for no-op diffs).
+    if let Some(ref diff) = edit_diff {
+        let adds = diff.iter().filter(|(ty, _)| *ty == "add").count();
+        let dels = diff.iter().filter(|(ty, _)| *ty == "del").count();
+        if adds > 0 || dels > 0 {
+            header_spans.push(Span::styled(
+                format!(" +{adds}"),
+                Style::default().fg(colors::accent_success()),
+            ));
+            header_spans.push(Span::styled(
+                format!(" −{dels}"),
+                Style::default().fg(colors::accent_error()),
+            ));
+        }
+    }
+
     lines.push(Arc::new(Line::from(header_spans)));
 
-    // Output peek in folded mode (max 50 chars, indented)
+    // Output peek in folded mode: show the first two real (non-empty) output
+    // lines instead of whitespace-collapsed text, preserving line structure.
     if folded {
         // Edit tool: preview the pending change as a compact diff directly
         // (capped at FOLDED_EDIT_DIFF_LINES; browse-mode Ctrl+E shows all).
-        let edit_diff_shown =
-            tool_kind(tool_name) == ToolKind::Edit && render_edit_diff_peek(&mut lines, arguments);
+        let edit_diff_shown = edit_diff.is_some();
+        if let Some(ref diff) = edit_diff {
+            render_edit_diff_peek(&mut lines, diff);
+        }
 
-        // Show output peek in folded mode (max 2 lines based on width). The
-        // diff already conveys a successful edit, so keep the peek only for
-        // errors or when no diff could be rendered.
+        // The diff already conveys a successful edit, so keep the peek only
+        // for errors or when no diff could be rendered.
         if error.is_some() || !edit_diff_shown {
             if let Some(out) = error.or(output) {
-                let trimmed = out.trim();
-                if !trimmed.is_empty() {
-                    // Compact whitespace first, then truncate to 2 lines width
-                    let compact = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
-                    // Total width for 2 lines, minus the " ⎿ " prefix
-                    let max_width = width * 2 - 3;
-                    let peek = truncate_by_width(&compact, max_width, "...");
-                    lines.push(Arc::new(Line::from(vec![
-                        Span::styled(" ⎿ ", Style::default().fg(colors::text_secondary())),
-                        Span::styled(peek, Style::default().fg(colors::text_secondary())),
-                    ])));
+                let non_empty: Vec<&str> = out.lines().filter(|l| !l.trim().is_empty()).collect();
+                for (i, out_line) in non_empty.iter().take(2).enumerate() {
+                    let prefix = if i == 0 { " ⎿ " } else { "   " };
+                    let hidden = non_empty.len().saturating_sub(2);
+                    let more = if i == 1 && hidden > 0 {
+                        format!(" … +{hidden}")
+                    } else {
+                        String::new()
+                    };
+                    let avail = width.saturating_sub(3 + UnicodeWidthStr::width(more.as_str()));
+                    let mut spans = vec![
+                        Span::styled(prefix, Style::default().fg(colors::text_secondary())),
+                        Span::styled(
+                            truncate_by_width(out_line.trim(), avail, "..."),
+                            Style::default().fg(colors::text_secondary()),
+                        ),
+                    ];
+                    if !more.is_empty() {
+                        spans.push(Span::styled(
+                            more,
+                            Style::default()
+                                .fg(colors::text_secondary())
+                                .add_modifier(Modifier::ITALIC),
+                        ));
+                    }
+                    lines.push(Arc::new(Line::from(spans)));
                 }
             }
         }
@@ -384,13 +442,13 @@ fn render_tool(
         // Show tool arguments if available
         if let Some(args) = arguments {
             if !args.is_empty() {
-                if tool_kind(tool_name) == ToolKind::Edit {
+                if kind == ToolKind::Edit {
                     // Special diff view for edit tool (full diff)
                     let mut diff_rendered = false;
-                    if let Some(diff) = edit_args_diff(arguments) {
+                    if let Some(ref diff) = edit_diff {
                         diff_rendered = true;
                         for (ty, text) in diff {
-                            push_edit_diff_line(&mut lines, ty, &text);
+                            push_edit_diff_line(&mut lines, ty, text);
                         }
                     }
                     if !diff_rendered {
@@ -419,7 +477,7 @@ fn render_tool(
                             ])));
                         }
                     }
-                } else if tool_kind(tool_name) == ToolKind::PostMessage {
+                } else if kind == ToolKind::PostMessage {
                     let mut rendered = false;
                     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(args) {
                         if let (Some(agent_id), Some(title), Some(content)) = (

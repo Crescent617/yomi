@@ -38,10 +38,16 @@
   );
 </script>
 
-{#snippet messageTimestamp(createdAt: string | undefined, isStreaming: boolean)}
+{#snippet messageTimestamp(
+  createdAt: string | undefined,
+  isStreaming: boolean,
+  alignEnd: boolean,
+)}
   {#if createdAt && !isStreaming}
     <div
-      class="mt-1 flex justify-end pr-1 text-[10px] leading-none text-muted-foreground/55 transition-colors group-hover:text-muted-foreground"
+      class="mt-1 flex text-[10px] leading-none text-muted-foreground/55 transition-colors group-hover:text-muted-foreground {alignEnd
+        ? 'justify-end pr-1'
+        : 'justify-start pl-1'}"
     >
       <time datetime={createdAt}>{formatMessageTime(createdAt)}</time>
     </div>
@@ -75,8 +81,12 @@
           {session_id}
         />
       {/if}
-      {#if msg.type === "user"}
-        {@render messageTimestamp(msg.created_at, item.isStreaming)}
+      {#if msg.type === "user" || msg.type === "assistant"}
+        {@render messageTimestamp(
+          msg.created_at,
+          item.isStreaming,
+          msg.type === "user",
+        )}
       {/if}
     </div>
   {:else}
@@ -100,6 +110,7 @@
               isStreaming={item.isStreaming}
             />
             <TextBlock content={text} isStreaming={item.isStreaming} />
+            {@render messageTimestamp(m.created_at, item.isStreaming, false)}
           </div>
         {/if}
       {/each}

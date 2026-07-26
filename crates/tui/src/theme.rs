@@ -82,9 +82,9 @@ impl Default for ThemeConfig {
             text_secondary: hex("#90909F"),
             text_muted: hex("#808090"),
 
-            // Accent colors - Purple theme
-            accent_user: hex("#C4C6CF"),
-            user_msg_bg: hex("#2A2A35"),
+            // Accent colors
+            accent_user: hex("#89B4FA"), // Blue user accent (prompts, indicators)
+            user_msg_bg: hex("#3B3B4A"), // Clearly visible full-width band
             accent_system: hex("#64C8DF"),
             accent_info: hex("#64C8DF"),
             accent_success: hex("#64DC8C"),

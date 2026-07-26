@@ -184,6 +184,11 @@
   .text-block {
     color: hsl(var(--foreground));
     line-height: 1.65;
+    /* Long URLs / unbreakable tokens wrap instead of overflowing the column */
+    overflow-wrap: anywhere;
+  }
+  .text-block :global(img) {
+    max-width: 100%;
   }
   .text-block :global(h1) {
     font-size: 1.25rem;

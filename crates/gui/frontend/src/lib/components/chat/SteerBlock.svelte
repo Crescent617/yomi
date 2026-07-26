@@ -57,7 +57,7 @@
   </div>
   <div
     class="min-w-0 flex-1 text-xs leading-4 text-foreground"
-    class:pb-2={isLong}
+    class:pb-5={isLong}
   >
     {#if parsed.source?.type === "user"}
       <span class="mb-0.5 inline-flex text-[11px] font-semibold text-primary">

@@ -52,6 +52,14 @@ pub trait KernelApi: Send + Sync {
     /// Gracefully stop the kernel and all background tasks.
     fn stop(&self);
 
+    /// Whether the kernel is currently reachable.
+    ///
+    /// Local kernels are always connected. The remote client reports
+    /// `false` once the daemon connection has been invalidated (heartbeat
+    /// loss, send/RPC failure) and not yet re-established — callers can use
+    /// this to skip RPCs that would only stall until their timeout.
+    async fn is_connected(&self) -> bool;
+
     // ── Config ─────────────────────────────────────────────────────────────
     async fn get_config(&self) -> Result<crate::config::KernelConfig>;
     async fn set_config(&self, content: String) -> Result<()>;
@@ -235,6 +243,10 @@ pub trait KernelApi: Send + Sync {
 impl KernelApi for Kernel {
     fn stop(&self) {
         Self::stop(self);
+    }
+
+    async fn is_connected(&self) -> bool {
+        true
     }
 
     async fn get_config(&self) -> Result<crate::config::KernelConfig> {
@@ -1099,6 +1111,16 @@ impl KernelApi for RemoteKernel {
                 c.cancel.cancel();
             }
         });
+    }
+
+    async fn is_connected(&self) -> bool {
+        // try_lock: ensure_connected holds the mutex across its reconnect
+        // loop (up to 10s); a locked connection is unusable anyway, so
+        // report not-connected instead of stalling the caller.
+        match self.connection.try_lock() {
+            Ok(guard) => matches!(guard.as_ref(), Some(conn) if !conn.cancel.is_cancelled()),
+            Err(_) => false,
+        }
     }
 
     async fn get_config(&self) -> Result<crate::config::KernelConfig> {

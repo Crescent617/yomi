@@ -22,13 +22,13 @@
 </script>
 
 <div class="relative flex gap-1">
-  <div class="relative w-3 shrink-0 pt-1" aria-hidden="true">
+  <div class="relative w-3 shrink-0 pt-0.5" aria-hidden="true">
     {#if !(isFirst && isLast)}
       <span
         class="absolute left-1/2 w-px -translate-x-1/2 bg-border/70 {isFirst
-          ? 'bottom-0 top-[18px]'
+          ? 'bottom-0 top-[16px]'
           : isLast
-            ? 'bottom-[calc(100%-18px)] top-0'
+            ? 'bottom-[calc(100%-16px)] top-0'
             : 'inset-y-0'}"
       ></span>
     {/if}
@@ -53,7 +53,7 @@
     </span>
   </div>
 
-  <div class="min-w-0 flex-1 py-1">
+  <div class="min-w-0 flex-1 py-0.5">
     <button
       type="button"
       class="flex min-h-7 w-full items-center gap-2 rounded-md px-0.5 text-left transition-colors hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -62,10 +62,7 @@
     >
       <Lightbulb class="size-3.5 shrink-0 text-muted-foreground" />
       <span class="shrink-0 text-xs font-medium text-foreground">Thought</span>
-      <span
-        class="min-w-0 flex-1 truncate text-[11px] text-muted-foreground"
-        title={preview}
-      >
+      <span class="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
         {preview}
       </span>
       <span

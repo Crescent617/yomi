@@ -76,6 +76,10 @@ pub struct StreamingMarkdownRenderer {
     code_blocks: Vec<CodeBlockInfo>,
     /// Throttle full re-parsing during streaming to avoid O(n²) behaviour.
     last_render_at: std::time::Instant,
+    /// Viewport width for pre-wrapped block elements (tables). Lines are
+    /// wrapped later by `WrapParagraph`, but tables must be laid out at a
+    /// fixed width during rendering.
+    width: usize,
 }
 
 impl Default for StreamingMarkdownRenderer {
@@ -94,6 +98,16 @@ impl StreamingMarkdownRenderer {
             dirty: false,
             code_blocks: Vec::new(),
             last_render_at: std::time::Instant::now(),
+            width: 120,
+        }
+    }
+
+    /// Set the viewport width for pre-wrapped elements (tables).
+    /// Marks the renderer dirty so the next `lines()` re-renders.
+    pub fn set_width(&mut self, width: usize) {
+        if width > 0 && width != self.width {
+            self.width = width;
+            self.dirty = true;
         }
     }
 
@@ -351,7 +365,7 @@ impl StreamingMarkdownRenderer {
                             in_table_head = false;
                             // Render the complete table
                             if let Some(ref tr) = self.table_renderer {
-                                let table_lines = tr.render(120); // Use a reasonable max width
+                                let table_lines = tr.render(self.width);
                                 for line in table_lines {
                                     self.lines.push(line);
                                 }
@@ -517,7 +531,7 @@ impl StreamingMarkdownRenderer {
                     .rposition(|l| l.to_string().trim().is_empty())
                     .map_or(0, |i| i + 1);
 
-                let table_lines = tr.render(120);
+                let table_lines = tr.render(self.width);
                 self.lines.truncate(table_start);
                 for line in table_lines {
                     self.lines.push(line);

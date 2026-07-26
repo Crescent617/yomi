@@ -339,7 +339,7 @@ impl Conductor {
         }
 
         let history = match &self.agent_shared.message_store {
-            Some(store) => match store.get(&sid.0).await {
+            Some(store) => match store.get_inlined(&sid.0).await {
                 Ok(msgs) => msgs.into_iter().map(Arc::new).collect(),
                 Err(_) => Vec::new(),
             },

@@ -26,7 +26,7 @@ fn into_reply_promotes_last_text_to_body() {
 #[test]
 fn into_reply_strips_attachments_block_from_body() {
     let mut buf = RunReplyBuffer::new();
-    buf.record_text("report done\n\n<yomi:attachments>\nout.pdf\n</yomi:attachments>");
+    buf.record_text("report done\n\n<yomi_attachments>\nout.pdf\n</yomi_attachments>");
     let reply = buf.into_reply();
     assert_eq!(reply.text(), Some("report done"));
     assert_eq!(reply.attachments(), &["out.pdf"]);
@@ -35,7 +35,7 @@ fn into_reply_strips_attachments_block_from_body() {
 #[test]
 fn into_reply_attachments_only_body_becomes_textless() {
     let mut buf = RunReplyBuffer::new();
-    buf.record_text("<yomi:attachments>\nout.pdf\n</yomi:attachments>");
+    buf.record_text("<yomi_attachments>\nout.pdf\n</yomi_attachments>");
     let reply = buf.into_reply();
     assert_eq!(reply.text(), None);
     assert_eq!(reply.attachments(), &["out.pdf"]);
@@ -47,7 +47,7 @@ fn attachments_block_never_renders_anywhere() {
     // the XML must not leak into the trace panel, the card, or the body.
     let mut buf = RunReplyBuffer::new();
     buf.record_text("generated the file");
-    buf.record_text("mid-run note\n<yomi:attachments>\nout.pdf\n</yomi:attachments>");
+    buf.record_text("mid-run note\n<yomi_attachments>\nout.pdf\n</yomi_attachments>");
     buf.record_text("here you go");
     // The live card preview renders from the buffer.
     let preview = buf.trace_preview_lines(10).join("\n");
@@ -61,7 +61,7 @@ fn attachments_block_never_renders_anywhere() {
         preview,
     ] {
         assert!(
-            !rendered.contains("<yomi:attachments>"),
+            !rendered.contains("<yomi_attachments>"),
             "xml leaked: {rendered}"
         );
         assert!(!rendered.contains("out.pdf"), "path leaked: {rendered}");

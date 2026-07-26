@@ -1,7 +1,7 @@
 //! Attachment declarations in channel replies.
 //!
 //! A channel-routed agent attaches files to its reply with a
-//! `<yomi:attachments>` block, one path per line (absolute, or relative
+//! `<yomi_attachments>` block, one path per line (absolute, or relative
 //! to the session workspace). The tag is project-specific, and a block
 //! counts as a declaration only when it stands outside a fenced code
 //! block — decided by parity: the fences after a fenced-in block are odd
@@ -24,11 +24,11 @@ use super::utils::resolve_safe_path;
 use super::{PlatformAdapter, SessionRouting};
 use crate::types::ContentBlock;
 
-const OPEN_TAG: &str = "<yomi:attachments>";
-const CLOSE_TAG: &str = "</yomi:attachments>";
+const OPEN_TAG: &str = "<yomi_attachments>";
+const CLOSE_TAG: &str = "</yomi_attachments>";
 const FENCE: &str = "```";
 
-/// Strip every `<yomi:attachments>…</yomi:attachments>` block standing
+/// Strip every `<yomi_attachments>…</yomi_attachments>` block standing
 /// outside a fenced code block, returning the cleaned text and the
 /// declared paths (trimmed, non-empty, in document order).
 ///

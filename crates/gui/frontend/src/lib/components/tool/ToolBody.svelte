@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Loader2 } from "lucide-svelte";
+  import { Check, Copy, Loader2 } from "lucide-svelte";
+  import { onDestroy } from "svelte";
   import type { ToolCall } from "../../state.svelte";
   import AssetImage from "../ui/AssetImage.svelte";
   import {
@@ -19,7 +20,47 @@
       ? parsePostMessageArgs(tool.arguments ?? "")
       : null,
   );
+
+  let copiedKey = $state<string | null>(null);
+  let copyTimer: ReturnType<typeof setTimeout> | undefined;
+
+  onDestroy(() => clearTimeout(copyTimer));
+
+  function formatJson(value: string): string {
+    try {
+      return JSON.stringify(JSON.parse(value), null, 2);
+    } catch {
+      return value;
+    }
+  }
+
+  async function copyText(key: string, text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      copiedKey = key;
+      clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => (copiedKey = null), 1500);
+    } catch (error) {
+      console.error("Failed to copy:", error);
+    }
+  }
 </script>
+
+{#snippet copyButton(key: string, text: string)}
+  <button
+    type="button"
+    onclick={() => copyText(key, text)}
+    class="inline-flex shrink-0 items-center rounded p-0.5 text-muted-foreground/70 transition-colors hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+    title={copiedKey === key ? "Copied" : "Copy"}
+    aria-label={copiedKey === key ? "Copied" : "Copy"}
+  >
+    {#if copiedKey === key}
+      <Check size={12} class="text-success" />
+    {:else}
+      <Copy size={12} />
+    {/if}
+  </button>
+{/snippet}
 
 <div
   class="space-y-1.5 max-h-96 overflow-y-auto {embedded
@@ -96,12 +137,16 @@
       </div>
     </div>
 
-    <!-- Other tools: raw JSON -->
+    <!-- Other tools: formatted JSON -->
   {:else if tool.arguments}
-    <div class="text-xs opacity-60">
-      <div class="font-medium mb-0.5">Arguments:</div>
-      <pre
-        class="bg-code-bg rounded px-2 py-1 whitespace-pre-wrap">{tool.arguments}</pre>
+    <div class="text-xs">
+      <div class="mb-0.5 flex items-center justify-between gap-2 opacity-60">
+        <span class="font-medium">Arguments:</span>
+        {@render copyButton("arguments", tool.arguments)}
+      </div>
+      <pre class="bg-code-bg rounded px-2 py-1 whitespace-pre-wrap">{formatJson(
+          tool.arguments,
+        )}</pre>
     </div>
   {/if}
 
@@ -122,7 +167,10 @@
 
   {#if tool.output}
     <div class="text-xs">
-      <div class="font-medium mb-0.5 opacity-60">Output:</div>
+      <div class="mb-0.5 flex items-center justify-between gap-2">
+        <span class="font-medium opacity-60">Output:</span>
+        {@render copyButton("output", tool.output)}
+      </div>
       <pre
         class="bg-code-bg rounded px-2 py-1 whitespace-pre-wrap overflow-x-auto">{tool.output}</pre>
     </div>
@@ -130,7 +178,10 @@
 
   {#if tool.error}
     <div class="text-xs text-error">
-      <div class="font-medium mb-0.5">Error:</div>
+      <div class="mb-0.5 flex items-center justify-between gap-2">
+        <span class="font-medium">Error:</span>
+        {@render copyButton("error", tool.error)}
+      </div>
       <pre
         class="bg-error/10 rounded px-2 py-1 whitespace-pre-wrap">{tool.error}</pre>
     </div>

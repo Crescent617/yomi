@@ -17,9 +17,9 @@ const SKILL_SECTION_HEADER: &str = "# Skills\nIMPORTANT: before replying, you mu
 
 /// Delivery contract for sessions routed from an external chat platform:
 /// the final reply is auto-delivered, and files are attached via a
-/// `<yomi:attachments>` block (parsed and delivered by the channel hub).
+/// `<yomi_attachments>` block (parsed and delivered by the channel hub).
 /// Appended to the base prompt by the conductor at spawn time.
-pub(crate) const CHANNEL_DELIVERY_SECTION: &str = "# Channel Delivery\nThis session is connected to an external chat platform. Your final reply is delivered automatically — write it as one complete message. To attach files to the reply, include an attachments block, one path per line (absolute, or relative to the workspace):\n\n<yomi:attachments>\noutput/report.pdf\n</yomi:attachments>\n\nTo show this syntax to the user instead of attaching files, wrap it in a fenced code block.";
+pub(crate) const CHANNEL_DELIVERY_SECTION: &str = "# Channel Delivery\nThis session is connected to an external chat platform. Your final reply is delivered automatically — write it as one complete message. To attach files to the reply, include an attachments block, one path per line (absolute, or relative to the workspace):\n\n<yomi_attachments>\noutput/report.pdf\n</yomi_attachments>\n\nTo show this syntax to the user instead of attaching files, wrap it in a fenced code block.";
 
 impl<'a> SystemPromptBuilder<'a> {
     pub fn new() -> Self {

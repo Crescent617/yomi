@@ -58,7 +58,7 @@ async fn test_replace() {
 }
 
 #[tokio::test]
-async fn test_get_resolves_stored_asset_url() {
+async fn test_get_keeps_asset_reference() {
     let (store, _temp) = create_test_store();
     let data_url = "data:image/png;base64,aGVsbG8=";
 
@@ -73,7 +73,32 @@ async fn test_get_resolves_stored_asset_url() {
     assert!(persisted.contains("asset://"));
     assert!(!persisted.contains(data_url));
 
+    // Frontend reads keep the lightweight asset reference (resolved lazily
+    // via read_asset) so list responses stay small.
     let messages = store.get("session-1").await.unwrap();
+    let image_url = messages[0]
+        .content
+        .iter()
+        .find_map(|block| match block {
+            crate::types::ContentBlock::ImageUrl { image_url } => Some(&image_url.url),
+            _ => None,
+        })
+        .unwrap();
+    assert!(image_url.starts_with("asset://"));
+}
+
+#[tokio::test]
+async fn test_get_inlined_resolves_stored_asset_url() {
+    let (store, _temp) = create_test_store();
+    let data_url = "data:image/png;base64,aGVsbG8=";
+
+    store
+        .append("session-1", &[Message::user_with_image("image", data_url)])
+        .await
+        .unwrap();
+
+    // Model-context reads inline the asset back to a data URL.
+    let messages = store.get_inlined("session-1").await.unwrap();
     let image_url = messages[0]
         .content
         .iter()
@@ -86,7 +111,7 @@ async fn test_get_resolves_stored_asset_url() {
 }
 
 #[tokio::test]
-async fn test_get_errors_when_stored_asset_is_missing() {
+async fn test_get_inlined_placeholder_when_stored_asset_is_missing() {
     let (store, temp) = create_test_store();
     let data_url = "data:image/png;base64,aGVsbG8=";
 
@@ -99,6 +124,17 @@ async fn test_get_errors_when_stored_asset_is_missing() {
         .await
         .unwrap();
 
-    let error = store.get("session-1").await.unwrap_err();
-    assert!(error.to_string().contains("failed to resolve stored asset"));
+    // Missing assets never fail the load: get keeps the reference,
+    // get_inlined degrades the block to a text placeholder.
+    let messages = store.get("session-1").await.unwrap();
+    assert!(messages[0].content.iter().any(|block| matches!(
+        block,
+        crate::types::ContentBlock::ImageUrl { image_url } if image_url.url.starts_with("asset://")
+    )));
+
+    let messages = store.get_inlined("session-1").await.unwrap();
+    assert!(messages[0].content.iter().any(|block| matches!(
+        block,
+        crate::types::ContentBlock::Text { text } if text.contains("[image unavailable:")
+    )));
 }

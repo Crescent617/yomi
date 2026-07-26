@@ -48,13 +48,13 @@
 </script>
 
 <div class="relative flex gap-1">
-  <div class="relative w-3 shrink-0 pt-1" aria-hidden="true">
+  <div class="relative w-3 shrink-0 pt-0.5" aria-hidden="true">
     {#if !(isFirst && isLast)}
       <span
         class="absolute left-1/2 w-px -translate-x-1/2 bg-border/70 {isFirst
-          ? 'bottom-0 top-[18px]'
+          ? 'bottom-0 top-[16px]'
           : isLast
-            ? 'bottom-[calc(100%-18px)] top-0'
+            ? 'bottom-[calc(100%-16px)] top-0'
             : 'inset-y-0'}"
       ></span>
     {/if}
@@ -65,7 +65,7 @@
         {#if tool.status === "running"}
           <span class="relative flex size-1.5 items-center justify-center">
             <span
-              class="absolute size-2 animate-ping rounded-full bg-primary/70"
+              class="absolute size-2 rounded-full bg-primary/70 motion-safe:animate-ping"
             ></span>
             <span
               class="absolute size-2.5 rounded-full bg-primary/25 blur-[2px]"
@@ -80,7 +80,7 @@
     </span>
   </div>
 
-  <div class="min-w-0 flex-1 py-1">
+  <div class="min-w-0 flex-1 py-0.5">
     <div
       class="flex min-h-7 items-center gap-2 rounded-md px-0.5 transition-colors hover:bg-secondary/40"
     >

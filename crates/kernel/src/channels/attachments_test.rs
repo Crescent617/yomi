@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 #[test]
 fn no_block_returns_text_unchanged() {
-    let text = "  hello <yomi:attachments> world\n";
+    let text = "  hello <yomi_attachments> world\n";
     let (cleaned, paths) = parse_attachments(text);
     assert_eq!(cleaned, text);
     assert!(paths.is_empty());
@@ -17,7 +17,7 @@ fn no_block_returns_text_unchanged() {
 #[test]
 fn trailing_block_is_stripped() {
     let (cleaned, paths) = parse_attachments(
-        "report done\n\n<yomi:attachments>\nout.pdf\n data.csv \n</yomi:attachments>\n",
+        "report done\n\n<yomi_attachments>\nout.pdf\n data.csv \n</yomi_attachments>\n",
     );
     assert_eq!(cleaned, "report done");
     assert_eq!(paths, vec!["out.pdf", "data.csv"]);
@@ -25,7 +25,7 @@ fn trailing_block_is_stripped() {
 
 #[test]
 fn block_only_leaves_empty_text() {
-    let (cleaned, paths) = parse_attachments("<yomi:attachments>\na.pdf\n</yomi:attachments>");
+    let (cleaned, paths) = parse_attachments("<yomi_attachments>\na.pdf\n</yomi_attachments>");
     assert_eq!(cleaned, "");
     assert_eq!(paths, vec!["a.pdf"]);
 }
@@ -33,7 +33,7 @@ fn block_only_leaves_empty_text() {
 #[test]
 fn mid_text_block_is_recognized() {
     // Position no longer matters — only fence parity does.
-    let text = "before <yomi:attachments>a.pdf</yomi:attachments> after";
+    let text = "before <yomi_attachments>a.pdf</yomi_attachments> after";
     let (cleaned, paths) = parse_attachments(text);
     assert_eq!(cleaned, "before  after");
     assert_eq!(paths, vec!["a.pdf"]);
@@ -42,7 +42,7 @@ fn mid_text_block_is_recognized() {
 #[test]
 fn declaration_with_trailing_outro() {
     let (cleaned, paths) =
-        parse_attachments("done\n<yomi:attachments>\nout.pdf\n</yomi:attachments>\n附件如上");
+        parse_attachments("done\n<yomi_attachments>\nout.pdf\n</yomi_attachments>\n附件如上");
     assert_eq!(cleaned, "done\n\n附件如上");
     assert_eq!(paths, vec!["out.pdf"]);
 }
@@ -51,7 +51,7 @@ fn declaration_with_trailing_outro() {
 fn declaration_followed_by_fenced_code() {
     // Balanced fences after the block keep the parity even.
     let (cleaned, paths) =
-        parse_attachments("<yomi:attachments>\nout.pdf\n</yomi:attachments>\n```\ncode\n```");
+        parse_attachments("<yomi_attachments>\nout.pdf\n</yomi_attachments>\n```\ncode\n```");
     assert_eq!(cleaned, "```\ncode\n```");
     assert_eq!(paths, vec!["out.pdf"]);
 }
@@ -59,7 +59,7 @@ fn declaration_followed_by_fenced_code() {
 #[test]
 fn multiple_blocks_merge_in_order() {
     let (cleaned, paths) = parse_attachments(
-        "<yomi:attachments>a.pdf</yomi:attachments>\n<yomi:attachments>b.pdf</yomi:attachments>\n",
+        "<yomi_attachments>a.pdf</yomi_attachments>\n<yomi_attachments>b.pdf</yomi_attachments>\n",
     );
     assert_eq!(cleaned, "");
     assert_eq!(paths, vec!["a.pdf", "b.pdf"]);
@@ -69,7 +69,7 @@ fn multiple_blocks_merge_in_order() {
 fn fenced_example_surfaces_as_typed() {
     // The supported way to show the syntax: the enclosing fence closes
     // after the block, leaving an odd fence count behind it.
-    let text = "use this syntax:\n```\n<yomi:attachments>\nout.pdf\n</yomi:attachments>\n```";
+    let text = "use this syntax:\n```\n<yomi_attachments>\nout.pdf\n</yomi_attachments>\n```";
     let (cleaned, paths) = parse_attachments(text);
     assert_eq!(cleaned, text);
     assert!(paths.is_empty());
@@ -78,18 +78,18 @@ fn fenced_example_surfaces_as_typed() {
 #[test]
 fn fenced_example_then_real_declaration() {
     // The example stays verbatim; the real declaration is collected.
-    let text = "```\n<yomi:attachments>\nexample.pdf\n</yomi:attachments>\n```\n<yomi:attachments>\nreal.pdf\n</yomi:attachments>";
+    let text = "```\n<yomi_attachments>\nexample.pdf\n</yomi_attachments>\n```\n<yomi_attachments>\nreal.pdf\n</yomi_attachments>";
     let (cleaned, paths) = parse_attachments(text);
     assert_eq!(
         cleaned,
-        "```\n<yomi:attachments>\nexample.pdf\n</yomi:attachments>\n```"
+        "```\n<yomi_attachments>\nexample.pdf\n</yomi_attachments>\n```"
     );
     assert_eq!(paths, vec!["real.pdf"]);
 }
 
 #[test]
 fn unterminated_block_is_left_untouched() {
-    let text = "done\n<yomi:attachments>\na.pdf";
+    let text = "done\n<yomi_attachments>\na.pdf";
     let (cleaned, paths) = parse_attachments(text);
     assert_eq!(cleaned, text);
     assert!(paths.is_empty());
@@ -97,7 +97,7 @@ fn unterminated_block_is_left_untouched() {
 
 #[test]
 fn empty_block_is_stripped_without_paths() {
-    let (cleaned, paths) = parse_attachments("done\n<yomi:attachments>\n</yomi:attachments>");
+    let (cleaned, paths) = parse_attachments("done\n<yomi_attachments>\n</yomi_attachments>");
     assert_eq!(cleaned, "done");
     assert!(paths.is_empty());
 }

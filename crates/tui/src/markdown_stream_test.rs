@@ -141,3 +141,31 @@ fn test_bold_underline_combination() {
         }
     }
 }
+
+#[test]
+fn test_table_respects_set_width() {
+    let mut renderer = StreamingMarkdownRenderer::new();
+    renderer.set_width(40);
+    let content = "| Name | Description |\n|------|-------------|\n| foo  | a somewhat long description that must be wrapped |\n| bar  | pending |";
+    let lines = renderer.set_content(content.to_string());
+
+    for line in lines {
+        let w = unicode_width::UnicodeWidthStr::width(line.to_string().as_str());
+        assert!(w <= 40, "table line width {w} exceeds 40: {line}");
+    }
+}
+
+#[test]
+fn test_width_change_marks_dirty_and_renders() {
+    let mut renderer = StreamingMarkdownRenderer::new();
+    let content = "| A | B |\n|---|---|\n| x | y |";
+    renderer.set_content(content.to_string());
+
+    renderer.set_width(30);
+    let narrow = renderer.lines();
+    assert!(!narrow.is_empty());
+    for line in narrow {
+        let w = unicode_width::UnicodeWidthStr::width(line.to_string().as_str());
+        assert!(w <= 30, "table line width {w} exceeds 30: {line}");
+    }
+}

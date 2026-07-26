@@ -214,7 +214,7 @@ pub async fn run_session_loop(
     let session_id_for_input = session_id.clone();
     let app_storage_for_save = app_storage.clone();
     let working_dir_for_save = ctx.working_dir.clone();
-    let input_handle = tokio::spawn(async move {
+    let mut input_handle = tokio::spawn(async move {
         let mut has_saved = false;
         while let Some(blocks) = input_rx.recv().await {
             if !has_saved {
@@ -245,7 +245,7 @@ pub async fn run_session_loop(
     // Spawn control command handling task
     let coord_for_ctrl = kernel.clone();
     let session_id_for_ctrl = session_id.clone();
-    let ctrl_handle = tokio::spawn(async move {
+    let mut ctrl_handle = tokio::spawn(async move {
         while let Some(cmd) = ctrl_rx.recv().await {
             match cmd {
                 Command::Cancel => {
@@ -366,42 +366,71 @@ pub async fn run_session_loop(
 
     // Close input channel so the forwarding task exits
     drop(input_tx);
-    // Wait for the input forwarding task to drain pending messages.
-    // In daemon mode send_message is async over IPC; allow up to 5s.
-    if tokio::time::timeout(std::time::Duration::from_secs(5), input_handle)
-        .await
-        .is_err()
-    {
-        tracing::warn!("Input forwarding task did not exit in time");
-    }
+    // When the daemon connection is already known to be dead, draining
+    // tasks and RPCs below would only stall until their timeouts — use a
+    // short drain window and skip the remote session check entirely.
+    let kernel_reachable = kernel.is_connected().await;
+    let drain_timeout = if kernel_reachable {
+        std::time::Duration::from_secs(5)
+    } else {
+        std::time::Duration::from_millis(500)
+    };
 
-    // Wait for the control task to finish (ctrl_tx dropped by run_tui)
-    if tokio::time::timeout(std::time::Duration::from_secs(5), ctrl_handle)
-        .await
-        .is_err()
-    {
-        tracing::warn!("Control task did not exit in time");
+    // Wait for the input/control tasks to drain. In daemon mode their
+    // kernel calls are async over IPC, so allow up to 5s; on timeout abort
+    // them rather than letting them keep retrying against a dead daemon
+    // in the background after shutdown.
+    let (input_drained, ctrl_drained) = tokio::join!(
+        tokio::time::timeout(drain_timeout, &mut input_handle),
+        tokio::time::timeout(drain_timeout, &mut ctrl_handle),
+    );
+    if input_drained.is_err() {
+        tracing::warn!("Input forwarding task did not exit in time, aborting");
+        input_handle.abort();
+    }
+    if ctrl_drained.is_err() {
+        tracing::warn!("Control task did not exit in time, aborting");
+        ctrl_handle.abort();
     }
 
     // Only record session if the session has actual messages in storage.
     // If we can't reach storage (e.g. daemon disconnected), conservatively
     // keep the session rather than risk deleting data.
-    match kernel.list_messages(&session_id).await {
-        Ok(msgs) if msgs.is_empty() => {
+    let messages = if kernel_reachable {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            kernel.list_messages(&session_id),
+        )
+        .await
+        {
+            Ok(result) => Some(result),
+            Err(_) => {
+                tracing::warn!("list_messages timed out during shutdown, keeping session");
+                None
+            }
+        }
+    } else {
+        tracing::info!("Daemon connection is down, keeping session without remote check");
+        None
+    };
+    match messages {
+        Some(Ok(msgs)) if msgs.is_empty() => {
             if let Err(e) = kernel.delete_session(&session_id).await {
                 tracing::warn!("Failed to delete empty session: {}", e);
             }
             println!("Goodbye~");
         }
-        Ok(_) => {
+        Some(Ok(_)) => {
             app_storage
                 .save_session(&ctx.working_dir, &session_id.0)
                 .await?;
             println!("Goodbye~ You can resume this session later with:");
             println!("yomi --resume {}", session_id.0);
         }
-        Err(e) => {
-            tracing::warn!("Failed to check session messages, keeping session: {}", e);
+        other => {
+            if let Some(Err(e)) = &other {
+                tracing::warn!("Failed to check session messages, keeping session: {}", e);
+            }
             app_storage
                 .save_session(&ctx.working_dir, &session_id.0)
                 .await?;
