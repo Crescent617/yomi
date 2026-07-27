@@ -1366,7 +1366,7 @@
     {:else if activeSession?.active_tab_id === "chat"}
       <div class="flex h-full relative">
         <!-- Main chat area -->
-        <div class="flex-1 flex flex-col h-full min-w-0 relative">
+        <div class="@container flex-1 flex flex-col h-full min-w-0 relative">
           <div
             class="flex-1 relative min-h-0"
             onclick={handleChatClick}

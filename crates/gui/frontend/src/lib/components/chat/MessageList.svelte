@@ -188,10 +188,15 @@
 
 {#if activeSession}
   <div class="h-full relative">
+    <!-- Classic scrollbars (macOS w/ mouse, Windows) shrink the scroller's
+         content box, so the centered message column sits half a scrollbar
+         width off from the input column below. Symmetric gutters re-center
+         it — only once the max-w-4xl (56rem) column actually binds; below
+         that both columns are full-width and already aligned. -->
     <div
       bind:this={scrollContainer}
       onscroll={onScroll}
-      class="h-full overflow-y-auto [overflow-anchor:none]"
+      class="h-full overflow-y-auto [overflow-anchor:none] @min-[56rem]:[scrollbar-gutter:stable_both-edges]"
     >
       <TaskDock />
       <div
