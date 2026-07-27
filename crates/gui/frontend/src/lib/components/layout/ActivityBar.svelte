@@ -13,7 +13,6 @@
   import { appState, requestActivePanel } from "../../state.svelte";
   import {
     guiPreferences,
-    snapshotGuiPreferences,
     scheduleGuiPreferencesSave,
     applyTheme,
   } from "../../settings.svelte";
@@ -35,10 +34,9 @@
     const order = ["light", "dark", "system"] as const;
     const idx = order.indexOf(guiPreferences.appearance.theme);
     const nextTheme = order[(idx + 1) % 3];
-    const next = snapshotGuiPreferences();
-    next.appearance.theme = nextTheme;
+    guiPreferences.appearance.theme = nextTheme;
     applyTheme(nextTheme);
-    scheduleGuiPreferencesSave(next);
+    scheduleGuiPreferencesSave();
   }
 </script>
 

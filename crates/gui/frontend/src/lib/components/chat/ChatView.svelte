@@ -72,7 +72,6 @@
   import {
     guiPreferences,
     scheduleGuiPreferencesSave,
-    snapshotGuiPreferences,
   } from "../../settings.svelte";
 
   let {
@@ -1353,9 +1352,8 @@
                   value={(permission_level as PermissionLevel) || "caution"}
                   onSelect={(level) => {
                     permission_level = level;
-                    const next = snapshotGuiPreferences();
-                    next.chat.auto_approve_level = level;
-                    scheduleGuiPreferencesSave(next);
+                    guiPreferences.chat.auto_approve_level = level;
+                    scheduleGuiPreferencesSave();
                   }}
                 />
                 <ModelSelector bind:this={modelSelectorRef} />

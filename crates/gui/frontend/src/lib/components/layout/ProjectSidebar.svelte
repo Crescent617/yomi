@@ -63,7 +63,6 @@
   import {
     guiPreferences,
     scheduleGuiPreferencesSave,
-    snapshotGuiPreferences,
     type SidebarViewPreference,
   } from "../../settings.svelte";
   import { slide, fly } from "svelte/transition";
@@ -289,7 +288,7 @@
     if (sidebarView === view) return;
     guiPreferences.layout.sidebar_view = view;
     closeMenus();
-    scheduleGuiPreferencesSave(snapshotGuiPreferences());
+    scheduleGuiPreferencesSave();
   }
 
   /** Projects sorted by most recently updated. */

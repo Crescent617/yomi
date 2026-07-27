@@ -6,7 +6,6 @@
     defaultGuiPreferences,
     guiPreferences,
     scheduleGuiPreferencesSave,
-    snapshotGuiPreferences,
   } from "../../settings.svelte";
   import ProjectSidebar from "./ProjectSidebar.svelte";
   import ChatView from "../chat/ChatView.svelte";
@@ -63,8 +62,7 @@
   function toggleLeftSidebar() {
     guiPreferences.layout.sidebarCollapsed =
       !guiPreferences.layout.sidebarCollapsed;
-    const next = snapshotGuiPreferences();
-    scheduleGuiPreferencesSave(next);
+    scheduleGuiPreferencesSave();
   }
 
   function handleToggleLeft() {
@@ -78,7 +76,7 @@
   function resetSidebarWidth() {
     guiPreferences.layout.sidebarWidth =
       defaultGuiPreferences.layout.sidebarWidth;
-    scheduleGuiPreferencesSave(snapshotGuiPreferences());
+    scheduleGuiPreferencesSave();
   }
 
   function handleResizeKeydown(e: KeyboardEvent) {
@@ -88,7 +86,7 @@
     guiPreferences.layout.sidebarWidth = clampSidebarWidth(
       guiPreferences.layout.sidebarWidth + delta,
     );
-    scheduleGuiPreferencesSave(snapshotGuiPreferences());
+    scheduleGuiPreferencesSave();
   }
 
   function startDragLeft(e: MouseEvent) {
@@ -110,7 +108,7 @@
       isDraggingLeft = false;
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      scheduleGuiPreferencesSave(snapshotGuiPreferences());
+      scheduleGuiPreferencesSave();
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);

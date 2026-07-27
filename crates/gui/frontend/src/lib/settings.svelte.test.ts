@@ -142,15 +142,16 @@ describe("GUI preference normalization", () => {
     );
   });
 
-  test("debounces preference saves and persists only the latest snapshot", async () => {
+  test("debounces preference saves and persists only the latest state", async () => {
     vi.useFakeTimers();
     const first = snapshotGuiPreferences();
     first.layout.sidebarWidth = 220;
+    replaceGuiPreferences(first);
+    scheduleGuiPreferencesSave();
     const latest = snapshotGuiPreferences();
     latest.layout.sidebarWidth = 320;
-
-    scheduleGuiPreferencesSave(first);
-    scheduleGuiPreferencesSave(latest);
+    replaceGuiPreferences(latest);
+    scheduleGuiPreferencesSave();
     expect(storeMocks.set).not.toHaveBeenCalled();
 
     await vi.runAllTimersAsync();
@@ -165,14 +166,35 @@ describe("GUI preference normalization", () => {
     expect(storeMocks.save).toHaveBeenCalledTimes(1);
   });
 
+  test("a scheduled save persists state mutated after scheduling", async () => {
+    // State is the source of truth: the debounced save snapshots at fire
+    // time, so mutations inside the debounce window are persisted too.
+    vi.useFakeTimers();
+    scheduleGuiPreferencesSave();
+    const mutated = snapshotGuiPreferences();
+    mutated.appearance.theme = "dark";
+    replaceGuiPreferences(mutated);
+
+    await vi.runAllTimersAsync();
+
+    expect(storeMocks.set).toHaveBeenCalledTimes(1);
+    expect(storeMocks.set).toHaveBeenCalledWith(
+      "gui_preferences",
+      expect.objectContaining({
+        appearance: expect.objectContaining({ theme: "dark" }),
+      }),
+    );
+  });
+
   test("an immediate save cancels a pending debounced save", async () => {
     vi.useFakeTimers();
     const pending = snapshotGuiPreferences();
     pending.layout.sidebarWidth = 220;
+    replaceGuiPreferences(pending);
+    scheduleGuiPreferencesSave();
     const immediate = snapshotGuiPreferences();
     immediate.layout.sidebarWidth = 360;
 
-    scheduleGuiPreferencesSave(pending);
     await saveGuiPreferences(immediate);
     await vi.runAllTimersAsync();
 
@@ -198,7 +220,8 @@ describe("GUI preference normalization", () => {
     expect(next.appearance.theme_id).toBe("custom-x");
 
     next.appearance.theme = "dark";
-    scheduleGuiPreferencesSave(next);
+    replaceGuiPreferences(next);
+    scheduleGuiPreferencesSave();
     await vi.runAllTimersAsync();
 
     expect(storeMocks.set).toHaveBeenLastCalledWith(

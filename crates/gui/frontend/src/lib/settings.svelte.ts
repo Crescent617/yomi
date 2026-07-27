@@ -348,16 +348,18 @@ export async function saveGuiPreferences(value: GuiPreferences): Promise<void> {
   await enqueueGuiPreferencesSave(normalized);
 }
 
-export function scheduleGuiPreferencesSave(
-  value: GuiPreferences = snapshotGuiPreferences(),
-): void {
-  const pending = cloneGuiPreferences(value);
+export function scheduleGuiPreferencesSave(): void {
   if (preferenceSaveTimer) clearTimeout(preferenceSaveTimer);
   preferenceSaveTimer = setTimeout(() => {
     preferenceSaveTimer = null;
-    void enqueueGuiPreferencesSave(pending).catch((error) => {
-      console.error("[Settings] Failed to save GUI preferences:", error);
-    });
+    // State is the source of truth: mutate `guiPreferences` first, then
+    // schedule. Snapshot at fire time so mutations made inside the
+    // debounce window are persisted too.
+    void enqueueGuiPreferencesSave(snapshotGuiPreferences()).catch(
+      (error) => {
+        console.error("[Settings] Failed to save GUI preferences:", error);
+      },
+    );
   }, PREFERENCE_SAVE_DEBOUNCE_MS);
 }
 
