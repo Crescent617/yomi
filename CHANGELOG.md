@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.10] - 2026-07-27
+
+### Changed
+- shell 工具输出更简洁：只有标准输出或标准错误单一方面有内容时，不再附加标签与多余换行。
+
 ## [0.7.9] - 2026-07-27
 
 ### Fixed
