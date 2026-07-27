@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.9] - 2026-07-27
+
+### Fixed
+- 修复频道（飞书等）运行状态与回复轨迹中步数统计偏小的问题：只有工具调用、没有文字输出的模型回合现在也计入步数。
+
+### Removed
+- 移除聊天输入框中输入 @ 弹出的文件提及补全（GUI）。
+
 ## [0.7.8] - 2026-07-27
 
 ### Fixed
