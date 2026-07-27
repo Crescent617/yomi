@@ -24,6 +24,9 @@ pub enum TaggedEvent {
         session_id: String,
         shell_count: usize,
     },
+    TitleChanged {
+        title: String,
+    },
     Connected,
     ConnectionLost,
 }
@@ -93,6 +96,9 @@ impl EventPump {
             if !Self::send_shell_snapshot(&kernel, &sid, &tx).await {
                 return;
             }
+            if !Self::send_session_title(&kernel, &sid, &tx).await {
+                return;
+            }
 
             // Notify TUI that the initial connection is ready (only in daemon mode).
             // Connection-state transitions must not be dropped, so use the
@@ -118,6 +124,9 @@ impl EventPump {
                                 }
                             };
                             if !Self::send_shell_snapshot(&kernel, &sid, &tx).await {
+                                break 'outer;
+                            }
+                            if !Self::send_session_title(&kernel, &sid, &tx).await {
                                 break 'outer;
                             }
                             // Notify TUI that connection is back (must not be dropped).
@@ -153,6 +162,18 @@ impl EventPump {
                                 kind: kernel::agent::BackgroundTaskKind::Shell,
                             }) if session_id == sid => {
                                 if !Self::send_shell_snapshot(&kernel, &sid, &tx).await {
+                                    break 'outer;
+                                }
+                            }
+                            Some(kernel::notification::Notification::TitleUpdated {
+                                session_id,
+                                title,
+                            }) if session_id == sid => {
+                                if !try_send_droppable(
+                                    &tx,
+                                    TaggedEvent::TitleChanged { title },
+                                    "title update",
+                                ) {
                                     break 'outer;
                                 }
                             }
@@ -278,6 +299,25 @@ impl EventPump {
         })
         .await
         .is_ok()
+    }
+
+    /// Fetch the current session title and forward it to the TUI.
+    /// Best-effort: a fetch failure does not stop the pump.
+    async fn send_session_title(
+        kernel: &Arc<dyn KernelApi>,
+        session_id: &SessionId,
+        tx: &mpsc::Sender<TaggedEvent>,
+    ) -> bool {
+        let title = kernel
+            .get_session(session_id)
+            .await
+            .ok()
+            .and_then(|session| session.title)
+            .filter(|title| !title.is_empty());
+        match title {
+            Some(title) => tx.send(TaggedEvent::TitleChanged { title }).await.is_ok(),
+            None => true,
+        }
     }
 
     /// Retry subscribe until success or cancellation.  No deadline — the

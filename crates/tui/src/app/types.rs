@@ -130,6 +130,8 @@ pub struct Model {
     pub(crate) working_dir: std::path::PathBuf,
     /// Current session ID
     pub(crate) session_id: String,
+    /// Current session title (best-effort, kept in sync via kernel notifications)
+    pub(crate) session_title: Option<String>,
     /// Current permission level (can be changed at runtime via YOLO mode)
     pub(crate) permission_level: Level,
     /// Queued message waiting to be sent when streaming ends (only one allowed)

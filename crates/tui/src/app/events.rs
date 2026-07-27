@@ -49,6 +49,10 @@ impl Model {
                     self.state.should_redraw = true;
                     continue;
                 }
+                Ok(TaggedEvent::TitleChanged { title }) => {
+                    self.session_title = Some(title);
+                    continue;
+                }
                 Ok(TaggedEvent::Subagent {
                     parent_tool_id,
                     session_id,
@@ -304,7 +308,7 @@ impl Model {
                                     }
                                 }
                                 let message = "😸 Task completed";
-                                Self::send_desktop_notification("Yomi", message);
+                                self.send_desktop_notification("Yomi", message);
                                 self.show_notification(
                                     &crate::components::info_bar::Notification::success(
                                         message, 5000,
@@ -322,7 +326,7 @@ impl Model {
                             }
                             StopReason::Failed { error } => {
                                 let message = format!(" Task failed: {error}");
-                                Self::send_desktop_notification("Yomi - Error", &message);
+                                self.send_desktop_notification("Yomi - Error", &message);
                                 self.handle_streaming_error(
                                     StreamingStatus::Failed,
                                     format!("Agent error: {error}"),
@@ -330,7 +334,7 @@ impl Model {
                             }
                             StopReason::MaxIterations { reached } => {
                                 let message = format!(" Max iterations reached ({reached})");
-                                Self::send_desktop_notification("Yomi - Stopped", &message);
+                                self.send_desktop_notification("Yomi - Stopped", &message);
                                 self.handle_streaming_error(
                                     StreamingStatus::MaxIterations,
                                     format!("Reached maximum iterations ({reached})"),
@@ -470,7 +474,7 @@ impl Model {
                         req_id,
                         questions.len()
                     );
-                    Self::send_desktop_notification("Yomi", "Agent has a question for you");
+                    self.send_desktop_notification("Yomi", "Agent has a question for you");
 
                     // Auto-deny any previous pending ask-user request
                     if let Some((old_req_id, old_session_id, _, _)) = self.pending_ask_user.take() {

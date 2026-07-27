@@ -75,6 +75,7 @@ impl Model {
             new_history_entries: Vec::new(),
             working_dir,
             session_id,
+            session_title: None,
             permission_level: crate::config().auto_approve,
             queued_message: None,
             last_terminal_size: (0, 0),
@@ -431,13 +432,21 @@ impl Model {
     }
 
     /// Send desktop notification via OSC
-    pub(crate) fn send_desktop_notification(title: &str, message: &str) {
+    pub(crate) fn send_desktop_notification(&self, title: &str, message: &str) {
         // Only send if desktop notifications are enabled
         if !crate::feature_gates().desktop_notify {
             return;
         }
 
-        crate::utils::send_desktop_notification(title, message);
+        // Include the session title so notifications from concurrent
+        // sessions are distinguishable.
+        let title = match &self.session_title {
+            Some(session_title) if !session_title.is_empty() => {
+                format!("{title} · {session_title}")
+            }
+            _ => title.to_string(),
+        };
+        crate::utils::send_desktop_notification(&title, message);
     }
 
     /// Handle streaming error by stopping streaming and showing error message
