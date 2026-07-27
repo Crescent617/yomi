@@ -36,6 +36,10 @@ enum Commands {
     Config(ConfigArgs),
     /// Show token usage
     Usage(UsageArgs),
+    /// Stream session events from the daemon as NDJSON
+    Events(EventsArgs),
+    /// Manage cron jobs
+    Cron(CronArgs),
     /// Show version
     Version,
     /// Manage daemon (internal use)
@@ -175,6 +179,133 @@ struct UsageArgs {
     provider: Option<String>,
 }
 
+#[derive(Parser)]
+struct EventsArgs {
+    #[command(flatten)]
+    global: GlobalArgs,
+
+    /// Session ID to subscribe to (defaults to current directory's last session)
+    #[arg(short, long, conflicts_with = "all")]
+    session: Option<String>,
+
+    /// Subscribe to events from all sessions (real-time only, no replay)
+    #[arg(long)]
+    all: bool,
+
+    /// Resume after this event ID (single-session mode only)
+    #[arg(long)]
+    after_event_id: Option<String>,
+}
+
+#[derive(Parser)]
+struct CronArgs {
+    #[command(flatten)]
+    global: GlobalArgs,
+
+    #[command(subcommand)]
+    command: CronCommands,
+}
+
+#[derive(Subcommand)]
+enum CronCommands {
+    /// List cron jobs
+    List {
+        /// Filter by status: active, paused, completed, failed
+        #[arg(long)]
+        status: Option<String>,
+        /// Max jobs to show
+        #[arg(long, default_value = "50")]
+        limit: usize,
+    },
+    /// Show one cron job as JSON
+    Get {
+        /// Cron job ID
+        job_id: String,
+    },
+    /// Create a cron job
+    Create {
+        /// Job name
+        #[arg(long)]
+        name: String,
+        /// Cron expression (5 or 6 fields, interpreted in local time)
+        #[arg(long)]
+        schedule: String,
+        /// Action: send a message to a session (the agent responds)
+        #[arg(long, conflicts_with = "command", required_unless_present = "command")]
+        message: Option<String>,
+        /// Action: run a shell command
+        #[arg(long)]
+        command: Option<String>,
+        /// Target session for --message (default: a dedicated session)
+        #[arg(long, requires = "message")]
+        session: Option<String>,
+        /// Working directory for --command
+        #[arg(long, requires = "command")]
+        work_dir: Option<String>,
+        /// Stop after N runs (default: unlimited)
+        #[arg(long)]
+        max_runs: Option<u32>,
+        /// Expire at this time, RFC 3339 (default: never)
+        #[arg(long)]
+        expires_at: Option<String>,
+    },
+    /// Update a cron job (only given fields change)
+    Update {
+        /// Cron job ID
+        job_id: String,
+        /// New name
+        #[arg(long)]
+        name: Option<String>,
+        /// New cron expression
+        #[arg(long)]
+        schedule: Option<String>,
+        /// Replace the action with a session message
+        #[arg(long, conflicts_with = "command")]
+        message: Option<String>,
+        /// Replace the action with a shell command
+        #[arg(long)]
+        command: Option<String>,
+        /// Target session for --message (omit for a dedicated session)
+        #[arg(long, requires = "message")]
+        session: Option<String>,
+        /// Working directory for --command
+        #[arg(long, requires = "command")]
+        work_dir: Option<String>,
+        /// Stop after N runs
+        #[arg(long, conflicts_with = "clear_max_runs")]
+        max_runs: Option<u32>,
+        /// Expire at this time, RFC 3339
+        #[arg(long, conflicts_with = "clear_expires_at")]
+        expires_at: Option<String>,
+        /// Remove the run limit (unlimited)
+        #[arg(long)]
+        clear_max_runs: bool,
+        /// Remove the expiry (never expires)
+        #[arg(long)]
+        clear_expires_at: bool,
+    },
+    /// Pause a cron job
+    Pause {
+        /// Cron job ID
+        job_id: String,
+    },
+    /// Resume a paused cron job
+    Resume {
+        /// Cron job ID
+        job_id: String,
+    },
+    /// Delete a cron job
+    Delete {
+        /// Cron job ID
+        job_id: String,
+    },
+    /// Run a cron job once, immediately
+    Trigger {
+        /// Cron job ID
+        job_id: String,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Install rustls crypto provider before any TLS operations.
@@ -191,6 +322,10 @@ async fn main() -> Result<()> {
         Some(Commands::Skill(args)) => run_skill(args).await,
         Some(Commands::Config(args)) => run_config(args).await,
         Some(Commands::Usage(args)) => run_usage(args).await,
+        Some(Commands::Events(args)) => {
+            commands::events::run(&args.global, args.session, args.all, args.after_event_id).await
+        }
+        Some(Commands::Cron(args)) => run_cron(args).await,
         Some(Commands::Version) => {
             println!("v{}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -266,4 +401,75 @@ async fn run_usage(args: UsageArgs) -> Result<()> {
         })
     };
     commands::usage::show(args.global, args.days, filter).await
+}
+
+async fn run_cron(args: CronArgs) -> Result<()> {
+    use kernel::cron::CronJobStatus;
+
+    match args.command {
+        CronCommands::List { status, limit } => {
+            commands::cron::list(&args.global, status, limit).await
+        }
+        CronCommands::Get { job_id } => commands::cron::get(&args.global, job_id).await,
+        CronCommands::Create {
+            name,
+            schedule,
+            message,
+            command,
+            session,
+            work_dir,
+            max_runs,
+            expires_at,
+        } => {
+            commands::cron::create(
+                &args.global,
+                name,
+                schedule,
+                message,
+                command,
+                session,
+                work_dir,
+                max_runs,
+                expires_at,
+            )
+            .await
+        }
+        CronCommands::Update {
+            job_id,
+            name,
+            schedule,
+            message,
+            command,
+            session,
+            work_dir,
+            max_runs,
+            expires_at,
+            clear_max_runs,
+            clear_expires_at,
+        } => {
+            commands::cron::update(
+                &args.global,
+                job_id,
+                name,
+                schedule,
+                message,
+                command,
+                session,
+                work_dir,
+                max_runs,
+                expires_at,
+                clear_max_runs,
+                clear_expires_at,
+            )
+            .await
+        }
+        CronCommands::Pause { job_id } => {
+            commands::cron::set_status(&args.global, job_id, CronJobStatus::Paused).await
+        }
+        CronCommands::Resume { job_id } => {
+            commands::cron::set_status(&args.global, job_id, CronJobStatus::Active).await
+        }
+        CronCommands::Delete { job_id } => commands::cron::delete(&args.global, job_id).await,
+        CronCommands::Trigger { job_id } => commands::cron::trigger(&args.global, job_id).await,
+    }
 }

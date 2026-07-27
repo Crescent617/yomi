@@ -8,6 +8,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 
+/// Key of the all-sessions subscription in a connection's subscription map
+/// (session IDs are ULIDs, so "*" can never collide with a real one).
+const ALL_SUBSCRIPTION_KEY: &str = "*";
+
 impl KernelServer {
     pub(crate) async fn dispatch_request(
         &self,
@@ -188,6 +192,25 @@ impl KernelServer {
             }
             ReqMethod::Unsubscribe { session_id } => {
                 if let Some(handle) = subscriptions.write().await.remove(&session_id) {
+                    handle.abort();
+                }
+                RespBody::Ok {
+                    result: serde_json::Value::Null,
+                }
+            }
+            ReqMethod::SubscribeAll => {
+                let mut subs = subscriptions.write().await;
+                if let Some(old) = subs.remove(ALL_SUBSCRIPTION_KEY) {
+                    old.abort();
+                }
+                let handle = self.spawn_all_subscription(send_tx.clone(), cancel.clone());
+                subs.insert(ALL_SUBSCRIPTION_KEY.to_string(), handle);
+                RespBody::Ok {
+                    result: serde_json::Value::Null,
+                }
+            }
+            ReqMethod::UnsubscribeAll => {
+                if let Some(handle) = subscriptions.write().await.remove(ALL_SUBSCRIPTION_KEY) {
                     handle.abort();
                 }
                 RespBody::Ok {
@@ -438,6 +461,8 @@ impl KernelServer {
                 status,
                 max_runs,
                 expires_at,
+                clear_max_runs,
+                clear_expires_at,
             } => {
                 let status = status.and_then(|s| s.parse().ok());
                 let input = crate::cron::UpdateCronJobInput {
@@ -447,6 +472,8 @@ impl KernelServer {
                     status,
                     max_runs,
                     expires_at,
+                    clear_max_runs,
+                    clear_expires_at,
                     ..Default::default()
                 };
                 match self
@@ -670,6 +697,44 @@ impl KernelServer {
     pub(crate) fn cleanup_session(&self, sid: &SessionId) {
         self.event_buffer.remove(sid);
         self.session_subscribers.remove_session(sid);
+    }
+
+    /// Forward the cross-session live stream to this connection (real-time
+    /// only — no replay, see `ReqMethod::SubscribeAll`).
+    fn spawn_all_subscription(
+        &self,
+        send_tx: mpsc::Sender<WireMsg>,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
+        use tokio::sync::broadcast::error::RecvError;
+
+        let mut rx = self.all_subscribers.subscribe();
+        tokio::spawn(async move {
+            loop {
+                let envelope = tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => break,
+                    result = rx.recv() => match result {
+                        Ok(e) => e,
+                        // The receiver auto-resumes from the oldest retained
+                        // event; keep the subscription alive and only log the
+                        // gap instead of silently going dark.
+                        Err(RecvError::Lagged(n)) => {
+                            tracing::warn!(dropped = n, "all-events subscriber lagged");
+                            continue;
+                        }
+                        Err(RecvError::Closed) => break,
+                    },
+                };
+                match send_tx.try_send(WireMsg::Event(envelope)) {
+                    Ok(()) => {}
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        tracing::warn!("outbound channel full, dropping all-events envelope");
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => break,
+                }
+            }
+        })
     }
 }
 

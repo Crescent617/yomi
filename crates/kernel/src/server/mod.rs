@@ -34,6 +34,7 @@ fn forward_envelope(
     envelope: &Envelope,
     event_buffer: &EventBuffer,
     session_subscribers: &SessionSubscribers,
+    all_subscribers: &broadcast::Sender<Envelope>,
 ) {
     if should_clear_event_buffer(&envelope.event) {
         event_buffer.clear(sid);
@@ -55,6 +56,9 @@ fn forward_envelope(
     }
 
     session_subscribers.publish(sid, envelope);
+    // Cross-session live stream (SubscribeAll); lagging receivers just
+    // lose events — a global feed must never block the forwarder.
+    let _ = all_subscribers.send(envelope.clone());
 }
 
 /// Short human-readable summary for error logs — avoids dumping full payloads.
@@ -90,6 +94,8 @@ pub struct KernelServer {
     pub(crate) event_buffer: Arc<EventBuffer>,
     /// Real-time event subscribers per session.
     pub(crate) session_subscribers: Arc<SessionSubscribers>,
+    /// Cross-session live event stream (real-time only, no replay).
+    pub(crate) all_subscribers: broadcast::Sender<Envelope>,
 }
 
 impl KernelServer {
@@ -118,6 +124,7 @@ impl KernelServer {
             shutdown: tokio_util::sync::CancellationToken::new(),
             event_buffer: Arc::new(EventBuffer::new(10_000)),
             session_subscribers: Arc::new(SessionSubscribers::new(4096)),
+            all_subscribers: broadcast::channel(4096).0,
         }
     }
 
@@ -160,6 +167,7 @@ impl KernelServer {
     fn start_event_forwarder(&self, cancel: tokio_util::sync::CancellationToken) {
         let event_buffer = Arc::clone(&self.event_buffer);
         let session_subscribers = Arc::clone(&self.session_subscribers);
+        let all_subscribers = self.all_subscribers.clone();
         let bus = match self.kernel.event_bus() {
             Some(b) => b,
             None => return,
@@ -172,7 +180,7 @@ impl KernelServer {
                     biased;
                     () = cancel.cancelled() => break,
                     Some((sid, envelope)) = subscriber.recv() => {
-                        forward_envelope(&sid, &envelope, &event_buffer, &session_subscribers);
+                        forward_envelope(&sid, &envelope, &event_buffer, &session_subscribers, &all_subscribers);
                     }
                 }
             }

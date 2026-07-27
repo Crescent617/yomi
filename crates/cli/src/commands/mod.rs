@@ -1,6 +1,8 @@
 pub mod checkpoint;
 pub mod config;
+pub mod cron;
 pub mod daemon;
+pub mod events;
 pub mod gc;
 pub mod session;
 pub mod skill;

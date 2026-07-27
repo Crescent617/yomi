@@ -37,6 +37,10 @@ type PendingMap = dashmap::DashMap<
 >;
 type EventRouterMap = dashmap::DashMap<String, broadcast::Sender<Envelope>>;
 
+/// Router key collecting events from **all** sessions (used by
+/// `subscribe_all_events`; session IDs are ULIDs, so "*" never collides).
+const ALL_EVENTS_ROUTER_KEY: &str = "*";
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PaginatedSessions {
     pub sessions: Vec<crate::storage::session::SessionInfo>,
@@ -156,6 +160,9 @@ pub trait KernelApi: Send + Sync {
         session_id: &SessionId,
         after_event_id: Option<crate::types::EventId>,
     ) -> Result<crate::comms::EventBusSubscriber>;
+    /// Subscribe to the live event stream of **all** sessions (real-time
+    /// only, no replay).
+    async fn subscribe_all_events(&self) -> Result<crate::comms::EventBusSubscriber>;
     async fn list_sessions(
         &self,
         project_id: Option<&ProjectId>,
@@ -464,6 +471,16 @@ impl KernelApi for Kernel {
         Ok(Self::subscribe_session_events(self, session_id))
     }
 
+    async fn subscribe_all_events(&self) -> Result<crate::comms::EventBusSubscriber> {
+        // Same Internal filter as `subscribe_session_events` — internal
+        // events never leave the kernel.
+        Ok(Self::event_bus(self)
+            .expect("event_bus must be configured")
+            .subscribe_all_filtered(|envelope| {
+                !matches!(envelope.event, crate::event::Event::Internal(_))
+            }))
+    }
+
     async fn list_sessions(
         &self,
         project_id: Option<&ProjectId>,
@@ -748,6 +765,9 @@ impl RemoteKernel {
                             }
                             WireMsg::Event(envelope) => {
                                 if let Some(entry) = event_routers.get(envelope.session_id.as_str()) {
+                                    let _ = entry.value().send(envelope.clone());
+                                }
+                                if let Some(entry) = event_routers.get(ALL_EVENTS_ROUTER_KEY) {
                                     let _ = entry.value().send(envelope);
                                 }
                             }
@@ -1555,6 +1575,34 @@ impl KernelApi for RemoteKernel {
             .await
     }
 
+    async fn subscribe_all_events(&self) -> Result<crate::comms::EventBusSubscriber> {
+        use dashmap::mapref::entry::Entry;
+
+        let tx = match self.event_routers.entry(ALL_EVENTS_ROUTER_KEY.to_string()) {
+            Entry::Occupied(entry) => entry.get().clone(),
+            Entry::Vacant(entry) => {
+                let (tx, _rx) = broadcast::channel(256);
+                entry.insert(tx.clone());
+                tx
+            }
+        };
+
+        self.call(ReqMethod::SubscribeAll).await?;
+
+        let mut broadcast_rx = tx.subscribe();
+        let (mpsc_tx, mpsc_rx) = mpsc::channel::<(SessionId, crate::wire::Envelope)>(256);
+        tokio::spawn(async move {
+            while let Ok(ev) = broadcast_rx.recv().await {
+                let sid = ev.session_id.clone();
+                if mpsc_tx.send((sid, ev)).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        Ok(crate::comms::EventBusSubscriber::from_receiver(mpsc_rx))
+    }
+
     async fn list_sessions(
         &self,
         project_id: Option<&ProjectId>,
@@ -1791,6 +1839,8 @@ impl KernelApi for RemoteKernel {
                 status: input.status.map(|s| s.as_str().to_string()),
                 max_runs: input.max_runs,
                 expires_at: input.expires_at,
+                clear_max_runs: input.clear_max_runs,
+                clear_expires_at: input.clear_expires_at,
             })
             .await?;
         let updated: bool = serde_json::from_value(result)?;

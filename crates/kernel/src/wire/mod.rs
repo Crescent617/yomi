@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 // ── Wire Protocol ────────────────────────────────────────────────────────
 
 /// Wire protocol version. Bumped on any breaking change to the IPC schema.
-pub const WIRE_PROTOCOL_VERSION: u32 = 21;
+pub const WIRE_PROTOCOL_VERSION: u32 = 22;
 
 /// All operations a client can request from the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +82,10 @@ pub enum ReqMethod {
     Unsubscribe {
         session_id: String,
     },
+    /// Subscribe to the live event stream of **all** sessions (real-time
+    /// only, no replay — cross-session history is not buffered globally).
+    SubscribeAll,
+    UnsubscribeAll,
     ListSessions {
         project_id: Option<String>,
         scope: crate::storage::session::SessionListScope,
@@ -179,6 +183,12 @@ pub enum ReqMethod {
         status: Option<String>,
         max_runs: Option<u32>,
         expires_at: Option<DateTime<Utc>>,
+        /// Explicitly clear `max_runs` (back to unlimited).
+        #[serde(default)]
+        clear_max_runs: bool,
+        /// Explicitly clear `expires_at` (back to never).
+        #[serde(default)]
+        clear_expires_at: bool,
     },
     /// Trigger a cron job manually (execute immediately, record result).
     TriggerCronJob {
