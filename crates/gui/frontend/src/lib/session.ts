@@ -87,10 +87,15 @@ export function sendDesktopNotification(
   session_id?: string,
 ) {
   if (typeof window === "undefined") return;
+  // Include the session title so notifications from concurrent sessions
+  // are distinguishable. Skip placeholders that carry no information.
+  const alias = session_id ? getSession(session_id)?.alias : undefined;
+  const fullTitle =
+    alias && alias !== "Untitled" ? `${title} · ${alias}` : title;
   try {
     if (session_id && typeof Notification !== "undefined") {
       try {
-        const n = new Notification(title, { body, tag: session_id });
+        const n = new Notification(fullTitle, { body, tag: session_id });
         n.onclick = () => {
           getCurrentWindow()
             .setFocus()
@@ -108,7 +113,7 @@ export function sendDesktopNotification(
         );
       }
     }
-    sendNotification({ title, body });
+    sendNotification({ title: fullTitle, body });
   } catch (e) {
     console.error("Failed to send desktop notification:", e);
   }
