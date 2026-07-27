@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.13] - 2026-07-27
+
+### Added
+- 新增 `yomi events` 命令：以 NDJSON（每行一个 JSON 事件）流式查看 daemon 事件，可直接接 `jq`；默认订阅当前目录会话（`--session` 指定其他会话），含事件重放与 `--after-event-id` 断点续传，`--all` 实时订阅全部会话。
+- 新增 `yomi cron` 命令组管理定时任务：`list` / `get` / `create` / `update` / `pause` / `resume` / `delete` / `trigger`；动作支持 `--message`（发消息触发 Agent）或 `--command`（执行 shell），可用 `--max-runs`、`--expires-at` 限制，更新时用 `--clear-max-runs` / `--clear-expires-at` 清除限制。
+
 ## [0.7.12] - 2026-07-27
 
 ### Added
