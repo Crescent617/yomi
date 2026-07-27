@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.15] - 2026-07-27
+
+### Added
+- 附件能力推广到所有会话：助手可在回复中声明附件文件（默认开启，`[features] attachments = false` 可关闭）；GUI 在消息下方显示附件条目，点击用系统默认应用打开；频道（飞书等）投递行为不变。
+- GUI 图片附件原地内联渲染：单图按原始尺寸、多图网格布局，点击查看大图（应用内预览）；加载失败的图片自动降级为普通附件条目。
+
+### Fixed
+- 修复 markdown 裸 URL 被下划线截断的问题：URL 中的下划线不再被误转义，链接完整可点击（GUI）。
+
 ## [0.7.14] - 2026-07-27
 
 ### Changed
