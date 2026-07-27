@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.12] - 2026-07-27
+
+### Added
+- 流式状态行的状态动词切换时播放简约的上升淡入动画（GUI），字体不再使用斜体。
+
+### Fixed
+- 修复流式状态行的状态动词有时消失不见的问题（GUI）。
+
 ## [0.7.11] - 2026-07-27
 
 ### Added
