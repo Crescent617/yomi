@@ -251,23 +251,7 @@ impl ShellTool {
         );
 
         let total_budget = max_tool_output_length.saturating_sub(footer.len());
-        let has_out = !stdout.is_empty();
-        let has_err = !stderr.is_empty();
-
-        let content = if has_out && has_err {
-            let per_stream = total_budget / 2;
-            format!(
-                "[stdout]\n{}\n\n[stderr]\n{}",
-                format_stream(&stdout, per_stream),
-                format_stream(&stderr, per_stream)
-            )
-        } else if has_out {
-            format!("[stdout]\n{}", format_stream(&stdout, total_budget))
-        } else if has_err {
-            format!("[stderr]\n{}", format_stream(&stderr, total_budget))
-        } else {
-            String::new()
-        };
+        let content = format_sync_output(&stdout, &stderr, total_budget);
 
         let output_text = format!("{content}{footer}");
         Ok(ToolOutput::text(output_text))
@@ -452,6 +436,26 @@ fn format_stream(text: &str, budget: usize) -> String {
         truncate_keep_edges(text, budget, "\n... [truncated] ...\n")
     } else {
         text.to_string()
+    }
+}
+
+/// Assemble the result body from the captured streams. The `[stdout]` /
+/// `[stderr]` labels (and their newlines) only appear when both streams
+/// have content and need disambiguating; a single non-empty stream is
+/// returned bare.
+fn format_sync_output(stdout: &str, stderr: &str, budget: usize) -> String {
+    match (!stdout.is_empty(), !stderr.is_empty()) {
+        (true, true) => {
+            let per_stream = budget / 2;
+            format!(
+                "[stdout]\n{}\n\n[stderr]\n{}",
+                format_stream(stdout, per_stream),
+                format_stream(stderr, per_stream)
+            )
+        }
+        (true, false) => format_stream(stdout, budget),
+        (false, true) => format_stream(stderr, budget),
+        (false, false) => String::new(),
     }
 }
 

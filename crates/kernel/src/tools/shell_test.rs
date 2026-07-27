@@ -1,6 +1,30 @@
-use super::{extract_log_body, format_background_result};
+use super::{extract_log_body, format_background_result, format_sync_output};
 use crate::tools::format_shell_message;
 use std::path::Path;
+
+#[test]
+fn sync_output_single_stream_is_bare() {
+    // Only one non-empty stream: no label, no extra newline.
+    assert_eq!(format_sync_output("hello", "", 1000), "hello");
+    assert_eq!(format_sync_output("", "warn", 1000), "warn");
+    assert_eq!(format_sync_output("", "", 1000), "");
+}
+
+#[test]
+fn sync_output_both_streams_labeled() {
+    assert_eq!(
+        format_sync_output("hello", "warn", 1000),
+        "[stdout]\nhello\n\n[stderr]\nwarn"
+    );
+}
+
+#[test]
+fn sync_output_truncates_over_budget_stream() {
+    let out = "a".repeat(5000);
+    let result = format_sync_output(&out, "", 200);
+    assert!(result.contains("[truncated]"));
+    assert!(result.len() < 5000);
+}
 
 #[test]
 fn background_shell_messages_include_task_id_once() {
