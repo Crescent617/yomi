@@ -185,6 +185,8 @@ pub fn run() {
             commands::system::get_session_model,
             commands::system::set_session_model,
             commands::system::open_default,
+            commands::system::open_attachment,
+            commands::system::read_attachment_image,
             commands::system::open_in_vscode,
             commands::system::open_in_zed,
             commands::system::get_git_info,

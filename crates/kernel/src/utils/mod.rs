@@ -1,6 +1,7 @@
 //! Utility functions for the kernel crate
 
 pub mod asset;
+pub mod attachments;
 pub mod env;
 pub mod file_chunk;
 pub mod g_lock;

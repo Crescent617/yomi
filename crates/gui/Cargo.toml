@@ -23,6 +23,8 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 image = { workspace = true, features = ["webp"] }
+base64 = { workspace = true }
+mime_guess = { workspace = true }
 
 # Config TOML editing
 toml = { workspace = true }

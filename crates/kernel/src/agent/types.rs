@@ -11,6 +11,8 @@ use thiserror::Error;
 /// Agent configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+// Independent feature switches; a bool per capability is the intended shape.
+#[allow(clippy::struct_excessive_bools)]
 pub struct AgentConfig {
     /// Default model name for new sessions (points to a model in Config.models)
     pub default_model: String,
@@ -33,6 +35,11 @@ pub struct AgentConfig {
     /// in `build_agent_config`; not settable via the `[agent]` section.
     #[serde(skip)]
     pub enable_todo_tool: bool,
+    /// Teach agents the attachments syntax. Plumbed from `[features]
+    /// attachments` in `build_agent_config` (default: on); not settable via
+    /// the `[agent]` section.
+    #[serde(skip)]
+    pub enable_attachments: bool,
 }
 
 /// Configuration for spawning a new agent
@@ -200,6 +207,7 @@ impl Default for AgentConfig {
             max_tool_output_length: 40_000,
             enable_cron_tool: false,
             enable_todo_tool: false,
+            enable_attachments: true,
         }
     }
 }

@@ -153,6 +153,13 @@ pub struct FeaturesConfig {
     pub cron_tool: Option<bool>,
     /// Expose the todo tool to agents (task list tracking).
     pub todo_tool: Option<bool>,
+    /// Teach agents the `<yomi_attachments>` syntax for attaching files to
+    /// replies (channels deliver the files, the app shows clickable items).
+    /// Unlike the experimental flags above this is **on by default** and
+    /// ignores `all`; set `false` to disable. Attachments already declared
+    /// in history still surface when disabled — the flag only gates what
+    /// agents are taught.
+    pub attachments: Option<bool>,
 }
 
 impl FeaturesConfig {
@@ -169,6 +176,11 @@ impl FeaturesConfig {
     #[must_use]
     pub fn todo_tool_enabled(&self) -> bool {
         self.todo_tool.unwrap_or(self.all)
+    }
+
+    #[must_use]
+    pub fn attachments_enabled(&self) -> bool {
+        self.attachments.unwrap_or(true)
     }
 }
 

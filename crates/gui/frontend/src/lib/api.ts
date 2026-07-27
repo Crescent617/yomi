@@ -803,6 +803,33 @@ export async function openDefault(target: string): Promise<void> {
   return invokeCmd("open_default", { target });
 }
 
+/**
+ * Open a declared attachment file (resolved against the session workspace
+ * on the backend; relative paths must stay inside it).
+ */
+export async function openAttachment(
+  base_dir: string | null,
+  path: string,
+): Promise<void> {
+  return invokeCmd("open_attachment", { base_dir, path });
+}
+
+export interface AttachmentImage {
+  data_base64: string;
+  mime: string;
+}
+
+/**
+ * Read an image attachment for inline display (same backend resolution
+ * rules as `openAttachment`; rejects non-images and oversized files).
+ */
+export async function readAttachmentImage(
+  base_dir: string | null,
+  path: string,
+): Promise<AttachmentImage> {
+  return invokeCmd("read_attachment_image", { base_dir, path });
+}
+
 export async function openInVscode(path: string): Promise<void> {
   return invokeCmd("open_in_vscode", { path });
 }

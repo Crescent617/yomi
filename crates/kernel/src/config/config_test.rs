@@ -231,6 +231,40 @@ fn features_default_to_disabled() {
     assert!(!features.update_session_title_enabled());
     assert!(!features.cron_tool_enabled());
     assert!(!features.todo_tool_enabled());
+    // Attachments is the exception: a default capability, not an experiment.
+    assert!(features.attachments_enabled());
+}
+
+#[test]
+fn attachments_default_on_and_explicitly_disableable() {
+    // `all` does not affect attachments in either direction.
+    let parsed: Config = toml::from_str(
+        r"
+[features]
+all = true
+",
+    )
+    .unwrap();
+    assert!(parsed.features.attachments_enabled());
+
+    let parsed: Config = toml::from_str(
+        r"
+[features]
+all = true
+attachments = false
+",
+    )
+    .unwrap();
+    assert!(!parsed.features.attachments_enabled());
+
+    let parsed: Config = toml::from_str(
+        r"
+[features]
+attachments = false
+",
+    )
+    .unwrap();
+    assert!(!parsed.features.attachments_enabled());
 }
 
 #[test]

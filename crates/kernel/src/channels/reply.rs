@@ -120,7 +120,7 @@ impl RunReplyBuffer {
     /// delivery; a text that held only blocks leaves no narration.
     pub(crate) fn record_model_end(&mut self, text: &str) {
         self.steps += 1;
-        let (text, paths) = super::attachments::parse_attachments(text);
+        let (text, paths) = crate::utils::attachments::parse_attachments(text);
         self.attachments.extend(paths);
         if !text.is_empty() {
             self.push_entry(TraceEntry::Narration(text));

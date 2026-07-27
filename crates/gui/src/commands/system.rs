@@ -315,6 +315,83 @@ pub async fn open_default(target: String) -> Result<(), GuiError> {
     Ok(())
 }
 
+/// Resolve a declared attachment path against the session workspace
+/// (`kernel::utils::attachments::resolve_attachment`), mapping every
+/// failure to the same user-facing error.
+async fn resolve_attachment_arg(
+    base_dir: Option<String>,
+    path: &str,
+) -> Result<std::path::PathBuf, GuiError> {
+    let base = base_dir.filter(|d| !d.is_empty());
+    kernel::utils::attachments::resolve_attachment(base.as_deref().map(std::path::Path::new), path)
+        .await
+        .ok_or_else(|| {
+            GuiError::unknown(format!(
+                "attachment unavailable: {path} (missing, not a file, or outside the workspace)"
+            ))
+        })
+}
+
+/// Open a declared attachment file (from a `<yomi_attachments>` block in an
+/// assistant message). Resolved with the same rules as channel delivery
+/// (`kernel::utils::attachments::resolve_attachment`): relative paths must
+/// stay inside the session workspace; missing/non-file/escaping paths are
+/// rejected. Without a `base_dir` only absolute paths resolve.
+///
+/// Limitation: resolution happens on the local filesystem — attachments of
+/// a REMOTE daemon's sessions (files on the daemon's host) cannot open.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn open_attachment(base_dir: Option<String>, path: String) -> Result<(), GuiError> {
+    let resolved = resolve_attachment_arg(base_dir, &path).await?;
+    tauri_plugin_opener::open_path(&resolved, None::<&str>)
+        .map_err(|e| GuiError::unknown(format!("Failed to open: {e}")))?;
+    Ok(())
+}
+
+/// Inline image payload for the attachment gallery.
+#[derive(serde::Serialize)]
+pub struct AttachmentImage {
+    pub data_base64: String,
+    pub mime: String,
+}
+
+/// Largest image read for inline display (rejects accidental huge reads).
+const MAX_INLINE_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+
+/// Read an image attachment for inline display. Same resolution rules as
+/// [`open_attachment`] — including its local-filesystem limitation
+/// (remote-daemon attachments cannot load); non-images and oversized files
+/// are rejected (the frontend falls back to a plain chip).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn read_attachment_image(
+    base_dir: Option<String>,
+    path: String,
+) -> Result<AttachmentImage, GuiError> {
+    use base64::Engine as _;
+
+    let resolved = resolve_attachment_arg(base_dir, &path).await?;
+
+    let mime = mime_guess::from_path(&resolved).first_or_octet_stream();
+    if mime.type_() != "image" {
+        return Err(GuiError::unknown(format!("not an image: {path}")));
+    }
+    let meta = tokio::fs::metadata(&resolved)
+        .await
+        .map_err(|e| GuiError::unknown(format!("stat attachment: {e}")))?;
+    if meta.len() > MAX_INLINE_IMAGE_BYTES {
+        return Err(GuiError::unknown(format!(
+            "image too large to preview: {path}"
+        )));
+    }
+    let bytes = tokio::fs::read(&resolved)
+        .await
+        .map_err(|e| GuiError::unknown(format!("read attachment: {e}")))?;
+    Ok(AttachmentImage {
+        data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        mime: mime.essence_str().to_string(),
+    })
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn open_in_vscode(path: String) -> Result<(), GuiError> {
     #[cfg(target_os = "macos")]

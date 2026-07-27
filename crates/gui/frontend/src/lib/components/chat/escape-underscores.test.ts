@@ -47,6 +47,39 @@ describe("escapeIntrawordUnderscores", () => {
     );
   });
 
+  it("does not escape inside bare URLs", () => {
+    // An escaped underscore would truncate the renderer's raw-URL token.
+    expect(
+      escapeIntrawordUnderscores(
+        "见 https://dev.example.com/delivery/-/merge_requests/new?merge_request%5Bsource_branch%5D=fix-metrics 备用",
+      ),
+    ).toBe(
+      "见 https://dev.example.com/delivery/-/merge_requests/new?merge_request%5Bsource_branch%5D=fix-metrics 备用",
+    );
+    // Escaping resumes right after the URL.
+    expect(escapeIntrawordUnderscores("https://a.com/b_c then d_e")).toBe(
+      "https://a.com/b_c then d\\_e",
+    );
+  });
+
+  it("stops the bare URL at whitespace, backslash, quotes and angle brackets", () => {
+    expect(escapeIntrawordUnderscores("https://a.com/b_c\nnext_line")).toBe(
+      "https://a.com/b_c\nnext\\_line",
+    );
+    expect(escapeIntrawordUnderscores('"https://a.com/b_c" d_e')).toBe(
+      '"https://a.com/b_c" d\\_e',
+    );
+    expect(escapeIntrawordUnderscores("<https://a.com/b_c> d_e")).toBe(
+      "<https://a.com/b_c> d\\_e",
+    );
+    // `]`, `)` and trailing punctuation stay inside by design: the
+    // renderer's raw-URL token includes them too, so protection mirrors
+    // what will actually be linkified.
+    expect(escapeIntrawordUnderscores("(https://a.com/b_c) d_e")).toBe(
+      "(https://a.com/b_c) d\\_e",
+    );
+  });
+
   it("escapes underscores inside CJK words too", () => {
     expect(escapeIntrawordUnderscores("变量_名 测试")).toBe("变量\\_名 测试");
     expect(escapeIntrawordUnderscores("hello_世界")).toBe("hello\\_世界");

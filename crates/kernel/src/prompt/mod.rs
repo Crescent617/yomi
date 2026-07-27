@@ -15,11 +15,13 @@ pub struct SystemPromptBuilder<'a> {
 
 const SKILL_SECTION_HEADER: &str = "# Skills\nIMPORTANT: before replying, you must scan available skills and load skill content with `read` tool when task hits its description.\n\n";
 
-/// Delivery contract for sessions routed from an external chat platform:
-/// the final reply is auto-delivered, and files are attached via a
-/// `<yomi_attachments>` block (parsed and delivered by the channel hub).
-/// Appended to the base prompt by the conductor at spawn time.
-pub(crate) const CHANNEL_DELIVERY_SECTION: &str = "# Channel Delivery\nThis session is connected to an external chat platform. Your final reply is delivered automatically — write it as one complete message. To attach files to the reply, include an attachments block, one path per line (absolute, or relative to the workspace):\n\n<yomi_attachments>\noutput/report.pdf\n</yomi_attachments>\n\nTo show this syntax to the user instead of attaching files, wrap it in a fenced code block.";
+/// Attachment contract for every non-sub-agent session (when the
+/// `attachments` feature is on): files declared in a `<yomi_attachments>`
+/// block reach the user as attachments alongside the message — channels
+/// deliver the files, the app shows clickable items. Appended to the base
+/// prompt by the conductor at spawn time. Sub-agents never get it: a
+/// sub-agent's parent decides what becomes an attachment.
+pub(crate) const ATTACHMENTS_SECTION: &str = "# Attachments\nTo attach files to your reply, include an attachments block, one path per line (absolute, or relative to the workspace) — each is delivered to the user as an attachment alongside your message:\n\n<yomi_attachments>\noutput/report.pdf\n</yomi_attachments>\n\nTo show this syntax to the user instead of attaching files, wrap it in a fenced code block.";
 
 impl<'a> SystemPromptBuilder<'a> {
     pub fn new() -> Self {

@@ -454,19 +454,21 @@ impl Conductor {
             tool_blocklist.push(crate::tools::ask_user::ASK_USER_TOOL_NAME.to_string());
         }
 
-        // The channel-delivery prompt contract applies only to sessions with
-        // their own channel routing: a subagent's output never reaches the
-        // platform directly (the hub forwarder skips unrouted sessions), so
-        // its parent decides what becomes an attachment. Note the narrower
-        // predicate than the ask_user blocklist above, which covers every
-        // sub-agent outright.
-        let base_prompt = match &self.agent_shared.channel_hub {
-            Some(hub) if !is_sub_agent && hub.is_channel_session(sid).await => format!(
+        // Every non-sub-agent session learns the attachment syntax when the
+        // feature is on: declared files reach the user alongside the message
+        // (channels deliver them, the app shows clickable items). Sub-agents
+        // never get it — their output never leaves the parent, so the parent
+        // decides what becomes an attachment. Note the narrower predicate
+        // than the ask_user blocklist above, which covers every sub-agent
+        // outright.
+        let base_prompt = if !is_sub_agent && self.agent_config.enable_attachments {
+            format!(
                 "{}\n\n{}",
                 self.base_prompt,
-                crate::prompt::CHANNEL_DELIVERY_SECTION
-            ),
-            _ => self.base_prompt.clone(),
+                crate::prompt::ATTACHMENTS_SECTION
+            )
+        } else {
+            self.base_prompt.clone()
         };
 
         // Resolve tool flags here — session-level policy lives in the

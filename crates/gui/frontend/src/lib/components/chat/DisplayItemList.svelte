@@ -1,5 +1,6 @@
 <script lang="ts">
   import { textFromBlocks, hasText } from "../../session";
+  import { parseAttachments } from "../../attachments";
   import type { DisplayItem } from "./display-items";
   import { keyDisplayItems, liveActivityIndex } from "./display-items";
   import UserBubble from "./UserBubble.svelte";
@@ -9,6 +10,7 @@
   import ActivityGroup from "./ActivityGroup.svelte";
   import MessageActions from "./MessageActions.svelte";
   import TextBlock from "./TextBlock.svelte";
+  import AttachmentChips from "./AttachmentChips.svelte";
   import { formatMessageTime } from "../../utils";
 
   import type { ActivityGroupOverride } from "./activity-expansion";
@@ -101,15 +103,19 @@
       />
       {#each item.messages as m, messageIndex (`${m.type}-${m.id}-${messageIndex}`)}
         {#if m.type === "assistant" && hasText(m.content)}
-          {@const text = textFromBlocks(m.content)}
+          {@const parsed = parseAttachments(textFromBlocks(m.content))}
           <div class="group/ma relative" data-message-id={m.id}>
             <MessageActions
               {session_id}
               message={m}
-              content={text}
+              content={parsed.cleaned}
               isStreaming={item.isStreaming}
             />
-            <TextBlock content={text} isStreaming={item.isStreaming} />
+            <TextBlock
+              content={parsed.cleaned}
+              isStreaming={item.isStreaming}
+            />
+            <AttachmentChips paths={parsed.paths} {session_id} />
             {@render messageTimestamp(m.created_at, item.isStreaming, false)}
           </div>
         {/if}

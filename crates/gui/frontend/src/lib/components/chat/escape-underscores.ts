@@ -8,8 +8,8 @@
  * `finish_reason`. Escaping intra-word runs (`\_`) renders them literally
  * while leaving real emphasis (`_foo_`, `__bold__`) intact.
  *
- * Fenced code, inline code spans, and link destinations are copied
- * verbatim so escaping can't corrupt code or URLs.
+ * Fenced code, inline code spans, link destinations, and bare URLs are
+ * copied verbatim so escaping can't corrupt code or URLs.
  */
 export function escapeIntrawordUnderscores(md: string): string {
   let inFence = false;
@@ -51,6 +51,16 @@ function escapeLine(line: string): string {
     if (ch === "]" && line[i + 1] === "(") {
       const close = line.indexOf(")", i + 2);
       const end = close === -1 ? line.length : close + 1;
+      out += line.slice(i, end);
+      i = end;
+      continue;
+    }
+    // Bare URL (what the renderer autolinks): copy through the terminator —
+    // escaping an underscore here inserts a backslash, which the renderer
+    // treats as the end of the URL, truncating the link.
+    if (line.startsWith("http://", i) || line.startsWith("https://", i)) {
+      let end = i;
+      while (end < line.length && !/[\s\\<>"'`]/.test(line[end])) end += 1;
       out += line.slice(i, end);
       i = end;
       continue;
