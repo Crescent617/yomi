@@ -121,19 +121,15 @@ impl CronScheduler {
         }
 
         // 过期
-        if let Some(expires_at) = job.expires_at {
-            if now >= expires_at {
-                self.complete_job(job_id).await;
-                return;
-            }
+        if job.has_expiry() && now >= job.expires_at {
+            self.complete_job(job_id).await;
+            return;
         }
 
         // 已达最大执行次数
-        if let Some(max_runs) = job.max_runs {
-            if job.run_count >= max_runs {
-                self.complete_job(job_id).await;
-                return;
-            }
+        if job.has_max_runs() && job.run_count >= job.max_runs {
+            self.complete_job(job_id).await;
+            return;
         }
 
         // 重新计算 next_run 并更新数据库 + 缓存
@@ -296,18 +292,14 @@ impl CronScheduler {
 
         for job in due_jobs {
             // 检查是否过期或达到最大执行次数
-            if let Some(expires_at) = job.expires_at {
-                if now >= expires_at {
-                    self.complete_job(&job.id).await;
-                    continue;
-                }
+            if job.has_expiry() && now >= job.expires_at {
+                self.complete_job(&job.id).await;
+                continue;
             }
 
-            if let Some(max_runs) = job.max_runs {
-                if job.run_count >= max_runs {
-                    self.complete_job(&job.id).await;
-                    continue;
-                }
+            if job.has_max_runs() && job.run_count >= job.max_runs {
+                self.complete_job(&job.id).await;
+                continue;
             }
 
             // 标记为执行中，防止重复调度

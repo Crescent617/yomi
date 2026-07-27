@@ -19,7 +19,7 @@
     Trash2,
   } from "lucide-svelte";
   import { automationStore } from "../../automation.svelte";
-  import type { CronJob } from "../../api";
+  import { isNeverExpires, type CronJob } from "../../api";
   import ConfirmDialog from "../ui/ConfirmDialog.svelte";
   import CreateJobModal from "./CreateJobModal.svelte";
 
@@ -457,7 +457,9 @@
               <div>
                 <dt class="text-xs text-muted-foreground">Expires</dt>
                 <dd class="mt-1 text-sm font-medium">
-                  {formatDate(job.expires_at)}
+                  {isNeverExpires(job.expires_at)
+                    ? "Never"
+                    : formatDate(job.expires_at)}
                 </dd>
               </div>
             </dl>

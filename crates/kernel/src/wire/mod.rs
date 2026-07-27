@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 // ── Wire Protocol ────────────────────────────────────────────────────────
 
 /// Wire protocol version. Bumped on any breaking change to the IPC schema.
-pub const WIRE_PROTOCOL_VERSION: u32 = 22;
+pub const WIRE_PROTOCOL_VERSION: u32 = 23;
 
 /// All operations a client can request from the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,6 +84,10 @@ pub enum ReqMethod {
     },
     /// Subscribe to the live event stream of **all** sessions (real-time
     /// only, no replay — cross-session history is not buffered globally).
+    ///
+    /// This stream is independent of per-session `Subscribe` streams: an
+    /// event is delivered once per overlapping subscription, so a client
+    /// mixing both must deduplicate by `event_id`.
     SubscribeAll,
     UnsubscribeAll,
     ListSessions {
@@ -181,14 +185,10 @@ pub enum ReqMethod {
         schedule: Option<String>,
         action: Option<crate::cron::CronAction>,
         status: Option<String>,
+        /// `None` = 不变；`Some(0)` = 恢复不限次数
         max_runs: Option<u32>,
+        /// `None` = 不变；`Some(NEVER_EXPIRES)` = 恢复永不过期
         expires_at: Option<DateTime<Utc>>,
-        /// Explicitly clear `max_runs` (back to unlimited).
-        #[serde(default)]
-        clear_max_runs: bool,
-        /// Explicitly clear `expires_at` (back to never).
-        #[serde(default)]
-        clear_expires_at: bool,
     },
     /// Trigger a cron job manually (execute immediately, record result).
     TriggerCronJob {

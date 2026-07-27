@@ -3,6 +3,11 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::types::CronJobId;
 
+/// `max_runs` sentinel meaning "no run limit".
+pub const UNLIMITED_MAX_RUNS: u32 = 0;
+/// `expires_at` sentinel meaning "never expires" (the zero timestamp).
+pub const NEVER_EXPIRES: DateTime<Utc> = DateTime::UNIX_EPOCH;
+
 /// 任务触发时要执行的动作
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
@@ -86,12 +91,24 @@ pub struct CronJob {
     pub last_run_at: Option<DateTime<Utc>>,
     /// 执行次数统计
     pub run_count: u32,
-    /// 最大执行次数（None = 无限）
-    pub max_runs: Option<u32>,
-    /// 过期时间（None = 永不过期）
-    pub expires_at: Option<DateTime<Utc>>,
+    /// 最大执行次数（[`UNLIMITED_MAX_RUNS`] = 无限）
+    pub max_runs: u32,
+    /// 过期时间（[`NEVER_EXPIRES`] = 永不过期）
+    pub expires_at: DateTime<Utc>,
     /// 最近错误信息
     pub last_error: Option<String>,
+}
+
+impl CronJob {
+    /// Whether the job has a run limit.
+    pub fn has_max_runs(&self) -> bool {
+        self.max_runs > UNLIMITED_MAX_RUNS
+    }
+
+    /// Whether the job can expire.
+    pub fn has_expiry(&self) -> bool {
+        self.expires_at > NEVER_EXPIRES
+    }
 }
 
 /// 创建任务输入
@@ -100,7 +117,9 @@ pub struct CreateCronJobInput {
     pub name: String,
     pub schedule: String,
     pub action: CronAction,
+    /// `None` / `Some(0)` = 不限次数
     pub max_runs: Option<u32>,
+    /// `None` = 永不过期
     pub expires_at: Option<DateTime<Utc>>,
 }
 
@@ -111,14 +130,10 @@ pub struct UpdateCronJobInput {
     pub schedule: Option<String>,
     pub action: Option<CronAction>,
     pub status: Option<CronJobStatus>,
+    /// `None` = 不变；`Some(0)` = 恢复不限次数
     pub max_runs: Option<u32>,
+    /// `None` = 不变；`Some(NEVER_EXPIRES)` = 恢复永不过期
     pub expires_at: Option<DateTime<Utc>>,
-    /// 显式清除 `max_runs`（设为 NULL，恢复无限次）
-    #[serde(default)]
-    pub clear_max_runs: bool,
-    /// 显式清除 `expires_at`（设为 NULL，永不过期）
-    #[serde(default)]
-    pub clear_expires_at: bool,
     /// 用于 scheduler 内部更新 `next_run_at`
     #[serde(skip)]
     pub next_run_at: Option<DateTime<Utc>>,

@@ -14,6 +14,7 @@
     createSession,
     errorMessage,
     getCwd,
+    isNeverExpires,
     listProjects,
     updateCronJob,
     type CronJob,
@@ -43,9 +44,9 @@
   let content = $state(initialEditingJob?.action.content ?? "");
   let command = $state(initialEditingJob?.action.command ?? "");
   let working_dir = $state(initialEditingJob?.action.working_dir ?? "");
-  let max_runs = $state<string | number>(initialEditingJob?.max_runs ?? "");
+  let max_runs = $state<string | number>(initialEditingJob?.max_runs || "");
   let expires_at = $state(
-    initialEditingJob?.expires_at
+    initialEditingJob && !isNeverExpires(initialEditingJob.expires_at)
       ? utcToLocalDatetimeLocal(initialEditingJob.expires_at)
       : "",
   );
@@ -54,8 +55,8 @@
   let selected_project_id = $state("");
   let showAdvanced = $state(
     Boolean(initialEditingJob) &&
-      (initialEditingJob?.max_runs !== null ||
-        initialEditingJob?.expires_at !== null),
+      ((initialEditingJob?.max_runs ?? 0) > 0 ||
+        !isNeverExpires(initialEditingJob?.expires_at)),
   );
   let loadingProjects = $state(false);
   let saving = $state(false);
@@ -165,13 +166,15 @@
       };
       if (max_runs !== "" && max_runs != null) {
         payload.max_runs = Number(max_runs);
-      } else if (editingJob?.max_runs != null) {
-        payload.clear_max_runs = true;
+      } else if ((editingJob?.max_runs ?? 0) > 0) {
+        // Field cleared in edit mode: 0 is the no-limit sentinel.
+        payload.max_runs = 0;
       }
       if (expires_at) {
         payload.expires_at = new Date(expires_at).toISOString();
-      } else if (editingJob?.expires_at != null) {
-        payload.clear_expires_at = true;
+      } else if (!isNeverExpires(editingJob?.expires_at)) {
+        // Field cleared in edit mode: zero timestamp is the never-expires sentinel.
+        payload.expires_at = new Date(0).toISOString();
       }
 
       if (editingJob) {

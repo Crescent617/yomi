@@ -461,8 +461,6 @@ impl KernelServer {
                 status,
                 max_runs,
                 expires_at,
-                clear_max_runs,
-                clear_expires_at,
             } => {
                 let status = status.and_then(|s| s.parse().ok());
                 let input = crate::cron::UpdateCronJobInput {
@@ -472,8 +470,6 @@ impl KernelServer {
                     status,
                     max_runs,
                     expires_at,
-                    clear_max_runs,
-                    clear_expires_at,
                     ..Default::default()
                 };
                 match self

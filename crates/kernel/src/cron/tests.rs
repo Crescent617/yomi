@@ -2,7 +2,7 @@
 #[allow(clippy::module_inception)]
 mod tests {
     use super::super::types::{
-        CronAction, CronError, CronJob, CronJobId, CronJobStatus, CronSchedule,
+        CronAction, CronError, CronJob, CronJobId, CronJobStatus, CronSchedule, NEVER_EXPIRES,
     };
     use chrono::{Timelike, Utc};
 
@@ -112,8 +112,8 @@ mod tests {
             next_run_at: None,
             last_run_at: None,
             run_count: 0,
-            max_runs: Some(10),
-            expires_at: None,
+            max_runs: 10,
+            expires_at: NEVER_EXPIRES,
             last_error: None,
         };
 

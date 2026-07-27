@@ -1,7 +1,10 @@
 use super::*;
 
 use crate::cron::store::CronStore;
-use crate::cron::types::{CronAction, CronJob, CronJobId, CronJobStatus, UpdateCronJobInput};
+use crate::cron::types::{
+    CronAction, CronJob, CronJobId, CronJobStatus, UpdateCronJobInput, NEVER_EXPIRES,
+    UNLIMITED_MAX_RUNS,
+};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -63,10 +66,10 @@ impl CronStore for MockStore {
                 job.status = status;
             }
             if let Some(max_runs) = input.max_runs {
-                job.max_runs = Some(max_runs);
+                job.max_runs = max_runs;
             }
             if let Some(expires_at) = input.expires_at {
-                job.expires_at = Some(expires_at);
+                job.expires_at = expires_at;
             }
             if let Some(next_run) = input.next_run_at {
                 job.next_run_at = Some(next_run);
@@ -121,9 +124,9 @@ fn make_job(
         next_run_at: next_run,
         last_run_at: None,
         run_count,
-        max_runs,
+        max_runs: max_runs.unwrap_or(UNLIMITED_MAX_RUNS),
         last_error: None,
-        expires_at,
+        expires_at: expires_at.unwrap_or(NEVER_EXPIRES),
     }
 }
 
@@ -274,6 +277,48 @@ async fn test_fire_due_jobs_completes_max_runs() {
     assert_eq!(updates.len(), 1);
     assert_eq!(updates[0].0, "j1");
     assert_eq!(updates[0].1.status, Some(CronJobStatus::Completed));
+}
+
+#[tokio::test]
+async fn test_fire_due_jobs_zero_sentinels_never_complete() {
+    // max_runs = 0 (unlimited) and expires_at = zero timestamp (never): even
+    // with run_count far beyond any limit and the sentinel date long past,
+    // the job must still fire, never complete.
+    let (tx, mut rx) = mpsc::channel(10);
+    let past = Utc::now() - chrono::Duration::seconds(60);
+    let job = make_job(
+        "j1",
+        "0 0 9 * * *",
+        Some(past),
+        Some(NEVER_EXPIRES),
+        Some(UNLIMITED_MAX_RUNS),
+        999,
+    );
+
+    let mut jobs = HashMap::new();
+    jobs.insert("j1".to_string(), job.clone());
+    let store = Arc::new(MockStore::new(jobs));
+    let scheduler = Arc::new(CronScheduler::new(store.clone(), tx));
+
+    {
+        let mut q = scheduler.queue.write().await;
+        q.entry(past).or_default().push(job.id.clone());
+        let mut j = scheduler.jobs.write().await;
+        j.insert(job.id.clone(), job.clone());
+    }
+
+    scheduler.fire_due_jobs().await.unwrap();
+
+    // Fired, not completed.
+    let received = rx.try_recv().unwrap();
+    assert_eq!(received.id.0, "j1");
+    assert!(
+        store
+            .updates()
+            .iter()
+            .all(|(_, input)| input.status != Some(CronJobStatus::Completed)),
+        "sentinel-limited job must never be completed"
+    );
 }
 
 #[tokio::test]

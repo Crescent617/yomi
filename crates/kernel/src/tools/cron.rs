@@ -173,14 +173,14 @@ impl CronTool {
         }
         if let Some(v) = args.get("max_runs") {
             if v.is_null() {
-                input.clear_max_runs = true;
+                input.max_runs = Some(crate::cron::UNLIMITED_MAX_RUNS);
             } else {
                 input.max_runs = Some(parse_max_runs_value(v)?);
             }
         }
         if let Some(v) = args.get("expires_at") {
             if v.is_null() {
-                input.clear_expires_at = true;
+                input.expires_at = Some(crate::cron::NEVER_EXPIRES);
             } else {
                 input.expires_at = Some(parse_expires_at(args)?.ok_or_else(|| {
                     KernelError::tool("expires_at must be an RFC3339 timestamp".to_string())
@@ -407,10 +407,11 @@ fn parse_max_runs(args: &Value) -> Result<Option<u32>> {
 }
 
 fn parse_max_runs_value(v: &Value) -> Result<u32> {
+    // 0 is the "no limit" sentinel.
     let n = v
         .as_u64()
-        .filter(|n| *n > 0 && u32::try_from(*n).is_ok())
-        .ok_or_else(|| KernelError::tool("max_runs must be a positive integer".to_string()))?;
+        .filter(|n| u32::try_from(*n).is_ok())
+        .ok_or_else(|| KernelError::tool("max_runs must be a non-negative integer".to_string()))?;
     Ok(n as u32)
 }
 
@@ -436,7 +437,7 @@ impl Tool for CronTool {
 Actions: list, create, update, delete, trigger (run once immediately, for testing).
 Schedule is a cron expression with 5 fields ('0 9 * * 1-5' = weekdays 09:00) or 6 fields with leading seconds, interpreted in the machine's LOCAL timezone.
 For send_message jobs: pass session_id to target an existing session (e.g. the current conversation); omit it to create a dedicated new session that every run reuses (the new session inherits the current working directory and project; model stays default).
-Use update with status active/paused to resume/pause a job; pass null for max_runs/expires_at to clear them. Job type cannot be changed after creation."
+Use update with status active/paused to resume/pause a job; pass null (or 0 for max_runs, the zero timestamp for expires_at) to clear those limits. Job type cannot be changed after creation."
     }
 
     fn schema(&self) -> Value {
@@ -493,11 +494,11 @@ Use update with status active/paused to resume/pause a job; pass null for max_ru
                 },
                 "max_runs": {
                     "type": "integer",
-                    "description": "Stop after N runs (default: unlimited; pass null on update to clear)"
+                    "description": "Stop after N runs (0 or omitted: unlimited; pass null or 0 on update to clear a limit)"
                 },
                 "expires_at": {
                     "type": "string",
-                    "description": "RFC3339 expiry timestamp (default: never expires; pass null on update to clear)"
+                    "description": "RFC3339 expiry timestamp (default: never expires; pass null or the zero timestamp on update to clear)"
                 }
             }
         })

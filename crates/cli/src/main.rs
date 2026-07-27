@@ -271,18 +271,12 @@ enum CronCommands {
         /// Working directory for --command
         #[arg(long, requires = "command")]
         work_dir: Option<String>,
-        /// Stop after N runs
-        #[arg(long, conflicts_with = "clear_max_runs")]
+        /// Stop after N runs (0 = back to unlimited)
+        #[arg(long)]
         max_runs: Option<u32>,
-        /// Expire at this time, RFC 3339
-        #[arg(long, conflicts_with = "clear_expires_at")]
+        /// Expire at this time, RFC 3339 ("never" = back to no expiry)
+        #[arg(long)]
         expires_at: Option<String>,
-        /// Remove the run limit (unlimited)
-        #[arg(long)]
-        clear_max_runs: bool,
-        /// Remove the expiry (never expires)
-        #[arg(long)]
-        clear_expires_at: bool,
     },
     /// Pause a cron job
     Pause {
@@ -444,8 +438,6 @@ async fn run_cron(args: CronArgs) -> Result<()> {
             work_dir,
             max_runs,
             expires_at,
-            clear_max_runs,
-            clear_expires_at,
         } => {
             commands::cron::update(
                 &args.global,
@@ -458,8 +450,6 @@ async fn run_cron(args: CronArgs) -> Result<()> {
                 work_dir,
                 max_runs,
                 expires_at,
-                clear_max_runs,
-                clear_expires_at,
             )
             .await
         }

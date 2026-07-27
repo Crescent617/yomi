@@ -196,7 +196,7 @@ async fn create_shell_job() {
     let job_id = CronJobId::from(v["job_id"].as_str().unwrap());
     let job = f.cron_store.get(&job_id).await.unwrap().unwrap();
     assert!(matches!(job.action, CronAction::Shell { .. }));
-    assert_eq!(job.max_runs, Some(3));
+    assert_eq!(job.max_runs, 3);
 }
 
 #[tokio::test]
@@ -548,8 +548,8 @@ async fn update_clears_max_runs_and_expires_at_with_null() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(job.max_runs, Some(5));
-    assert!(job.expires_at.is_some());
+    assert_eq!(job.max_runs, 5);
+    assert!(job.has_expiry());
 
     exec(
         &f.tool,
@@ -564,8 +564,8 @@ async fn update_clears_max_runs_and_expires_at_with_null() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(job.max_runs, None);
-    assert_eq!(job.expires_at, None);
+    assert_eq!(job.max_runs, crate::cron::UNLIMITED_MAX_RUNS);
+    assert_eq!(job.expires_at, crate::cron::NEVER_EXPIRES);
 }
 
 #[tokio::test]
@@ -624,8 +624,8 @@ async fn update_sessionless_send_message_errors_without_session_store() {
         next_run_at: None,
         last_run_at: None,
         run_count: 0,
-        max_runs: None,
-        expires_at: None,
+        max_runs: 0,
+        expires_at: crate::cron::NEVER_EXPIRES,
         last_error: None,
     };
     f.cron_store.create(&job).await.unwrap();

@@ -19,11 +19,17 @@ async fn connect() -> Result<RemoteKernel> {
         .context("Failed to connect to daemon. Is it running?")
 }
 
-/// Parse an RFC 3339 timestamp (e.g. `2026-08-01T09:00:00+08:00`) to UTC.
+/// Parse an expiry timestamp: RFC 3339 (e.g. `2026-08-01T09:00:00+08:00`),
+/// or "never" / the zero timestamp for the no-expiry sentinel.
 fn parse_expires_at(raw: &str) -> Result<DateTime<Utc>> {
+    if raw.eq_ignore_ascii_case("never") {
+        return Ok(kernel::cron::NEVER_EXPIRES);
+    }
     DateTime::parse_from_rfc3339(raw)
         .map(|dt| dt.with_timezone(&Utc))
-        .with_context(|| format!("Invalid --expires-at timestamp: {raw} (expected RFC 3339)"))
+        .with_context(|| {
+            format!("Invalid --expires-at timestamp: {raw} (expected RFC 3339 or 'never')")
+        })
 }
 
 /// Build the action from `--message` / `--command` flags (exactly one
@@ -149,9 +155,10 @@ pub async fn list(_global: &GlobalArgs, status: Option<String>, limit: usize) ->
             .next_run_at
             .as_ref()
             .map_or_else(|| "-".to_string(), fmt_local);
-        let runs = match job.max_runs {
-            Some(max) => format!("{}/{max}", job.run_count),
-            None => job.run_count.to_string(),
+        let runs = if job.has_max_runs() {
+            format!("{}/{}", job.run_count, job.max_runs)
+        } else {
+            job.run_count.to_string()
         };
         table.add_row(vec![
             job.id.to_string(),
@@ -192,8 +199,6 @@ pub async fn update(
     work_dir: Option<String>,
     max_runs: Option<u32>,
     expires_at: Option<String>,
-    clear_max_runs: bool,
-    clear_expires_at: bool,
 ) -> Result<()> {
     let action = build_action(message, command, session, work_dir);
     let expires_at = expires_at.as_deref().map(parse_expires_at).transpose()?;
@@ -209,8 +214,6 @@ pub async fn update(
                 status: None,
                 max_runs,
                 expires_at,
-                clear_max_runs,
-                clear_expires_at,
                 next_run_at: None,
             },
         )

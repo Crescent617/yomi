@@ -161,7 +161,8 @@ pub trait KernelApi: Send + Sync {
         after_event_id: Option<crate::types::EventId>,
     ) -> Result<crate::comms::EventBusSubscriber>;
     /// Subscribe to the live event stream of **all** sessions (real-time
-    /// only, no replay).
+    /// only, no replay). Overlapping per-session subscriptions are not
+    /// deduplicated — mix both and dedupe by `event_id` if needed.
     async fn subscribe_all_events(&self) -> Result<crate::comms::EventBusSubscriber>;
     async fn list_sessions(
         &self,
@@ -1839,8 +1840,6 @@ impl KernelApi for RemoteKernel {
                 status: input.status.map(|s| s.as_str().to_string()),
                 max_runs: input.max_runs,
                 expires_at: input.expires_at,
-                clear_max_runs: input.clear_max_runs,
-                clear_expires_at: input.clear_expires_at,
             })
             .await?;
         let updated: bool = serde_json::from_value(result)?;

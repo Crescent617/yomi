@@ -9,7 +9,7 @@ pub use scheduler::CronScheduler;
 pub use store::{CronStore, SqliteCronStore};
 pub use types::{
     CreateCronJobInput, CronAction, CronError, CronJob, CronJobId, CronJobStatus, CronSchedule,
-    UpdateCronJobInput,
+    UpdateCronJobInput, NEVER_EXPIRES, UNLIMITED_MAX_RUNS,
 };
 pub use worker::CronWorker;
 
@@ -146,8 +146,8 @@ pub async fn create_cron_job(
         next_run_at: Some(next_run),
         last_run_at: None,
         run_count: 0,
-        max_runs: input.max_runs,
-        expires_at: input.expires_at,
+        max_runs: input.max_runs.unwrap_or(UNLIMITED_MAX_RUNS),
+        expires_at: input.expires_at.unwrap_or(NEVER_EXPIRES),
         last_error: None,
     };
 

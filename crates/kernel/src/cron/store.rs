@@ -1,5 +1,6 @@
 use crate::cron::types::{
-    CronAction, CronError, CronJob, CronJobId, CronJobStatus, UpdateCronJobInput,
+    CronAction, CronError, CronJob, CronJobId, CronJobStatus, UpdateCronJobInput, NEVER_EXPIRES,
+    UNLIMITED_MAX_RUNS,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -63,8 +64,8 @@ impl CronStore for SqliteCronStore {
         .bind(job.next_run_at.map(|t| t.to_rfc3339()))
         .bind(job.last_run_at.map(|t| t.to_rfc3339()))
         .bind(i64::from(job.run_count))
-        .bind(job.max_runs.map(i64::from))
-        .bind(job.expires_at.map(|t| t.to_rfc3339()))
+        .bind(i64::from(job.max_runs))
+        .bind(job.expires_at.to_rfc3339())
         .bind(job.last_error.as_ref())
         .execute(&self.pool)
         .await?;
@@ -108,15 +109,15 @@ impl CronStore for SqliteCronStore {
 
     async fn update(&self, id: &CronJobId, input: &UpdateCronJobInput) -> Result<bool, CronError> {
         // 使用参数化查询，避免 SQL 注入。
-        // max_runs/expires_at 支持显式清除（clear flag → NULL）。
+        // max_runs = 0 / expires_at = 零时间戳即“不限制/永不过期”，直接落库。
         let result = sqlx::query(
             r"UPDATE cron_jobs SET
                 name = COALESCE(?, name),
                 schedule = COALESCE(?, schedule),
                 action = COALESCE(?, action),
                 status = COALESCE(?, status),
-                max_runs = CASE WHEN ? THEN NULL ELSE COALESCE(?, max_runs) END,
-                expires_at = CASE WHEN ? THEN NULL ELSE COALESCE(?, expires_at) END,
+                max_runs = COALESCE(?, max_runs),
+                expires_at = COALESCE(?, expires_at),
                 next_run_at = COALESCE(?, next_run_at),
                 updated_at = ?
             WHERE id = ?",
@@ -130,9 +131,7 @@ impl CronStore for SqliteCronStore {
                 .and_then(|a| serde_json::to_string(a).ok()),
         )
         .bind(input.status.map(|s| s.as_str().to_string()))
-        .bind(input.clear_max_runs)
         .bind(input.max_runs.map(i64::from))
-        .bind(input.clear_expires_at)
         .bind(input.expires_at.map(|t| t.to_rfc3339()))
         .bind(input.next_run_at.map(|t| t.to_rfc3339()))
         .bind(Utc::now().to_rfc3339())
@@ -235,8 +234,15 @@ impl From<CronJobRow> for CronJob {
             next_run_at: row.next_run_at.and_then(|s| parse_datetime(&s)),
             last_run_at: row.last_run_at.and_then(|s| parse_datetime(&s)),
             run_count: row.run_count as u32,
-            max_runs: row.max_runs.map(|v| v as u32),
-            expires_at: row.expires_at.and_then(|s| parse_datetime(&s)),
+            // Legacy NULLs read back as the "no limit" / "never" sentinels.
+            max_runs: row
+                .max_runs
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or(UNLIMITED_MAX_RUNS),
+            expires_at: row
+                .expires_at
+                .and_then(|s| parse_datetime(&s))
+                .unwrap_or(NEVER_EXPIRES),
             last_error,
         }
     }
@@ -247,3 +253,7 @@ fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
         .ok()
         .map(|dt| dt.with_timezone(&Utc))
 }
+
+#[cfg(test)]
+#[path = "store_test.rs"]
+mod tests;

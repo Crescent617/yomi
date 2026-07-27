@@ -76,8 +76,6 @@ pub async fn update_cron_job(
     status: Option<String>,
     max_runs: Option<u32>,
     expires_at: Option<String>,
-    clear_max_runs: Option<bool>,
-    clear_expires_at: Option<bool>,
 ) -> Result<(), GuiError> {
     if let Some(ref s) = schedule {
         kernel::cron::CronSchedule::parse(s)
@@ -113,8 +111,6 @@ pub async fn update_cron_job(
         status: status_parsed,
         max_runs,
         expires_at: expires_at_parsed,
-        clear_max_runs: clear_max_runs.unwrap_or(false),
-        clear_expires_at: clear_expires_at.unwrap_or(false),
         ..Default::default()
     };
 

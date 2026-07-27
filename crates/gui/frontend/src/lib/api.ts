@@ -905,9 +905,16 @@ export interface CronJob {
   next_run_at: string | null;
   last_run_at: string | null;
   run_count: number;
-  max_runs: number | null;
-  expires_at: string | null;
+  /** 0 = unlimited */
+  max_runs: number;
+  /** zero timestamp = never expires */
+  expires_at: string;
   last_error: string | null;
+}
+
+/** Whether an `expires_at` value is the never-expires sentinel (zero time). */
+export function isNeverExpires(iso: string | null | undefined): boolean {
+  return !iso || new Date(iso).getTime() <= 0;
 }
 
 export async function listCronJobs(
@@ -934,10 +941,10 @@ export async function updateCronJob(
     schedule?: string;
     action?: string;
     status?: string;
+    /** 0 = back to unlimited */
     max_runs?: number;
+    /** zero timestamp = back to never expiring */
     expires_at?: string;
-    clear_max_runs?: boolean;
-    clear_expires_at?: boolean;
   },
 ): Promise<void> {
   return invokeCmd("update_cron_job", { job_id: job_id, ...input });
