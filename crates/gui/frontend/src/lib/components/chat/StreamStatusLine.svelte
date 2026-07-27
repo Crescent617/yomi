@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { flushSync, untrack } from "svelte";
   import type { Message, SessionState } from "../../state.svelte";
   import { findThinking, hasText } from "../../session";
   import { isActiveSessionPhase, noteRunStart } from "../../session-phase";
@@ -132,6 +133,56 @@
     }, 1000);
     return () => clearInterval(timer);
   });
+
+  // ── Lead-word swap ──
+  // The displayed word lags `leadWord`: the old word rises and dissolves
+  // (blur + fade), the text swaps at the hidden point, and the new word
+  // settles in from below. Reduced motion swaps instantly.
+  const SWAP_OUT_MS = 140;
+  // Starts at the current lead word, then lags behind it via the swap effect.
+  let displayWord = $state(untrack(() => leadWord));
+  let swapOut = $state(false);
+  let swapReset = $state(false);
+  let verbRef = $state<HTMLSpanElement | null>(null);
+  let swapTimer: ReturnType<typeof setTimeout> | null = null;
+  const reduceMotion =
+    typeof window !== "undefined" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  $effect(() => {
+    const next = leadWord;
+    untrack(() => {
+      if (next === displayWord) {
+        // Bounced back to the displayed word mid-swap: settle instead of
+        // staying parked in the (invisible) out pose.
+        swapOut = false;
+        return;
+      }
+      if (reduceMotion) {
+        displayWord = next;
+        return;
+      }
+      swapOut = true;
+      if (swapTimer) clearTimeout(swapTimer);
+      swapTimer = setTimeout(() => {
+        swapTimer = null;
+        displayWord = next;
+        swapOut = false;
+        // Jump to the entry pose (below, dissolved) without transitioning,
+        // then release so the word animates up into place.
+        swapReset = true;
+        flushSync();
+        void verbRef?.offsetWidth;
+        swapReset = false;
+      }, SWAP_OUT_MS);
+    });
+    return () => {
+      if (swapTimer) {
+        clearTimeout(swapTimer);
+        swapTimer = null;
+      }
+    };
+  });
 </script>
 
 {#if visible}
@@ -142,8 +193,12 @@
     aria-atomic="true"
   >
     <div class="flex min-h-5 items-center gap-1.5">
-      <span class="status-shimmer shrink-0 font-mono text-sm" data-text={leadWord}
-        >{leadWord}</span
+      <span
+        bind:this={verbRef}
+        class="status-shimmer lead-word shrink-0 font-mono text-sm"
+        class:swap-out={swapOut}
+        class:swap-reset={swapReset}
+        data-text={displayWord}>{displayWord}</span
       >
       {#if accent}
         <span
@@ -173,6 +228,39 @@
 {/if}
 
 <style>
+  /* Lead-word swap: quick rise-and-dissolve roll between status verbs. */
+  .lead-word {
+    transition:
+      transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
+      opacity 160ms ease-out,
+      filter 200ms ease-out;
+  }
+
+  .lead-word.swap-out {
+    transform: translateY(-0.3em);
+    opacity: 0;
+    filter: blur(3px);
+    transition:
+      transform 140ms cubic-bezier(0.5, 0, 0.75, 0),
+      opacity 120ms ease-in,
+      filter 140ms ease-in;
+  }
+
+  /* Entry pose: applied for one forced reflow so the settle-in transition
+     starts from below. */
+  .lead-word.swap-reset {
+    transition: none;
+    transform: translateY(0.3em);
+    opacity: 0;
+    filter: blur(3px);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .lead-word {
+      transition: none;
+    }
+  }
+
   /* 1px theme-color gradient sweeping the underside of the status row. */
   .tape-scan {
     position: absolute;
@@ -218,7 +306,6 @@
   /* Shimmer sweep across the status word: muted base, foreground peak. */
   .status-shimmer {
     position: relative;
-    font-style: italic;
     background: linear-gradient(
       90deg,
       var(--color-muted-foreground) 0%,

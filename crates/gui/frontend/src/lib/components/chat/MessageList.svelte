@@ -8,7 +8,7 @@
   import { ArrowDown } from "lucide-svelte";
   import TaskDock from "./TaskDock.svelte";
   import { isActiveSessionPhase } from "../../session-phase";
-  import InlineStreamStatus from "./InlineStreamStatus.svelte";
+  import StreamStatusLine from "./StreamStatusLine.svelte";
   import DisplayItemList from "./DisplayItemList.svelte";
   import { DisplayItemProjection } from "./display-items";
   import { guiPreferences } from "../../settings.svelte";
@@ -217,7 +217,7 @@
             expansionOverrides={activityExpansionOverrides}
           />
           {#if isActiveSessionPhase(activeSession.phase)}
-            <InlineStreamStatus
+            <StreamStatusLine
               session={activeSession}
               messages={displayMessages}
             />
