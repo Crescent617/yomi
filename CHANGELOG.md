@@ -15,6 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.11] - 2026-07-27
+
+### Added
+- 桌面通知标题附带会话标题，多个会话同时运行时可区分通知来源（GUI、TUI）。
+
+### Fixed
+- 修复经典滚动条环境下（macOS 外接鼠标、Windows）消息列与下方输入框横向错位的问题（GUI）。
+
+### Changed
+- 客户端正常断开连接时 daemon 不再输出警告日志，减少噪音。
+
 ## [0.7.10] - 2026-07-27
 
 ### Changed
