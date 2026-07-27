@@ -343,11 +343,19 @@ impl KernelServer {
                 result = recv_frame(&mut read_half) => match result {
                     Ok(m) => m,
                     Err(e) => {
-                        if e.kind() == std::io::ErrorKind::InvalidData {
+                        match e.kind() {
+                            // Peer closed the connection without a protocol-level
+                            // goodbye — a routine client disconnect, not an error.
+                            std::io::ErrorKind::UnexpectedEof => {
+                                tracing::debug!("Client disconnected: {e}");
+                            }
                             // Peer sent an oversized or malformed frame.
-                            tracing::warn!("Inbound frame rejected: {e}");
-                        } else {
-                            tracing::warn!("Recv frame error, closing connection: {e}");
+                            std::io::ErrorKind::InvalidData => {
+                                tracing::warn!("Inbound frame rejected: {e}");
+                            }
+                            _ => {
+                                tracing::warn!("Recv frame error, closing connection: {e}");
+                            }
                         }
                         break;
                     }
