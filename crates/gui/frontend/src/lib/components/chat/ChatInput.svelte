@@ -25,12 +25,7 @@
   import { forkSession, textFromBlocks } from "../../session";
   import { isActiveSessionPhase } from "../../session-phase";
   import { SLASH_COMMANDS } from "../../commands";
-  import type { FileEntry } from "../../fs/provider";
   import { open } from "@tauri-apps/plugin-dialog";
-
-  import { createFilePicker } from "$lib/filePicker.svelte";
-
-  import FilePicker from "../filePicker/FilePicker.svelte";
 
   import ModelSelector from "./ModelSelector.svelte";
   import PermissionSelector from "./PermissionSelector.svelte";
@@ -39,9 +34,6 @@
   let textareaRef: HTMLTextAreaElement | null = $state(null);
   let composing = $state(false);
   let ignoreNextEnter = $state(false);
-
-  // ── file picker (shared hook) ──
-  const filePicker = createFilePicker();
 
   // ── command completion ──
   let showCommands = $state(false);
@@ -101,12 +93,9 @@
   function detectCompletion() {
     if (!textareaRef) return;
     if (showHistory) return; // Don't interfere with history search
-    const cursorPos = textareaRef.selectionStart;
-    const beforeCursor = content.slice(0, cursorPos);
 
     // ── skill: starts with /skill: ──
     if (content.startsWith("/skill:")) {
-      filePicker.close();
       showCommands = false;
       const query = content.slice(7);
       const valid = /^[a-zA-Z0-9_\-:]*$/.test(query);
@@ -125,7 +114,6 @@
 
     // ── command: starts with / ──
     if (content.startsWith("/")) {
-      filePicker.close(); // mutually exclusive with @ picker
       const query = content.slice(1);
       const valid = /^[a-zA-Z0-9_\-:]*$/.test(query);
       if (valid) {
@@ -137,22 +125,6 @@
       }
     } else {
       showCommands = false;
-    }
-
-    // ── file: last @ before cursor ──
-    const lastAt = beforeCursor.lastIndexOf("@");
-    if (lastAt >= 0) {
-      const afterAt = beforeCursor.slice(lastAt + 1);
-      // @ must not be followed by a space (still typing the path)
-      if (!afterAt.includes(" ")) {
-        showCommands = false; // mutually exclusive with / picker
-        const root = getActiveSession()?.project_path || "";
-        filePicker.open(lastAt, afterAt, root);
-      } else {
-        filePicker.close();
-      }
-    } else {
-      filePicker.close();
     }
   }
 
@@ -283,25 +255,6 @@
     content = "/skill:" + name + " ";
     showSkills = false;
     skillFilter = "";
-    textareaRef?.focus();
-    requestAnimationFrame(autoResize);
-  }
-
-  function onEnterDir(entry: FileEntry) {
-    const newQuery = filePicker.enterDir(entry);
-    const before = content.slice(0, filePicker.anchor);
-    const after = content.slice(textareaRef?.selectionStart ?? content.length);
-    content = before + "@" + newQuery + after;
-    textareaRef?.focus();
-  }
-
-  function onAcceptFile(entry: FileEntry) {
-    const resultPath = filePicker.acceptFile(entry);
-    const cursorPos = textareaRef?.selectionStart ?? content.length;
-    const before = content.slice(0, filePicker.anchor);
-    const after = content.slice(cursorPos);
-    content = before + "@" + resultPath + " " + after;
-    filePicker.close();
     textareaRef?.focus();
     requestAnimationFrame(autoResize);
   }
@@ -720,24 +673,6 @@
       }
     }
 
-    // File picker navigation
-    if (filePicker.show) {
-      const handled = filePicker.handleKeydown(e);
-      if (handled) {
-        const entries = filePicker.entries;
-        const idx = filePicker.selectedIdx;
-        const entry = entries[idx];
-        if (
-          entry &&
-          !entry.isDirectory &&
-          (e.key === "Enter" || e.key === "Tab")
-        ) {
-          onAcceptFile(entry);
-        }
-        return;
-      }
-    }
-
     // History picker navigation
     if (showHistory) {
       if (e.key === "ArrowDown") {
@@ -877,7 +812,6 @@
     if (!container.contains(e.relatedTarget as Node)) {
       showCommands = false;
       showSkills = false;
-      filePicker.close();
       showHistory = false;
     }
   }
@@ -934,17 +868,6 @@
       {/each}
     </div>
   {/if}
-
-  <!-- File picker dropdown -->
-  <FilePicker
-    show={filePicker.show}
-    entries={filePicker.entries}
-    selectedIdx={filePicker.selectedIdx}
-    query={filePicker.query}
-    root={filePicker.root}
-    onEnter={onEnterDir}
-    onAccept={onAcceptFile}
-  />
 
   <!-- History picker -->
   {#if showHistory}
@@ -1025,7 +948,7 @@
         onpaste={handlePaste}
         placeholder={isStreaming
           ? "Press Enter to queue next message..."
-          : "Ask anything... (Shift+Enter newline, /command, @file, paste image)"}
+          : "Ask anything... (Shift+Enter newline, /command, paste image)"}
         rows={1}
         class="flex-1 resize-none bg-transparent text-sm placeholder:text-muted-foreground focus-visible:outline-none min-h-[40px] max-h-[200px] py-2.5"
       ></textarea>

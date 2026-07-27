@@ -54,7 +54,6 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { homeDir } from "@tauri-apps/api/path";
   import type { PermissionLevel } from "../../permission";
-  import { createFilePicker } from "$lib/filePicker.svelte";
   import { pickGreeting } from "../home/greeting";
   import TodayUsageCard from "../home/TodayUsageCard.svelte";
   import RecentSessions from "../home/RecentSessions.svelte";
@@ -64,8 +63,6 @@
   import ChangesWorkspace from "../layout/ChangesWorkspace.svelte";
   import PermissionSelector from "./PermissionSelector.svelte";
 
-  import type { FileEntry } from "../../fs/provider";
-  import FilePicker from "../filePicker/FilePicker.svelte";
   import { buildContentBlocks } from "../../types";
   import { steerQueuedMessage } from "../../queued-messages.svelte";
   import { isActiveSessionPhase } from "../../session-phase";
@@ -163,8 +160,6 @@
   let homeFileAttachments = $state<string[]>([]);
   let homeDirPath = $state("");
 
-  // ── home file picker (shared hook) ──
-  const homeFilePicker = createFilePicker();
   let homeTextareaRef: HTMLTextAreaElement | null = $state(null);
 
   // ── home command picker (only /goal on home screen) ──
@@ -620,12 +615,9 @@
 
   function detectHomeCompletion() {
     if (!homeTextareaRef) return;
-    const cursorPos = homeTextareaRef.selectionStart;
-    const beforeCursor = homeInput.slice(0, cursorPos);
 
     // ── command: starts with / ──
     if (homeInput.startsWith("/")) {
-      homeFilePicker.close();
       const query = homeInput.slice(1);
       const valid = /^[a-zA-Z0-9_\-:]*$/.test(query);
       if (valid) {
@@ -639,22 +631,6 @@
     } else {
       showCommands = false;
     }
-
-    // ── file: last @ before cursor ──
-    const lastAt = beforeCursor.lastIndexOf("@");
-    if (lastAt >= 0) {
-      const afterAt = beforeCursor.slice(lastAt + 1);
-      if (!afterAt.includes(" ")) {
-        const root =
-          projectState.projects.find((p) => p.id === selectedProjectId)?.dir ||
-          "";
-        homeFilePicker.open(lastAt, afterAt, root);
-      } else {
-        homeFilePicker.close();
-      }
-    } else {
-      homeFilePicker.close();
-    }
   }
 
   function acceptHomeCommand(cmd: string) {
@@ -663,30 +639,9 @@
     homeTextareaRef?.focus();
   }
 
-  function onEnterHomeDir(entry: FileEntry) {
-    const newQuery = homeFilePicker.enterDir(entry);
-    const before = homeInput.slice(0, homeFilePicker.anchor);
-    const after = homeInput.slice(
-      homeTextareaRef?.selectionStart ?? homeInput.length,
-    );
-    homeInput = before + "@" + newQuery + after;
-    homeTextareaRef?.focus();
-  }
-
-  function onAcceptHomeFile(entry: FileEntry) {
-    const resultPath = homeFilePicker.acceptFile(entry);
-    const cursorPos = homeTextareaRef?.selectionStart ?? homeInput.length;
-    const before = homeInput.slice(0, homeFilePicker.anchor);
-    const after = homeInput.slice(cursorPos);
-    homeInput = before + "@" + resultPath + " " + after;
-    homeFilePicker.close();
-    homeTextareaRef?.focus();
-  }
-
   function handleHomeFocusOut(e: FocusEvent) {
     const container = e.currentTarget as HTMLElement;
     if (!container.contains(e.relatedTarget as Node)) {
-      homeFilePicker.close();
       showCommands = false;
     }
   }
@@ -778,22 +733,6 @@
       }
     }
 
-    if (homeFilePicker.show) {
-      const handled = homeFilePicker.handleKeydown(e);
-      if (handled) {
-        const entries = homeFilePicker.entries;
-        const idx = homeFilePicker.selectedIdx;
-        const entry = entries[idx];
-        if (
-          entry &&
-          !entry.isDirectory &&
-          (e.key === "Enter" || e.key === "Tab")
-        ) {
-          onAcceptHomeFile(entry);
-        }
-        return;
-      }
-    }
     if (e.key === "Enter" && !e.shiftKey) {
       // If this Enter is right after IME composition ends, ignore it
       if (homeIgnoreNextEnter) {
@@ -1104,7 +1043,7 @@
                   homeIgnoreNextEnter = true;
                   setTimeout(() => (homeIgnoreNextEnter = false), 100);
                 }}
-                placeholder="Ask anything... (type @ to reference files, / for commands)"
+                placeholder="Ask anything... (/ for commands)"
                 rows={3}
                 disabled={submitting}
                 class="w-full resize-none bg-transparent text-base placeholder:text-muted-foreground focus:outline-none disabled:opacity-50"
@@ -1177,16 +1116,6 @@
                 {/each}
               </div>
             {/if}
-            <!-- Home file picker dropdown (floating above input) -->
-            <FilePicker
-              show={homeFilePicker.show}
-              entries={homeFilePicker.entries}
-              selectedIdx={homeFilePicker.selectedIdx}
-              query={homeFilePicker.query}
-              root={homeFilePicker.root}
-              onEnter={onEnterHomeDir}
-              onAccept={onAcceptHomeFile}
-            />
             <div
               class="px-4 py-3 border-t border-border flex items-center justify-between gap-3"
             >
