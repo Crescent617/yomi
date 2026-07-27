@@ -740,6 +740,14 @@ fn end_with_text(text: &str) -> Event {
     })
 }
 
+/// A tool-call-only turn: the model response completed without any text.
+fn end_without_text() -> Event {
+    Event::Model(ModelEvent::End {
+        message_id: crate::types::MessageId::new(),
+        content: vec![],
+    })
+}
+
 #[tokio::test]
 async fn fresh_card_shows_placeholder_until_first_content() {
     let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
@@ -1099,10 +1107,10 @@ async fn whisper_line_is_capped_at_100_chars() {
 
 fn reply_with(text: &str) -> crate::channels::reply::FinalReply {
     let mut buf = crate::channels::reply::RunReplyBuffer::new();
-    buf.record_text("intermediate thought");
+    buf.record_model_end("intermediate thought");
     buf.record_tool_start("t1", "shell", Some(r#"{"command":"cargo test"}"#));
     buf.record_tool_end("t1", 1200, false);
-    buf.record_text(text);
+    buf.record_model_end(text);
     buf.into_reply()
 }
 
@@ -1471,7 +1479,7 @@ fn random_title_picks_from_the_list() {
 }
 
 #[tokio::test]
-async fn stats_line_shows_steps_after_first_completed_text() {
+async fn stats_line_shows_steps_after_first_model_end() {
     let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
     let mock = MockAdapter::new();
     let sid = sid();
@@ -1484,14 +1492,15 @@ async fn stats_line_shows_steps_after_first_completed_text() {
         .handle_event(&adapter, &sid, "chat-1", None, &tool_start("bash"))
         .await;
 
-    // No completed text yet (the just-materialized card): tools only, no steps.
+    // No completed model response yet (the just-materialized card): tools
+    // only, no steps.
     let cards = mock.cards.lock().await;
     let first = cards[0].1.clone();
     assert!(first.contains("1 tools"));
     assert!(!first.contains("step"), "no steps yet: {first}");
     drop(cards);
 
-    // First completed assistant message: the stats line gains a step.
+    // First completed model response: the stats line gains a step.
     tracker
         .handle_event(&adapter, &sid, "chat-1", None, &end_with_text("done one"))
         .await;
@@ -1507,4 +1516,31 @@ async fn stats_line_shows_steps_after_first_completed_text() {
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
     assert!(last.contains("1 steps"), "still one step: {last}");
+}
+
+#[tokio::test]
+async fn stats_line_counts_textless_model_end_as_step() {
+    let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &tool_start("bash"))
+        .await;
+    // Tool-call-only turn: the model response carried no text — the step
+    // count tracks model ends, not completed texts.
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &end_without_text())
+        .await;
+
+    let patches = mock.patches.lock().await;
+    let last = patches.last().unwrap().1.clone();
+    assert!(
+        last.contains("1 steps"),
+        "tool-call-only turn is a step: {last}"
+    );
 }

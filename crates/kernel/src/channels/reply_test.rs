@@ -2,12 +2,12 @@ use super::*;
 
 fn buffer_with_run() -> RunReplyBuffer {
     let mut buf = RunReplyBuffer::new();
-    buf.record_text("Let me look at the code.");
+    buf.record_model_end("Let me look at the code.");
     buf.record_tool_start("t1", "read", Some(r#"{"path":"crates/kernel/src/hub.rs"}"#));
     buf.record_tool_end("t1", 120, false);
     buf.record_tool_start("t2", "shell", Some(r#"{"command":"cargo test -p kernel"}"#));
     buf.record_tool_end("t2", 65_000, false);
-    buf.record_text("All tests pass.");
+    buf.record_model_end("All tests pass.");
     buf
 }
 
@@ -26,7 +26,7 @@ fn into_reply_promotes_last_text_to_body() {
 #[test]
 fn into_reply_strips_attachments_block_from_body() {
     let mut buf = RunReplyBuffer::new();
-    buf.record_text("report done\n\n<yomi_attachments>\nout.pdf\n</yomi_attachments>");
+    buf.record_model_end("report done\n\n<yomi_attachments>\nout.pdf\n</yomi_attachments>");
     let reply = buf.into_reply();
     assert_eq!(reply.text(), Some("report done"));
     assert_eq!(reply.attachments(), &["out.pdf"]);
@@ -35,7 +35,7 @@ fn into_reply_strips_attachments_block_from_body() {
 #[test]
 fn into_reply_attachments_only_body_becomes_textless() {
     let mut buf = RunReplyBuffer::new();
-    buf.record_text("<yomi_attachments>\nout.pdf\n</yomi_attachments>");
+    buf.record_model_end("<yomi_attachments>\nout.pdf\n</yomi_attachments>");
     let reply = buf.into_reply();
     assert_eq!(reply.text(), None);
     assert_eq!(reply.attachments(), &["out.pdf"]);
@@ -46,9 +46,9 @@ fn attachments_block_never_renders_anywhere() {
     // Declarations in intermediate texts are stripped at record time too —
     // the XML must not leak into the trace panel, the card, or the body.
     let mut buf = RunReplyBuffer::new();
-    buf.record_text("generated the file");
-    buf.record_text("mid-run note\n<yomi_attachments>\nout.pdf\n</yomi_attachments>");
-    buf.record_text("here you go");
+    buf.record_model_end("generated the file");
+    buf.record_model_end("mid-run note\n<yomi_attachments>\nout.pdf\n</yomi_attachments>");
+    buf.record_model_end("here you go");
     // The live card preview renders from the buffer.
     let preview = buf.trace_preview_lines(10).join("\n");
     let reply = buf.into_reply();
@@ -71,7 +71,7 @@ fn attachments_block_never_renders_anywhere() {
 #[test]
 fn push_note_appends_or_creates_text() {
     let mut buf = RunReplyBuffer::new();
-    buf.record_text("done");
+    buf.record_model_end("done");
     let mut reply = buf.into_reply();
     reply.push_note("⚠️ first");
     assert_eq!(reply.text(), Some("done\n\n⚠️ first"));
@@ -92,11 +92,27 @@ fn into_reply_without_any_text_keeps_trace_only() {
 }
 
 #[test]
+fn tool_call_only_turns_count_as_steps() {
+    // Turn 1: a tool-call-only model response (no text) — still a step.
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("");
+    buf.record_tool_start("t1", "read", None);
+    buf.record_tool_end("t1", 10, false);
+    // Turn 2: the final text.
+    buf.record_model_end("done");
+    assert_eq!(buf.step_count(), 2);
+
+    let reply = buf.into_reply();
+    let out = render_plain(&reply);
+    assert!(out.contains("Trace · 2 steps · 1 tools"), "out: {out}");
+}
+
+#[test]
 fn into_reply_after_cancel_mid_tool_uses_last_text() {
     // Cancel mid-tool: the run ends with a pending tool entry; the last
     // text still becomes the body (design: /stop still flushes).
     let mut buf = RunReplyBuffer::new();
-    buf.record_text("Working on it.");
+    buf.record_model_end("Working on it.");
     buf.record_tool_start("t1", "shell", Some(r#"{"command":"sleep 100"}"#));
     let reply = buf.into_reply();
     assert_eq!(reply.text.as_deref(), Some("Working on it."));
@@ -111,7 +127,7 @@ fn tool_end_matches_by_tool_id() {
     buf.record_tool_start("t2", "read", None);
     buf.record_tool_end("t1", 5, true);
     let reply = {
-        buf.record_text("done");
+        buf.record_model_end("done");
         buf.into_reply()
     };
     let card = render_card(&reply, None).unwrap();
@@ -150,7 +166,7 @@ fn render_card_structure() {
 #[test]
 fn render_card_without_trace_is_a_single_markdown_element() {
     let mut buf = RunReplyBuffer::new();
-    buf.record_text("Just an answer.");
+    buf.record_model_end("Just an answer.");
     let reply = buf.into_reply();
     assert!(!reply.has_trace());
 
@@ -164,7 +180,7 @@ fn render_card_without_trace_is_a_single_markdown_element() {
 #[test]
 fn render_card_truncates_oversized_text() {
     let mut buf = RunReplyBuffer::new();
-    buf.record_text(&"x".repeat(FINAL_TEXT_MAX_BYTES + 100));
+    buf.record_model_end(&"x".repeat(FINAL_TEXT_MAX_BYTES + 100));
     let reply = buf.into_reply();
     let card = render_card(&reply, None).unwrap();
     assert!(card.contains("...(内容已截断)"));
@@ -177,7 +193,7 @@ fn render_trace_shows_all_entries() {
         buf.record_tool_start(&format!("t{i}"), "read", None);
         buf.record_tool_end(&format!("t{i}"), 1, false);
     }
-    buf.record_text("done");
+    buf.record_model_end("done");
     let reply = buf.into_reply();
 
     let card = render_card(&reply, None).unwrap();
@@ -195,7 +211,7 @@ fn render_trace_shows_all_entries() {
 fn buffer_drops_oldest_entries_beyond_cap() {
     let mut buf = RunReplyBuffer::new();
     for i in 0..(BUFFER_MAX_ENTRIES + 20) {
-        buf.record_text(&format!("text {i}"));
+        buf.record_model_end(&format!("text {i}"));
     }
     let reply = buf.into_reply();
     // The latest text survives as the body even though old ones were dropped.
@@ -228,7 +244,7 @@ fn render_plain_appends_trace_without_markup() {
 #[test]
 fn render_plain_without_trace_returns_text_only() {
     let mut buf = RunReplyBuffer::new();
-    buf.record_text("plain answer");
+    buf.record_model_end("plain answer");
     let reply = buf.into_reply();
     assert_eq!(render_plain(&reply), "plain answer");
 }
@@ -286,7 +302,7 @@ fn trace_arg_summary_flattens_multiline_args() {
         Some(r#"{"command":"cargo build &&\n cargo test &&\n cargo clippy"}"#),
     );
     buf.record_tool_end("t1", 5, false);
-    buf.record_text("done");
+    buf.record_model_end("done");
     let reply = buf.into_reply();
     let card = render_card(&reply, None).unwrap();
     // Multi-line args flatten to one inline line; no continuation lines.
@@ -299,7 +315,7 @@ fn trace_arg_summary_caps_long_values() {
     let args = format!(r#"{{"command":"{}"}}"#, "x".repeat(300));
     let mut buf = RunReplyBuffer::new();
     buf.record_tool_start("t1", "shell", Some(&args));
-    buf.record_text("done");
+    buf.record_model_end("done");
     let reply = buf.into_reply();
     let card = render_card(&reply, None).unwrap();
     let v: serde_json::Value = serde_json::from_str(&card).unwrap();
@@ -320,7 +336,7 @@ fn trace_arg_summary_empty_when_no_known_key_or_args() {
     let mut buf = RunReplyBuffer::new();
     buf.record_tool_start("t1", "todo", Some(r#"{"items":[]}"#));
     buf.record_tool_start("t2", "shell", None);
-    buf.record_text("done");
+    buf.record_model_end("done");
     let reply = buf.into_reply();
     let card = render_card(&reply, None).unwrap();
     let v: serde_json::Value = serde_json::from_str(&card).unwrap();
@@ -338,7 +354,7 @@ fn render_trace_long_args_stay_one_truncated_line() {
     let args = format!(r#"{{"command":"{long_cmd}"}}"#);
     buf.record_tool_start("t1", "shell", Some(&args));
     buf.record_tool_end("t1", 100, false);
-    buf.record_text("done");
+    buf.record_model_end("done");
     let reply = buf.into_reply();
     let card = render_card(&reply, None).unwrap();
 
@@ -368,7 +384,7 @@ fn render_trace_multiline_args_flatten_to_one_line() {
         Some(r#"{"command":"cargo build &&\n cargo test &&\n cargo clippy"}"#),
     );
     buf.record_tool_end("t1", 5, false);
-    buf.record_text("done");
+    buf.record_model_end("done");
     let reply = buf.into_reply();
     let card = render_card(&reply, None).unwrap();
 
@@ -396,7 +412,7 @@ fn render_plain_flattens_multiline_args() {
     let mut buf = RunReplyBuffer::new();
     buf.record_tool_start("t1", "shell", Some(r#"{"command":"a\nb"}"#));
     buf.record_tool_end("t1", 5, false);
-    buf.record_text("done");
+    buf.record_model_end("done");
     let reply = buf.into_reply();
     let out = render_plain(&reply);
     assert!(out.contains("✅ shell · a b · 5ms"));

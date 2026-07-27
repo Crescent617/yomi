@@ -357,13 +357,13 @@ impl ChannelHub {
                                 reply_buffers.entry(session_id.clone()).or_default();
                             }
                             Event::Model(ModelEvent::End { content, .. }) => {
+                                // One step per completed model response —
+                                // tool-call-only turns (no text) count too.
                                 let text = super::blocks_to_text(content);
-                                if !text.is_empty() {
-                                    reply_buffers
-                                        .entry(session_id.clone())
-                                        .or_default()
-                                        .record_text(&text);
-                                }
+                                reply_buffers
+                                    .entry(session_id.clone())
+                                    .or_default()
+                                    .record_model_end(&text);
                             }
                             Event::Tool(ToolEvent::Start {
                                 tool_id,

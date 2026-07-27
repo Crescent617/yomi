@@ -377,15 +377,15 @@ impl ObsTracker {
                 self.materialize_card(session_id).await;
             }
             Event::Model(ModelEvent::End { content, .. }) => {
-                // The completed text joins the trace as a narration entry
-                // (self-heals chunk loss on the bus — the full text is
-                // authoritative); the whisper always clears for the next
-                // turn instead of duplicating or going stale.
+                // One completed model response = one step, text or not
+                // (tool-call-only turns count too). A non-empty text also
+                // joins the trace as a narration entry (self-heals chunk
+                // loss on the bus — the full text is authoritative); the
+                // whisper always clears for the next turn instead of
+                // duplicating or going stale.
                 let text = super::blocks_to_text(content);
                 self.update_running(session_id, |s| {
-                    if !text.is_empty() {
-                        s.trace.record_text(&text);
-                    }
+                    s.trace.record_model_end(&text);
                     s.whisper.clear();
                 })
                 .await;

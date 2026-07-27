@@ -390,10 +390,10 @@ fn test_routing() -> SessionRouting {
 
 fn run_buffer() -> reply::RunReplyBuffer {
     let mut buf = reply::RunReplyBuffer::new();
-    buf.record_text("Let me check.");
+    buf.record_model_end("Let me check.");
     buf.record_tool_start("t1", "shell", Some(r#"{"command":"cargo test"}"#));
     buf.record_tool_end("t1", 2000, false);
-    buf.record_text("final answer");
+    buf.record_model_end("final answer");
     buf
 }
 

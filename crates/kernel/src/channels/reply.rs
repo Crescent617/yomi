@@ -86,6 +86,9 @@ struct ToolTrace {
 #[derive(Debug)]
 pub(crate) struct RunReplyBuffer {
     entries: Vec<TraceEntry>,
+    /// Completed model responses (`ModelEvent::End` count) — the run's
+    /// steps, including tool-call-only turns that produced no text.
+    steps: usize,
     /// Attachment paths declared via `<yomi_attachments>` blocks in
     /// assistant texts. Blocks are stripped at record time so the XML
     /// never renders on the platform (trace snippets, live card preview,
@@ -101,18 +104,22 @@ impl RunReplyBuffer {
     pub(crate) fn new() -> Self {
         Self {
             entries: Vec::new(),
+            steps: 0,
             attachments: Vec::new(),
             dropped: 0,
             started_at: Instant::now(),
         }
     }
 
-    /// Record a completed assistant text. The most recent one becomes the
-    /// reply body at flush time; all earlier ones stay in the trace. Each
-    /// `<yomi_attachments>` block outside a fenced code block is stripped
-    /// from the text and its paths collected for file delivery; a text
-    /// that held only blocks leaves no narration.
-    pub(crate) fn record_text(&mut self, text: &str) {
+    /// Record a completed model response (`ModelEvent::End`) — one step of
+    /// the run, whether or not it produced text (tool-call-only turns
+    /// count too). A non-empty text joins the trace: the most recent one
+    /// becomes the reply body at flush time, all earlier ones stay as
+    /// narrations. Each `<yomi_attachments>` block outside a fenced code
+    /// block is stripped from the text and its paths collected for file
+    /// delivery; a text that held only blocks leaves no narration.
+    pub(crate) fn record_model_end(&mut self, text: &str) {
+        self.steps += 1;
         let (text, paths) = super::attachments::parse_attachments(text);
         self.attachments.extend(paths);
         if !text.is_empty() {
@@ -177,6 +184,7 @@ impl RunReplyBuffer {
         });
         FinalReply {
             text,
+            steps: self.steps,
             attachments: self.attachments,
             entries,
             dropped_entries: self.dropped,
@@ -196,13 +204,10 @@ impl RunReplyBuffer {
         lines
     }
 
-    /// Completed assistant messages in the trace (the run's steps so far;
-    /// the in-progress text doesn't count until it completes).
+    /// Completed model responses so far this run (the run's steps; the
+    /// in-progress response doesn't count until its `ModelEvent::End`).
     pub(crate) fn step_count(&self) -> usize {
-        self.entries
-            .iter()
-            .filter(|e| matches!(e, TraceEntry::Narration(_)))
-            .count()
+        self.steps
     }
 }
 
@@ -215,6 +220,9 @@ impl Default for RunReplyBuffer {
 /// The deliverable reply: optional final text + the run trace (may be empty).
 pub(crate) struct FinalReply {
     text: Option<String>,
+    /// Completed model responses this run (`ModelEvent::End` count) — the
+    /// step count shown in the trace title.
+    steps: usize,
     /// Attachment paths collected from `<yomi_attachments>` blocks in the
     /// run's assistant texts (blocks already stripped from the recorded
     /// texts).
@@ -347,11 +355,9 @@ fn render_trace(reply: &FinalReply, markdown: bool) -> (Vec<String>, String) {
         lines.insert(0, dropped_marker(reply.dropped_entries));
     }
 
-    // The reply body is an assistant message too — count it as a step.
-    let steps = stats.steps + usize::from(reply.text().is_some());
     let mut title = format!(
         "🐾 Trace · {} steps · {} tools · {}",
-        steps,
+        reply.steps,
         stats.tools,
         fmt_elapsed(reply.elapsed)
     );
@@ -371,13 +377,10 @@ fn dropped_marker(dropped: usize) -> String {
 fn trace_stats(entries: &[TraceEntry]) -> TraceStats {
     let mut stats = TraceStats::default();
     for entry in entries {
-        match entry {
-            TraceEntry::Narration(_) => stats.steps += 1,
-            TraceEntry::Tool(tool) => {
-                stats.tools += 1;
-                if tool.is_error {
-                    stats.failed += 1;
-                }
+        if let TraceEntry::Tool(tool) = entry {
+            stats.tools += 1;
+            if tool.is_error {
+                stats.failed += 1;
             }
         }
     }
@@ -386,8 +389,6 @@ fn trace_stats(entries: &[TraceEntry]) -> TraceStats {
 
 #[derive(Default)]
 struct TraceStats {
-    /// Assistant messages (narrations) — the run's steps.
-    steps: usize,
     tools: usize,
     failed: usize,
 }
