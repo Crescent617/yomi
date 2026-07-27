@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.14] - 2026-07-27
+
+### Changed
+- 定时任务清除限制的方式改为值级哨兵：`yomi cron update` 移除 `--clear-max-runs` 与 `--clear-expires-at`，改用 `--max-runs 0`（恢复不限次数）和 `--expires-at never`（恢复永不过期）。
+- GUI 自动化面板编辑任务时清空「最大次数 / 过期时间」字段即恢复不限制。
+
 ## [0.7.13] - 2026-07-27
 
 ### Added
