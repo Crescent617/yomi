@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.8] - 2026-07-27
+
+### Fixed
+- 修复左侧栏底部明暗主题切换按钮点击无反应的问题（GUI）。
+- 修复首页权限级别选择有时被恢复成旧值的问题（GUI）。
+
 ## [0.7.7] - 2026-07-27
 
 ### Added
