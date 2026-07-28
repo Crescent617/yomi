@@ -102,3 +102,38 @@ async fn test_subscriber_recv_ends_on_shutdown() {
         None
     );
 }
+
+#[tokio::test]
+async fn test_emit_on_drop_sends_event_on_scope_exit() {
+    let bus: Arc<PubSub<i32, &'static str>> = PubSub::new();
+    let handle = bus.handle("alpha");
+    let mut sub = bus.subscribe("alpha");
+
+    {
+        let _guard = handle.emit_on_drop(4);
+    }
+
+    assert_eq!(sub.recv().await, Some(("alpha", 4)));
+}
+
+#[tokio::test]
+async fn test_emit_on_drop_survives_task_abort() {
+    let bus: Arc<PubSub<i32, &'static str>> = PubSub::new();
+    let handle = bus.handle("alpha");
+    let mut sub = bus.subscribe("alpha");
+
+    let task = tokio::spawn(async move {
+        let _guard = handle.emit_on_drop(4);
+        std::future::pending::<()>().await;
+    });
+    tokio::task::yield_now().await;
+    task.abort();
+
+    assert_eq!(
+        timeout(Duration::from_secs(5), sub.recv())
+            .await
+            .ok()
+            .flatten(),
+        Some(("alpha", 4))
+    );
+}

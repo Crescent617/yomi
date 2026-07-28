@@ -31,6 +31,7 @@ pub struct PermissionCheckResult {
 pub async fn check_tool_permissions(
     tool_calls: &[ToolCall],
     permission_checker: Option<&Checker>,
+    cancel_token: &tokio_util::sync::CancellationToken,
 ) -> PermissionCheckResult {
     use super::resolver::ToolLevelResolver;
 
@@ -42,7 +43,7 @@ pub async fn check_tool_permissions(
 
         // Check if permission is needed
         if let Some(checker) = permission_checker {
-            match checker.check_permission(call, level).await {
+            match checker.check_permission(call, level, cancel_token).await {
                 Ok(true) => {
                     approved.push(call.clone());
                 }
@@ -183,7 +184,12 @@ impl Checker {
     /// - Ok(true): 允许执行（未超过阈值或用户批准）
     /// - Ok(false): 拒绝执行（用户拒绝或超时）
     /// - Err: 检查过程中发生错误
-    pub async fn check_permission(&self, tool_call: &ToolCall, level: Level) -> Result<bool> {
+    pub async fn check_permission(
+        &self,
+        tool_call: &ToolCall,
+        level: Level,
+        cancel_token: &tokio_util::sync::CancellationToken,
+    ) -> Result<bool> {
         // 检查是否超过全局阈值
         let current_level = *self.state.auto_approve_level.read().await;
         if !exceeds_threshold(level, current_level) {
@@ -249,8 +255,18 @@ impl Checker {
             tool_call.name
         );
 
-        // 等待响应（2 分钟 timeout）
-        let result = tokio::time::timeout(Duration::from_mins(2), async {
+        // Every exit path past this point — response, timeout, cancel, task
+        // abort — emits the matching PermissionAck exactly once, so clients
+        // never leave the prompt visible after the request is resolved.
+        let _ack = self.event_tx.emit_on_drop(crate::event::Envelope::new(
+            self.session_id.clone(),
+            Event::Agent(AgentEvent::PermissionAck {
+                req_id: req_id.clone(),
+            }),
+        ));
+
+        // 等待响应（2 分钟 timeout，可被 cancel 即时打断）
+        let wait = tokio::time::timeout(Duration::from_mins(2), async {
             while let Some((_, input)) = subscriber.recv().await {
                 if let AgentInput::PermissionResponse {
                     req_id: id,
@@ -264,8 +280,16 @@ impl Checker {
                 }
             }
             Response::deny()
-        })
-        .await;
+        });
+
+        let result = tokio::select! {
+            biased;
+            () = cancel_token.cancelled() => {
+                tracing::info!("Permission request {req_id} cancelled by user");
+                return Ok(false);
+            }
+            result = wait => result,
+        };
 
         let approved = match result {
             Ok(response) => {
@@ -299,16 +323,6 @@ impl Checker {
                 false
             }
         };
-
-        let _ = self
-            .event_tx
-            .send(crate::event::Envelope::new(
-                self.session_id.clone(),
-                Event::Agent(AgentEvent::PermissionAck {
-                    req_id: req_id.clone(),
-                }),
-            ))
-            .await;
 
         Ok(approved)
     }

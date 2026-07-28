@@ -148,9 +148,12 @@ impl Agent {
         calls: &[ToolCall],
         message_ids: &BTreeMap<String, MessageId>,
     ) -> (Vec<ToolCall>, Vec<ToolExecutionResult>) {
-        let perm =
-            crate::permission::check_tool_permissions(calls, self.permission_checker.as_deref())
-                .await;
+        let perm = crate::permission::check_tool_permissions(
+            calls,
+            self.permission_checker.as_deref(),
+            &self.create_runtime_token(),
+        )
+        .await;
 
         let denied = perm
             .denied

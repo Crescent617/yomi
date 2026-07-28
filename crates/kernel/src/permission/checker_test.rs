@@ -22,7 +22,11 @@ async fn test_permission_checker_auto_approve() {
 
     // Safe 工具应该自动批准（不需要发送事件）
     assert!(checker
-        .check_permission(&safe_tool, Level::Safe)
+        .check_permission(
+            &safe_tool,
+            Level::Safe,
+            &tokio_util::sync::CancellationToken::new()
+        )
         .await
         .unwrap());
 }
@@ -50,7 +54,11 @@ async fn test_permission_via_input_bus() {
 
     let checker_task = tokio::spawn(async move {
         checker
-            .check_permission(&caution_tool, Level::Caution)
+            .check_permission(
+                &caution_tool,
+                Level::Caution,
+                &tokio_util::sync::CancellationToken::new(),
+            )
             .await
     });
 
@@ -102,7 +110,11 @@ async fn test_permission_remember_per_tool() {
     let checker_clone = Arc::clone(&checker);
     let checker_task = tokio::spawn(async move {
         checker_clone
-            .check_permission(&edit_tool, Level::Caution)
+            .check_permission(
+                &edit_tool,
+                Level::Caution,
+                &tokio_util::sync::CancellationToken::new(),
+            )
             .await
     });
 
@@ -138,7 +150,11 @@ async fn test_permission_remember_per_tool() {
     };
 
     let result = checker
-        .check_permission(&edit_tool2, Level::Caution)
+        .check_permission(
+            &edit_tool2,
+            Level::Caution,
+            &tokio_util::sync::CancellationToken::new(),
+        )
         .await
         .unwrap();
     assert!(result);
@@ -150,4 +166,63 @@ async fn test_permission_remember_per_tool() {
         timeout_result.is_err(),
         "Should not receive event for auto-approved Edit tool"
     );
+}
+
+#[tokio::test]
+async fn test_permission_cancel_resolves_promptly_and_emits_ack() {
+    let bus = crate::comms::EventBus::new();
+    let handle = bus.handle(SessionId::new());
+    let input_bus = crate::comms::InputBus::new();
+    let session_id = SessionId::new();
+
+    let state = PermissionState::new(Level::Safe);
+    let checker = Checker::new(
+        state,
+        handle.clone(),
+        Arc::clone(&input_bus),
+        session_id.clone(),
+    );
+
+    let danger_tool = ToolCall {
+        id: "test1".to_string(),
+        name: "Shell".to_string(),
+        arguments: json!({"command": "rm -rf /"}),
+    };
+
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let checker_cancel = cancel_token.clone();
+    let checker_task = tokio::spawn(async move {
+        checker
+            .check_permission(&danger_tool, Level::Dangerous, &checker_cancel)
+            .await
+    });
+
+    let mut sub = bus.subscribe_all();
+    let envelope = sub.recv().await.unwrap().1;
+    let req_id = match envelope.event {
+        Event::Agent(AgentEvent::PermissionRequest { req_id, .. }) => req_id,
+        other => panic!("Expected PermissionRequest event, got {other:?}"),
+    };
+
+    // Cancel instead of answering: the wait must end immediately with a deny.
+    cancel_token.cancel();
+    let approved = tokio::time::timeout(std::time::Duration::from_secs(5), checker_task)
+        .await
+        .expect("cancelled permission check must not hang")
+        .unwrap()
+        .unwrap();
+    assert!(!approved);
+
+    // The client always receives the matching ack so it can close the prompt.
+    let envelope = tokio::time::timeout(std::time::Duration::from_secs(5), sub.recv())
+        .await
+        .expect("PermissionAck must be emitted on cancel")
+        .unwrap()
+        .1;
+    match envelope.event {
+        Event::Agent(AgentEvent::PermissionAck { req_id: ack_id }) => {
+            assert_eq!(ack_id, req_id);
+        }
+        other => panic!("Expected PermissionAck event, got {other:?}"),
+    }
 }

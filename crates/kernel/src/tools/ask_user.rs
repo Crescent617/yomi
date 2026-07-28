@@ -193,6 +193,16 @@ impl Tool for AskUserTool {
 
         tracing::info!("AskUserQuestion sent with req_id={}", req_id);
 
+        // Every exit path past this point — response, timeout, cancel-driven
+        // task abort — emits the matching AskUserAck exactly once, so clients
+        // never leave the question visible after the request is resolved.
+        let _ack = self.event_bus.emit_on_drop(crate::event::Envelope::new(
+            session_id.clone(),
+            Event::Agent(AgentEvent::AskUserAck {
+                req_id: req_id.clone(),
+            }),
+        ));
+
         // Wait for response via input bus (2-minute timeout)
         let result = tokio::time::timeout(Duration::from_mins(2), async {
             while let Some((_, input)) = subscriber.recv().await {
@@ -221,16 +231,6 @@ impl Tool for AskUserTool {
                 ))
             }
         };
-
-        let _ = self
-            .event_bus
-            .send(crate::event::Envelope::new(
-                session_id.clone(),
-                Event::Agent(AgentEvent::AskUserAck {
-                    req_id: req_id.clone(),
-                }),
-            ))
-            .await;
 
         result
     }

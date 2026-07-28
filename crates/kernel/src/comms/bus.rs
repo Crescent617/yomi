@@ -153,10 +153,19 @@ where
 }
 
 /// 生产者句柄。绑定 `key`，发送时不需要再传。
-#[derive(Clone)]
+/// 手动实现 Clone：通道句柄的克隆与 `T` 无关，不应要求 `T: Clone`。
 pub struct PubSubHandle<K, T> {
     event_tx: mpsc::Sender<(K, T)>,
     key: K,
+}
+
+impl<K: Clone, T> Clone for PubSubHandle<K, T> {
+    fn clone(&self) -> Self {
+        Self {
+            event_tx: self.event_tx.clone(),
+            key: self.key.clone(),
+        }
+    }
 }
 
 impl<K, T> PubSubHandle<K, T>
@@ -170,6 +179,69 @@ where
     #[allow(clippy::result_large_err)]
     pub fn try_send(&self, event: T) -> Result<(), mpsc::error::TrySendError<(K, T)>> {
         self.event_tx.try_send((self.key.clone(), event))
+    }
+
+    /// Create a guard that emits `event` when dropped, however the current
+    /// scope exits. See [`EmitOnDrop`].
+    pub fn emit_on_drop(&self, event: T) -> EmitOnDrop<K, T>
+    where
+        K: Send + Sync + 'static,
+        T: Send + 'static,
+    {
+        EmitOnDrop::new(self.clone(), event)
+    }
+}
+
+/// RAII guard that emits an event when dropped.
+///
+/// Interactive flows (permission prompts, ask-user questions) pair a request
+/// event with a terminal ack; tying the ack to the guard's lifetime covers
+/// every exit path — response, timeout, cancellation, task abort, panic —
+/// exactly once, so subscribers never wait on a reply that will never come.
+pub struct EmitOnDrop<K, T>
+where
+    K: Clone + Send + Sync + 'static,
+    T: Send + 'static,
+{
+    handle: PubSubHandle<K, T>,
+    event: Option<T>,
+}
+
+impl<K, T> EmitOnDrop<K, T>
+where
+    K: Clone + Send + Sync + 'static,
+    T: Send + 'static,
+{
+    pub const fn new(handle: PubSubHandle<K, T>, event: T) -> Self {
+        Self {
+            handle,
+            event: Some(event),
+        }
+    }
+}
+
+impl<K, T> Drop for EmitOnDrop<K, T>
+where
+    K: Clone + Send + Sync + 'static,
+    T: Send + 'static,
+{
+    fn drop(&mut self) {
+        let Some(event) = self.event.take() else {
+            return;
+        };
+        match self.handle.try_send(event) {
+            Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => {}
+            // Channel momentarily full: hand off to a task that awaits
+            // capacity so the terminal event is not lost with the producer.
+            Err(mpsc::error::TrySendError::Full((_, event))) => {
+                if let Ok(rt) = tokio::runtime::Handle::try_current() {
+                    let handle = self.handle.clone();
+                    rt.spawn(async move {
+                        let _ = handle.send(event).await;
+                    });
+                }
+            }
+        }
     }
 }
 
