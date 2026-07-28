@@ -27,6 +27,8 @@ Full compaction is the default path:
 4. Replace old history with a continuation summary plus any configured recent-message suffix. Internal metadata is excluded and retained tool results always include their assistant tool-call batch.
 5. Preserve the Agent's original system message separately, clear stale token-usage baselines, and persist every actual history rewrite.
 
+The summary opens with a Conversation Environment section recording the user's primary interaction language (`User Language: ...`) and any still-relevant skills loaded during the conversation (`Loaded Skills: ...`), so the continued conversation keeps the user's language and can reload skills whose contents were compacted away.
+
 The first summary attempt uses the complete history to preserve prompt-cache reuse. If the provider explicitly reports a context-window overflow, full compaction retries up to three times, removing the oldest 20% of complete user-led conversation rounds each time. This emergency trimming only affects the summary request; stored history is replaced only after a valid summary succeeds.
 
 The summary request disables extended thinking and uses the configured `summary_max_tokens` subject to the normal remaining-context calculation and safety buffer.

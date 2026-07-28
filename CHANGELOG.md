@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- 上下文压缩现在会在摘要中标注用户的交互语言，压缩后的对话继续沿用原语言回复。
+- 压缩摘要会记录会话中加载过且仍相关的技能，压缩后 agent 可按需重新加载，避免技能内容随历史被移除后失效。
+
 ## [0.7.15] - 2026-07-27
 
 ### Added

@@ -18,9 +18,13 @@ The summary must:
 7. Distinguish completed work from explicitly pending tasks.
 8. Describe the exact current work state, last concrete action and result, and remaining verification.
 9. Include an optional next step only when it directly follows from unfinished work; do not invent scope.
-10. Keep the summary precise and information-dense. Do not reproduce unrelated large files.
+10. Keep the summary precise and information-dense. Do not reproduce large files.
+11. Preserve Conversation Environment:
+  a. User Language: <primary language the user writes in>
+  b. Loaded Skills: <names or SKILL.md paths still relevant>
 
 Use these sections inside <summary>:
+0. Conversation Environment
 1. Primary Request and Intent
 2. Current Outcome and Decisions
 3. Key Technical Concepts and Constraints
