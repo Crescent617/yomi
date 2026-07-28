@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.19] - 2026-07-28
+
 ### Changed
 - 飞书状态卡运行轨迹的截断文本放宽：工具参数摘要与中间文本摘要均由之前的 60/80 字符提高到 120 字符，命令、路径等上下文显示更完整。
 
