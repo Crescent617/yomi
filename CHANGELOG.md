@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.18] - 2026-07-28
+
 ### Fixed
 - 修复在 agent 提问或请求权限期间取消会话后，提问/授权气泡一直残留的问题：取消现在会立即结束等待并关闭提示（此前提问气泡会永久残留，授权气泡最长残留 2 分钟）。
 
