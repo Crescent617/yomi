@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.17] - 2026-07-28
+
+### Changed
+- 上下文压缩后的续接消息会提醒 agent：依赖摘要中的文件或技能内容前先重新读取、重新加载，避免基于过时或不完整的摘要继续操作。
+
 ## [0.7.16] - 2026-07-28
 
 ### Changed
