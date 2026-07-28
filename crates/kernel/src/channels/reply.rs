@@ -25,10 +25,11 @@ const FINAL_TEXT_MAX_BYTES: usize = 28_000;
 /// as a marker line at render time.
 const BUFFER_MAX_ENTRIES: usize = 100;
 /// Intermediate-text snippet truncation inside the trace panel.
-const NARRATION_MAX_CHARS: usize = 80;
+const NARRATION_MAX_CHARS: usize = 120;
 /// Tool argument summary truncation (single-line displays: inline trace
-/// entries).
-const ARG_SUMMARY_MAX_CHARS: usize = 60;
+/// entries). Long enough for typical shell commands and paths to stay
+/// recognizable; the card payload budget has ample headroom for it.
+const ARG_SUMMARY_MAX_CHARS: usize = 120;
 
 /// Preferred argument key per tool for the one-line summary.
 fn primary_arg_key(tool_name: &str) -> Option<&'static str> {

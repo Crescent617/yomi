@@ -323,7 +323,7 @@ fn trace_arg_summary_caps_long_values() {
         .as_str()
         .unwrap();
     let line = body.lines().next().unwrap();
-    // "⏳ **shell** · `" + 60 chars + "…`"
+    // "⏳ **shell** · `" + ARG_SUMMARY_MAX_CHARS chars + "…`"
     assert!(line.ends_with("…`"), "line: {line}");
     assert!(
         line.chars().count() <= 20 + ARG_SUMMARY_MAX_CHARS + 2,
@@ -368,10 +368,7 @@ fn render_trace_long_args_stay_one_truncated_line() {
         header.starts_with("✅ **shell** · `cargo test cargo test"),
         "header: {header}"
     );
-    assert!(
-        header.contains("cargo…` · 100ms"),
-        "truncated inline: {header}"
-    );
+    assert!(header.contains("…` · 100ms"), "truncated inline: {header}");
     assert!(iter.next().is_none(), "single line only: {body}");
 }
 

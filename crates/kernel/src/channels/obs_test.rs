@@ -1052,13 +1052,13 @@ async fn trace_inline_arg_summary_is_capped() {
         .filter_map(|e| e["content"].as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    // Long args stay on one truncated inline line (60 chars + ellipsis).
+    // Long args stay on one truncated inline line (ARG_SUMMARY_MAX_CHARS + ellipsis).
     let tool_line = content
         .lines()
         .find(|l| l.starts_with('⏳'))
         .expect("trace tool line");
     assert!(tool_line.ends_with("…`"), "line: {tool_line}");
-    assert!(tool_line.chars().count() <= 80, "line: {tool_line}");
+    assert!(tool_line.chars().count() <= 140, "line: {tool_line}");
     assert!(!content.lines().any(|l| l.starts_with('↳')));
 }
 
