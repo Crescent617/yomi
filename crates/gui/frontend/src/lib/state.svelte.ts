@@ -358,6 +358,8 @@ export interface SessionState {
   parent_session_id?: string;
   messages: Message[];
   message_rewrite_revision: number;
+  /** True once the initial message history has been fetched from the backend. */
+  messages_loaded: boolean;
   phase: string;
   phase_revision: number;
   checkpoints: Checkpoint[];

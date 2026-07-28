@@ -129,6 +129,7 @@ export function createSessionState(
     project_path: "",
     messages: [],
     message_rewrite_revision: 0,
+    messages_loaded: false,
     phase: "idle",
     phase_revision: 0,
     checkpoints: [],
@@ -270,6 +271,11 @@ export async function activateSession(sessionId: string) {
         sessionState.sessions = sessionState.sessions.filter(
           (session) => session.id !== sessionId,
         );
+      } else {
+        // Stop the loading skeleton — the session stays open with whatever
+        // (possibly empty) history it had; an error toast explains the rest.
+        const session = getSession(sessionId);
+        if (session) session.messages_loaded = true;
       }
       if (sessionState.activeSessionId === sessionId) {
         const rollbackId =
@@ -487,6 +493,21 @@ export function loadSessionMessages(
     }
   }
 
-  replaceSessionMessages(session, parsedMessages);
+  // Skip the wholesale replace when the fetched history is identical to what
+  // we already render: replacing bumps the rewrite revision, which forces a
+  // full re-projection and re-render of the whole list on every session
+  // switch. Rewrites (compaction, message_replaced) mint new message ids, so
+  // id + created_at per message detects them reliably.
+  const unchanged =
+    session.messages.length === parsedMessages.length &&
+    session.messages.every(
+      (existing, index) =>
+        existing.id === parsedMessages[index].id &&
+        existing.created_at === parsedMessages[index].created_at,
+    );
+  if (!unchanged) {
+    replaceSessionMessages(session, parsedMessages);
+  }
   session.token_usage = latestTokenUsage;
+  session.messages_loaded = true;
 }

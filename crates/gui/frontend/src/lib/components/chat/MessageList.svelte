@@ -13,6 +13,7 @@
   import { DisplayItemProjection } from "./display-items";
   import { guiPreferences } from "../../settings.svelte";
   import QueryNavigator from "./QueryNavigator.svelte";
+  import MessageListSkeleton from "./MessageListSkeleton.svelte";
   import { userQueryMarkers } from "./query-navigator";
   import type { ActivityGroupOverride } from "./activity-expansion";
 
@@ -39,6 +40,14 @@
   );
   const queryMarkers = $derived(
     userQueryMarkers(activeSession?.messages ?? []),
+  );
+  // Initial history not fetched yet: keep the chat column mounted but show
+  // a skeleton instead of a blank pane.
+  const messagesLoading = $derived(
+    !!activeSession &&
+      !activeSession.messages_loaded &&
+      activeSession.messages.length === 0 &&
+      (streamingMessages[activeSession.id]?.length ?? 0) === 0,
   );
 
   let scrollContainer = $state<HTMLDivElement | null>(null);
@@ -203,26 +212,30 @@
         bind:this={messageContent}
         class="mx-auto w-full max-w-4xl px-4 lg:px-6 pt-2 pb-4"
       >
-        <div class="flex flex-col gap-3">
-          <DisplayItemList
-            items={displaySections.stableItems}
-            session_id={activeSession.id}
-            markLatest={!dynamicHasActivityGroup}
-            expansionOverrides={activityExpansionOverrides}
-          />
-          <DisplayItemList
-            items={displaySections.dynamicItems}
-            session_id={activeSession.id}
-            activityActive={isActiveSessionPhase(activeSession.phase)}
-            expansionOverrides={activityExpansionOverrides}
-          />
-          {#if isActiveSessionPhase(activeSession.phase)}
-            <StreamStatusLine
-              session={activeSession}
-              messages={displayMessages}
+        {#if messagesLoading}
+          <MessageListSkeleton />
+        {:else}
+          <div class="flex flex-col gap-3">
+            <DisplayItemList
+              items={displaySections.stableItems}
+              session_id={activeSession.id}
+              markLatest={!dynamicHasActivityGroup}
+              expansionOverrides={activityExpansionOverrides}
             />
-          {/if}
-        </div>
+            <DisplayItemList
+              items={displaySections.dynamicItems}
+              session_id={activeSession.id}
+              activityActive={isActiveSessionPhase(activeSession.phase)}
+              expansionOverrides={activityExpansionOverrides}
+            />
+            {#if isActiveSessionPhase(activeSession.phase)}
+              <StreamStatusLine
+                session={activeSession}
+                messages={displayMessages}
+              />
+            {/if}
+          </div>
+        {/if}
       </div>
     </div>
     <QueryNavigator

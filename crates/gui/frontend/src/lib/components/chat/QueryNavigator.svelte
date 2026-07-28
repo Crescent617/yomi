@@ -89,6 +89,25 @@
     activeId = query.id;
   }
 
+  let stripEl = $state<HTMLDivElement | null>(null);
+  let listEl = $state<HTMLOListElement | null>(null);
+
+  function scrollActiveIntoView(container: HTMLElement | null) {
+    if (!container || !activeId) return;
+    const item = container.querySelector<HTMLElement>(
+      `[data-nav-id="${CSS.escape(activeId)}"]`,
+    );
+    if (!item) return;
+    const containerRect = container.getBoundingClientRect();
+    const itemRect = item.getBoundingClientRect();
+    const delta =
+      itemRect.top -
+      containerRect.top -
+      (container.clientHeight - itemRect.height) / 2;
+    if (Math.abs(delta) < 1) return;
+    container.scrollTo({ top: container.scrollTop + delta });
+  }
+
   function closeWhenFocusLeaves(event: FocusEvent) {
     const next = event.relatedTarget;
     if (
@@ -98,6 +117,16 @@
       expanded = false;
     }
   }
+
+  $effect(() => {
+    const id = activeId;
+    const isExpanded = expanded;
+    // Re-anchor when the query set itself shifts under a stable activeId.
+    queries.map((query) => query.id).join("|");
+    if (!id) return;
+    scrollActiveIntoView(stripEl);
+    if (isExpanded) scrollActiveIntoView(listEl);
+  });
 
   $effect(() => {
     const container = scrollContainer;
@@ -138,11 +167,15 @@
       class:pointer-events-none={!expanded}
       aria-hidden={!expanded}
     >
-      <ol class="query-navigator-list min-h-0 space-y-0.5 overflow-y-auto">
+      <ol
+        bind:this={listEl}
+        class="query-navigator-list min-h-0 space-y-0.5 overflow-y-auto"
+      >
         {#each queries as query (query.id)}
           <li>
             <button
               type="button"
+              data-nav-id={query.id}
               class="group/query relative flex w-full items-start overflow-hidden rounded-lg py-2 pl-5 pr-2.5 text-left text-xs leading-relaxed transition-[background-color,color] duration-200 ease-out hover:bg-secondary/70 focus-visible:bg-secondary/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none {query.id ===
               activeId
                 ? 'bg-secondary/45'
@@ -168,13 +201,16 @@
       </ol>
     </div>
 
+    <!-- Cap the compact strip at 30 ticks: 30*6px + 29*2px gaps + 8px padding = 246px. -->
     <div
-      class="pointer-events-auto flex max-h-[min(28rem,calc(100vh-6rem))] min-h-9 min-w-6 cursor-default flex-col items-end justify-center gap-0.5 overflow-y-auto rounded-md px-1.5 py-1 transition-colors hover:bg-secondary/70 motion-reduce:transition-none"
+      bind:this={stripEl}
+      class="query-navigator-strip pointer-events-auto flex max-h-[min(15.375rem,calc(100vh-6rem))] min-h-9 min-w-6 cursor-default flex-col items-end gap-0.5 overflow-y-auto rounded-md px-1.5 py-1 transition-colors [justify-content:safe_center] hover:bg-secondary/70 motion-reduce:transition-none"
       aria-label={`Show all ${queries.length} user queries`}
     >
-      {#each queries as query (query.id)}
+      {#each queries as query, index (query.id)}
         <button
           type="button"
+          data-nav-id={query.id}
           class="flex h-1.5 min-w-3 shrink-0 items-center justify-end rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label={`Jump to query: ${query.label}`}
           title={`Jump to query: ${query.label}`}
@@ -185,10 +221,12 @@
           }}
         >
           <span
-            class="h-0.5 rounded-full transition-[width,background-color] motion-reduce:transition-none {query.id ===
+            class="rounded-full transition-[width,height,background-color] motion-reduce:transition-none {query.id ===
             activeId
-              ? 'w-3 bg-primary'
-              : 'w-2 bg-muted-foreground/45'}"
+              ? 'h-0.5 w-3 bg-primary'
+              : (index + 1) % 10 === 0
+                ? 'h-1 w-2 bg-muted-foreground/45'
+                : 'h-0.5 w-2 bg-muted-foreground/45'}"
             aria-hidden="true"
           ></span>
         </button>
@@ -198,11 +236,13 @@
 {/if}
 
 <style>
-  .query-navigator-list {
+  .query-navigator-list,
+  .query-navigator-strip {
     scrollbar-width: none;
   }
 
-  .query-navigator-list::-webkit-scrollbar {
+  .query-navigator-list::-webkit-scrollbar,
+  .query-navigator-strip::-webkit-scrollbar {
     display: none;
   }
 </style>

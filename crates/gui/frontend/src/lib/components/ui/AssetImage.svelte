@@ -21,7 +21,7 @@
     <img
       src={resolved}
       {alt}
-      class="max-w-[200px] max-h-[200px] rounded-lg border border-border object-cover transition-opacity hover:opacity-90"
+      class="h-[200px] w-[200px] rounded-lg border border-border object-cover transition-opacity hover:opacity-90"
     />
   </button>
 {/snippet}

@@ -14,8 +14,9 @@
   /* Yomi identity type: Space Grotesk for UI prose, IBM Plex Mono for
      code, paths, commands, IDs, tool names, and data readouts. */
   --font-sans:
-    "Space Grotesk Variable", "Inter", "Hiragino Kaku Gothic ProN",
-    "Yu Gothic UI", system-ui, sans-serif;
+    "Space Grotesk Variable", "Inter", "PingFang SC", "Microsoft YaHei",
+    "Noto Sans CJK SC", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", system-ui,
+    sans-serif;
   --font-mono:
     "IBM Plex Mono", ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
   --radius-lg: 0.75rem;
