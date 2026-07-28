@@ -15,6 +15,7 @@ fn test_build_continuation_summary() {
     assert!(message.starts_with("This session is being continued"));
     assert!(message.contains("Summary: keep the current task"));
     assert!(message.contains("Resume the latest unfinished task directly"));
+    assert!(message.contains("Re-read files and reload skills"));
 }
 
 #[test]

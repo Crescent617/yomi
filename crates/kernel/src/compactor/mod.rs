@@ -562,7 +562,7 @@ async fn generate_summary(
 /// Build the user-facing continuation message stored after compaction.
 fn build_continuation_summary(summary: &str) -> String {
     format!(
-        "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\n{summary}\n\nContinue the conversation from where it left off without asking the user to repeat information already included here. Resume the latest unfinished task directly. Do not acknowledge this summary, do not recap the conversation, and do not preface the response with phrases such as \"I'll continue\"."
+        "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\n{summary}\n\nContinue the conversation from where it left off without asking the user to repeat information already included here. Resume the latest unfinished task directly. Re-read files and reload skills mentioned in the summary before relying on their contents. Do not acknowledge this summary, do not recap the conversation, and do not preface the response with phrases such as \"I'll continue\"."
     )
 }
 
