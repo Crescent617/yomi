@@ -58,7 +58,7 @@ channel（Feishu/Telegram）中的 agent 原本是黑箱：用户 @ 机器人后
 | 条件 | 行为 |
 |------|------|
 | 有卡平台 + observability + 无 mid-run 消息 | **morph**：卡原地 PATCH 为最终回复卡（无 header：异常提示行? + 正文 + 轨迹面板） |
-| 有卡平台 + observability + 有 mid-run 消息（receipts 条数 >1，见 §6） | **冻结 + 沉底**：卡 PATCH 为终态凭据（header ✅ Done / ❌ Failed / ⏹ Stopped / ⏰ Timed out + 统计行），回复作为新消息发出（锚定最新用户消息） |
+| 有卡平台 + observability + 有 mid-run 消息（receipts 条数 >1，见 §6） | **冻结 + 沉底**：卡 PATCH 为终态凭据（header ✅ Done / ❌ Failed / ⏹ Stopped / ⏰ Timed out + 统计行 + 折叠轨迹面板），回复作为新消息发出（锚定最新用户消息） |
 | 无卡平台 或 `observability: false` | `flush_reply` 发新消息（无卡平台 obs 仅内存态结算） |
 | settle 未落地（无 run 状态 / `send_card` 失败） | 回复交还并回退 `flush_reply`——单点故障只降级展示形式，不丢内容 |
 

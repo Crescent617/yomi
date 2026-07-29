@@ -205,6 +205,23 @@ impl RunReplyBuffer {
         lines
     }
 
+    /// The full trace (title + all entry lines) as rendered on the reply
+    /// card's trace panel — used by the terminal receipt card, which keeps
+    /// the whole run trace (the reply text stays a narration here: only
+    /// `into_reply` promotes it). `None` when nothing was recorded.
+    pub(crate) fn full_trace_render(&self) -> Option<(Vec<String>, String)> {
+        if self.entries.is_empty() {
+            return None;
+        }
+        Some(render_trace_parts(
+            &self.entries,
+            self.steps,
+            self.dropped,
+            self.started_at.elapsed(),
+            true,
+        ))
+    }
+
     /// Completed model responses so far this run (the run's steps; the
     /// in-progress response doesn't count until its `ModelEvent::End`).
     pub(crate) fn step_count(&self) -> usize {
@@ -301,20 +318,7 @@ pub(crate) fn render_card(reply: &FinalReply, notice: Option<&str>) -> Option<St
 
     if !reply.entries.is_empty() {
         let (lines, title) = render_trace(reply, true);
-        elements.push(json!({
-            "tag": "collapsible_panel",
-            "expanded": false,
-            "header": {
-                "title": { "tag": "markdown", "content": format!("<font color='grey'>{title}</font>") },
-                "vertical_align": "center",
-                "padding": "4px 0px 4px 8px",
-            },
-            "vertical_spacing": "4px",
-            "padding": "0px 0px 0px 8px",
-            "elements": [
-                { "tag": "markdown", "text_size": "notation", "content": lines.join("\n") },
-            ],
-        }));
+        elements.push(trace_panel_element(&lines, &title));
     }
 
     if elements.is_empty() {
@@ -347,20 +351,57 @@ pub(crate) fn render_plain(reply: &FinalReply) -> String {
     out
 }
 
+/// Collapsible run-trace panel (default collapsed) shared by the reply
+/// card and the terminal receipt card.
+pub(crate) fn trace_panel_element(lines: &[String], title: &str) -> serde_json::Value {
+    json!({
+        "tag": "collapsible_panel",
+        "expanded": false,
+        "header": {
+            "title": { "tag": "markdown", "content": format!("<font color='grey'>{title}</font>") },
+            "vertical_align": "center",
+            "padding": "4px 0px 4px 8px",
+        },
+        "vertical_spacing": "4px",
+        "padding": "0px 0px 0px 8px",
+        "elements": [
+            { "tag": "markdown", "text_size": "notation", "content": lines.join("\n") },
+        ],
+    })
+}
+
 /// Render the trace lines (all of them — entries are single-line, so the
 /// full run stays compact) and the summary title.
 fn render_trace(reply: &FinalReply, markdown: bool) -> (Vec<String>, String) {
-    let stats = trace_stats(&reply.entries);
-    let mut lines = trace_lines(&reply.entries, markdown);
-    if reply.dropped_entries > 0 {
-        lines.insert(0, dropped_marker(reply.dropped_entries));
+    render_trace_parts(
+        &reply.entries,
+        reply.steps,
+        reply.dropped_entries,
+        reply.elapsed,
+        markdown,
+    )
+}
+
+/// Shared trace renderer behind [`render_trace`] and
+/// [`RunReplyBuffer::full_trace_render`].
+fn render_trace_parts(
+    entries: &[TraceEntry],
+    steps: usize,
+    dropped_entries: usize,
+    elapsed: Duration,
+    markdown: bool,
+) -> (Vec<String>, String) {
+    let stats = trace_stats(entries);
+    let mut lines = trace_lines(entries, markdown);
+    if dropped_entries > 0 {
+        lines.insert(0, dropped_marker(dropped_entries));
     }
 
     let mut title = format!(
         "🐾 Trace · {} steps · {} tools · {}",
-        reply.steps,
+        steps,
         stats.tools,
-        fmt_elapsed(reply.elapsed)
+        fmt_elapsed(elapsed)
     );
     if stats.failed > 0 {
         let _ = write!(title, " · {} failed", stats.failed);

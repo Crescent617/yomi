@@ -1003,6 +1003,13 @@ async fn terminal_card_freezes_without_whisper() {
         !terminal.contains("🔧"),
         "terminal drops the last-tool line"
     );
+    // The run trace survives on the frozen card as a collapsed panel.
+    assert!(
+        terminal.contains("collapsible_panel"),
+        "trace panel: {terminal}"
+    );
+    assert!(terminal.contains("Trace · 0 steps · 1 tools"), "{terminal}");
+    assert!(terminal.contains("⏳ **bash**"), "{terminal}");
 }
 
 #[test]

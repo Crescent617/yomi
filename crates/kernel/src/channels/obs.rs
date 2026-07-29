@@ -14,8 +14,8 @@
 //! On settlement the card **morphs** into the final reply (last text +
 //! run-trace panel, no header; abnormal endings get a notice line in the
 //! content). With mid-run posts the card freezes as a terminal receipt
-//! and the reply lands at the bottom as bare text (the trace was already
-//! live on the card during the run). Runs without a reply (crash / lost
+//! (header + stats + the run trace as a collapsed panel) and the reply
+//! lands at the bottom as bare text. Runs without a reply (crash / lost
 //! events) freeze into a terminal header style instead. User messages
 //! received during the run are recorded as receipts — used only for the
 //! mid-run post detection (morph vs. new-message settle); no reactions
@@ -667,7 +667,16 @@ fn render_terminal(s: &ObsCardState, settle: &Settle) -> String {
     if let Settle::Failed(error) = settle {
         lines.push(error_line(error));
     }
-    card_json(template, &title, &lines.join("\n"))
+    let mut elements =
+        vec![json!({ "tag": "markdown", "text_size": "notation", "content": lines.join("\n") })];
+    // The trace that streamed live during the run stays on the frozen card
+    // as a collapsed panel — with mid-run posts the reply lands as a
+    // separate bare-text message, so this is the only place the trace
+    // survives settlement.
+    if let Some((trace_lines, trace_title)) = s.trace.full_trace_render() {
+        elements.push(reply::trace_panel_element(&trace_lines, &trace_title));
+    }
+    card_json_elements(template, &title, &elements)
 }
 
 fn card_json(template: &str, title: &str, body_md: &str) -> String {

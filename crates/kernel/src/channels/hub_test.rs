@@ -948,12 +948,17 @@ async fn deliver_reply_freezes_card_and_flushes_new_message_on_mid_run_posts() {
     )
     .await;
 
-    // The old card freezes as a terminal receipt …
+    // The old card freezes as a terminal receipt, keeping the run trace as
+    // a collapsed panel …
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 1);
     assert!(patches[0].1.contains("✅ Done"), "frozen terminal card");
+    assert!(
+        patches[0].1.contains("collapsible_panel") && patches[0].1.contains("Trace ·"),
+        "frozen card keeps the trace panel"
+    );
     // … and the reply lands at the bottom as a NEW bare-text message —
-    // no trace panel (the trace was already live on the card mid-run).
+    // no trace panel (it stays on the frozen card).
     let cards = mock.cards.lock().await;
     assert_eq!(cards.len(), 1, "materialize only; reply is bare text");
     let outgoing = mock.outgoing.lock().await;

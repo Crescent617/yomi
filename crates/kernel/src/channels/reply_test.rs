@@ -108,6 +108,24 @@ fn tool_call_only_turns_count_as_steps() {
 }
 
 #[test]
+fn full_trace_render_keeps_every_entry_and_empty_is_none() {
+    assert!(RunReplyBuffer::new().full_trace_render().is_none());
+
+    let buf = buffer_with_run();
+    let Some((lines, title)) = buf.full_trace_render() else {
+        panic!("expected a trace");
+    };
+    // Unlike into_reply, the final text stays a narration — the terminal
+    // receipt card shows the whole run, the reply text lands separately.
+    assert!(title.starts_with("🐾 Trace · 2 steps · 2 tools"), "{title}");
+    let joined = lines.join("\n");
+    assert!(joined.contains("💬 Let me look at the code."), "{joined}");
+    assert!(joined.contains("✅ **read**"), "{joined}");
+    assert!(joined.contains("✅ **shell**"), "{joined}");
+    assert!(joined.contains("💬 All tests pass."), "{joined}");
+}
+
+#[test]
 fn into_reply_after_cancel_mid_tool_uses_last_text() {
     // Cancel mid-tool: the run ends with a pending tool entry; the last
     // text still becomes the body (design: /stop still flushes).

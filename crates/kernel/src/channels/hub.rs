@@ -573,10 +573,10 @@ async fn settle_with(
 /// the files themselves go out AFTER the reply, landing at the bottom of
 /// the chat. The reply itself: card-capable platforms with observability
 /// morph the status card into it (one message per run) — or, when the user
-/// posted mid-run, freeze the card as a terminal receipt and flush the
-/// reply as a new bare-text message at the bottom (no trace there: it was
-/// already live on the card during the run). All other cases flush as a
-/// new message and settle the obs state without a reply. When the rich
+/// posted mid-run, freeze the card as a terminal receipt (the trace stays
+/// on it as a collapsed panel) and flush the reply as a new bare-text
+/// message at the bottom. All other cases flush as a new message and
+/// settle the obs state without a reply. When the rich
 /// settle comes back unsettled (no run state, or the settle send failed),
 /// the reply falls back to a plain flush so content is never silently lost.
 #[allow(clippy::too_many_arguments)]
@@ -608,15 +608,15 @@ async fn deliver_reply(
     };
     if observability && adapter.supports_status_card() {
         if obs.has_mid_run_posts(session_id) {
-            // The trace went live on the card only if the card
-            // materialized; keep it in the flush when it never did
-            // (double-failure edge: mid-run post + card send failure).
+            // The frozen card keeps the trace as a collapsed panel — but
+            // only if it materialized; keep it in the flush when it never
+            // did (double-failure edge: mid-run post + card send failure).
             let keep_trace = tool_trace && obs.card_missing(session_id);
             let _ = settle_with(obs, session_id, kind, None).await;
             if let Some(reply) = reply {
                 // The reply lands as a standalone message below the user's
-                // mid-run posts — bare final text, no trace (it was already
-                // live on the card during the run).
+                // mid-run posts — bare final text (the trace is on the
+                // frozen card).
                 flush_reply(adapter, routing, reply, keep_trace).await;
             }
         } else if let Some(reply) = settle_with(obs, session_id, kind, reply).await {
