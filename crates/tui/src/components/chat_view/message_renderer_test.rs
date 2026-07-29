@@ -423,6 +423,34 @@ fn folded_peek_shows_first_two_real_output_lines() {
 }
 
 #[test]
+fn folded_peek_expands_tabs_to_spaces() {
+    let msg = HistoryMessage::Tool {
+        tool_name: "shell".to_string(),
+        tool_id: "call_1".to_string(),
+        status: ToolStatus::Completed,
+        output: Some("col1\tcol2".to_string()),
+        error: None,
+        folded: true,
+        arguments: Some(r#"{"command":"ls"}"#.to_string()),
+        elapsed_ms: None,
+        content_blocks: Vec::new(),
+        subagent: None,
+    };
+    let lines = rendered_line_texts(&msg);
+
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains('⎿') && l.contains("col1  col2")),
+        "peek line expands tabs: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains('\t')),
+        "no raw tab in rendered lines: {lines:?}"
+    );
+}
+
+#[test]
 fn edit_header_shows_diff_stats() {
     let args = r#"{"path":"a.rs","old_str":"a\nb\nc","new_str":"a\nx\nc"}"#;
     let msg = edit_tool_msg(true, Some(args.to_string()), Some("ok".to_string()), None);

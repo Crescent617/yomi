@@ -422,7 +422,7 @@ fn render_tool(
                     let mut spans = vec![
                         Span::styled(prefix, Style::default().fg(colors::text_secondary())),
                         Span::styled(
-                            truncate_by_width(out_line.trim(), avail, "..."),
+                            truncate_by_width(&preprocess(out_line.trim()), avail, "..."),
                             Style::default().fg(colors::text_secondary()),
                         ),
                     ];
