@@ -69,6 +69,14 @@
     return Math.max(0, scrollHeight - scrollTop - clientHeight);
   }
 
+  // Update the button visibility ONLY. Unlike `updateBottomState`, this must
+  // never touch `followLatest`: content-height changes (stream chunks,
+  // activity group expand/collapse) are not user intent, so they must not
+  // re-engage following — only a user scroll may.
+  function updateNearBottom() {
+    isNearBottom = distanceFromBottom() <= NEAR_BOTTOM_THRESHOLD;
+  }
+
   function updateBottomState() {
     const distance = distanceFromBottom();
     isNearBottom = distance <= NEAR_BOTTOM_THRESHOLD;
@@ -123,13 +131,19 @@
   });
 
   // A sent user message is an explicit request to resume following the latest
-  // output, even when the user was previously reading older messages.
+  // output, even when the user was previously reading older messages. Gate on
+  // the message id: `session.messages` also grows on mid-run appends (retries,
+  // errors, the run-end flush), and those must not re-engage following — only
+  // a user scroll (or a new user message) does.
+  let lastSeenUserMessageId: string | null = null;
   $effect(() => {
     const session = activeSession;
     const latestUserMessage = session?.messages.findLast(
       (message) => message.type === "user",
     );
     if (!session || !latestUserMessage || !scrollContainer) return;
+    if (latestUserMessage.id === lastSeenUserMessageId) return;
+    lastSeenUserMessageId = latestUserMessage.id;
     followLatest = true;
     scheduleScrollToBottom();
   });
@@ -183,7 +197,8 @@
       // ResizeObserver runs before paint. Scroll synchronously so the streaming
       // status stays anchored instead of moving for one frame before the RAF.
       if (followLatest && guiPreferences.chat.autoScroll) setScrollToBottom();
-      else updateBottomState();
+      // Never re-engages following — see `updateNearBottom`'s contract.
+      else updateNearBottom();
     });
     resizeObserver.observe(messageContent);
     return () => {
