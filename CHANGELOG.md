@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.24] - 2026-07-29
+
+### Added
+- 状态栏新增更新提示：检测到 GitHub 上有更新版本发布时，右下角版本号旁显示新版本徽标，点击可查看版本详情、打开发布页或忽略该版本（有更新版本时会再次提示）。
+- 通道消息接入统一的表情反馈：`allowed_users`/`allowed_chats` 名单外的用户 @ 机器人时会收到 🙏 婉拒表情（Telegram 与飞书一致），`blocked_users`/`blocked_chats` 中的对象则完全静默。
+
+### Changed
+- Telegram 的 👀 已读表情改为只对会触发机器人的消息展示：群聊中未被 @ 的消息不再被打标；`require_mention: false` 时所有消息都会有表情反馈。
+- 飞书的 ⏱️ 收到确认表情改为通过访问控制后才展示，未授权用户不会再先看到"处理中"的误导反馈。
+
 ## [0.7.23] - 2026-07-29
 
 ### Added
