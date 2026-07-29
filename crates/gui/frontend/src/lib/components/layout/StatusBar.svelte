@@ -264,7 +264,7 @@
 <svelte:window onclick={handleClickOutside} />
 
 <div
-  class="shrink-0 h-7 border-t border-border bg-card flex items-center px-3 text-xs select-none gap-3"
+  class="shrink-0 h-7 border-t border-border bg-card flex items-center px-3 text-xs select-none gap-2"
 >
   <div bind:this={connRef} class="relative flex items-center">
     <button
@@ -510,7 +510,7 @@
 
   <div class="flex-1"></div>
 
-  <div class="flex items-center gap-3">
+  <div class="flex items-center gap-2">
     <!-- Keep-awake: hold an OS power assertion so the device won't sleep -->
     <button
       type="button"
@@ -525,15 +525,12 @@
       disabled={keepAwakeBusy}
       onclick={() => void toggleKeepAwake()}
     >
-      <Coffee
-        class="size-3.5 {keepAwake ? 'fill-current' : ''}"
-        aria-hidden="true"
-      />
+      <Coffee class="size-3.5" aria-hidden="true" />
     </button>
 
     <!-- Pet mood: the app-wide agent heartbeat -->
     <div
-      class="flex items-center gap-1.5"
+      class="flex items-center gap-0.5"
       title="Pet mood: {petMood}{streamingCount > 0
         ? ` · ${streamingCount} running`
         : ''}"
@@ -553,7 +550,7 @@
     {#if version}
       <a
         href="https://github.com/Crescent617/yomi"
-        class="text-muted-foreground/70 hover:text-foreground flex items-center gap-1.5 text-[10px] transition-colors"
+        class="text-muted-foreground/70 hover:text-foreground flex items-center gap-0.5 text-[10px] transition-colors"
         title="Open Yomi on GitHub"
         onclick={(event) => {
           event.preventDefault();
