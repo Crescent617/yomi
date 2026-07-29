@@ -2,6 +2,7 @@
   import {
     Activity,
     Check,
+    CircleArrowUp,
     Coffee,
     Copy,
     Github,
@@ -37,6 +38,11 @@
     snapshotGuiPreferences,
   } from "../../settings.svelte";
   import { connectionState } from "../../connection.svelte";
+  import {
+    startUpdateChecker,
+    stopUpdateChecker,
+    updateCheckState,
+  } from "../../update-check.svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import { onMount } from "svelte";
 
@@ -46,6 +52,45 @@
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined;
   let activityRef = $state<HTMLDivElement>();
   let cardRef = $state<HTMLDivElement>();
+
+  // ── Update check (GitHub Releases) ───────────────────────────────────
+  let updateOpen = $state(false);
+  let updateRef = $state<HTMLDivElement>();
+  let updateCardRef = $state<HTMLDivElement>();
+  const updateVersion = $derived(
+    updateCheckState.status === "available"
+      ? updateCheckState.latest_version
+      : null,
+  );
+  const showUpdate = $derived(
+    updateVersion !== null &&
+      guiPreferences.updates.dismissed_version !== updateVersion,
+  );
+
+  async function openReleasePage() {
+    const url = updateCheckState.release_url;
+    if (!url) return;
+    try {
+      await openDefault(url);
+    } catch (error) {
+      showNotification(`Failed to open link: ${errorMessage(error)}`, "error");
+    }
+  }
+
+  async function dismissUpdate() {
+    if (!updateVersion) return;
+    updateOpen = false;
+    const prefs = snapshotGuiPreferences();
+    prefs.updates.dismissed_version = updateVersion;
+    try {
+      await saveGuiPreferences(prefs);
+    } catch (error) {
+      showNotification(
+        `Failed to save preferences: ${errorMessage(error)}`,
+        "error",
+      );
+    }
+  }
 
   // ── Connection (local / remote daemon) ───────────────────────────────
   let connInfo = $derived(connectionState.info);
@@ -113,6 +158,7 @@
     getVersion()
       .then((v) => (version = v))
       .catch(() => {});
+    startUpdateChecker();
     let cancelledRef = { cancelled: false };
     const loadPetSprite = async () => {
       try {
@@ -146,6 +192,7 @@
     })();
     return () => {
       cancelledRef.cancelled = true;
+      stopUpdateChecker();
       if (copyResetTimer) clearTimeout(copyResetTimer);
       if (petSpriteUrl) URL.revokeObjectURL(petSpriteUrl);
     };
@@ -209,6 +256,13 @@
       !connCardRef?.contains(target)
     ) {
       connOpen = false;
+    }
+    if (
+      updateOpen &&
+      !updateRef?.contains(target) &&
+      !updateCardRef?.contains(target)
+    ) {
+      updateOpen = false;
     }
   }
 
@@ -546,6 +600,69 @@
       {/if}
       <span class="micro-label {moodTextClass(petMood)}">{petMood}</span>
     </div>
+
+    {#if showUpdate && updateVersion}
+      <div bind:this={updateRef} class="relative flex items-center">
+        <button
+          type="button"
+          class="flex items-center gap-1 rounded px-1 py-0.5 text-primary transition-colors hover:bg-secondary/70"
+          aria-expanded={updateOpen}
+          title="Update available: v{updateVersion} — click for details"
+          onclick={() => (updateOpen = !updateOpen)}
+        >
+          <CircleArrowUp class="w-3 h-3" aria-hidden="true" />
+          <span class="micro-label">v{updateVersion}</span>
+        </button>
+
+        {#if updateOpen}
+          <PopoverPanel
+            bind:ref={updateCardRef}
+            title="Update available"
+            padded
+            class="absolute bottom-full right-0 z-30 mb-1 w-64"
+          >
+            <div class="space-y-0.5">
+              <div class="flex items-center justify-between gap-2 text-xs">
+                <span class="micro-label text-muted-foreground">Current</span>
+                <span class="font-mono text-[10px]">v{version}</span>
+              </div>
+              <div class="flex items-center justify-between gap-2 text-xs">
+                <span class="micro-label text-muted-foreground">Latest</span>
+                <span class="font-mono text-[10px] text-primary">
+                  v{updateVersion}
+                </span>
+              </div>
+              {#if updateCheckState.published_at}
+                <div class="text-[10px] text-muted-foreground">
+                  Published {new Date(
+                    updateCheckState.published_at,
+                  ).toLocaleDateString()}
+                </div>
+              {/if}
+            </div>
+
+            <div class="h-px bg-border"></div>
+
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                class="inline-flex h-7 items-center gap-1.5 rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                onclick={() => void openReleasePage()}
+              >
+                View release
+              </button>
+              <button
+                type="button"
+                class="inline-flex h-7 items-center rounded-md border border-border bg-secondary px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary/80"
+                onclick={() => void dismissUpdate()}
+              >
+                Dismiss
+              </button>
+            </div>
+          </PopoverPanel>
+        {/if}
+      </div>
+    {/if}
 
     {#if version}
       <a

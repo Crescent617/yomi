@@ -55,6 +55,10 @@ export interface GuiPreferences {
     /** Hold an OS power assertion so the machine does not sleep while Yomi runs. */
     keep_awake: boolean;
   };
+  updates: {
+    /** Release version the user dismissed; re-prompt only for a newer one. */
+    dismissed_version: string | null;
+  };
 }
 
 interface LegacyLayoutPreferences extends Partial<GuiPreferences["layout"]> {
@@ -101,6 +105,9 @@ export const defaultGuiPreferences: GuiPreferences = {
   power: {
     keep_awake: false,
   },
+  updates: {
+    dismissed_version: null,
+  },
 };
 
 export const guiPreferences = $state<GuiPreferences>(
@@ -123,6 +130,7 @@ function cloneGuiPreferences(value: GuiPreferences): GuiPreferences {
     chat: { ...value.chat },
     connection: { ...value.connection },
     power: { ...value.power },
+    updates: { ...value.updates },
   };
 }
 
@@ -225,6 +233,12 @@ function normalizeGuiPreferences(
       keep_awake:
         value?.power?.keep_awake ?? defaultGuiPreferences.power.keep_awake,
     },
+    updates: {
+      dismissed_version:
+        typeof value?.updates?.dismissed_version === "string"
+          ? value.updates.dismissed_version
+          : null,
+    },
   };
 }
 
@@ -237,6 +251,7 @@ function assignGuiPreferences(value: GuiPreferences): void {
   Object.assign(guiPreferences.chat, value.chat);
   Object.assign(guiPreferences.connection, value.connection);
   Object.assign(guiPreferences.power, value.power);
+  Object.assign(guiPreferences.updates, value.updates);
 }
 
 async function loadLegacyPreferences(s: Store): Promise<GuiPreferences> {
@@ -281,6 +296,9 @@ async function loadLegacyPreferences(s: Store): Promise<GuiPreferences> {
     },
     power: {
       keep_awake: defaultGuiPreferences.power.keep_awake,
+    },
+    updates: {
+      dismissed_version: defaultGuiPreferences.updates.dismissed_version,
     },
   });
 }
