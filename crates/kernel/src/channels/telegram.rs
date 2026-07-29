@@ -29,17 +29,26 @@ impl TelegramAdapter {
     }
 
     async fn ensure_username(&self) -> &str {
-        self.bot_username
-            .get_or_init(|| async {
+        // Nothing is cached on failure, so a failed get_me retries on the
+        // next batch: an empty username would degrade the mention check
+        // to "any @mention counts" for the process lifetime.
+        match self
+            .bot_username
+            .get_or_try_init(|| async {
                 self.bot
                     .get_me()
                     .send()
                     .await
-                    .ok()
-                    .and_then(|me| me.username.clone())
-                    .unwrap_or_default()
+                    .map(|me| me.username.clone().unwrap_or_default())
             })
             .await
+        {
+            Ok(name) => name.as_str(),
+            Err(e) => {
+                warn!("get_me failed; mention detection degraded this batch: {e}");
+                ""
+            }
+        }
     }
 
     async fn download_photo(&self, file_id: &str) -> Result<String, ChannelError> {
@@ -62,16 +71,31 @@ impl TelegramAdapter {
         Ok(format!("data:{mime_type};base64,{base64}"))
     }
 
-    fn split_command_batches<T>(items: Vec<T>, is_command: impl Fn(&T) -> bool) -> Vec<Vec<T>> {
+    /// Merge consecutive non-command messages into one channel message.
+    /// Commands are always isolated, and a batch never crosses senders —
+    /// access control and reactions target the (single) sender of each
+    /// merged message.
+    fn split_command_batches<T>(
+        items: Vec<T>,
+        is_command: impl Fn(&T) -> bool,
+        sender_key: impl Fn(&T) -> u64,
+    ) -> Vec<Vec<T>> {
         let mut batches = Vec::new();
         let mut regular_items = Vec::new();
+        let mut regular_sender: Option<u64> = None;
         for item in items {
             if is_command(&item) {
                 if !regular_items.is_empty() {
                     batches.push(std::mem::take(&mut regular_items));
+                    regular_sender = None;
                 }
                 batches.push(vec![item]);
             } else {
+                let sender = sender_key(&item);
+                if regular_sender.is_some_and(|s| s != sender) {
+                    batches.push(std::mem::take(&mut regular_items));
+                }
+                regular_sender = Some(sender);
                 regular_items.push(item);
             }
         }
@@ -379,10 +403,15 @@ impl PlatformAdapter for TelegramAdapter {
                     let bot_username = self.ensure_username().await;
 
                     for (chat_id, msgs) in by_chat {
-                        let batches = Self::split_command_batches(msgs, |msg| {
-                            let raw_text = msg.text().or_else(|| msg.caption()).unwrap_or_default();
-                            super::hub::has_channel_command_prefix(raw_text)
-                        });
+                        let batches = Self::split_command_batches(
+                            msgs,
+                            |msg| {
+                                let raw_text =
+                                    msg.text().or_else(|| msg.caption()).unwrap_or_default();
+                                super::hub::has_channel_command_prefix(raw_text)
+                            },
+                            |msg| msg.from.as_ref().map_or(0, |u| u.id.0),
+                        );
 
                         for batch in batches {
                             let Some(channel_msg) = self

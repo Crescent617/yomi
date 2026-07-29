@@ -5,6 +5,7 @@ fn command_messages_are_isolated_from_regular_batches() {
     let batches = TelegramAdapter::split_command_batches(
         vec!["before", "/stop@yomi_bot", "after", "more"],
         |text| text.starts_with('/'),
+        |_| 1,
     );
 
     assert_eq!(
@@ -19,9 +20,40 @@ fn command_messages_are_isolated_from_regular_batches() {
 
 #[test]
 fn regular_messages_stay_in_one_batch() {
-    let batches = TelegramAdapter::split_command_batches(vec!["one", "two"], |_| false);
+    let batches = TelegramAdapter::split_command_batches(vec!["one", "two"], |_| false, |_| 1);
 
     assert_eq!(batches, vec![vec!["one", "two"]]);
+}
+
+#[test]
+fn batches_split_at_sender_change() {
+    // Access control and reactions target the merged message's sender, so
+    // a batch must never mix senders.
+    let batches = TelegramAdapter::split_command_batches(
+        vec![("a", 1u64), ("b", 1), ("c", 2), ("d", 1)],
+        |_| false,
+        |&(_, sender)| sender,
+    );
+
+    assert_eq!(
+        batches,
+        vec![vec![("a", 1), ("b", 1)], vec![("c", 2)], vec![("d", 1)]]
+    );
+}
+
+#[test]
+fn command_isolation_resets_sender_grouping() {
+    // Same sender around a command must not merge across it.
+    let batches = TelegramAdapter::split_command_batches(
+        vec![("a", 1u64), ("/stop", 1), ("b", 1)],
+        |&(text, _)| text.starts_with('/'),
+        |&(_, sender)| sender,
+    );
+
+    assert_eq!(
+        batches,
+        vec![vec![("a", 1)], vec![("/stop", 1)], vec![("b", 1)]]
+    );
 }
 
 #[test]

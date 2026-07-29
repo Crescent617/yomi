@@ -749,7 +749,11 @@ impl FeishuAdapter {
                     if let Some(ref payload) = frame.payload {
                         let text = String::from_utf8_lossy(payload);
                         debug!(payload = %text, "event payload");
-                        let _ = self.parse_event(&text, incoming).await;
+                        // The frame is already ACKed — a parse failure
+                        // loses the event for good, so at least log it.
+                        if let Err(e) = self.parse_event(&text, incoming).await {
+                            warn!(error = %e, "event parse failed, event lost");
+                        }
                     }
                 }
             }
