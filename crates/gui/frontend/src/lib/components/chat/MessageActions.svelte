@@ -63,12 +63,18 @@
     "p-1.5 rounded-md transition-colors hover:bg-accent hover:text-foreground";
 </script>
 
+<!-- Vertical action strip, hover-revealed. Default: overlays the message's
+     top-right corner (tight layouts). Wide chat areas (≥64rem): docks just
+     OUTSIDE the message's right edge, flush against it so the hover can
+     travel over — the QueryNavigator rail owns the far-right edge below
+     that width. -->
 {#if !isStreaming && content}
   <div
-    class="absolute -top-2.5 right-1 z-10 flex items-center gap-0.5 rounded-lg border border-border bg-card p-0.5 shadow-sm transition-opacity
+    class="absolute right-1 top-0 z-10 flex flex-col items-center gap-0.5 rounded-lg border border-border bg-card p-0.5 shadow-sm transition-opacity
+           @min-[64rem]:right-0 @min-[64rem]:translate-x-full
            {favoriteId
       ? 'opacity-100'
-      : 'opacity-0 pointer-events-none group-hover/ma:opacity-100 group-hover/ma:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto'}"
+      : 'opacity-0 pointer-events-none group-hover/ma:opacity-100 group-hover/ma:pointer-events-auto hover:opacity-100 hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto'}"
   >
     <button
       type="button"
