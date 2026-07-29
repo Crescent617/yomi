@@ -658,7 +658,7 @@ async fn gate_message(
                 adapter,
                 config,
                 msg,
-                Some(config.platform.access_denied_reaction()),
+                config.platform.access_denied_reaction(),
             )
             .await;
         }
@@ -672,15 +672,15 @@ async fn gate_message(
     true
 }
 
-/// Best-effort gate reaction; needs both a platform emoji and a message to
-/// target, and only logs on failure.
+/// Best-effort gate reaction; needs a message to target and only logs on
+/// failure.
 async fn send_gate_reaction(
     adapter: &Arc<dyn PlatformAdapter>,
     config: &ChannelConfig,
     msg: &ChannelMessage,
-    emoji: Option<&'static str>,
+    emoji: &'static str,
 ) {
-    let (Some(emoji), Some(message_id)) = (emoji, msg.external_message_id.as_deref()) else {
+    let Some(message_id) = msg.external_message_id.as_deref() else {
         return;
     };
     if let Err(e) = adapter

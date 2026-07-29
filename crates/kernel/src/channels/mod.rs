@@ -175,13 +175,13 @@ pub enum PlatformConfig {
 }
 
 impl PlatformConfig {
-    /// Ack reaction for a message accepted for processing (`None` = the
-    /// platform shows no ack). Values are platform-specific emoji
-    /// identifiers (Feishu `emoji_type`, Telegram unicode emoji).
-    pub(crate) fn ack_reaction(&self) -> Option<&'static str> {
+    /// Ack reaction for a message accepted for processing. Values are
+    /// platform-specific emoji identifiers (Feishu `emoji_type`, Telegram
+    /// unicode emoji).
+    pub(crate) fn ack_reaction(&self) -> &'static str {
         match self {
-            Self::Feishu { .. } => Some("OneSecond"),
-            Self::Telegram { .. } => Some("👀"),
+            Self::Feishu { .. } => "OneSecond",
+            Self::Telegram { .. } => "👀",
         }
     }
 

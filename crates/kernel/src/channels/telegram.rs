@@ -294,6 +294,24 @@ fn cap_message_length(text: &str) -> String {
     crate::utils::strs::truncate_by_utf16(text, MAX_MESSAGE_UTF16_UNITS, "\n\n...(内容已截断)")
 }
 
+/// Confirm all pending updates (a negative offset makes `getUpdates`
+/// return only the latest one, confirming everything before it) and
+/// return the offset to poll from. Failure degrades to 0 — the old
+/// behavior of replaying the backlog.
+async fn skip_backlog(bot: &teloxide_core::Bot) -> i64 {
+    let mut req = bot.get_updates();
+    req.offset = Some(-1);
+    req.limit = Some(1);
+    req.timeout = Some(0);
+    match req.send().await {
+        Ok(updates) => updates.last().map_or(0, |u| i64::from(u.id.0) + 1),
+        Err(e) => {
+            warn!("failed to skip Telegram update backlog: {e}");
+            0
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl PlatformAdapter for TelegramAdapter {
     async fn run_receiver(
@@ -301,7 +319,12 @@ impl PlatformAdapter for TelegramAdapter {
         incoming: mpsc::Sender<ChannelMessage>,
         cancel: CancellationToken,
     ) -> Result<(), ChannelError> {
-        let mut offset: i64 = 0;
+        // Skip the update backlog: Telegram keeps unconfirmed updates for
+        // up to 24h and the polling offset lives only in memory, so a
+        // restart would otherwise replay the last unconfirmed batch —
+        // duplicate steers, replies, and reactions for messages already
+        // handled.
+        let mut offset: i64 = skip_backlog(&self.bot).await;
 
         info!("starting Telegram long polling receiver");
 
