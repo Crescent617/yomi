@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.21] - 2026-07-29
+
+### Added
+- 新增"保持唤醒"开关：开启后设备在 Yomi 运行期间不会进入睡眠，屏幕仍可正常熄灭；可从状态栏咖啡杯按钮或设置页 Application → Power 切换，默认关闭（仅桌面系统）。
+
+### Fixed
+- 修复飞书会话运行期间用户再发消息时，运行轨迹在结束后从界面消失的问题：终态状态卡现在保留可展开的运行轨迹面板。
+
 ## [0.7.20] - 2026-07-29
 
 ### Changed
