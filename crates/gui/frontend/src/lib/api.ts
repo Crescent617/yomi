@@ -364,6 +364,15 @@ export async function setPetEnabled(enabled: boolean): Promise<void> {
   return invokeCmd("set_pet_enabled", { enabled });
 }
 
+export async function getKeepAwake(): Promise<boolean> {
+  return invokeCmd("get_keep_awake");
+}
+
+/** Enable/disable the OS keep-awake assertion; returns the state in effect. */
+export async function setKeepAwake(enabled: boolean): Promise<boolean> {
+  return invokeCmd("set_keep_awake", { enabled });
+}
+
 export async function getCwd(): Promise<string> {
   return invokeCmd("get_cwd");
 }

@@ -59,5 +59,9 @@ tauri-build = { workspace = true, features = [] }
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["process", "signal"] }
 
+# Keep-awake power assertions (desktop OSes only; mobile has no such API)
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+keepawake = "0.6"
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]

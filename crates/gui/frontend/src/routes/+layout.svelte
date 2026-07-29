@@ -66,6 +66,9 @@
       .catch((error) => {
         console.error("Failed to restore desktop pet preference:", error);
       });
+    await api.setKeepAwake(guiPreferences.power.keep_awake).catch((error) => {
+      console.error("Failed to restore keep-awake preference:", error);
+    });
 
     const eventFrameBuffer = new EventFrameBuffer(
       ({

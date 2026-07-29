@@ -2,6 +2,7 @@
   import {
     Activity,
     Check,
+    Coffee,
     Copy,
     Github,
     Globe,
@@ -222,6 +223,30 @@
         `Failed to copy shell log path: ${errorMessage(error)}`,
         "error",
       );
+    }
+  }
+
+  // ── Keep-awake power assertion ───────────────────────────────────────
+  let keepAwake = $derived(guiPreferences.power.keep_awake);
+  let keepAwakeBusy = $state(false);
+
+  async function toggleKeepAwake() {
+    if (keepAwakeBusy) return;
+    keepAwakeBusy = true;
+    const next = !keepAwake;
+    try {
+      // Apply to the OS first; the preference only follows on success.
+      await api.setKeepAwake(next);
+      const prefs = snapshotGuiPreferences();
+      prefs.power.keep_awake = next;
+      await saveGuiPreferences(prefs);
+    } catch (error) {
+      showNotification(
+        `Failed to toggle keep-awake: ${errorMessage(error)}`,
+        "error",
+      );
+    } finally {
+      keepAwakeBusy = false;
     }
   }
 
@@ -486,6 +511,26 @@
   <div class="flex-1"></div>
 
   <div class="flex items-center gap-3">
+    <!-- Keep-awake: hold an OS power assertion so the device won't sleep -->
+    <button
+      type="button"
+      class="grid size-5 place-items-center rounded transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 {keepAwake
+        ? 'text-primary'
+        : 'text-muted-foreground hover:text-foreground'}"
+      title={keepAwake
+        ? "Keep awake on — this device won't sleep while Yomi runs (the display may still turn off)"
+        : "Keep awake off — click to prevent this device from sleeping"}
+      aria-pressed={keepAwake}
+      aria-label="Toggle keep awake"
+      disabled={keepAwakeBusy}
+      onclick={() => void toggleKeepAwake()}
+    >
+      <Coffee
+        class="size-3.5 {keepAwake ? 'fill-current' : ''}"
+        aria-hidden="true"
+      />
+    </button>
+
     <!-- Pet mood: the app-wide agent heartbeat -->
     <div
       class="flex items-center gap-1.5"

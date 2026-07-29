@@ -3,6 +3,7 @@ pub mod chat;
 pub mod checkpoint;
 pub mod debug;
 pub mod favorite;
+pub mod keep_awake;
 pub mod pet;
 pub mod project;
 pub mod session;

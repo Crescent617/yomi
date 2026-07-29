@@ -51,6 +51,10 @@ export interface GuiPreferences {
   connection: {
     remote_addr: string | null;
   };
+  power: {
+    /** Hold an OS power assertion so the machine does not sleep while Yomi runs. */
+    keep_awake: boolean;
+  };
 }
 
 interface LegacyLayoutPreferences extends Partial<GuiPreferences["layout"]> {
@@ -94,6 +98,9 @@ export const defaultGuiPreferences: GuiPreferences = {
   connection: {
     remote_addr: null,
   },
+  power: {
+    keep_awake: false,
+  },
 };
 
 export const guiPreferences = $state<GuiPreferences>(
@@ -115,6 +122,7 @@ function cloneGuiPreferences(value: GuiPreferences): GuiPreferences {
     desktop_pet: { ...value.desktop_pet },
     chat: { ...value.chat },
     connection: { ...value.connection },
+    power: { ...value.power },
   };
 }
 
@@ -213,6 +221,10 @@ function normalizeGuiPreferences(
           ? value.connection.remote_addr
           : null,
     },
+    power: {
+      keep_awake:
+        value?.power?.keep_awake ?? defaultGuiPreferences.power.keep_awake,
+    },
   };
 }
 
@@ -224,6 +236,7 @@ function assignGuiPreferences(value: GuiPreferences): void {
   Object.assign(guiPreferences.desktop_pet, value.desktop_pet);
   Object.assign(guiPreferences.chat, value.chat);
   Object.assign(guiPreferences.connection, value.connection);
+  Object.assign(guiPreferences.power, value.power);
 }
 
 async function loadLegacyPreferences(s: Store): Promise<GuiPreferences> {
@@ -265,6 +278,9 @@ async function loadLegacyPreferences(s: Store): Promise<GuiPreferences> {
     },
     connection: {
       remote_addr: defaultGuiPreferences.connection.remote_addr,
+    },
+    power: {
+      keep_awake: defaultGuiPreferences.power.keep_awake,
     },
   });
 }
@@ -355,11 +371,9 @@ export function scheduleGuiPreferencesSave(): void {
     // State is the source of truth: mutate `guiPreferences` first, then
     // schedule. Snapshot at fire time so mutations made inside the
     // debounce window are persisted too.
-    void enqueueGuiPreferencesSave(snapshotGuiPreferences()).catch(
-      (error) => {
-        console.error("[Settings] Failed to save GUI preferences:", error);
-      },
-    );
+    void enqueueGuiPreferencesSave(snapshotGuiPreferences()).catch((error) => {
+      console.error("[Settings] Failed to save GUI preferences:", error);
+    });
   }, PREFERENCE_SAVE_DEBOUNCE_MS);
 }
 

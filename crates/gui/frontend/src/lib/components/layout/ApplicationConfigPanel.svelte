@@ -13,6 +13,7 @@
     Save,
     Sun,
     Type,
+    Zap,
   } from "lucide-svelte";
   import {
     defaultGuiPreferences,
@@ -79,6 +80,7 @@
   ];
 
   let petSync = Promise.resolve();
+  let keepAwakeSync = Promise.resolve();
 
   const dirty = $derived(
     JSON.stringify($state.snapshot(draft)) !==
@@ -120,6 +122,9 @@
         if (pet_preview_changed) {
           void syncPetPreview(original.desktop_pet).catch(() => {});
         }
+        // Keep-awake previews apply the OS assertion immediately — revert
+        // it too, or the machine stays awake with the pref showing off.
+        void syncKeepAwake(original.power.keep_awake).catch(() => {});
       }
       onDirtyChange?.(false);
     };
@@ -148,8 +153,16 @@
     return petSync;
   }
 
+  function syncKeepAwake(enabled: boolean): Promise<void> {
+    keepAwakeSync = keepAwakeSync
+      .catch(() => {})
+      .then(() => api.setKeepAwake(enabled).then(() => undefined));
+    return keepAwakeSync;
+  }
+
   function preview(update: (value: GuiPreferences) => void) {
     const previous_pet = { ...draft.desktop_pet };
+    const previous_keep_awake = draft.power.keep_awake;
     update(draft);
     replaceGuiPreferences(draft);
     error = null;
@@ -167,6 +180,11 @@
         error = `Desktop pet preview failed: ${api.errorMessage(syncError)}`;
       });
     }
+    if (draft.power.keep_awake !== previous_keep_awake) {
+      void syncKeepAwake(draft.power.keep_awake).catch((syncError) => {
+        error = `Keep-awake preview failed: ${api.errorMessage(syncError)}`;
+      });
+    }
   }
 
   function restore(target: GuiPreferences) {
@@ -176,10 +194,14 @@
     Object.assign(draft.notifications, copy.notifications);
     Object.assign(draft.desktop_pet, copy.desktop_pet);
     Object.assign(draft.chat, copy.chat);
+    Object.assign(draft.power, copy.power);
     replaceGuiPreferences(copy);
     error = null;
     void syncPetPreview(copy.desktop_pet).catch((syncError) => {
       error = `Desktop pet preview failed: ${api.errorMessage(syncError)}`;
+    });
+    void syncKeepAwake(copy.power.keep_awake).catch((syncError) => {
+      error = `Keep-awake restore failed: ${api.errorMessage(syncError)}`;
     });
   }
 
@@ -619,6 +641,37 @@
               preview(
                 (value) =>
                   (value.notifications.enabled = event.currentTarget.checked),
+              )}
+            class="h-4 w-4 accent-primary"
+          />
+        </label>
+      </section>
+
+      <section
+        class="overflow-hidden rounded-xl border border-border bg-card/45"
+      >
+        <div class="border-b border-border px-4 py-3">
+          <div class="flex items-center gap-2 text-sm font-medium">
+            <Zap size={15} class="text-muted-foreground" /> Power
+          </div>
+        </div>
+        <label
+          class="flex cursor-pointer items-center justify-between gap-4 px-4 py-3.5"
+        >
+          <div>
+            <div class="text-sm text-foreground">Keep awake</div>
+            <div class="text-xs text-muted-foreground">
+              Prevent this device from sleeping while Yomi is running. The
+              display can still turn off.
+            </div>
+          </div>
+          <input
+            type="checkbox"
+            checked={draft.power.keep_awake}
+            onchange={(event) =>
+              preview(
+                (value) =>
+                  (value.power.keep_awake = event.currentTarget.checked),
               )}
             class="h-4 w-4 accent-primary"
           />

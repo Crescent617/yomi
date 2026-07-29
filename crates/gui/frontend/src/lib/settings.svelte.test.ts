@@ -61,6 +61,28 @@ describe("GUI preference normalization", () => {
     });
   });
 
+  test("defaults keep-awake to disabled", () => {
+    expect(defaultGuiPreferences.power).toEqual({ keep_awake: false });
+  });
+
+  test("normalizes missing power preferences", () => {
+    const preferences = {
+      ...snapshotGuiPreferences(),
+      power: undefined,
+    } as unknown as GuiPreferences;
+
+    replaceGuiPreferences(preferences);
+
+    expect(snapshotGuiPreferences().power).toEqual({ keep_awake: false });
+  });
+
+  test("snapshots power preferences without sharing references", () => {
+    const preferences = snapshotGuiPreferences();
+    preferences.power.keep_awake = true;
+
+    expect(snapshotGuiPreferences().power.keep_awake).toBe(false);
+  });
+
   test("normalizes missing desktop pet preferences", () => {
     const preferences = {
       ...snapshotGuiPreferences(),

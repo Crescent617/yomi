@@ -142,6 +142,8 @@ pub fn run() {
             commands::chat::stop_goal,
             commands::pet::get_pet_state,
             commands::pet::set_pet_enabled,
+            commands::keep_awake::get_keep_awake,
+            commands::keep_awake::set_keep_awake,
             commands::pet::list_pet_packs,
             commands::pet::select_pet_pack,
             commands::pet::get_selected_pet_pack,
