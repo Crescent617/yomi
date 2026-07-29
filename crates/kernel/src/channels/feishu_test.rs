@@ -181,7 +181,7 @@ fn response_for(method: &str, path: &str) -> &'static str {
 }
 
 fn stub_adapter(base_url: &str) -> super::FeishuAdapter {
-    super::FeishuAdapter::new("app".to_string(), "secret".to_string(), false)
+    super::FeishuAdapter::new("app".to_string(), "secret".to_string())
         .with_base_url(base_url.to_string())
 }
 

@@ -13,12 +13,14 @@ use sqlx::sqlite::SqlitePoolOptions;
 
 pub struct MockAdapter {
     pub outgoing: tokio::sync::Mutex<Vec<(String, Vec<ContentBlock>)>>,
+    pub reactions: tokio::sync::Mutex<Vec<(String, String)>>,
 }
 
 impl MockAdapter {
     pub fn new(_name: impl Into<String>) -> Self {
         Self {
             outgoing: tokio::sync::Mutex::new(Vec::new()),
+            reactions: tokio::sync::Mutex::new(Vec::new()),
         }
     }
 }
@@ -45,6 +47,19 @@ impl PlatformAdapter for MockAdapter {
             .await
             .push((external_chat_id.to_string(), blocks));
         Ok(None)
+    }
+
+    async fn send_reaction(
+        &self,
+        _external_chat_id: &str,
+        message_id: &str,
+        emoji: &str,
+    ) -> std::result::Result<Option<String>, crate::channels::ChannelError> {
+        self.reactions
+            .lock()
+            .await
+            .push((message_id.to_string(), emoji.to_string()));
+        Ok(Some("reaction-1".to_string()))
     }
 }
 
@@ -1374,4 +1389,141 @@ async fn history_prefix_drops_consumed_thread_root_only() {
         prefix.contains("thread root"),
         "unconsumed root kept: {prefix}"
     );
+}
+
+// ── Message gate reactions ──────────────────────────────────────────
+
+fn gate_config(platform: PlatformConfig) -> ChannelConfig {
+    ChannelConfig {
+        name: "gate".to_string(),
+        enabled: true,
+        platform,
+        allowed_users: vec!["user-1".to_string()],
+        ..Default::default()
+    }
+}
+
+fn feishu_gate_config() -> ChannelConfig {
+    gate_config(PlatformConfig::Feishu {
+        app_id: "app".to_string(),
+        app_secret: "secret".to_string(),
+    })
+}
+
+#[tokio::test]
+async fn gate_accepts_allowed_mention_with_ack_reaction() {
+    let mock = Arc::new(MockAdapter::new("fs"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let msg = channel_message(None, true, true);
+
+    assert!(gate_message(&adapter, &feishu_gate_config(), &msg).await);
+    let reactions = mock.reactions.lock().await.clone();
+    assert_eq!(reactions, [("msg-1".to_string(), "OneSecond".to_string())]);
+}
+
+#[tokio::test]
+async fn gate_denies_unlisted_user_with_denied_reaction() {
+    let mock = Arc::new(MockAdapter::new("fs"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let mut msg = channel_message(None, true, true);
+    msg.external_user_id = "stranger".to_string();
+
+    assert!(!gate_message(&adapter, &feishu_gate_config(), &msg).await);
+    let reactions = mock.reactions.lock().await.clone();
+    assert_eq!(reactions, [("msg-1".to_string(), "THANKS".to_string())]);
+}
+
+#[tokio::test]
+async fn gate_stays_silent_for_unlisted_user_without_mention() {
+    let mock = Arc::new(MockAdapter::new("fs"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let mut msg = channel_message(None, true, true);
+    msg.external_user_id = "stranger".to_string();
+    msg.is_mention = false;
+
+    assert!(!gate_message(&adapter, &feishu_gate_config(), &msg).await);
+    assert!(mock.reactions.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn gate_reacts_to_unlisted_user_when_mentions_not_required() {
+    let mock = Arc::new(MockAdapter::new("fs"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig {
+        require_mention: false,
+        ..feishu_gate_config()
+    };
+    let mut msg = channel_message(None, true, true);
+    msg.external_user_id = "stranger".to_string();
+    msg.is_mention = false;
+
+    assert!(!gate_message(&adapter, &config, &msg).await);
+    let reactions = mock.reactions.lock().await.clone();
+    assert_eq!(reactions, [("msg-1".to_string(), "THANKS".to_string())]);
+}
+
+#[tokio::test]
+async fn gate_stays_silent_for_blocked_user() {
+    let mock = Arc::new(MockAdapter::new("fs"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig {
+        blocked_users: vec!["user-1".to_string()],
+        ..feishu_gate_config()
+    };
+    let msg = channel_message(None, true, true);
+
+    assert!(!gate_message(&adapter, &config, &msg).await);
+    assert!(mock.reactions.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn gate_telegram_acks_with_eyes_and_denies_with_folded_hands() {
+    let mock = Arc::new(MockAdapter::new("tg"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = gate_config(PlatformConfig::Telegram {
+        token: "fake".to_string(),
+    });
+
+    let msg = channel_message(None, true, true);
+    assert!(gate_message(&adapter, &config, &msg).await);
+
+    let mut denied = channel_message(None, true, true);
+    denied.external_user_id = "stranger".to_string();
+    assert!(!gate_message(&adapter, &config, &denied).await);
+
+    let reactions = mock.reactions.lock().await.clone();
+    assert_eq!(
+        reactions,
+        [
+            ("msg-1".to_string(), "👀".to_string()),
+            ("msg-1".to_string(), "🙏".to_string()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn gate_acks_every_allowed_message_when_mentions_not_required() {
+    let mock = Arc::new(MockAdapter::new("fs"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig {
+        require_mention: false,
+        ..feishu_gate_config()
+    };
+    let mut msg = channel_message(None, true, true);
+    msg.is_mention = false;
+
+    assert!(gate_message(&adapter, &config, &msg).await);
+    let reactions = mock.reactions.lock().await.clone();
+    assert_eq!(reactions, [("msg-1".to_string(), "OneSecond".to_string())]);
+}
+
+#[tokio::test]
+async fn gate_skips_reaction_without_message_id() {
+    let mock = Arc::new(MockAdapter::new("fs"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let mut msg = channel_message(None, true, false);
+    msg.external_user_id = "stranger".to_string();
+
+    assert!(!gate_message(&adapter, &feishu_gate_config(), &msg).await);
+    assert!(mock.reactions.lock().await.is_empty());
 }

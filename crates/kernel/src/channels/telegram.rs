@@ -173,29 +173,6 @@ impl TelegramAdapter {
         })
     }
 
-    fn fire_reaction(&self, chat_id: &str, message_id: &str, emoji: &str) {
-        let bot = self.bot.clone();
-        let chat_id = chat_id.to_string();
-        let message_id = message_id.to_string();
-        let emoji = emoji.to_string();
-        tokio::spawn(async move {
-            let Ok(chat_id) = chat_id.parse::<i64>() else {
-                return;
-            };
-            let Ok(msg_id) = message_id.parse::<i32>() else {
-                return;
-            };
-            let _ = bot
-                .set_message_reaction(
-                    Recipient::Id(ChatId(chat_id)),
-                    teloxide_core::types::MessageId(msg_id),
-                )
-                .reaction(vec![ReactionType::Emoji { emoji }])
-                .send()
-                .await;
-        });
-    }
-
     fn is_mention_of_bot(msg: &teloxide_core::types::Message, bot_username: &str) -> bool {
         if msg.chat.is_private() {
             return true;
@@ -391,10 +368,6 @@ impl PlatformAdapter for TelegramAdapter {
                             else {
                                 continue;
                             };
-
-                            if let Some(ref msg_id) = channel_msg.external_message_id {
-                                self.fire_reaction(&chat_id, msg_id, "👀");
-                            }
 
                             if incoming.send(channel_msg).await.is_err() {
                                 warn!("incoming channel closed, stopping receiver");

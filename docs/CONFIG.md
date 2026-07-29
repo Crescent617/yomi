@@ -204,10 +204,10 @@ app_secret = "..."
 | `name` | string | 通道名称 | 必填 |
 | `enabled` | boolean | 是否启用 | `false` |
 | `platform` | object | 平台配置 | 必填 |
-| `allowed_chats` | string[] | 允许的聊天 ID | `[]` |
-| `allowed_users` | string[] | 允许的用户 ID | `[]` |
-| `blocked_chats` | string[] | 屏蔽的聊天 ID | `[]` |
-| `blocked_users` | string[] | 屏蔽的用户 ID | `[]` |
+| `allowed_chats` | string[] | 允许的聊天 ID；列表外聊天中 @ 机器人会收到 🙏 婉拒表情，不会得到回复 | `[]` |
+| `allowed_users` | string[] | 允许的用户 ID；列表外用户 @ 机器人会收到 🙏 婉拒表情，不会得到回复 | `[]` |
+| `blocked_chats` | string[] | 屏蔽的聊天 ID；被屏蔽对象完全静默处理（无任何反馈） | `[]` |
+| `blocked_users` | string[] | 屏蔽的用户 ID；被屏蔽对象完全静默处理（无任何反馈） | `[]` |
 | `require_mention` | boolean | 是否需要 @ 触发 | `true` |
 | `reply_in_thread` | boolean | 群聊中回复是否锚定到触发消息的 thread（Feishu 话题回复，Telegram 引用回复）；私聊不受影响 | `false` |
 | `auto_approve_level` | string | 通道级别自动批准：`safe`/`caution`/`dangerous` | `safe` |

@@ -27,7 +27,16 @@ fn test_check_access_blocked_user() {
         blocked_users: vec!["bad_user".to_string()],
         ..Default::default()
     };
-    assert!(config.check_access("chat1", "bad_user").is_err());
+    let err = config.check_access("chat1", "bad_user").unwrap_err();
+    assert!(matches!(
+        err,
+        ChannelError::AccessDenied {
+            reason: AccessDeniedReason::BlockedUser,
+            ..
+        }
+    ));
+    // Blocklist hits stay silent — no feedback reaction.
+    assert!(!err.is_allowlist_miss());
     assert!(config.check_access("chat1", "good_user").is_ok());
 }
 
@@ -42,7 +51,15 @@ fn test_check_access_blocked_chat() {
         blocked_chats: vec!["bad_chat".to_string()],
         ..Default::default()
     };
-    assert!(config.check_access("bad_chat", "user1").is_err());
+    let err = config.check_access("bad_chat", "user1").unwrap_err();
+    assert!(matches!(
+        err,
+        ChannelError::AccessDenied {
+            reason: AccessDeniedReason::BlockedChat,
+            ..
+        }
+    ));
+    assert!(!err.is_allowlist_miss());
     assert!(config.check_access("good_chat", "user1").is_ok());
 }
 
@@ -58,7 +75,15 @@ fn test_check_access_allowed_users() {
         ..Default::default()
     };
     assert!(config.check_access("chat1", "alice").is_ok());
-    assert!(config.check_access("chat1", "bob").is_err());
+    let err = config.check_access("chat1", "bob").unwrap_err();
+    assert!(matches!(
+        err,
+        ChannelError::AccessDenied {
+            reason: AccessDeniedReason::UserNotAllowed,
+            ..
+        }
+    ));
+    assert!(err.is_allowlist_miss());
 }
 
 #[test]
@@ -73,7 +98,15 @@ fn test_check_access_allowed_chats() {
         ..Default::default()
     };
     assert!(config.check_access("group1", "user1").is_ok());
-    assert!(config.check_access("group2", "user1").is_err());
+    let err = config.check_access("group2", "user1").unwrap_err();
+    assert!(matches!(
+        err,
+        ChannelError::AccessDenied {
+            reason: AccessDeniedReason::ChatNotAllowed,
+            ..
+        }
+    ));
+    assert!(err.is_allowlist_miss());
 }
 
 #[test]
@@ -89,7 +122,15 @@ fn test_check_access_blocklist_wins() {
         blocked_users: vec!["alice".to_string()],
         ..Default::default()
     };
-    assert!(config.check_access("chat1", "alice").is_err());
+    let err = config.check_access("chat1", "alice").unwrap_err();
+    assert!(matches!(
+        err,
+        ChannelError::AccessDenied {
+            reason: AccessDeniedReason::BlockedUser,
+            ..
+        }
+    ));
+    assert!(!err.is_allowlist_miss());
 }
 
 #[test]

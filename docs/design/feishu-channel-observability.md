@@ -79,9 +79,9 @@ forwarder 维护 per-session `RunReplyBuffer`（cap 100 条防 goal 长 run 膨�
 
 `tool_trace: false` 时轨迹整体省略（morph/flush 只发正文）。
 
-## 6. receipts 与 OneSecond
+## 6. receipts 与门禁 reaction
 
-- 收到平台消息即打 `OneSecond` ack（best-effort，失败仅 warn）；**结算时不发送任何 reaction**。
+- 消息门禁（hub `gate_message`）统一发放 reaction（best-effort，失败仅 warn）：通过访问控制且被 @（或无需 @）的消息打 ack（Feishu `OneSecond` / Telegram 👀）；allowlist 未命中（`allowed_chats`/`allowed_users` 之外）且被 @ 的消息打 🙏 婉拒（Feishu `THANKS`）；blocklist 命中、通道禁用、未 @ 的群消息一律静默。**结算时不发送任何 reaction**。
 - receipts = 逐 run 记录的用户消息 ID（消息处理循环在 Steer/Queue/None 路由时记录，命令不记）；唯一用途是 **mid-run 判定**——条数 >1（含触发消息）即 run 期间用户发了消息；任何结算路径（Stopped/Timeout/sweep）结束时清空。
 
 ## 7. watchdog（超时兜底）

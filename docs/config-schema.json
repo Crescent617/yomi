@@ -179,25 +179,25 @@
             ]
           },
           "allowed_chats": {
-            "description": "Chat IDs that are allowed to access this channel. Empty means allow all.",
+            "description": "Chat IDs that are allowed to access this channel. Empty means allow all. Messages mentioning the bot from other chats get a denial reaction instead of a reply.",
             "type": "array",
             "items": { "type": "string" },
             "default": []
           },
           "allowed_users": {
-            "description": "User IDs that are allowed to access this channel. Empty means allow all.",
+            "description": "User IDs that are allowed to access this channel. Empty means allow all. Messages mentioning the bot from other users get a denial reaction instead of a reply.",
             "type": "array",
             "items": { "type": "string" },
             "default": []
           },
           "blocked_chats": {
-            "description": "Chat IDs that are blocked.",
+            "description": "Chat IDs that are blocked. Blocked chats are ignored silently (no feedback).",
             "type": "array",
             "items": { "type": "string" },
             "default": []
           },
           "blocked_users": {
-            "description": "User IDs that are blocked.",
+            "description": "User IDs that are blocked. Blocked users are ignored silently (no feedback).",
             "type": "array",
             "items": { "type": "string" },
             "default": []

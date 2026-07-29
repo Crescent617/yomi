@@ -56,11 +56,10 @@ pub struct FeishuAdapter {
     base_url: String,
     token_cache: Mutex<Option<TokenCache>>,
     bot_open_id: tokio::sync::Mutex<Option<String>>,
-    require_mention: bool,
 }
 
 impl FeishuAdapter {
-    pub fn new(app_id: String, app_secret: String, require_mention: bool) -> Self {
+    pub fn new(app_id: String, app_secret: String) -> Self {
         Self {
             app_id,
             app_secret,
@@ -71,7 +70,6 @@ impl FeishuAdapter {
             base_url: FEISHU_BASE_URL.to_string(),
             token_cache: Mutex::new(None),
             bot_open_id: tokio::sync::Mutex::new(None),
-            require_mention,
         }
     }
 
@@ -780,12 +778,6 @@ impl FeishuAdapter {
         }
     }
 
-    async fn add_reaction_or_warn(&self, msg_id: &str) {
-        if let Err(e) = self.send_reaction("", msg_id, "OneSecond").await {
-            warn!(error = %e, "reaction failed");
-        }
-    }
-
     /// Parse event from protobuf payload (JSON string).
     async fn parse_event(
         &self,
@@ -945,11 +937,6 @@ impl FeishuAdapter {
 
         let raw_text =
             strip_bot_mention(text, message["mentions"].as_array(), bot_open_id.as_deref());
-
-        // Ack reaction on receipt (`OneSecond`); best-effort.
-        if !self.require_mention || is_mention {
-            self.add_reaction_or_warn(&msg_id).await;
-        }
 
         let channel_msg = ChannelMessage {
             external_chat_id: chat_id.to_string(),

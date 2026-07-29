@@ -9,6 +9,27 @@ pub(crate) use utils::MAX_RETRY_DELAY;
 
 pub(crate) mod attachments;
 
+/// Why a channel message was rejected by access control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccessDeniedReason {
+    BlockedChat,
+    BlockedUser,
+    ChatNotAllowed,
+    UserNotAllowed,
+}
+
+impl std::fmt::Display for AccessDeniedReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::BlockedChat => "chat is blocked",
+            Self::BlockedUser => "user is blocked",
+            Self::ChatNotAllowed => "chat not in allowed_chats",
+            Self::UserNotAllowed => "user not in allowed_users",
+        };
+        f.write_str(s)
+    }
+}
+
 /// Channel-level error type
 #[derive(Debug, thiserror::Error, Clone)]
 pub enum ChannelError {
@@ -18,10 +39,28 @@ pub enum ChannelError {
     Storage(String),
     #[error("Platform API error: {0}")]
     Platform(String),
-    #[error("Access denied for chat {chat_id} (user {user_id})")]
-    AccessDenied { chat_id: String, user_id: String },
+    #[error("Access denied for chat {chat_id} (user {user_id}): {reason}")]
+    AccessDenied {
+        chat_id: String,
+        user_id: String,
+        reason: AccessDeniedReason,
+    },
     #[error("Channel {0} is disabled")]
     Disabled(String),
+}
+
+impl ChannelError {
+    /// Allowlist misses get visible feedback (a reaction on the triggering
+    /// message); blocklist hits and disabled channels stay silent.
+    pub fn is_allowlist_miss(&self) -> bool {
+        matches!(
+            self,
+            Self::AccessDenied {
+                reason: AccessDeniedReason::ChatNotAllowed | AccessDeniedReason::UserNotAllowed,
+                ..
+            }
+        )
+    }
 }
 
 impl From<ChannelError> for crate::types::KernelError {
@@ -133,6 +172,27 @@ impl Default for ChannelConfig {
 pub enum PlatformConfig {
     Telegram { token: String },
     Feishu { app_id: String, app_secret: String },
+}
+
+impl PlatformConfig {
+    /// Ack reaction for a message accepted for processing (`None` = the
+    /// platform shows no ack). Values are platform-specific emoji
+    /// identifiers (Feishu `emoji_type`, Telegram unicode emoji).
+    pub(crate) fn ack_reaction(&self) -> Option<&'static str> {
+        match self {
+            Self::Feishu { .. } => Some("OneSecond"),
+            Self::Telegram { .. } => Some("👀"),
+        }
+    }
+
+    /// Reaction shown when an addressed message is rejected by the
+    /// allowlist. A soft 🙏 ("sorry, no") rather than a harsh ✖/👎.
+    pub(crate) fn access_denied_reaction(&self) -> &'static str {
+        match self {
+            Self::Feishu { .. } => "THANKS",
+            Self::Telegram { .. } => "🙏",
+        }
+    }
 }
 
 /// Platform-independent message from an external chat platform
@@ -390,12 +450,18 @@ impl ChannelConfig {
         }
 
         // Blocklist wins over allowlist
-        if self.blocked_chats.contains(&chat_id.to_string())
-            || self.blocked_users.contains(&user_id.to_string())
-        {
+        if self.blocked_chats.contains(&chat_id.to_string()) {
             return Err(ChannelError::AccessDenied {
                 chat_id: chat_id.to_string(),
                 user_id: user_id.to_string(),
+                reason: AccessDeniedReason::BlockedChat,
+            });
+        }
+        if self.blocked_users.contains(&user_id.to_string()) {
+            return Err(ChannelError::AccessDenied {
+                chat_id: chat_id.to_string(),
+                user_id: user_id.to_string(),
+                reason: AccessDeniedReason::BlockedUser,
             });
         }
 
@@ -404,12 +470,14 @@ impl ChannelConfig {
             return Err(ChannelError::AccessDenied {
                 chat_id: chat_id.to_string(),
                 user_id: user_id.to_string(),
+                reason: AccessDeniedReason::ChatNotAllowed,
             });
         }
         if !self.allowed_users.is_empty() && !self.allowed_users.contains(&user_id.to_string()) {
             return Err(ChannelError::AccessDenied {
                 chat_id: chat_id.to_string(),
                 user_id: user_id.to_string(),
+                reason: AccessDeniedReason::UserNotAllowed,
             });
         }
 

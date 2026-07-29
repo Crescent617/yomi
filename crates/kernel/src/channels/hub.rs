@@ -105,7 +105,7 @@ impl ChannelHub {
         let name = config.name.clone();
         info!(channel = %name, "starting channel");
 
-        let adapter = build_adapter(&config.platform, config.require_mention);
+        let adapter = build_adapter(&config.platform);
         let status = Arc::new(AtomicU8::new(STATUS_CONNECTING));
 
         let (incoming_tx, incoming_rx) = mpsc::channel::<ChannelMessage>(256);
@@ -147,12 +147,7 @@ impl ChannelHub {
                         break;
                     }
                     Some(msg) = incoming_rx.recv() => {
-                        if let Err(e) = config_proc.check_access(&msg.external_chat_id, &msg.external_user_id) {
-                            info!(channel = %name_proc, error = %e, "access denied");
-                            continue;
-                        }
-                        if config_proc.require_mention && !msg.is_mention {
-                            info!(channel = %name_proc, chat_id = %msg.external_chat_id, "ignoring non-mention message");
+                        if !gate_message(&adapter_proc, &config_proc, &msg).await {
                             continue;
                         }
                         // Route to kernel
@@ -639,6 +634,61 @@ async fn deliver_reply(
     // Attachments last: files land at the bottom of the chat, below the
     // reply text/card.
     super::attachments::send_attachments(adapter, routing, files).await;
+}
+
+/// Gate one incoming message: enforce access control and the mention
+/// requirement, emitting the platform's gate reactions. Returns true when
+/// the message should be processed.
+///
+/// Reaction policy: an accepted, addressed message gets the platform's ack
+/// reaction (when it has one); an allowlist miss gets the access-denied
+/// reaction — but only when the message addresses the bot, so random group
+/// chatter stays untouched. Blocklist hits, disabled channels, and
+/// non-addressed messages stay silent.
+async fn gate_message(
+    adapter: &Arc<dyn PlatformAdapter>,
+    config: &ChannelConfig,
+    msg: &ChannelMessage,
+) -> bool {
+    let addressed = !config.require_mention || msg.is_mention;
+    if let Err(e) = config.check_access(&msg.external_chat_id, &msg.external_user_id) {
+        info!(channel = %config.name, error = %e, "access denied");
+        if addressed && e.is_allowlist_miss() {
+            send_gate_reaction(
+                adapter,
+                config,
+                msg,
+                Some(config.platform.access_denied_reaction()),
+            )
+            .await;
+        }
+        return false;
+    }
+    if !addressed {
+        info!(channel = %config.name, chat_id = %msg.external_chat_id, "ignoring non-mention message");
+        return false;
+    }
+    send_gate_reaction(adapter, config, msg, config.platform.ack_reaction()).await;
+    true
+}
+
+/// Best-effort gate reaction; needs both a platform emoji and a message to
+/// target, and only logs on failure.
+async fn send_gate_reaction(
+    adapter: &Arc<dyn PlatformAdapter>,
+    config: &ChannelConfig,
+    msg: &ChannelMessage,
+    emoji: Option<&'static str>,
+) {
+    let (Some(emoji), Some(message_id)) = (emoji, msg.external_message_id.as_deref()) else {
+        return;
+    };
+    if let Err(e) = adapter
+        .send_reaction(&msg.external_chat_id, message_id, emoji)
+        .await
+    {
+        warn!(channel = %config.name, error = %e, "gate reaction failed");
+    }
 }
 
 async fn handle_incoming_message(
@@ -1357,16 +1407,13 @@ fn format_unknown_model(key: &str, models: &[crate::kernel::ModelInfo]) -> Strin
     }
 }
 
-fn build_adapter(
-    platform: &super::PlatformConfig,
-    require_mention: bool,
-) -> Arc<dyn PlatformAdapter> {
+fn build_adapter(platform: &super::PlatformConfig) -> Arc<dyn PlatformAdapter> {
     match platform {
         super::PlatformConfig::Telegram { token } => {
             Arc::new(super::telegram::TelegramAdapter::new(token.clone()))
         }
         super::PlatformConfig::Feishu { app_id, app_secret } => Arc::new(
-            super::feishu::FeishuAdapter::new(app_id.clone(), app_secret.clone(), require_mention),
+            super::feishu::FeishuAdapter::new(app_id.clone(), app_secret.clone()),
         ),
     }
 }
