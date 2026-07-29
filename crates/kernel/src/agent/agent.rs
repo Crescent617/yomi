@@ -25,7 +25,8 @@ pub enum AgentInput {
     User { content: Vec<ContentBlock> },
     /// Continue the agent from Idle to Streaming (used by goal auto-start)
     Continue,
-    /// Cancel current operation
+    /// Cancel current operation; the agent loop exits once the cancellation
+    /// is observed (the next input respawns the agent with fresh context)
     Cancel,
     /// Steer message injected before the next streaming turn
     Steer(Vec<ContentBlock>),
@@ -289,9 +290,12 @@ impl Agent {
                 // Note: cancel is handled during streaming via select!, not here
                 let result = match state {
                     AgentState::Idle => {
+                        // Once cancelled, the agent exits instead of resetting:
+                        // the next input respawns it with freshly assembled
+                        // context (system prompt, skills, project memory).
                         if self.cancel_token.is_cancelled() {
-                            self.cancel_token.reset_if_cancelled();
-                            continue;
+                            tracing::info!("agent cancelled, exiting loop");
+                            break;
                         }
                         self.context.reset_iteration();
                         // steer 插队
@@ -307,8 +311,8 @@ impl Agent {
                                 tokio::select! {
                                     biased;
                                     () = self.cancel_token.cancelled() => {
-                                        self.cancel_token.reset_if_cancelled();
-                                        continue;
+                                        tracing::info!("agent cancelled while idle, exiting loop");
+                                        break;
                                     }
                                     () = self.mailbox.wait_for_mail() => {
                                         continue;
@@ -650,7 +654,8 @@ impl Agent {
                 Ok(())
             }
             AgentInput::Continue => {
-                self.cancel_token.reset_if_cancelled();
+                // Do not reset a pending cancellation: it will be observed by
+                // the upcoming streaming select and terminate the loop.
                 self.context.transition_to(AgentState::Streaming);
                 Ok(())
             }
@@ -691,7 +696,8 @@ impl Agent {
         mut content: Vec<ContentBlock>,
         is_steer: bool,
     ) -> Result<(), AgentError> {
-        self.cancel_token.reset_if_cancelled();
+        // No cancel reset here: a cancellation that landed after the Idle
+        // check must abort the upcoming stream, not be swallowed.
         if let Some(ref interceptor) = self.shared.message_interceptor {
             let ctx = InterceptCtx {
                 session_id: &self.session_id,

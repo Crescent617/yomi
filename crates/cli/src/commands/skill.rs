@@ -9,7 +9,7 @@ pub async fn list(global: &GlobalArgs) -> Result<()> {
     let skill_folders = config.skill_folders().iter().map(PathBuf::from).collect();
 
     let loader = SkillLoader::new(skill_folders);
-    let skills = loader.load_all().unwrap_or_default();
+    let skills = loader.load_all().await;
 
     if skills.is_empty() {
         println!("No skills found.");

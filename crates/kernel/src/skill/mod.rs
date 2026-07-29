@@ -32,52 +32,131 @@ pub struct SkillLoader {
     folders: Vec<PathBuf>,
 }
 
+/// Directory (relative to a session's working directory) scanned for workspace skills.
+pub const WORKSPACE_SKILLS_DIR: &str = ".agents/skills";
+
+/// Maximum directory depth scanned below a skill root: `foo/SKILL.md` is
+/// level 1, `foo/bar/baz/SKILL.md` is level 3; anything deeper is ignored.
+pub const MAX_SCAN_DEPTH: usize = 3;
+
+/// Resolve the workspace skills directory for `cwd`, if it exists.
+pub async fn workspace_skill_dir(cwd: &Path) -> Option<PathBuf> {
+    let dir = cwd.join(WORKSPACE_SKILLS_DIR);
+    tokio::fs::try_exists(&dir)
+        .await
+        .unwrap_or(false)
+        .then_some(dir)
+}
+
+/// Load workspace skills from `dir` and merge them over `global`; workspace
+/// skills win on name collision. The scan is best-effort — failures are
+/// logged and skipped — so `global` is effectively the fallback.
+pub async fn load_workspace_skills(dir: &Path, global: Vec<Arc<Skill>>) -> Vec<Arc<Skill>> {
+    let workspace = SkillLoader::new(vec![dir.to_path_buf()]).load_all().await;
+    tracing::info!(
+        "loaded {} skill(s) from workspace {}",
+        workspace.len(),
+        dir.display()
+    );
+    merge_skills(global, workspace)
+}
+
+/// Merge two skill sets; `workspace` entries override `global` on name
+/// collision. Order is stable: global order is preserved (overridden entries
+/// keep their position), workspace-only skills are appended.
+pub fn merge_skills(global: Vec<Arc<Skill>>, workspace: Vec<Arc<Skill>>) -> Vec<Arc<Skill>> {
+    let mut merged = global;
+    for skill in workspace {
+        match merged.iter_mut().find(|s| s.name == skill.name) {
+            Some(existing) => *existing = skill,
+            None => merged.push(skill),
+        }
+    }
+    merged
+}
+
+/// Skill files are any `*SKILL.md` (e.g. `SKILL.md`, `debugging/SKILL.md`).
+fn is_skill_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .ends_with("SKILL.md")
+}
+
 impl SkillLoader {
     pub const fn new(folders: Vec<PathBuf>) -> Self {
         Self { folders }
     }
 
-    /// Load all skills from configured folders
-    pub fn load_all(&self) -> Result<Vec<Arc<Skill>>> {
+    /// Load all skills from configured folders.
+    ///
+    /// Best-effort scan: a missing or unreadable folder is logged and skipped
+    /// rather than failing the whole load. Results are sorted by name so the
+    /// assembled system prompt is stable across spawns.
+    pub async fn load_all(&self) -> Vec<Arc<Skill>> {
         let mut skills = Vec::new();
 
         for folder in &self.folders {
-            if folder.exists() {
-                Self::load_from_folder(folder, &mut skills).map_err(|e| {
-                    KernelError::skill(format!(
-                        "Failed to load skills from {}: {e}",
-                        folder.display()
-                    ))
-                })?;
+            if tokio::fs::try_exists(folder).await.unwrap_or(false) {
+                Self::load_from_folder(folder, &mut skills).await;
             } else {
                 tracing::warn!("Skill folder does not exist: {}", folder.display());
             }
         }
-        Ok(skills)
+        skills.sort_by(|a, b| a.name.cmp(&b.name));
+        skills
     }
 
-    /// Load skills from a single folder (recursively)
-    fn load_from_folder(folder: &Path, skills: &mut Vec<Arc<Skill>>) -> Result<()> {
-        Self::load_from_folder_recursive(folder, folder, skills)
-    }
+    /// Load skills from a single folder, descending at most [`MAX_SCAN_DEPTH`]
+    /// levels below the root.
+    ///
+    /// Anything broken along the way (unreadable directory, failed stat,
+    /// malformed SKILL.md) is logged and skipped so one bad entry cannot take
+    /// down the rest.
+    async fn load_from_folder(root_folder: &Path, skills: &mut Vec<Arc<Skill>>) {
+        let mut stack = vec![(root_folder.to_path_buf(), 0usize)];
+        while let Some((current, depth)) = stack.pop() {
+            let mut entries = match tokio::fs::read_dir(&current).await {
+                Ok(entries) => entries,
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to read skill directory {}: {}",
+                        current.display(),
+                        e
+                    );
+                    continue;
+                }
+            };
+            loop {
+                let entry = match entries.next_entry().await {
+                    Ok(Some(entry)) => entry,
+                    Ok(None) => break,
+                    Err(e) => {
+                        // Stop this directory — a persistent iterator error
+                        // must not spin the loop.
+                        tracing::warn!("Failed to read entry in {}: {}", current.display(), e);
+                        break;
+                    }
+                };
+                let path = entry.path();
+                // `metadata` (not `entry.file_type`) so symlinks are followed:
+                // skills are commonly linked in from dotfiles repos. Cycles
+                // are bounded by MAX_SCAN_DEPTH. Dangling links fail here and
+                // are skipped with a warning.
+                let file_type = match tokio::fs::metadata(&path).await {
+                    Ok(metadata) => metadata.file_type(),
+                    Err(e) => {
+                        tracing::warn!("Failed to stat {}: {}", path.display(), e);
+                        continue;
+                    }
+                };
 
-    /// Recursively load skills, tracking the root folder for name derivation
-    fn load_from_folder_recursive(
-        root_folder: &Path,
-        current_folder: &Path,
-        skills: &mut Vec<Arc<Skill>>,
-    ) -> Result<()> {
-        for entry in std::fs::read_dir(current_folder)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.is_dir() {
-                Self::load_from_folder_recursive(root_folder, &path, skills)?;
-            } else if path.is_file() {
-                let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-
-                if file_name.ends_with("SKILL.md") {
-                    match Self::load_skill(&path, root_folder) {
+                if file_type.is_dir() {
+                    if depth < MAX_SCAN_DEPTH {
+                        stack.push((path, depth + 1));
+                    }
+                } else if file_type.is_file() && is_skill_file(&path) {
+                    match Self::load_skill(&path, root_folder).await {
                         Ok(skill) => {
                             tracing::debug!(
                                 "Loaded skill '{}' from {}",
@@ -93,26 +172,22 @@ impl SkillLoader {
                 }
             }
         }
-
-        Ok(())
     }
 
     /// Parse the YAML frontmatter from a SKILL.md file.
-    fn parse_skill_frontmatter(path: &Path) -> Result<SkillFrontmatter> {
-        use std::io::{BufRead, BufReader};
+    async fn parse_skill_frontmatter(path: &Path) -> Result<SkillFrontmatter> {
+        use tokio::io::AsyncBufReadExt;
 
-        let file = std::fs::File::open(path).map_err(|e| {
+        let file = tokio::fs::File::open(path).await.map_err(|e| {
             KernelError::skill(format!(
                 "Failed to open skill file: {}: {e}",
                 path.display()
             ))
         })?;
-        let reader = BufReader::new(file);
-
-        let mut lines = reader.lines();
+        let mut lines = tokio::io::BufReader::new(file).lines();
 
         // Check if file starts with ---
-        let first_line = lines.next().transpose()?;
+        let first_line = lines.next_line().await?;
         if first_line.as_deref() != Some("---") {
             return Err(KernelError::skill(
                 "Skill file must start with frontmatter delimiter ---",
@@ -123,8 +198,7 @@ impl SkillLoader {
         let mut yaml_lines = Vec::new();
         let mut found_end = false;
 
-        for line in lines {
-            let line = line?;
+        while let Some(line) = lines.next_line().await? {
             if line == "---" {
                 found_end = true;
                 break;
@@ -145,8 +219,8 @@ impl SkillLoader {
     /// Load a single skill from a file
     /// Only reads the frontmatter portion for efficiency
     /// Derives skill name from relative path (e.g., `skill_dir/a/b/SKILL.md` -> a:b)
-    fn load_skill(path: &Path, root_folder: &Path) -> Result<Skill> {
-        let frontmatter = Self::parse_skill_frontmatter(path)?;
+    async fn load_skill(path: &Path, root_folder: &Path) -> Result<Skill> {
+        let frontmatter = Self::parse_skill_frontmatter(path).await?;
         let skill_name = Self::derive_skill_name(path, root_folder);
 
         Ok(Skill {

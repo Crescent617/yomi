@@ -131,7 +131,7 @@ pub fn create_provider_for_model(model: &ModelConfig) -> Result<Arc<dyn Provider
 
 /// Load skills from disk and build a complete `AgentConfig` from a `Config`.
 /// `base_dir` is used to resolve relative skill folder paths.
-pub fn build_agent_config(config: &Config, base_dir: &Path) -> AgentConfig {
+pub async fn build_agent_config(config: &Config, base_dir: &Path) -> AgentConfig {
     let skill_folders = config
         .skill_folders()
         .iter()
@@ -139,12 +139,7 @@ pub fn build_agent_config(config: &Config, base_dir: &Path) -> AgentConfig {
         .map(|p| if p.is_relative() { base_dir.join(p) } else { p })
         .collect::<Vec<_>>();
 
-    let mut skills = SkillLoader::new(skill_folders)
-        .load_all()
-        .unwrap_or_else(|e| {
-            tracing::warn!("Failed to load skills: {e}");
-            Vec::new()
-        });
+    let mut skills = SkillLoader::new(skill_folders).load_all().await;
 
     deduplicate_skills(&mut skills);
 
@@ -195,16 +190,7 @@ pub async fn build_kernel(config: &Config, enable_cron: bool) -> Result<Arc<Kern
         })
         .collect();
 
-    let agent_config = tokio::task::spawn_blocking({
-        let config = config.clone();
-        move || build_agent_config(&config, &config.data_dir)
-    })
-    .await
-    .map_err(|e| {
-        KernelError::storage(format!(
-            "Failed to build agent config in blocking task: {e}"
-        ))
-    })?;
+    let agent_config = build_agent_config(config, &config.data_dir).await;
 
     let kernel = Kernel::new(
         &storage,

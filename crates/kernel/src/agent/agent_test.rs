@@ -215,3 +215,189 @@ async fn repeated_token_usage_events_are_recorded_once() {
     assert_eq!(records[0].prompt_tokens, 100);
     assert_eq!(records[0].completion_tokens, 10);
 }
+
+/// `/clear` must not drop the system prompt: the conversation is wiped but
+/// the agent keeps the prompt assembled at spawn.
+#[tokio::test]
+async fn handle_clear_keeps_system_prompt() {
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs};
+    use crate::types::{ContentBlock, Message, Role, SessionId};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    let shared = Arc::new(AgentShared::new(
+        Arc::new(BTreeMap::new()),
+        "test".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+        None,
+    ));
+
+    let working_dir = tempfile::tempdir().unwrap();
+    let args = AgentSpawnArgs {
+        base_prompt: "BASE_PROMPT_MARKER".to_string(),
+        skills: Vec::new(),
+        history: vec![
+            Arc::new(Message::user("hello")),
+            Arc::new(Message::user("again")),
+        ],
+        session_id: SessionId::new().to_string(),
+        parent_session_id: None,
+        max_iterations: 1,
+        working_dir: working_dir.path().to_path_buf(),
+        cancel_token: None,
+        tool_flags: crate::tools::ToolFlags::new(false),
+        file_state_store: None,
+        tool_blocklist: Vec::new(),
+        max_tool_output_length: 1024,
+        mailbox: Arc::new(crate::comms::Mailbox::new()),
+        input_bus: None,
+    };
+    let mut agent = Agent::new(&shared, args).await;
+
+    // Sanity: assembled system prompt + two history messages.
+    assert_eq!(agent.message_buffer.len(), 3);
+
+    agent.handle_clear().await;
+
+    let messages = agent.message_buffer.messages();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].role, Role::System);
+    let prompt_text = messages[0]
+        .content
+        .iter()
+        .find_map(|block| match block {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .expect("system prompt has text");
+    assert!(prompt_text.contains("BASE_PROMPT_MARKER"));
+}
+
+/// Compaction results intentionally exclude system messages (see
+/// `Compactor::full_compact`); `apply_compacted_messages` must re-prepend the
+/// buffer's system prompt so `/compact` and auto-compaction never lose it.
+#[tokio::test]
+async fn apply_compacted_messages_keeps_system_prompt() {
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs};
+    use crate::types::{ContentBlock, Message, Role, SessionId};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    let shared = Arc::new(AgentShared::new(
+        Arc::new(BTreeMap::new()),
+        "test".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+        None,
+    ));
+
+    let working_dir = tempfile::tempdir().unwrap();
+    let args = AgentSpawnArgs {
+        base_prompt: "BASE_PROMPT_MARKER".to_string(),
+        skills: Vec::new(),
+        history: vec![
+            Arc::new(Message::user("hello")),
+            Arc::new(Message::user("again")),
+        ],
+        session_id: SessionId::new().to_string(),
+        parent_session_id: None,
+        max_iterations: 1,
+        working_dir: working_dir.path().to_path_buf(),
+        cancel_token: None,
+        tool_flags: crate::tools::ToolFlags::new(false),
+        file_state_store: None,
+        tool_blocklist: Vec::new(),
+        max_tool_output_length: 1024,
+        mailbox: Arc::new(crate::comms::Mailbox::new()),
+        input_bus: None,
+    };
+    let mut agent = Agent::new(&shared, args).await;
+
+    // Full-compaction-shaped result: summary + recent, no system message.
+    let compacted = vec![
+        Arc::new(Message::user("[summary] talked about greetings")),
+        Arc::new(Message::user("again")),
+    ];
+    let rewritten = agent.apply_compacted_messages(compacted).await;
+
+    assert!(rewritten);
+    let messages = agent.message_buffer.messages();
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[0].role, Role::System);
+    let prompt_text = messages[0]
+        .content
+        .iter()
+        .find_map(|block| match block {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .expect("system prompt has text");
+    assert!(prompt_text.contains("BASE_PROMPT_MARKER"));
+    assert_eq!(messages[1].role, Role::User);
+}
+
+/// A cancelled agent exits its loop instead of resetting and continuing:
+/// the next input respawns it with freshly assembled context (this is what
+/// makes `/cancel` double as a session reload).
+#[tokio::test]
+async fn cancelled_agent_exits_loop() {
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs};
+    use crate::types::SessionId;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    let shared = Arc::new(AgentShared::new(
+        Arc::new(BTreeMap::new()),
+        "test".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+        None,
+    ));
+
+    let working_dir = tempfile::tempdir().unwrap();
+    let args = AgentSpawnArgs {
+        base_prompt: "test".to_string(),
+        skills: Vec::new(),
+        history: Vec::new(),
+        session_id: SessionId::new().to_string(),
+        parent_session_id: None,
+        max_iterations: 1,
+        working_dir: working_dir.path().to_path_buf(),
+        cancel_token: None,
+        tool_flags: crate::tools::ToolFlags::new(false),
+        file_state_store: None,
+        tool_blocklist: Vec::new(),
+        max_tool_output_length: 1024,
+        mailbox: Arc::new(crate::comms::Mailbox::new()),
+        input_bus: None,
+    };
+    let agent = Agent::new(&shared, args).await;
+    agent.cancel_token.cancel();
+
+    let result = tokio::time::timeout(Duration::from_secs(2), agent.start_loop())
+        .await
+        .expect("cancelled agent should exit promptly");
+    assert!(result.is_ok());
+}

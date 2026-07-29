@@ -251,11 +251,37 @@ impl Conductor {
     async fn handle_input(&self, sid: SessionId, input: AgentInput) {
         match input {
             AgentInput::Cancel => {
+                let mailbox = self.mailboxes.get(&sid).map(|mb| Arc::clone(&mb));
                 if let Some(agent) = self.active.get(&sid) {
                     agent.cancel_token.cancel();
                 }
-                if let Some(mb) = self.mailboxes.get(&sid) {
+                if let Some(ref mb) = mailbox {
                     mb.clear().await;
+                }
+                // A cancelled agent exits its loop instead of resetting. Wait
+                // for the task to finish; if new input arrived while it was
+                // winding down (its own wake_agent saw the entry above and
+                // bailed), respawn so that input is not stranded in the
+                // mailbox until yet another message arrives.
+                if let Some((_, agent)) = self.active.remove(&sid) {
+                    if tokio::time::timeout(std::time::Duration::from_secs(5), agent.handle)
+                        .await
+                        .is_err()
+                    {
+                        // Stuck task (e.g. a tool ignoring cancellation). It
+                        // never touches the mailbox again — a cancelled agent
+                        // always breaks at the Idle check — so a later spawn
+                        // cannot race it for input.
+                        tracing::warn!(
+                            "cancel: agent for session={} did not exit within 5s; detaching",
+                            sid.0
+                        );
+                    }
+                    if let Some(mb) = mailbox {
+                        if !mb.is_empty() {
+                            self.wake_agent(&sid, mb).await;
+                        }
+                    }
                 }
             }
             // PermissionResponse and AskUserResponse are consumed directly by
@@ -387,38 +413,15 @@ impl Conductor {
         let permission_state = Some(crate::permission::PermissionState::new(auto_approve_level));
 
         // Resolve workspace skill directory
-        let workspace_skill_dir = cwd
-            .as_ref()
-            .map(|d| d.join(".agents/skills"))
-            .filter(|d| d.exists());
+        let workspace_skill_dir = match cwd.as_ref() {
+            Some(dir) => crate::skill::workspace_skill_dir(dir).await,
+            None => None,
+        };
 
-        // Merge global skills with workspace skills
+        // Merge global skills with workspace skills (workspace wins on collision)
         let mut skills = self.agent_config.skills.clone();
         if let Some(dir) = workspace_skill_dir.as_ref() {
-            match crate::skill::SkillLoader::new(vec![dir.clone()]).load_all() {
-                Ok(mut ws_skills) => {
-                    let mut merged = std::collections::HashMap::new();
-                    for skill in &skills {
-                        merged.insert(skill.name.clone(), skill.clone());
-                    }
-                    for skill in ws_skills.drain(..) {
-                        merged.insert(skill.name.clone(), skill);
-                    }
-                    skills = merged.into_values().collect();
-                    tracing::info!(
-                        "loaded {} skill(s) from workspace {}",
-                        skills.len(),
-                        dir.display()
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to load workspace skills from {}: {}",
-                        dir.display(),
-                        e
-                    );
-                }
-            }
+            skills = crate::skill::load_workspace_skills(dir, skills).await;
         }
 
         // Clone AgentShared so we can mutate skill_folders per-session

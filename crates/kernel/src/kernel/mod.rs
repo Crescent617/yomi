@@ -879,38 +879,16 @@ impl Kernel {
             .or(project_dir)
             .or_else(|| Some(data_dir.join("workspace")));
 
-        let workspace_skill_dir = cwd.map(|d| d.join(".agents/skills")).filter(|d| d.exists());
-
-        let global_skills = self.agent_config.skills.clone();
-
-        let mut skills = match workspace_skill_dir {
-            Some(dir) => {
-                match crate::skill::SkillLoader::new(vec![dir]).load_all() {
-                    Ok(mut ws_skills) => {
-                        // Merge global and workspace skills, workspace wins on collision.
-                        let mut merged = std::collections::HashMap::new();
-                        for skill in global_skills {
-                            merged.insert(skill.name.clone(), skill);
-                        }
-                        for skill in ws_skills.drain(..) {
-                            merged.insert(skill.name.clone(), skill);
-                        }
-                        merged.into_values().collect()
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to load workspace skills for session {}: {}, using global skills only",
-                            session_id.0,
-                            e
-                        );
-                        global_skills
-                    }
-                }
-            }
-            None => global_skills,
+        let workspace_skill_dir = match cwd.as_ref() {
+            Some(dir) => crate::skill::workspace_skill_dir(dir).await,
+            None => None,
         };
 
-        crate::skill::deduplicate_skills(&mut skills);
+        let mut skills = self.agent_config.skills.clone();
+        if let Some(dir) = workspace_skill_dir.as_ref() {
+            skills = crate::skill::load_workspace_skills(dir, skills).await;
+        }
+
         Ok(skills)
     }
 
