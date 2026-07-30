@@ -3,6 +3,7 @@
   import { flip } from "svelte/animate";
   import { fade } from "svelte/transition";
   import {
+    clearToasts,
     pauseToasts,
     removeToast,
     resumeToasts,
@@ -59,6 +60,15 @@
     if (visibleToasts.length === 0) clearInteractionState();
   });
 
+  $effect(() => {
+    if (!expanded) return;
+    const onKeydown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") expanded = false;
+    };
+    window.addEventListener("keydown", onKeydown);
+    return () => window.removeEventListener("keydown", onKeydown);
+  });
+
   onDestroy(clearInteractionState);
 </script>
 
@@ -67,7 +77,7 @@
 {#if visibleToasts.length > 0}
   <div
     bind:this={container}
-    class="pointer-events-auto fixed right-4 top-8 z-[9999] w-[min(22rem,calc(100vw-2rem))]"
+    class="pointer-events-auto fixed right-4 top-2 z-[9999] w-[min(22rem,calc(100vw-2rem))]"
     class:space-y-2={expanded}
     onmouseenter={handleMouseEnter}
     onmouseleave={handleMouseLeave}
@@ -91,6 +101,7 @@
             ? "translate3d(0, 0, 0) scale(1)"
             : `translate3d(0, ${index * 7}px, 0) scale(${Math.max(0.9, 1 - index * 0.025)})`}
         style:opacity={!expanded && index > 3 ? 0 : 1}
+        inert={!expanded && index > 0}
         animate:flip={{ duration: 200 }}
         transition:fade={{ duration: 140 }}
       >
@@ -107,12 +118,24 @@
     {#if !expanded && visibleToasts.length > 1}
       <button
         type="button"
-        class="absolute -bottom-5 right-1 z-50 rounded-full bg-popover px-2 py-0.5 font-mono text-[10px] text-muted-foreground shadow-sm ring-1 ring-border/70 transition-colors hover:text-foreground"
+        class="absolute -bottom-2.5 right-2 z-50 rounded-full bg-popover px-2 py-0.5 font-mono text-[10px] text-muted-foreground shadow-sm ring-1 ring-border/70 transition-colors hover:text-foreground"
         onclick={() => (expanded = true)}
         aria-label={`Show ${visibleToasts.length} notifications`}
       >
         {visibleToasts.length} notifications
       </button>
+    {/if}
+
+    {#if expanded && visibleToasts.length > 1}
+      <div class="flex justify-end">
+        <button
+          type="button"
+          class="rounded-full bg-popover px-2 py-0.5 font-mono text-[10px] text-muted-foreground shadow-sm ring-1 ring-border/70 transition-colors hover:text-foreground"
+          onclick={clearToasts}
+        >
+          Clear all
+        </button>
+      </div>
     {/if}
   </div>
 {/if}
