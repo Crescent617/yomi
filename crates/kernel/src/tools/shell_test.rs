@@ -1,5 +1,6 @@
-use super::{extract_log_body, format_background_result, format_sync_output};
+use super::{extract_log_body, format_background_result, format_sync_output, ShellTool};
 use crate::tools::format_shell_message;
+use std::ffi::OsStr;
 use std::path::Path;
 
 #[test]
@@ -141,4 +142,70 @@ fn extract_log_body_empty_output() {
 fn extract_log_body_keeps_inner_hash_lines() {
     let log = "# Command: cat README.md\n\n# Title\nsome text\n\n# Exit: 0\n";
     assert_eq!(extract_log_body(log), "# Title\nsome text");
+}
+
+#[test]
+fn build_command_disables_interactive_prompters() {
+    let cmd = ShellTool::build_command("true", Path::new("/tmp"));
+    let env = |key: &str| {
+        cmd.as_std()
+            .get_envs()
+            .find(|(k, _)| *k == OsStr::new(key))
+            .and_then(|(_, v)| v)
+            .map(|v| v.to_string_lossy().into_owned())
+    };
+
+    assert_eq!(env("GIT_TERMINAL_PROMPT").as_deref(), Some("0"));
+    assert_eq!(env("SSH_ASKPASS_REQUIRE").as_deref(), Some("never"));
+    assert_eq!(env("GIT_PAGER").as_deref(), Some("cat"));
+
+    // GIT_SSH_COMMAND is only injected when the user hasn't set their own.
+    match std::env::var("GIT_SSH_COMMAND") {
+        Ok(user_value) => {
+            assert!(
+                env("GIT_SSH_COMMAND").is_none() || env("GIT_SSH_COMMAND") == Some(user_value),
+                "user GIT_SSH_COMMAND must not be overridden"
+            );
+        }
+        Err(_) => {
+            assert_eq!(
+                env("GIT_SSH_COMMAND").as_deref(),
+                Some("ssh -oBatchMode=yes")
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn spawned_command_cannot_open_controlling_tty() {
+    // setsid detaches the child from the controlling terminal, so opening
+    // /dev/tty fails — this is what makes sudo/ssh/gpg fail fast instead
+    // of blocking on a hidden password prompt.
+    let mut cmd = ShellTool::build_command("echo x < /dev/tty", Path::new("/tmp"));
+    let output = cmd.output().await.unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("/dev/tty"), "unexpected stderr: {stderr}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn spawned_command_reads_eof_on_stdin() {
+    let mut cmd = ShellTool::build_command("read line; echo \"got:[$line]\"", Path::new("/tmp"));
+    let output = cmd.output().await.unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "got:[]");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn spawned_command_runs_normally() {
+    let mut cmd = ShellTool::build_command("echo hello", Path::new("/tmp"));
+    let output = cmd.output().await.unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "hello");
 }

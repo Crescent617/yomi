@@ -29,6 +29,14 @@ fn strip_ansi(text: &str) -> Cow<'_, str> {
     ANSI_REGEX.replace_all(text, "")
 }
 
+// POSIX `setsid(2)`: put the calling process into a new session with no
+// controlling terminal. Declared manually to avoid a libc/nix dependency —
+// the symbol is always linked on unix targets.
+#[cfg(unix)]
+extern "C" {
+    fn setsid() -> i32;
+}
+
 pub const SHELL_TOOL_NAME: &str = "shell";
 
 #[derive(Clone)]
@@ -104,6 +112,7 @@ For long-running commands (e.g. start a server, run a script with unknown durati
             } else {
                 "Execute a bash command. Reserve exclusively for system commands that require shell execution. Prefer dedicated tools (read, edit, grep) when available. DO NOT use for git push or dangerous operations without explicit user request."
             },
+            " Commands run non-interactively (stdin is /dev/null, no controlling terminal), so interactive prompts (e.g. sudo password, ssh confirmation) fail immediately instead of waiting for input.",
             BG_GUIDE
         )
     }
@@ -177,18 +186,19 @@ impl ShellTool {
         }
     }
 
-    /// Execute command synchronously and return output directly
-    async fn exec_sync(
-        &self,
-        command: &str,
-        timeout_secs: Option<u64>,
-        working_dir: &std::path::Path,
-        cancel_token: Option<tokio_util::sync::CancellationToken>,
-        max_tool_output_length: usize,
-    ) -> Result<ToolOutput> {
+    /// Build the base `Command` for shell execution, hardened for
+    /// non-interactive use:
+    ///
+    /// - stdin is `/dev/null`, so reads get immediate EOF;
+    /// - on unix the child starts a new session (`setsid`), leaving it with
+    ///   no controlling terminal — programs that prompt via `/dev/tty`
+    ///   (sudo, ssh, gpg, ...) fail fast instead of blocking on a hidden
+    ///   prompt or garbling the TUI;
+    /// - env vars disable the remaining interactive prompters (git, ssh).
+    fn build_command(command: &str, working_dir: &std::path::Path) -> Command {
         let (shell, arg) = Self::shell_command();
-        let output_fut = Command::new(shell)
-            .arg(arg)
+        let mut cmd = Command::new(shell);
+        cmd.arg(arg)
             .arg(command)
             .current_dir(working_dir)
             .stdin(Stdio::null())
@@ -198,10 +208,43 @@ impl ShellTool {
             .env("GIT_EDITOR", "true")
             .env("GIT_SEQUENCE_EDITOR", "true")
             .env("GIT_TERMINAL_PROMPT", "0")
+            .env("SSH_ASKPASS_REQUIRE", "never")
             .env("PAGER", "cat")
             .env("EDITOR", "true")
-            .kill_on_drop(true)
-            .output();
+            .kill_on_drop(true);
+
+        // BatchMode makes ssh fail instead of prompting (host-key confirm,
+        // passphrase). Only set when the user hasn't configured their own,
+        // since GIT_SSH_COMMAND may carry functional settings (key, port).
+        if std::env::var_os("GIT_SSH_COMMAND").is_none() {
+            cmd.env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes");
+        }
+
+        #[cfg(unix)]
+        // SAFETY: `pre_exec` runs in the forked child before exec, where only
+        // async-signal-safe operations are allowed; `setsid` qualifies.
+        unsafe {
+            cmd.pre_exec(|| {
+                if setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+
+        cmd
+    }
+
+    /// Execute command synchronously and return output directly
+    async fn exec_sync(
+        &self,
+        command: &str,
+        timeout_secs: Option<u64>,
+        working_dir: &std::path::Path,
+        cancel_token: Option<tokio_util::sync::CancellationToken>,
+        max_tool_output_length: usize,
+    ) -> Result<ToolOutput> {
+        let output_fut = Self::build_command(command, working_dir).output();
 
         let timeout_duration = Duration::from_secs(timeout_secs.unwrap_or(300));
         let output_result = match cancel_token {
@@ -284,22 +327,7 @@ impl ShellTool {
         let output_path_str = output_path.to_string_lossy().to_string();
 
         // Start the process and get PID immediately
-        let (shell, arg) = Self::shell_command();
-        let child = Command::new(shell)
-            .arg(arg)
-            .arg(command)
-            .current_dir(working_dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .env("GIT_PAGER", "cat")
-            .env("GIT_EDITOR", "true")
-            .env("GIT_SEQUENCE_EDITOR", "true")
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("PAGER", "cat")
-            .env("EDITOR", "true")
-            .kill_on_drop(true)
-            .spawn()?;
+        let child = Self::build_command(command, working_dir).spawn()?;
 
         let pid = child.id().unwrap_or(0);
         let tracker_guard = ctx
