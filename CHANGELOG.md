@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.28] - 2026-07-30
+
+### Fixed
+- 修复内核配置编辑器在 macOS 上按 Cmd+Backspace 删除到行首后，界面仍残留已删除文字的问题（实际内容并未受影响）。
+
 ## [0.7.27] - 2026-07-30
 
 ### Changed
