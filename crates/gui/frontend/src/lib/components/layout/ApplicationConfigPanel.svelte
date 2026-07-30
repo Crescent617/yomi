@@ -2,46 +2,31 @@
   import { onMount } from "svelte";
   import {
     Bell,
-    Check,
     Info,
     MessageSquare,
     Monitor,
     Moon,
     PanelLeft,
     Rabbit,
-    RotateCcw,
-    Save,
     Sun,
     Type,
     Zap,
   } from "lucide-svelte";
   import {
-    defaultGuiPreferences,
-    replaceGuiPreferences,
-    saveGuiPreferences,
-    snapshotGuiPreferences,
+    guiPreferences,
+    applyGuiPreferences,
+    scheduleGuiPreferencesSave,
     type FontSizePreference,
     type GuiPreferences,
     type ThemePreference,
     type ActivityGroupExpansionPreference,
   } from "../../settings.svelte";
-  import { showNotification } from "../../state.svelte";
   import * as api from "../../api";
 
-  interface Props {
-    onDirtyChange?: (dirty: boolean) => void;
-  }
-
-  let { onDirtyChange }: Props = $props();
-
-  let saved = $state<GuiPreferences>(snapshotGuiPreferences());
-  let draft = $state<GuiPreferences>(snapshotGuiPreferences());
-  let saving = $state(false);
   let error = $state<string | null>(null);
   let pet_packs = $state<api.PetPack[]>([]);
   let pet_packs_loading = $state(true);
   let pet_packs_error = $state<string | null>(null);
-  let pet_preview_changed = false;
 
   const themes: Array<{
     id: ThemePreference;
@@ -82,19 +67,13 @@
   let petSync = Promise.resolve();
   let keepAwakeSync = Promise.resolve();
 
-  const dirty = $derived(
-    JSON.stringify($state.snapshot(draft)) !==
-      JSON.stringify($state.snapshot(saved)),
-  );
   const selected_pet_pack_id = $derived(
-    pet_packs.some((pack) => pack.id === draft.desktop_pet.selected_pet_id)
-      ? draft.desktop_pet.selected_pet_id
+    pet_packs.some(
+      (pack) => pack.id === guiPreferences.desktop_pet.selected_pet_id,
+    )
+      ? guiPreferences.desktop_pet.selected_pet_id
       : (pet_packs[0]?.id ?? null),
   );
-
-  $effect(() => {
-    onDirtyChange?.(dirty);
-  });
 
   onMount(() => {
     let disposed = false;
@@ -104,6 +83,7 @@
         if (disposed) return;
         pet_packs = packs;
         pet_packs_error = null;
+        normalizePetSelection();
       })
       .catch((load_error) => {
         if (disposed) return;
@@ -116,22 +96,10 @@
 
     return () => {
       disposed = true;
-      if (dirty) {
-        const original = $state.snapshot(saved);
-        replaceGuiPreferences(original);
-        if (pet_preview_changed) {
-          void syncPetPreview(original.desktop_pet).catch(() => {});
-        }
-        // Keep-awake previews apply the OS assertion immediately — revert
-        // it too, or the machine stays awake with the pref showing off.
-        void syncKeepAwake(original.power.keep_awake).catch(() => {});
-      }
-      onDirtyChange?.(false);
     };
   });
 
   function syncPetPreview(value: GuiPreferences["desktop_pet"]): Promise<void> {
-    pet_preview_changed = true;
     const snapshot = {
       enabled: value.enabled,
       selected_pet_id: pet_packs.some(
@@ -160,138 +128,64 @@
     return keepAwakeSync;
   }
 
-  function preview(update: (value: GuiPreferences) => void) {
-    const previous_pet = { ...draft.desktop_pet };
-    const previous_keep_awake = draft.power.keep_awake;
-    update(draft);
-    replaceGuiPreferences(draft);
+  /**
+   * Single write path for every control: mutate the live preferences, apply
+   * visual side effects, preview OS/window side effects, and persist
+   * (debounced) — no draft, no save button.
+   */
+  function update(mutate: (value: GuiPreferences) => void) {
+    const previous_pet = { ...guiPreferences.desktop_pet };
+    const previous_keep_awake = guiPreferences.power.keep_awake;
+    mutate(guiPreferences);
+    applyGuiPreferences(guiPreferences);
+    scheduleGuiPreferencesSave();
     error = null;
-    const effective_pet = {
-      enabled: draft.desktop_pet.enabled,
-      selected_pet_id: selected_pet_pack_id,
-      scale: draft.desktop_pet.scale,
-    };
+    const pet = guiPreferences.desktop_pet;
     if (
-      effective_pet.enabled !== previous_pet.enabled ||
-      effective_pet.selected_pet_id !== previous_pet.selected_pet_id ||
-      effective_pet.scale !== previous_pet.scale
+      pet.enabled !== previous_pet.enabled ||
+      pet.selected_pet_id !== previous_pet.selected_pet_id ||
+      pet.scale !== previous_pet.scale
     ) {
-      void syncPetPreview(effective_pet).catch((syncError) => {
+      void syncPetPreview({
+        enabled: pet.enabled,
+        selected_pet_id: selected_pet_pack_id,
+        scale: pet.scale,
+      }).catch((syncError) => {
         error = `Desktop pet preview failed: ${api.errorMessage(syncError)}`;
       });
     }
-    if (draft.power.keep_awake !== previous_keep_awake) {
-      void syncKeepAwake(draft.power.keep_awake).catch((syncError) => {
+    if (guiPreferences.power.keep_awake !== previous_keep_awake) {
+      void syncKeepAwake(guiPreferences.power.keep_awake).catch((syncError) => {
         error = `Keep-awake preview failed: ${api.errorMessage(syncError)}`;
       });
     }
   }
 
-  function restore(target: GuiPreferences) {
-    const copy = $state.snapshot(target);
-    Object.assign(draft.appearance, copy.appearance);
-    Object.assign(draft.layout, copy.layout);
-    Object.assign(draft.notifications, copy.notifications);
-    Object.assign(draft.desktop_pet, copy.desktop_pet);
-    Object.assign(draft.chat, copy.chat);
-    Object.assign(draft.power, copy.power);
-    replaceGuiPreferences(copy);
-    error = null;
-    void syncPetPreview(copy.desktop_pet).catch((syncError) => {
-      error = `Desktop pet preview failed: ${api.errorMessage(syncError)}`;
-    });
-    void syncKeepAwake(copy.power.keep_awake).catch((syncError) => {
-      error = `Keep-awake restore failed: ${api.errorMessage(syncError)}`;
-    });
-  }
-
-  async function save() {
-    if (!dirty || saving) return;
-    saving = true;
-    error = null;
-    try {
-      // Normalize a stale persisted selection only on an explicit save and
-      // only when the pack list loaded; keep the user's selection otherwise.
-      if (
-        !pet_packs_loading &&
-        !pet_packs_error &&
-        !pet_packs.some((pack) => pack.id === draft.desktop_pet.selected_pet_id)
-      ) {
-        draft.desktop_pet.selected_pet_id = pet_packs[0]?.id ?? null;
-        if (pet_packs.length === 0) draft.desktop_pet.enabled = false;
-      }
-      await saveGuiPreferences($state.snapshot(draft));
-      saved = snapshotGuiPreferences();
-      restore(saved);
-      showNotification("Application preferences saved", "success");
-    } catch (saveError) {
-      console.error("Failed to save application preferences:", saveError);
-      error =
-        saveError instanceof Error ? saveError.message : String(saveError);
-      showNotification("Failed to save application preferences", "error");
-    } finally {
-      saving = false;
+  /** Persist a valid pet selection once the local pack list is known. */
+  function normalizePetSelection() {
+    const pet = guiPreferences.desktop_pet;
+    if (pet_packs.some((pack) => pack.id === pet.selected_pet_id)) return;
+    if (pet_packs.length === 0) {
+      if (pet.selected_pet_id === null && !pet.enabled) return;
+      update((value) => {
+        value.desktop_pet.selected_pet_id = null;
+        value.desktop_pet.enabled = false;
+      });
+    } else {
+      update((value) => {
+        value.desktop_pet.selected_pet_id = pet_packs[0].id;
+      });
     }
-  }
-
-  function cancel() {
-    restore(saved);
-  }
-
-  function reset() {
-    restore(defaultGuiPreferences);
   }
 </script>
 
 <div class="min-h-0 min-w-0 flex-1 overflow-y-auto bg-background">
   <div class="w-full px-4 py-5 sm:px-6 lg:py-7">
-    <div class="mb-5 flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <div class="flex items-center gap-2">
-          <h2 class="text-base font-semibold text-foreground">Application</h2>
-          {#if dirty}
-            <span
-              class="rounded-full bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning"
-              >Unsaved</span
-            >
-          {:else}
-            <span
-              class="inline-flex items-center gap-1 text-[11px] text-muted-foreground"
-            >
-              <Check size={12} /> Saved locally
-            </span>
-          {/if}
-        </div>
-        <p class="mt-1 text-sm text-muted-foreground">
-          Personalize Yomi on this device. Changes preview immediately.
-        </p>
-      </div>
-      <div class="flex items-center gap-2">
-        <button
-          type="button"
-          onclick={reset}
-          class="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-        >
-          <RotateCcw size={13} /> Reset
-        </button>
-        <button
-          type="button"
-          onclick={cancel}
-          disabled={!dirty || saving}
-          class="rounded-md border border-border px-2.5 py-1.5 text-xs text-foreground transition-colors hover:bg-secondary disabled:opacity-40"
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          onclick={save}
-          disabled={!dirty || saving}
-          class="inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-40"
-        >
-          <Save size={13} />
-          {saving ? "Saving…" : "Save"}
-        </button>
-      </div>
+    <div class="mb-5">
+      <h2 class="text-base font-semibold text-foreground">Application</h2>
+      <p class="mt-1 text-sm text-muted-foreground">
+        Personalize Yomi on this device. Changes apply and save automatically.
+      </p>
     </div>
 
     {#if error}
@@ -329,8 +223,8 @@
                 <button
                   type="button"
                   onclick={() =>
-                    preview((value) => (value.appearance.theme = theme.id))}
-                  class="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors {draft
+                    update((value) => (value.appearance.theme = theme.id))}
+                  class="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors {guiPreferences
                     .appearance.theme === theme.id
                     ? 'bg-background text-foreground shadow-sm'
                     : 'text-muted-foreground hover:text-foreground'}"
@@ -355,8 +249,8 @@
                 <button
                   type="button"
                   onclick={() =>
-                    preview((value) => (value.appearance.fontSize = size.id))}
-                  class="rounded-md px-2.5 py-1.5 text-xs transition-colors {draft
+                    update((value) => (value.appearance.fontSize = size.id))}
+                  class="rounded-md px-2.5 py-1.5 text-xs transition-colors {guiPreferences
                     .appearance.fontSize === size.id
                     ? 'bg-background text-foreground shadow-sm'
                     : 'text-muted-foreground hover:text-foreground'}"
@@ -377,7 +271,7 @@
             <PanelLeft size={15} class="text-muted-foreground" /> Layout
           </div>
           <p class="mt-0.5 text-xs text-muted-foreground">
-            Restore your workspace the way you left it.
+            Control how sessions appear in the sidebar.
           </p>
         </div>
         <div class="divide-y divide-border">
@@ -395,9 +289,9 @@
             >
               <input
                 type="checkbox"
-                checked={draft.layout.show_project_sessions_only}
+                checked={guiPreferences.layout.show_project_sessions_only}
                 onchange={(event) =>
-                  preview(
+                  update(
                     (value) =>
                       (value.layout.show_project_sessions_only =
                         event.currentTarget.checked),
@@ -445,7 +339,7 @@
             </div>
           </div>
           <p class="mt-0.5 text-xs text-muted-foreground">
-            Keep a compact companion nearby for session status and requests.
+            Keep a compact companion nearby for session status.
           </p>
         </div>
         <div class="divide-y divide-border">
@@ -475,7 +369,7 @@
             <select
               value={selected_pet_pack_id ?? ""}
               onchange={(event) =>
-                preview(
+                update(
                   (value) =>
                     (value.desktop_pet.selected_pet_id =
                       event.currentTarget.value || null),
@@ -484,7 +378,7 @@
               class="h-8 min-w-48 rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-ring disabled:opacity-40"
               aria-label="Desktop pet pack"
             >
-              {#if draft.desktop_pet.selected_pet_id === null || !pet_packs.some((pack) => pack.id === draft.desktop_pet.selected_pet_id)}
+              {#if guiPreferences.desktop_pet.selected_pet_id === null || !pet_packs.some((pack) => pack.id === guiPreferences.desktop_pet.selected_pet_id)}
                 <option value="" disabled>Choose a pet</option>
               {/if}
               {#each pet_packs as pack (pack.id)}
@@ -498,13 +392,13 @@
             <div>
               <div class="text-sm text-foreground">Pet size</div>
               <div class="text-xs text-muted-foreground">
-                Scale of the desktop pet window.
+                Scale the desktop pet window.
               </div>
             </div>
             <select
-              value={String(draft.desktop_pet.scale)}
+              value={String(guiPreferences.desktop_pet.scale)}
               onchange={(event) =>
-                preview(
+                update(
                   (value) =>
                     (value.desktop_pet.scale = Number(
                       event.currentTarget.value,
@@ -517,9 +411,9 @@
               {#each pet_scale_options as option (option.value)}
                 <option value={String(option.value)}>{option.label}</option>
               {/each}
-              {#if !pet_scale_options.some((option) => option.value === draft.desktop_pet.scale)}
-                <option value={String(draft.desktop_pet.scale)}>
-                  {Math.round(draft.desktop_pet.scale * 100)}%
+              {#if !pet_scale_options.some((option) => option.value === guiPreferences.desktop_pet.scale)}
+                <option value={String(guiPreferences.desktop_pet.scale)}>
+                  {Math.round(guiPreferences.desktop_pet.scale * 100)}%
                 </option>
               {/if}
             </select>
@@ -533,15 +427,15 @@
             <div>
               <div class="text-sm text-foreground">Enable desktop pet</div>
               <div class="text-xs text-muted-foreground">
-                Preview the always-on-top pet window immediately.
+                Show the always-on-top pet window on your desktop.
               </div>
             </div>
             <input
               type="checkbox"
-              checked={draft.desktop_pet.enabled}
+              checked={guiPreferences.desktop_pet.enabled}
               disabled={pet_packs_loading || pet_packs.length === 0}
               onchange={(event) =>
-                preview((value) => {
+                update((value) => {
                   value.desktop_pet.enabled = event.currentTarget.checked;
                   if (
                     value.desktop_pet.enabled &&
@@ -564,7 +458,7 @@
             <MessageSquare size={15} class="text-muted-foreground" /> Chat
           </div>
           <p class="mt-0.5 text-xs text-muted-foreground">
-            Defaults for new conversations.
+            How conversations look and behave.
           </p>
         </div>
         <div>
@@ -579,9 +473,9 @@
             </div>
             <input
               type="checkbox"
-              checked={draft.chat.autoScroll}
+              checked={guiPreferences.chat.autoScroll}
               onchange={(event) =>
-                preview(
+                update(
                   (value) =>
                     (value.chat.autoScroll = event.currentTarget.checked),
                 )}
@@ -598,9 +492,9 @@
               </div>
             </div>
             <select
-              value={draft.chat.activityGroupExpansion}
+              value={guiPreferences.chat.activityGroupExpansion}
               onchange={(event) =>
-                preview(
+                update(
                   (value) =>
                     (value.chat.activityGroupExpansion = event.currentTarget
                       .value as ActivityGroupExpansionPreference),
@@ -628,7 +522,7 @@
           class="flex cursor-pointer items-center justify-between gap-4 px-4 py-3.5"
         >
           <div>
-            <div class="text-sm text-foreground">Notifications</div>
+            <div class="text-sm text-foreground">In-app notifications</div>
             <div class="text-xs text-muted-foreground">
               Show notification messages inside Yomi. Kernel events stay
               connected.
@@ -636,9 +530,9 @@
           </div>
           <input
             type="checkbox"
-            checked={draft.notifications.enabled}
+            checked={guiPreferences.notifications.enabled}
             onchange={(event) =>
-              preview(
+              update(
                 (value) =>
                   (value.notifications.enabled = event.currentTarget.checked),
               )}
@@ -667,9 +561,9 @@
           </div>
           <input
             type="checkbox"
-            checked={draft.power.keep_awake}
+            checked={guiPreferences.power.keep_awake}
             onchange={(event) =>
-              preview(
+              update(
                 (value) =>
                   (value.power.keep_awake = event.currentTarget.checked),
               )}
