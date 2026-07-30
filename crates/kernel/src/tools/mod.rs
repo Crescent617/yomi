@@ -339,11 +339,6 @@ impl ToolRegistry {
             }
         }
 
-        // Register Sleep tool if enabled
-        if config.flags.sleep {
-            self.register(SleepTool::new(config.input_bus.cloned()));
-        }
-
         // Register cron tool if enabled and the cron store is available
         if config.flags.cron {
             if let Some(store) = config.shared.cron_store.clone() {
@@ -403,8 +398,6 @@ pub struct ToolFlags {
     pub reminder: bool,
     /// Enable goal tracking tool.
     pub goal: bool,
-    /// Enable sleep tool for testing.
-    pub sleep: bool,
     /// Enable cron tool for managing scheduled jobs.
     pub cron: bool,
     /// Enable todo tool for agent task tracking.
@@ -418,7 +411,6 @@ impl ToolFlags {
             subagent: enable_subagent,
             reminder: false,
             goal: true,
-            sleep: true,
             cron: false,
             todo: false,
         }
