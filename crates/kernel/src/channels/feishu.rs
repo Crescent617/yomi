@@ -1063,8 +1063,11 @@ impl FeishuAdapter {
         let thread_part = thread_id
             .as_ref()
             .map_or(String::new(), |tid| format!("[thread: {tid}]"));
+        let root_part = root_id
+            .as_ref()
+            .map_or(String::new(), |rid| format!("[root: {rid}]"));
         let header = format!(
-            "[{ts}][from_user_id: {user_id}][chat_id: {chat_id}]{thread_part}[platform: feishu]"
+            "[{ts}][from_user_id: {user_id}][chat_id: {chat_id}]{thread_part}{root_part}[platform: feishu]"
         );
         let formatted = if text.is_empty() {
             header
@@ -1077,6 +1080,8 @@ impl FeishuAdapter {
             msg_id,
             user_id,
             is_mention,
+            thread_id = thread_id.as_deref().unwrap_or(""),
+            root_id = root_id.as_deref().unwrap_or(""),
             text,
             image_count = image_keys.len(),
             "Feishu message"

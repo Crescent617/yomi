@@ -217,7 +217,9 @@ pub struct ChannelMessage {
     pub thread_id: Option<String>,
     /// Root message ID of the reply chain (e.g. Feishu `root_id`). In a
     /// thread, every message replies to the thread's root message, so this
-    /// identifies the message that started the thread.
+    /// identifies the message that started the thread. Plain quote-replies
+    /// outside any thread carry it too — the hub only uses it for session
+    /// mapping when `thread_id` is also present.
     pub root_id: Option<String>,
     /// Whether the message was sent in a group chat (vs. private/p2p).
     pub is_group: bool,

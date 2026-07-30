@@ -777,6 +777,17 @@ fn mapping_key_reply_in_thread_private_chat_stays_chat_scoped() {
 }
 
 #[test]
+fn mapping_key_reply_in_thread_quote_reply_starts_own_session() {
+    // Plain quote-reply (root_id set, but NOT inside any thread): keys by
+    // its own message id so it starts a fresh session — the bot's
+    // reply_in_thread answer opens a new thread anchored at this message,
+    // whose follow-ups then carry root_id = this message's id.
+    let mut msg = channel_message(None, true, true);
+    msg.root_id = Some("old-msg".to_string());
+    assert_eq!(session_mapping_key(&msg, "chat-1", true), "msg-1");
+}
+
+#[test]
 fn mapping_key_without_reply_in_thread_unchanged() {
     // Quote-reply in a group with reply_in_thread off: root_id is ignored.
     let mut msg = channel_message(None, true, true);
@@ -797,7 +808,8 @@ fn chat_level_message_only_for_top_level_group_in_thread_mode() {
     // In-thread message → thread session.
     let mut msg = channel_message(Some("thread-1"), true, true);
     assert!(!is_chat_level_message(&msg, true));
-    // Quote-reply (root_id set) → thread session of the quoted root.
+    // Quote-reply (root_id set, no thread) → its own new session, not
+    // chat-level.
     msg.root_id = Some("msg-root".to_string());
     assert!(!is_chat_level_message(&msg, true));
 

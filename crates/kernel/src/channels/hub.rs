@@ -703,6 +703,15 @@ async fn handle_incoming_message(
     let chat_id = msg.external_chat_id.clone();
     let reply_msg_id = reply_anchor(&msg, config.reply_in_thread);
     let mapping_key = session_mapping_key(&msg, &chat_id, config.reply_in_thread);
+    info!(
+        channel = %channel_name,
+        chat_id = %chat_id,
+        msg_id = msg.external_message_id.as_deref().unwrap_or(""),
+        thread_id = msg.thread_id.as_deref().unwrap_or(""),
+        root_id = msg.root_id.as_deref().unwrap_or(""),
+        mapping_key = %mapping_key,
+        "session mapping"
+    );
 
     let cmd = parse_channel_command(msg.raw_text.as_deref());
     match cmd {
@@ -1154,17 +1163,31 @@ fn reply_anchor(msg: &ChannelMessage, reply_in_thread: bool) -> Option<String> {
 /// In `reply_in_thread` group chats each conversation thread gets its own
 /// session. The bot's reply is what opens the thread, so the thread's
 /// *starting* message itself carries no `thread_id` — but every message
-/// inside the thread replies to the thread's root message (Feishu sets
-/// `root_id` to it). Keying by root/message id therefore keeps a whole
-/// thread in one session while each new top-level message starts a fresh
-/// session.
+/// inside the thread carries one and replies to the thread's root message
+/// (Feishu sets `root_id` to it). Keying in-thread messages by root id and
+/// everything else by its own message id therefore keeps a whole thread in
+/// one session while each new top-level message starts a fresh session.
+///
+/// A plain quote-reply (not in any thread) also carries `root_id` — it must
+/// NOT join the quoted message's session: it starts its own, and the bot's
+/// `reply_in_thread` answer opens a fresh thread anchored at it.
 fn session_mapping_key(msg: &ChannelMessage, chat_id: &str, reply_in_thread: bool) -> String {
     if reply_in_thread && msg.is_group {
-        msg.root_id
-            .clone()
-            .or_else(|| msg.thread_id.clone())
-            .or_else(|| msg.external_message_id.clone())
-            .unwrap_or_else(|| chat_id.to_string())
+        if msg.thread_id.is_some() {
+            // Inside a thread: key by the thread's root message so the whole
+            // thread shares one session (fall back to thread_id for older
+            // event shapes without root_id).
+            msg.root_id
+                .clone()
+                .or_else(|| msg.thread_id.clone())
+                .unwrap_or_else(|| chat_id.to_string())
+        } else {
+            // Top-level trigger or plain quote-reply: a fresh session keyed
+            // by the message itself.
+            msg.external_message_id
+                .clone()
+                .unwrap_or_else(|| chat_id.to_string())
+        }
     } else {
         msg.thread_id.clone().unwrap_or_else(|| chat_id.to_string())
     }
@@ -1188,6 +1211,7 @@ async fn get_or_create_session(
     reply_msg_id: Option<&str>,
 ) -> Result<SessionId> {
     if let Some(sid) = store.find_mapping(channel_name, mapping_key).await? {
+        info!(channel = %channel_name, mapping_key, session_id = %sid.0, "reusing session");
         store
             .save_mapping(channel_name, mapping_key, &sid, chat_id, reply_msg_id)
             .await?;
@@ -1214,6 +1238,7 @@ async fn get_or_create_session(
     store
         .save_mapping(channel_name, mapping_key, &sid, chat_id, reply_msg_id)
         .await?;
+    info!(channel = %channel_name, mapping_key, session_id = %sid.0, "created session");
     Ok(sid)
 }
 
