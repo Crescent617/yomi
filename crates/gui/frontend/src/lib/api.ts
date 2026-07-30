@@ -716,7 +716,7 @@ export async function getUsageRecords(
 }
 
 export async function getTodos(session_id: string): Promise<{
-  todos: { id: string; content: string; status: string }[];
+  todos: { id: number; content: string; status: string }[];
 }> {
   return invokeCmd("get_todos", { session_id: session_id });
 }

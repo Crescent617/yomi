@@ -46,7 +46,7 @@ async fn test_interval_zero_does_not_trigger() {
     let temp = TempDir::new().unwrap();
     let store = make_store_with_todos(
         &temp,
-        r#"{"todos":[{"id":"1","content":"A","status":"pending"}]}"#,
+        r#"{"todos":[{"id":1,"content":"A","status":"pending"}]}"#,
     )
     .await;
     let interceptor = TodoReminderInterceptor::new(store).with_interval(0);
@@ -65,7 +65,7 @@ async fn test_triggers_on_interval() {
     let temp = TempDir::new().unwrap();
     let store = make_store_with_todos(
         &temp,
-        r#"{"todos":[{"id":"1","content":"A","status":"pending"}]}"#,
+        r#"{"todos":[{"id":1,"content":"A","status":"pending"}]}"#,
     )
     .await;
     let interceptor = TodoReminderInterceptor::new(store).with_interval(5);
@@ -87,7 +87,7 @@ async fn test_does_not_trigger_when_not_yet_interval() {
     let temp = TempDir::new().unwrap();
     let store = make_store_with_todos(
         &temp,
-        r#"{"todos":[{"id":"1","content":"A","status":"pending"}]}"#,
+        r#"{"todos":[{"id":1,"content":"A","status":"pending"}]}"#,
     )
     .await;
     let interceptor = TodoReminderInterceptor::new(store).with_interval(5);
@@ -119,7 +119,7 @@ async fn test_only_completed_todos_does_nothing() {
     let temp = TempDir::new().unwrap();
     let store = make_store_with_todos(
         &temp,
-        r#"{"todos":[{"id":"1","content":"A","status":"completed"}]}"#,
+        r#"{"todos":[{"id":1,"content":"A","status":"completed"}]}"#,
     )
     .await;
     let interceptor = TodoReminderInterceptor::new(store);
@@ -136,7 +136,7 @@ async fn test_completed_todos_filtered() {
     let temp = TempDir::new().unwrap();
     let store = make_store_with_todos(
             &temp,
-            r#"{"todos":[{"id":"1","content":"Done","status":"completed"},{"id":"2","content":"B","status":"in_progress"}]}"#,
+            r#"{"todos":[{"id":1,"content":"Done","status":"completed"},{"id":2,"content":"B","status":"in_progress"}]}"#,
         )
         .await;
     let interceptor = TodoReminderInterceptor::new(store);
@@ -156,7 +156,7 @@ async fn test_reminder_appended_to_last_text_block() {
     let temp = TempDir::new().unwrap();
     let store = make_store_with_todos(
         &temp,
-        r#"{"todos":[{"id":"1","content":"A","status":"pending"}]}"#,
+        r#"{"todos":[{"id":1,"content":"A","status":"pending"}]}"#,
     )
     .await;
     let interceptor = TodoReminderInterceptor::new(store);
@@ -177,7 +177,7 @@ async fn test_reminder_creates_new_block_when_no_text() {
     let temp = TempDir::new().unwrap();
     let store = make_store_with_todos(
         &temp,
-        r#"{"todos":[{"id":"1","content":"A","status":"pending"}]}"#,
+        r#"{"todos":[{"id":1,"content":"A","status":"pending"}]}"#,
     )
     .await;
     let interceptor = TodoReminderInterceptor::new(store);
@@ -194,7 +194,7 @@ async fn test_system_reminder_tags_present() {
     let temp = TempDir::new().unwrap();
     let store = make_store_with_todos(
         &temp,
-        r#"{"todos":[{"id":"1","content":"A","status":"pending"}]}"#,
+        r#"{"todos":[{"id":1,"content":"A","status":"pending"}]}"#,
     )
     .await;
     let interceptor = TodoReminderInterceptor::new(store);
@@ -214,7 +214,7 @@ async fn test_resets_interval_after_todo_tool() {
     let temp = TempDir::new().unwrap();
     let store = make_store_with_todos(
         &temp,
-        r#"{"todos":[{"id":"1","content":"A","status":"pending"}]}"#,
+        r#"{"todos":[{"id":1,"content":"A","status":"pending"}]}"#,
     )
     .await;
     let interceptor = TodoReminderInterceptor::new(store).with_interval(5);
@@ -267,7 +267,7 @@ async fn test_non_todo_tool_does_not_reset() {
     let temp = TempDir::new().unwrap();
     let store = make_store_with_todos(
         &temp,
-        r#"{"todos":[{"id":"1","content":"A","status":"pending"}]}"#,
+        r#"{"todos":[{"id":1,"content":"A","status":"pending"}]}"#,
     )
     .await;
     let interceptor = TodoReminderInterceptor::new(store).with_interval(5);

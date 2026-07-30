@@ -380,7 +380,7 @@ export interface SessionState {
   git_info?: GitInfo | null;
   git_refresh_revision?: number;
   goal?: { description: string; status: string } | null;
-  todos?: { id: string; content: string; status: string }[];
+  todos?: { id: number; content: string; status: string }[];
   subagents: SubagentInfo[];
 }
 
@@ -538,7 +538,6 @@ export const appState = $state({
   rightPanelCollapsed: true,
   activePanel: "chat" as ActivePanel,
   config_dirty: false,
-  app_config_dirty: false,
   config_restart_required: false,
   config_applied: false,
 });
@@ -547,7 +546,7 @@ export function requestActivePanel(panel: ActivePanel): boolean {
   if (panel === appState.activePanel) return true;
   if (
     appState.activePanel === "config" &&
-    (appState.config_dirty || appState.app_config_dirty) &&
+    appState.config_dirty &&
     typeof window !== "undefined" &&
     !window.confirm("You have unsaved config changes. Leave without saving?")
   ) {

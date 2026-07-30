@@ -38,7 +38,7 @@ pub enum TodoStatus {
 /// A todo item
 #[derive(Debug, Clone, Deserialize)]
 pub struct TodoItem {
-    pub id: String,
+    pub id: u64,
     pub content: String,
     pub status: TodoStatus,
 }

@@ -51,7 +51,7 @@ impl TodoReminderInterceptor {
                 TodoStatus::Completed => "(completed)",
             };
             reminder.push('\n');
-            reminder.push_str(&todo.id);
+            reminder.push_str(&todo.id.to_string());
             reminder.push_str(". ");
             reminder.push_str(icon);
             reminder.push(' ');

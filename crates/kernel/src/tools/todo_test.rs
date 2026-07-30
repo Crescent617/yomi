@@ -29,8 +29,8 @@ async fn test_todo_write_and_read() {
     let write_input = json!({
         "action": "write",
         "todos": [
-            {"id": "1", "content": "Task 1", "status": "pending"},
-            {"id": "2", "content": "Task 2", "status": "in_progress"}
+            {"id": 1, "content": "Task 1", "status": "pending"},
+            {"id": 2, "content": "Task 2", "status": "in_progress"}
         ]
     });
     let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
@@ -53,7 +53,7 @@ async fn test_todo_write_empty_clears() {
     // First add some todos
     let input1 = json!({
         "action": "write",
-        "todos": [{"id": "1", "content": "Task 1", "status": "pending"}]
+        "todos": [{"id": 1, "content": "Task 1", "status": "pending"}]
     });
     let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
     tool.exec(input1, ctx).await.unwrap();
@@ -75,7 +75,7 @@ async fn test_todo_write_missing_content() {
 
     let input = json!({
         "action": "write",
-        "todos": [{"id": "1", "status": "pending"}]
+        "todos": [{"id": 1, "status": "pending"}]
     });
     let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
     let result = tool.exec(input, ctx).await;
@@ -94,7 +94,7 @@ async fn test_todo_write_invalid_status() {
 
     let input = json!({
         "action": "write",
-        "todos": [{"id": "1", "content": "Task 1", "status": "invalid"}]
+        "todos": [{"id": 1, "content": "Task 1", "status": "invalid"}]
     });
     let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
     let result = tool.exec(input, ctx).await;
@@ -112,8 +112,8 @@ async fn test_todo_update_single_status() {
     let write_input = json!({
         "action": "write",
         "todos": [
-            {"id": "1", "content": "Task 1", "status": "pending"},
-            {"id": "2", "content": "Task 2", "status": "in_progress"}
+            {"id": 1, "content": "Task 1", "status": "pending"},
+            {"id": 2, "content": "Task 2", "status": "in_progress"}
         ]
     });
     let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
@@ -122,7 +122,7 @@ async fn test_todo_update_single_status() {
     // Update status of todo "1"
     let update_input = json!({
         "action": "update",
-        "todos": [{"id": "1", "status": "completed"}]
+        "todos": [{"id": 1, "status": "completed"}]
     });
     let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
     let result = tool.exec(update_input, ctx).await.unwrap();
@@ -150,9 +150,9 @@ async fn test_todo_update_batch_multiple() {
     let write_input = json!({
         "action": "write",
         "todos": [
-            {"id": "1", "content": "Task 1", "status": "pending"},
-            {"id": "2", "content": "Task 2", "status": "pending"},
-            {"id": "3", "content": "Task 3", "status": "pending"}
+            {"id": 1, "content": "Task 1", "status": "pending"},
+            {"id": 2, "content": "Task 2", "status": "pending"},
+            {"id": 3, "content": "Task 3", "status": "pending"}
         ]
     });
     let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
@@ -162,8 +162,8 @@ async fn test_todo_update_batch_multiple() {
     let update_input = json!({
         "action": "update",
         "todos": [
-            {"id": "1", "status": "in_progress"},
-            {"id": "2", "status": "completed"}
+            {"id": 1, "status": "in_progress"},
+            {"id": 2, "status": "completed"}
         ]
     });
     let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
@@ -190,7 +190,7 @@ async fn test_todo_update_content() {
     // First write a todo
     let write_input = json!({
         "action": "write",
-        "todos": [{"id": "1", "content": "Task 1", "status": "pending"}]
+        "todos": [{"id": 1, "content": "Task 1", "status": "pending"}]
     });
     let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
     tool.exec(write_input, ctx).await.unwrap();
@@ -198,7 +198,7 @@ async fn test_todo_update_content() {
     // Update content
     let update_input = json!({
         "action": "update",
-        "todos": [{"id": "1", "content": "Updated Task"}]
+        "todos": [{"id": 1, "content": "Updated Task"}]
     });
     let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
     let result = tool.exec(update_input, ctx).await.unwrap();
@@ -223,7 +223,7 @@ async fn test_todo_update_not_found() {
     // First write a todo
     let write_input = json!({
         "action": "write",
-        "todos": [{"id": "1", "content": "Task 1", "status": "pending"}]
+        "todos": [{"id": 1, "content": "Task 1", "status": "pending"}]
     });
     let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
     tool.exec(write_input, ctx).await.unwrap();
@@ -231,7 +231,7 @@ async fn test_todo_update_not_found() {
     // Try to update non-existent todo
     let update_input = json!({
         "action": "update",
-        "todos": [{"id": "999", "status": "completed"}]
+        "todos": [{"id": 999, "status": "completed"}]
     });
     let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
     let result = tool.exec(update_input, ctx).await;
@@ -248,7 +248,7 @@ async fn test_todo_update_invalid_status() {
     // First write a todo
     let write_input = json!({
         "action": "write",
-        "todos": [{"id": "1", "content": "Task 1", "status": "pending"}]
+        "todos": [{"id": 1, "content": "Task 1", "status": "pending"}]
     });
     let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
     tool.exec(write_input, ctx).await.unwrap();
@@ -256,7 +256,7 @@ async fn test_todo_update_invalid_status() {
     // Try to update with invalid status
     let update_input = json!({
         "action": "update",
-        "todos": [{"id": "1", "status": "invalid_status"}]
+        "todos": [{"id": 1, "status": "invalid_status"}]
     });
     let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
     let result = tool.exec(update_input, ctx).await;
@@ -314,7 +314,7 @@ async fn test_todo_write_empty_content() {
 
     let input = json!({
         "action": "write",
-        "todos": [{"id": "1", "content": "", "status": "pending"}]
+        "todos": [{"id": 1, "content": "", "status": "pending"}]
     });
     let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
     let result = tool.exec(input, ctx).await;
@@ -327,14 +327,14 @@ async fn test_todo_write_empty_content() {
 }
 
 #[tokio::test]
-async fn test_todo_update_rejects_blank_id() {
+async fn test_todo_update_rejects_non_numeric_id() {
     let (storage, _temp) = create_test_storage().await;
     let tool = TodoTool::new(storage);
 
     let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
     let result = tool
         .exec(
-            json!({"action": "update", "todos": [{"id": "   ", "status": "completed"}]}),
+            json!({"action": "update", "todos": [{"id": "1", "status": "completed"}]}),
             ctx,
         )
         .await;
@@ -343,7 +343,7 @@ async fn test_todo_update_rejects_blank_id() {
     assert!(result
         .unwrap_err()
         .to_string()
-        .contains("update item must have non-empty id"));
+        .contains("update item must have numeric id"));
 }
 
 #[tokio::test]
@@ -355,7 +355,7 @@ async fn test_todo_update_ignores_blank_optional_fields() {
     tool.exec(
         json!({
             "action": "write",
-            "todos": [{"id": "1", "content": "Task 1", "status": "pending"}]
+            "todos": [{"id": 1, "content": "Task 1", "status": "pending"}]
         }),
         ctx,
     )
@@ -366,7 +366,7 @@ async fn test_todo_update_ignores_blank_optional_fields() {
     tool.exec(
         json!({
             "action": "update",
-            "todos": [{"id": "1", "content": "   ", "status": ""}]
+            "todos": [{"id": 1, "content": "   ", "status": ""}]
         }),
         ctx,
     )

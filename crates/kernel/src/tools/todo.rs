@@ -39,7 +39,7 @@ impl TodoTool {
 
         // Validate todo items
         if todos_array.iter().any(|item| {
-            item["id"].as_str().is_none()
+            item["id"].as_u64().is_none()
                 || item["content"].as_str().is_none_or(|s| s.trim().is_empty())
         }) {
             return Err(KernelError::tool(
@@ -91,14 +91,13 @@ impl TodoTool {
 
         for update in updates_array {
             let id = update["id"]
-                .as_str()
-                .filter(|id| !id.trim().is_empty())
-                .ok_or_else(|| KernelError::tool("update item must have non-empty id"))?;
+                .as_u64()
+                .ok_or_else(|| KernelError::tool("update item must have numeric id"))?;
 
             // Find and update the todo
             let mut found = false;
             for todo in todos_array.iter_mut() {
-                if todo["id"].as_str() == Some(id) {
+                if todo["id"].as_u64() == Some(id) {
                     // Update status if provided
                     if let Some(status) = update["status"].as_str().filter(|s| !s.is_empty()) {
                         match status {
@@ -143,7 +142,7 @@ impl Tool for TodoTool {
     }
 
     fn desc(&self) -> &'static str {
-        r"Manage todo list for tracking tasks.
+        r"Manage todo list for tracking progress.
 When to use:
 - Tasks with 3+ distinct steps
 - User provides multiple tasks or a list of things to do
@@ -174,8 +173,8 @@ Guidelines:
                         "required": ["id"],
                         "properties": {
                             "id": {
-                                "type": "string",
-                                "description": "Unique identifier for this todo item"
+                                "type": "integer",
+                                "description": "Identifier for this todo item"
                             },
                             "content": {
                                 "type": "string",
