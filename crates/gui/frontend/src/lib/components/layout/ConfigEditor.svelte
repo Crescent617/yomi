@@ -11,6 +11,7 @@
     Zap,
   } from "lucide-svelte";
   import * as api from "../../api";
+  import { deleteToLineStart } from "../../editor/delete-to-line-start";
   import { appState, showNotification } from "../../state.svelte";
   import ConfirmDialog from "../ui/ConfirmDialog.svelte";
 
@@ -346,6 +347,31 @@
     if (event.key === "s" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       void save();
+      return;
+    }
+    // WKWebView on macOS deletes to line start natively for Cmd+Backspace
+    // without firing an input event, leaving the highlight overlay stale.
+    // Handle it manually so the textarea and `content` stay in sync.
+    if (
+      event.key === "Backspace" &&
+      event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.shiftKey
+    ) {
+      event.preventDefault();
+      const element = event.currentTarget as HTMLTextAreaElement;
+      const { start, end, cursor } = deleteToLineStart(
+        element.value,
+        element.selectionStart,
+        element.selectionEnd,
+      );
+      if (start === end) return;
+      element.setRangeText("", start, end, "end");
+      element.setSelectionRange(cursor, cursor);
+      content = element.value;
+      saveError = null;
+      updateCursor(element);
     }
   }
 
