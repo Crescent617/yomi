@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.27] - 2026-07-30
+
+### Changed
+- 应用设置页改为即改即存：所有选项变更立即生效并自动保存，不再需要 Save/Cancel 按钮，"Unsaved" 标记与 Reset 重置按钮随之移除。
+- 通知 Toast 交互完善：堆叠时下层通知卡片不再可被误点，展开后按 Esc 可收起，新增 Clear all 一键清空。
+
+### Removed
+- 移除 agent 的 sleep 工具：纯等待改用 shell 命令（`sleep N && 检查`）或后台任务完成通知，避免诱导轮询。
+
 ## [0.7.26] - 2026-07-30
 
 ### Added
