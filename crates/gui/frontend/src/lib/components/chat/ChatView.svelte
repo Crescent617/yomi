@@ -17,7 +17,6 @@
     createSessionState,
   } from "../../session";
   import * as api from "../../api";
-  import { collapseHome } from "../../utils";
   import TabBar from "../layout/TabBar.svelte";
   import MessageList from "./MessageList.svelte";
   import ChatInput from "./ChatInput.svelte";
@@ -26,6 +25,7 @@
   import FilePreview from "../editor/FilePreview.svelte";
   import FileEditor from "../editor/FileEditor.svelte";
   import HeaderBreadcrumb from "./HeaderBreadcrumb.svelte";
+  import SidebarToggle from "../layout/SidebarToggle.svelte";
   import PermissionBar from "./PermissionBar.svelte";
   import AskUserBar from "./AskUserBar.svelte";
   import QueuedInputBar from "./QueuedInputBar.svelte";
@@ -34,8 +34,6 @@
     ChevronDown,
     ArrowUp,
     Check,
-    PanelLeftOpen,
-    PanelLeftClose,
     ExternalLink,
     Paperclip,
     Plus,
@@ -46,13 +44,13 @@
     GitBranch,
     FileDiff,
     Command,
+    Copy,
     FolderOpen,
     Info,
     Loader2,
     AlertCircle,
   } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { homeDir } from "@tauri-apps/api/path";
   import type { PermissionLevel } from "../../permission";
   import { pickGreeting } from "../home/greeting";
   import TodayUsageCard from "../home/TodayUsageCard.svelte";
@@ -74,9 +72,12 @@
   let {
     onToggleLeftPanel,
     leftPanelCollapsed,
+    leftPanelAttention,
   }: {
     onToggleLeftPanel?: () => void;
     leftPanelCollapsed?: boolean;
+    /** Tint the toggle to signal the desktop sidebar is hidden. */
+    leftPanelAttention?: boolean;
   } = $props();
 
   const activeSession = $derived(getActiveSession());
@@ -158,7 +159,6 @@
   let homeInput = $state("");
   let submitting = $state(false);
   let homeFileAttachments = $state<string[]>([]);
-  let homeDirPath = $state("");
 
   let homeTextareaRef: HTMLTextAreaElement | null = $state(null);
 
@@ -298,11 +298,6 @@
         if (cancelled) return;
         permission_level = guiPreferences.chat.auto_approve_level ?? "caution";
       });
-    homeDir()
-      .then((h) => {
-        if (!cancelled) homeDirPath = h;
-      })
-      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -519,6 +514,22 @@
   let showSessionInfo = $state(false);
   let infoButtonRef = $state<HTMLButtonElement | null>(null);
   let infoTooltipRef = $state<HTMLDivElement | null>(null);
+
+  // ── Copy session IDs from the info popover (local check-swap feedback) ──
+  let copiedIdKey = $state<string | null>(null);
+  let copyIdTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function copyIdToClipboard(id: string, key: string) {
+    try {
+      await navigator.clipboard.writeText(id);
+      clearTimeout(copyIdTimer);
+      copiedIdKey = key;
+      copyIdTimer = setTimeout(() => (copiedIdKey = null), 1500);
+    } catch (e) {
+      console.error("Failed to copy:", e);
+      showNotification("Failed to copy", "error");
+    }
+  }
 
   // Close session info tooltip when clicking outside
   $effect(() => {
@@ -755,20 +766,11 @@
       <div class="flex h-full min-w-0 items-center gap-2">
         <!-- Left panel toggle -->
         {#if onToggleLeftPanel}
-          <button
-            type="button"
+          <SidebarToggle
+            open={!leftPanelCollapsed}
+            attention={leftPanelAttention ?? false}
             onclick={() => onToggleLeftPanel()}
-            class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors {leftPanelCollapsed
-              ? 'bg-primary/5 text-primary hover:bg-primary/10'
-              : 'text-muted-foreground hover:bg-secondary/80 hover:text-foreground'}"
-            title={leftPanelCollapsed ? "Show sidebar" : "Hide sidebar"}
-          >
-            {#if leftPanelCollapsed}
-              <PanelLeftOpen size={16} />
-            {:else}
-              <PanelLeftClose size={16} />
-            {/if}
-          </button>
+          />
         {/if}
         <div class="flex min-w-0 flex-1 items-center gap-1.5">
           <HeaderBreadcrumb session={activeSession} />
@@ -846,40 +848,66 @@
                     {activeSession.project_path || "N/A"}
                   </div>
                 </div>
-                <div class="grid grid-cols-[3.5rem_1fr] gap-x-3 gap-y-1.5">
-                  <span class="text-muted-foreground">Updated</span>
-                  <span class="text-foreground">
-                    {new Date(activeSession.updated_at).toLocaleString()}
-                  </span>
-                  <span class="text-muted-foreground">Session ID</span>
-                  <span
-                    class="rounded-sm bg-code-bg px-1.5 py-0.5 font-mono text-foreground break-all"
-                  >
-                    {activeSession.id}
-                  </span>
-                  {#if activeSession.parent_session_id}
-                    <span class="text-muted-foreground">Parent</span>
-                    <span class="font-mono text-foreground break-all">
-                      {activeSession.parent_session_id}
+                <div class="space-y-1.5">
+                  <div class="flex items-center gap-1.5">
+                    <span class="shrink-0 text-muted-foreground">Updated</span>
+                    <span class="min-w-0 text-foreground">
+                      {new Date(activeSession.updated_at).toLocaleString()}
                     </span>
+                  </div>
+                  <div class="flex items-center gap-1.5">
+                    <span class="shrink-0 text-muted-foreground">ID</span>
+                    <button
+                      type="button"
+                      class="flex min-w-0 items-center gap-1.5 rounded-sm bg-code-bg px-1.5 py-0.5 font-mono text-foreground transition-colors hover:bg-secondary/70"
+                      title={activeSession.id}
+                      aria-label="Copy session ID"
+                      onclick={() =>
+                        copyIdToClipboard(activeSession.id, "session")}
+                    >
+                      <span class="truncate">{activeSession.id}</span>
+                      {#if copiedIdKey === "session"}
+                        <Check size={11} class="shrink-0 text-success" />
+                      {:else}
+                        <Copy
+                          size={11}
+                          class="shrink-0 text-muted-foreground"
+                        />
+                      {/if}
+                    </button>
+                  </div>
+                  {#if activeSession.parent_session_id}
+                    <div class="flex items-center gap-1.5">
+                      <span class="shrink-0 text-muted-foreground">Parent</span>
+                      <button
+                        type="button"
+                        class="flex min-w-0 items-center gap-1.5 rounded-sm bg-code-bg px-1.5 py-0.5 font-mono text-foreground transition-colors hover:bg-secondary/70"
+                        title={activeSession.parent_session_id}
+                        aria-label="Copy parent session ID"
+                        onclick={() =>
+                          copyIdToClipboard(
+                            activeSession.parent_session_id!,
+                            "parent",
+                          )}
+                      >
+                        <span class="truncate"
+                          >{activeSession.parent_session_id}</span
+                        >
+                        {#if copiedIdKey === "parent"}
+                          <Check size={11} class="shrink-0 text-success" />
+                        {:else}
+                          <Copy
+                            size={11}
+                            class="shrink-0 text-muted-foreground"
+                          />
+                        {/if}
+                      </button>
+                    </div>
                   {/if}
                 </div>
               </PopoverPanel>
             {/if}
           </div>
-          {#if activeSession.project_path}
-            {@const displayPath = collapseHome(
-              activeSession.project_path,
-              homeDirPath,
-            )}
-            <span class="text-border">·</span>
-            <span
-              class="min-w-0 truncate text-[11px] text-muted-foreground"
-              title={activeSession.project_path}
-            >
-              {displayPath}
-            </span>
-          {/if}
           {#if activeSession.git_info?.branch}
             <span class="text-border">·</span>
             <span
@@ -1005,7 +1033,19 @@
   <div class="flex-1 overflow-hidden">
     {#if !sessionState.activeSessionId}
       <!-- Clean home screen with direct message input -->
-      <div class="flex flex-col items-center justify-center h-full px-6">
+      <div
+        class="relative flex flex-col items-center justify-center h-full px-6"
+      >
+        {#if onToggleLeftPanel}
+          <!-- Sidebar toggle — aligned with the session header position -->
+          <div class="absolute left-2 top-2 z-10">
+            <SidebarToggle
+              open={!leftPanelCollapsed}
+              attention={leftPanelAttention ?? false}
+              onclick={() => onToggleLeftPanel()}
+            />
+          </div>
+        {/if}
         <div class="w-full max-w-2xl">
           <!-- Title -->
           <div class="text-center mb-8">

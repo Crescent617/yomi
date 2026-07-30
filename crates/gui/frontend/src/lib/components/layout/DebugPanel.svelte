@@ -1,12 +1,6 @@
 <script lang="ts">
-  import {
-    Bug,
-    ChevronUp,
-    Copy,
-    Menu,
-    RefreshCw,
-    WrapText,
-  } from "lucide-svelte";
+  import { Bug, ChevronUp, Copy, RefreshCw, WrapText } from "lucide-svelte";
+  import SidebarToggle from "./SidebarToggle.svelte";
   import { sessionState, showNotification } from "../../state.svelte";
   import {
     errorMessage,
@@ -162,14 +156,9 @@
   <header
     class="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3"
   >
-    <button
-      type="button"
-      class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground lg:hidden"
-      aria-label="Open sidebar"
-      onclick={onToggleLeftPanel}
-    >
-      <Menu class="h-4 w-4" />
-    </button>
+    {#if onToggleLeftPanel}
+      <SidebarToggle class="lg:hidden" onclick={onToggleLeftPanel} />
+    {/if}
     <Bug class="h-4 w-4 text-primary" />
     <h1 class="text-sm font-medium">Debug</h1>
     <div class="ml-3 flex rounded-md bg-secondary/60 p-0.5">

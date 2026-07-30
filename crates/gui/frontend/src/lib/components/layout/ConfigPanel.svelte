@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { Menu, MonitorCog, Palette, SlidersHorizontal } from "lucide-svelte";
+  import { MonitorCog, Palette, SlidersHorizontal } from "lucide-svelte";
   import { appState } from "../../state.svelte";
   import ApplicationConfigPanel from "./ApplicationConfigPanel.svelte";
   import ConfigEditor from "./ConfigEditor.svelte";
   import ThemePanel from "./ThemePanel.svelte";
+  import SidebarToggle from "./SidebarToggle.svelte";
 
   interface Props {
     onToggleLeftPanel?: () => void;
@@ -14,22 +15,8 @@
   type Section = "application" | "themes" | "kernel";
 
   let section = $state<Section>("application");
-  let applicationDirty = $state(false);
-
-  function setApplicationDirty(value: boolean) {
-    applicationDirty = value;
-    appState.app_config_dirty = value;
-  }
 
   function selectSection(next: Section) {
-    if (section === next) return;
-    if (
-      section === "application" &&
-      applicationDirty &&
-      !window.confirm("Discard unsaved application preference changes?")
-    ) {
-      return;
-    }
     section = next;
   }
 </script>
@@ -39,14 +26,9 @@
     class="flex shrink-0 items-center gap-1 border-b border-border bg-card/25 px-3 py-2 sm:px-4"
     aria-label="Configuration sections"
   >
-    <button
-      type="button"
-      onclick={onToggleLeftPanel}
-      class="mr-1 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground md:hidden"
-      aria-label="Show navigation"
-    >
-      <Menu size={18} />
-    </button>
+    {#if onToggleLeftPanel}
+      <SidebarToggle class="lg:hidden mr-1" onclick={onToggleLeftPanel} />
+    {/if}
     <button
       type="button"
       onclick={() => selectSection("application")}
@@ -58,10 +40,6 @@
     >
       <SlidersHorizontal size={15} />
       <span class="text-xs font-medium">Application</span>
-      {#if applicationDirty}
-        <span class="h-1.5 w-1.5 rounded-full bg-warning" aria-label="Unsaved"
-        ></span>
-      {/if}
     </button>
 
     <button
@@ -96,7 +74,7 @@
   </nav>
 
   {#if section === "application"}
-    <ApplicationConfigPanel onDirtyChange={setApplicationDirty} />
+    <ApplicationConfigPanel />
   {:else if section === "themes"}
     <ThemePanel />
   {:else}

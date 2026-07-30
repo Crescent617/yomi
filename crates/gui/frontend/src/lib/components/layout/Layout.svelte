@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import * as api from "../../api";
-  import { projectState, appState } from "../../state.svelte";
+  import { projectState, appState, sessionState } from "../../state.svelte";
   import {
     defaultGuiPreferences,
     guiPreferences,
@@ -21,7 +21,11 @@
   import { loadFavorites } from "../../favorites.svelte";
 
   let mobileSidebarOpen = $state(false);
+  let isNarrow = $state(false);
   let isDraggingLeft = $state(false);
+  let drawerEl = $state<HTMLElement | null>(null);
+  // Opener to hand focus back to when the drawer closes (modal cycle).
+  let drawerRestoreFocus: HTMLElement | null = null;
 
   const SIDEBAR_MIN_WIDTH = 160;
   const SIDEBAR_MAX_WIDTH = 400;
@@ -34,6 +38,36 @@
     startClock();
     loadProjects();
     void loadFavorites();
+    // Mirror the Tailwind `lg` breakpoint so toggle behavior and icon state
+    // follow the same boundary as the CSS that hides the activity rail.
+    const narrowQuery = window.matchMedia("(max-width: 1023.98px)");
+    isNarrow = narrowQuery.matches;
+    const onNarrowChange = (e: MediaQueryListEvent) => {
+      isNarrow = e.matches;
+    };
+    narrowQuery.addEventListener("change", onNarrowChange);
+    return () => narrowQuery.removeEventListener("change", onNarrowChange);
+  });
+
+  // The mobile drawer is a transient navigation surface: any navigation
+  // (panel switch, session activation) or a resize to desktop dismisses it.
+  $effect(() => {
+    void appState.activePanel;
+    void sessionState.activeSessionId;
+    void isNarrow;
+    // Untracked: closeMobileSidebar reads mobileSidebarOpen (its no-op
+    // guard) — as a dependency it would re-fire this effect the moment
+    // the drawer opens, instantly closing it again.
+    untrack(closeMobileSidebar);
+  });
+
+  $effect(() => {
+    if (!mobileSidebarOpen) return;
+    const onKeydown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeMobileSidebar();
+    };
+    window.addEventListener("keydown", onKeydown);
+    return () => window.removeEventListener("keydown", onKeydown);
   });
 
   async function loadProjects() {
@@ -51,12 +85,33 @@
     }
   }
 
+  function openMobileSidebar() {
+    drawerRestoreFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    mobileSidebarOpen = true;
+    // Move focus into the drawer so keyboard users land on its controls.
+    void tick().then(() => drawerEl?.querySelector<HTMLElement>("button")?.focus());
+  }
+
   function closeMobileSidebar() {
+    if (!mobileSidebarOpen) return;
     mobileSidebarOpen = false;
+    // Defer past Svelte's batch: focusing into a still-inert subtree is a
+    // spec no-op, so the restore must wait for inert to come off.
+    void tick().then(() => {
+      if (drawerRestoreFocus?.isConnected) drawerRestoreFocus.focus();
+      drawerRestoreFocus = null;
+    });
   }
 
   function toggleMobileSidebar() {
-    mobileSidebarOpen = !mobileSidebarOpen;
+    if (mobileSidebarOpen) {
+      closeMobileSidebar();
+    } else {
+      openMobileSidebar();
+    }
   }
 
   function toggleLeftSidebar() {
@@ -66,7 +121,7 @@
   }
 
   function handleToggleLeft() {
-    if (window.innerWidth < 1024) {
+    if (isNarrow) {
       toggleMobileSidebar();
     } else {
       toggleLeftSidebar();
@@ -117,11 +172,14 @@
 
 <div class="fixed inset-0 flex bg-background text-foreground overflow-hidden">
   <!-- Desktop ActivityBar — always visible on lg+ -->
-  <div class="hidden lg:flex shrink-0">
+  <div class="hidden lg:flex shrink-0" inert={mobileSidebarOpen}>
     <ActivityBar />
   </div>
 
-  <div class="flex-1 flex flex-col min-h-0 overflow-hidden relative">
+  <div
+    class="flex-1 flex flex-col min-h-0 overflow-hidden relative"
+    inert={mobileSidebarOpen}
+  >
     <div class="flex-1 flex min-h-0 overflow-hidden relative">
       {#if appState.activePanel === "chat"}
         <!-- Desktop inline sidebar -->
@@ -156,33 +214,12 @@
           {/if}
         </aside>
 
-        <!-- Mobile overlay sidebar -->
-        <!-- Backdrop: always rendered for smooth fade-out -->
-        <div
-          class="fixed inset-0 z-40 bg-overlay backdrop-blur-sm lg:hidden
-                 transition-opacity duration-200
-                 {mobileSidebarOpen
-            ? 'opacity-100 pointer-events-auto'
-            : 'opacity-0 pointer-events-none'}"
-          onclick={closeMobileSidebar}
-          role="presentation"
-        ></div>
-
-        <!-- Mobile drawer (always rendered for animation, controlled by transform) -->
-        <div
-          class="fixed left-0 top-0 bottom-0 z-50 flex border-r border-border bg-card/70 shadow-xl
-                 transition-transform duration-300 ease-out lg:hidden
-                 {mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}"
-          style="max-width: 85vw;"
-        >
-          <ActivityBar />
-          <div class="flex-1 flex flex-col min-w-0 overflow-hidden w-64">
-            <ProjectSidebar collapsed={false} />
-          </div>
-        </div>
-
         <ChatView
-          leftPanelCollapsed={guiPreferences.layout.sidebarCollapsed}
+          leftPanelCollapsed={isNarrow
+            ? !mobileSidebarOpen
+            : guiPreferences.layout.sidebarCollapsed}
+          leftPanelAttention={!isNarrow &&
+            guiPreferences.layout.sidebarCollapsed}
           onToggleLeftPanel={handleToggleLeft}
         />
       {:else if appState.activePanel === "usage"}
@@ -198,6 +235,37 @@
       {/if}
     </div>
     <StatusBar />
+  </div>
+
+  <!-- Mobile navigation drawer (< lg) — shared by all panels: the activity
+       rail plus, on the chat panel, the session sidebar. Always rendered so
+       the slide/fade transitions can play; inert while closed. -->
+  <div
+    class="fixed inset-0 z-40 bg-overlay backdrop-blur-sm lg:hidden
+           transition-opacity duration-200
+           {mobileSidebarOpen
+      ? 'opacity-100 pointer-events-auto'
+      : 'opacity-0 pointer-events-none'}"
+    onclick={closeMobileSidebar}
+    role="presentation"
+  ></div>
+  <div
+    class="fixed left-0 top-0 bottom-0 z-50 flex border-r border-border bg-card/70 shadow-xl
+           transition-transform duration-300 ease-out lg:hidden
+           {mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}"
+    style="max-width: 85vw;"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Navigation"
+    inert={!mobileSidebarOpen}
+    bind:this={drawerEl}
+  >
+    <ActivityBar onClose={closeMobileSidebar} onNavigate={closeMobileSidebar} />
+    {#if appState.activePanel === "chat"}
+      <div class="flex-1 flex flex-col min-w-0 overflow-hidden w-64">
+        <ProjectSidebar collapsed={false} />
+      </div>
+    {/if}
   </div>
 </div>
 

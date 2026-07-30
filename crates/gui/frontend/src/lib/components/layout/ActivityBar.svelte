@@ -9,6 +9,7 @@
     Monitor,
     CalendarClock,
     Star,
+    PanelLeftClose,
   } from "lucide-svelte";
   import { appState, requestActivePanel } from "../../state.svelte";
   import {
@@ -16,6 +17,16 @@
     scheduleGuiPreferencesSave,
     applyTheme,
   } from "../../settings.svelte";
+
+  let {
+    onClose,
+    onNavigate,
+  }: {
+    /** Render a close button atop the rail (overlay drawer mode). */
+    onClose?: () => void;
+    /** Called after a tab was successfully activated. */
+    onNavigate?: () => void;
+  } = $props();
 
   const tabs = [
     { id: "chat", icon: MessageSquare, label: "Chat" },
@@ -43,10 +54,25 @@
 <div
   class="shrink-0 w-12 border-r border-border bg-card flex flex-col items-center py-2 gap-1"
 >
+  {#if onClose}
+    <button
+      type="button"
+      onclick={onClose}
+      class="w-9 h-9 rounded-lg flex items-center justify-center transition-colors
+             text-muted-foreground hover:text-foreground hover:bg-accent"
+      title="Hide navigation"
+      aria-label="Hide navigation"
+    >
+      <PanelLeftClose class="w-5 h-5" />
+    </button>
+    <div class="h-px w-6 bg-border" aria-hidden="true"></div>
+  {/if}
   {#each tabs as tab (tab.id)}
     <button
       type="button"
-      onclick={() => requestActivePanel(tab.id)}
+      onclick={() => {
+        if (requestActivePanel(tab.id)) onNavigate?.();
+      }}
       class="w-9 h-9 rounded-lg flex items-center justify-center transition-colors
              {appState.activePanel === tab.id
         ? 'bg-primary/10 text-primary'

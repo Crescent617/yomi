@@ -7,13 +7,13 @@
   import InlineLoadingStatus from "../ui/InlineLoadingStatus.svelte";
   import PageLoading from "../ui/PageLoading.svelte";
   import UsagePageSkeleton from "./UsagePageSkeleton.svelte";
+  import SidebarToggle from "./SidebarToggle.svelte";
   import {
     ArrowUpRight,
     ArrowDownLeft,
     Zap,
     Calendar,
     TrendingUp,
-    PanelLeftOpen,
     Award,
     BarChart3,
     Flame,
@@ -619,32 +619,27 @@
 </script>
 
 <div class="flex-1 flex flex-col min-w-0 overflow-y-auto">
-  <div class="container mx-auto px-4 lg:px-6">
-    <!-- Header -->
-    <div class="shrink-0 h-14 border-b border-border flex items-center">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2">
-          {#if onToggleLeftPanel}
-            <button
-              type="button"
-              onclick={() => onToggleLeftPanel?.()}
-              class="lg:hidden inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring mr-1"
-              title="Toggle sidebar"
-            >
-              <PanelLeftOpen size={18} />
-            </button>
-          {/if}
-          <TrendingUp class="w-5 h-5 text-primary" />
-          <h2 class="text-lg font-semibold">Usage</h2>
-          <span class="text-xs text-muted-foreground ml-1">· last 365 days</span
-          >
-          {#if loading && config}
-            <InlineLoadingStatus label="Refreshing" />
-          {/if}
-        </div>
-      </div>
+  <!-- Header: full-width so the nav toggle hugs the page edge on narrow
+       screens; the title row re-centers with the content at lg+ -->
+  <div
+    class="flex h-14 shrink-0 items-center gap-2 border-b border-border px-2 lg:px-0"
+  >
+    {#if onToggleLeftPanel}
+      <SidebarToggle class="lg:hidden" onclick={() => onToggleLeftPanel()} />
+    {/if}
+    <div
+      class="flex min-w-0 items-center gap-2 lg:container lg:mx-auto lg:px-6"
+    >
+      <TrendingUp class="w-5 h-5 text-primary" />
+      <h2 class="text-lg font-semibold">Usage</h2>
+      <span class="text-xs text-muted-foreground ml-1">· last 365 days</span>
+      {#if loading && config}
+        <InlineLoadingStatus label="Refreshing" />
+      {/if}
     </div>
+  </div>
 
+  <div class="container mx-auto px-4 lg:px-6">
     {#if loading && !config}
       <PageLoading label="Loading usage data">
         <UsagePageSkeleton />

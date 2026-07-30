@@ -5,7 +5,6 @@
     ChevronLeft,
     ChevronRight,
     FileCode,
-    PanelLeftOpen,
     RefreshCw,
     RotateCcw,
     Save,
@@ -14,12 +13,6 @@
   import * as api from "../../api";
   import { appState, showNotification } from "../../state.svelte";
   import ConfirmDialog from "../ui/ConfirmDialog.svelte";
-
-  let {
-    onToggleLeftPanel,
-  }: {
-    onToggleLeftPanel?: () => void;
-  } = $props();
 
   type SaveDiagnostic = {
     message: string;
@@ -371,16 +364,6 @@
     class="shrink-0 flex flex-wrap items-center justify-between gap-2 px-4 py-2 border-b border-border bg-card"
   >
     <div class="flex items-center gap-2 min-w-0">
-      {#if onToggleLeftPanel}
-        <button
-          type="button"
-          onclick={() => onToggleLeftPanel()}
-          class="lg:hidden p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground mr-1"
-          title="Toggle sidebar"
-        >
-          <PanelLeftOpen size={16} />
-        </button>
-      {/if}
       <FileCode class="w-4 h-4 text-muted-foreground shrink-0" />
       <span class="text-sm font-medium shrink-0">Kernel</span>
       <span class="text-xs text-muted-foreground truncate max-w-[300px]"

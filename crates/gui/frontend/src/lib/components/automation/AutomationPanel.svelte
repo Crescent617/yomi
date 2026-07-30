@@ -22,6 +22,7 @@
   import { isNeverExpires, type CronJob } from "../../api";
   import ConfirmDialog from "../ui/ConfirmDialog.svelte";
   import CreateJobModal from "./CreateJobModal.svelte";
+  import SidebarToggle from "../layout/SidebarToggle.svelte";
 
   interface Props {
     onToggleLeftPanel?: () => void;
@@ -131,21 +132,7 @@
   >
     <div class="flex min-w-0 items-center gap-2">
       {#if onToggleLeftPanel}
-        <button
-          type="button"
-          onclick={onToggleLeftPanel}
-          class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring lg:hidden"
-          title="Toggle sidebar"
-          aria-label="Toggle sidebar"
-        >
-          <svg
-            class="size-5"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18" /></svg
-          >
-        </button>
+        <SidebarToggle class="lg:hidden" onclick={onToggleLeftPanel} />
       {/if}
       <CalendarClock class="size-5 shrink-0 text-primary" />
       <h1 class="truncate text-lg font-semibold">Automation</h1>
