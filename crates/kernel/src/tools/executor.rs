@@ -45,6 +45,10 @@ fn truncate_blocks(
 }
 
 /// Convert `ToolOutputBlock`s to `ContentBlock`s for the message.
+/// Image blocks are NOT normalized here — this builder is sync and
+/// recompression needs the blocking pool; the real-execution call site
+/// in `tool_exec` normalizes via `utils::image::normalize_image_blocks`
+/// (error outputs carry no images and skip it).
 fn to_content_blocks(blocks: &[crate::types::ToolOutputBlock]) -> Vec<ContentBlock> {
     blocks
         .iter()
@@ -150,3 +154,7 @@ pub async fn execute_single_tool(
         Err(e) => ToolOutput::error(format!("Tool execution error: {e}")),
     }
 }
+
+#[cfg(test)]
+#[path = "executor_test.rs"]
+mod tests;

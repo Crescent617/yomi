@@ -938,9 +938,10 @@ impl Kernel {
     async fn send_message_inner(
         &self,
         session_id: &SessionId,
-        blocks: Vec<crate::types::ContentBlock>,
+        mut blocks: Vec<crate::types::ContentBlock>,
         update_title: bool,
     ) -> Result<()> {
+        crate::utils::image::normalize_image_blocks(&mut blocks).await;
         let title_input = update_title
             .then(|| tasks::session_title::input_from_blocks(&blocks))
             .flatten();
@@ -1036,8 +1037,13 @@ impl Kernel {
     }
 
     #[tracing::instrument(skip(self, content), fields(session_id = %session_id.0))]
-    pub fn send_steer(&self, session_id: &SessionId, content: Vec<crate::types::ContentBlock>) {
-        let content = mark_user_steer(content);
+    pub async fn send_steer(
+        &self,
+        session_id: &SessionId,
+        content: Vec<crate::types::ContentBlock>,
+    ) {
+        let mut content = mark_user_steer(content);
+        crate::utils::image::normalize_image_blocks(&mut content).await;
         if let Err(e) = self
             .input_bus
             .publish(session_id.clone(), AgentInput::Steer(content))

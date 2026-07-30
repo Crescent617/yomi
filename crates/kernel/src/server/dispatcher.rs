@@ -797,7 +797,7 @@ async fn dispatch_command(
             Ok(serde_json::Value::Null)
         }
         Command::Steer { content } => {
-            kernel.send_steer(sid, content);
+            kernel.send_steer(sid, content).await;
             Ok(serde_json::Value::Null)
         }
         Command::Continue => {

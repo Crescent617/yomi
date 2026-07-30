@@ -39,6 +39,7 @@ regex = { workspace = true }
 ignore = { workspace = true }
 globset = { workspace = true }
 base64 = { workspace = true }
+image = { workspace = true, features = ["jpeg", "png", "gif", "webp"] }
 lru = { workspace = true }
 html2text = { workspace = true }
 urlencoding = { workspace = true }

@@ -205,6 +205,12 @@ pub struct ChannelMessage {
     /// Raw platform text used for command parsing, before model-context metadata is added.
     pub raw_text: Option<String>,
     pub content: Vec<ContentBlock>,
+    /// Opaque platform keys of images attached to this message (Feishu
+    /// `image_key`, Telegram photo `file_id`). Adapters must NOT download
+    /// them eagerly — the hub downloads via
+    /// [`PlatformAdapter::download_message_image`] only after the message
+    /// passes the gate, so gated-out group chatter costs no bandwidth.
+    pub image_keys: Vec<String>,
     /// Thread ID for platforms that support threaded conversations (e.g. Feishu).
     /// When present, the hub uses this as the session mapping key instead of
     /// `external_chat_id` so that each thread gets its own session.
@@ -408,6 +414,21 @@ pub trait PlatformAdapter: Send + Sync {
     ) -> Result<Vec<HistoryMessage>, ChannelError> {
         Ok(Vec::new())
     }
+
+    /// Download one image attached to a message as an `ImageUrl` content
+    /// block. `image_key` is opaque and platform-specific: from
+    /// [`ChannelMessage::image_keys`] (deferred receive-path download,
+    /// post-gate) or [`HistoryMessage::image_keys`] (history injection).
+    /// Default: unsupported.
+    async fn download_message_image(
+        &self,
+        _message_id: &str,
+        _image_key: &str,
+    ) -> Result<ContentBlock, ChannelError> {
+        Err(ChannelError::Platform(
+            "image download not supported for this platform".into(),
+        ))
+    }
 }
 
 /// A thread or chat a history fetch targets.
@@ -439,6 +460,10 @@ pub struct HistoryMessage {
     pub sender_id: String,
     /// Extracted text (non-text messages become a `[type]` placeholder).
     pub text: String,
+    /// Opaque platform keys of images attached to this message (Feishu
+    /// `image_key`s from `image` messages and post `img` runs). Each is
+    /// downloadable via [`PlatformAdapter::download_message_image`].
+    pub image_keys: Vec<String>,
 }
 
 // ── Internal helper: access control ──────────────────────────────────

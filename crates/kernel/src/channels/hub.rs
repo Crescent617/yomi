@@ -743,11 +743,11 @@ async fn handle_incoming_message(
             )
             .await?;
             record_receipt(config, obs, &kernel, &sid, &msg);
-            let text = with_history(
-                maybe_history_prefix(adapter, config, store, channel_name, &msg).await,
-                &text,
-            );
-            kernel.send_steer(&sid, vec![ContentBlock::Text { text }]);
+            let mut blocks = maybe_history_prefix(adapter, config, store, channel_name, &msg)
+                .await
+                .unwrap_or_default();
+            blocks.push(ContentBlock::Text { text });
+            kernel.send_steer(&sid, blocks).await;
             Ok(None)
         }
         ChannelCommand::Queue(text) => {
@@ -761,13 +761,11 @@ async fn handle_incoming_message(
             )
             .await?;
             record_receipt(config, obs, &kernel, &sid, &msg);
-            let text = with_history(
-                maybe_history_prefix(adapter, config, store, channel_name, &msg).await,
-                &text,
-            );
-            kernel
-                .send_message(&sid, vec![ContentBlock::Text { text }])
-                .await?;
+            let mut blocks = maybe_history_prefix(adapter, config, store, channel_name, &msg)
+                .await
+                .unwrap_or_default();
+            blocks.push(ContentBlock::Text { text });
+            kernel.send_message(&sid, blocks).await?;
             Ok(None)
         }
         ChannelCommand::ListModels => {
@@ -890,12 +888,20 @@ async fn handle_incoming_message(
             )
             .await?;
             record_receipt(config, obs, &kernel, &sid, &msg);
-            let prefix = maybe_history_prefix(adapter, config, store, channel_name, &msg).await;
-            let mut content = msg.content;
-            if let Some(prefix) = prefix {
-                content.insert(0, ContentBlock::Text { text: prefix });
-            }
-            kernel.send_steer(&sid, content);
+            let mut content = maybe_history_prefix(adapter, config, store, channel_name, &msg)
+                .await
+                .unwrap_or_default();
+            content.extend(msg.content);
+            // Deferred image download — only now, after the gate, does
+            // an attached image cost bandwidth.
+            append_message_images(
+                adapter,
+                msg.external_message_id.as_deref().unwrap_or(""),
+                &msg.image_keys,
+                &mut content,
+            )
+            .await;
+            kernel.send_steer(&sid, content).await;
             Ok(None)
         }
     }
@@ -940,18 +946,18 @@ async fn advance_history_cursor(
 
 /// Fetch and assemble recent-chat context for a triggering group message:
 /// messages since the last trigger in this thread/chat, formatted as a
-/// `<recent_chat_history>` block. Best-effort — any failure degrades to no
-/// context. The cursor advances to the newest fetched message (usually the
-/// triggering message itself) so it isn't re-fetched next time; advancing
-/// happens at fetch time, so a downstream send failure can leave a small
-/// history gap (accepted).
+/// `<recent_chat_history>` text block followed by any attached images.
+/// Best-effort — any failure degrades to no context. The cursor advances
+/// to the newest fetched message (usually the triggering message itself)
+/// so it isn't re-fetched next time; advancing happens at fetch time, so
+/// a downstream send failure can leave a small history gap (accepted).
 async fn maybe_history_prefix(
     adapter: &Arc<dyn PlatformAdapter>,
     config: &ChannelConfig,
     store: &Arc<dyn ChannelStore>,
     channel_name: &str,
     msg: &ChannelMessage,
-) -> Option<String> {
+) -> Option<Vec<ContentBlock>> {
     if config.history_context == 0 || !msg.is_group {
         return None;
     }
@@ -1014,14 +1020,75 @@ async fn maybe_history_prefix(
     if history.is_empty() {
         return None;
     }
-    Some(assemble_history(&history))
+    let mut blocks = vec![ContentBlock::Text {
+        text: assemble_history(&history),
+    }];
+
+    // Attach the actual images behind the `[image]`/`[post]` placeholders
+    // (the "send an image, then @ the bot about it" flow). Capped at the
+    // newest few so an image-heavy backlog can't blow up the context.
+    let mut pairs: Vec<(&str, &str)> = history
+        .iter()
+        .flat_map(|m| {
+            m.image_keys
+                .iter()
+                .map(move |k| (m.message_id.as_str(), k.as_str()))
+        })
+        .collect();
+    if pairs.len() > IMAGE_DOWNLOAD_MAX {
+        pairs.drain(..pairs.len() - IMAGE_DOWNLOAD_MAX);
+    }
+    let downloaded = futures::future::join_all(
+        pairs
+            .iter()
+            .map(|&(message_id, key)| adapter.download_message_image(message_id, key)),
+    )
+    .await;
+    // History is best-effort context: a failed download is dropped
+    // silently — the `[image]` text marker in the history block already
+    // records that an image was there.
+    blocks.extend(downloaded.into_iter().flatten());
+    Some(blocks)
 }
 
-/// Prepend an assembled history block to the user's text (when present).
-fn with_history(prefix: Option<String>, text: &str) -> String {
-    match prefix {
-        Some(p) => format!("{p}\n\n{text}"),
-        None => text.to_string(),
+/// Max images downloaded per triggering message or injected history
+/// block, so an image dump can't blow up the context (or stall delivery
+/// behind dozens of downloads). History keeps the newest; a message
+/// keeps the first ones and gets a note for the rest.
+const IMAGE_DOWNLOAD_MAX: usize = 5;
+
+/// Download a message's attached images (deferred until post-gate) and
+/// append them to the content, capped at [`IMAGE_DOWNLOAD_MAX`]; a
+/// failure degrades to a visible text placeholder instead of dropping
+/// the message.
+async fn append_message_images(
+    adapter: &Arc<dyn PlatformAdapter>,
+    message_id: &str,
+    image_keys: &[String],
+    content: &mut Vec<ContentBlock>,
+) {
+    let omitted = image_keys.len().saturating_sub(IMAGE_DOWNLOAD_MAX);
+    let keys = &image_keys[..image_keys.len() - omitted];
+    let results = futures::future::join_all(
+        keys.iter()
+            .map(|key| adapter.download_message_image(message_id, key)),
+    )
+    .await;
+    for (key, result) in keys.iter().zip(results) {
+        match result {
+            Ok(block) => content.push(block),
+            Err(e) => {
+                warn!(error = %e, image_key = %key, "image download failed");
+                content.push(ContentBlock::Text {
+                    text: format!("[Failed to download image: {e}]"),
+                });
+            }
+        }
+    }
+    if omitted > 0 {
+        content.push(ContentBlock::Text {
+            text: format!("[{omitted} more image(s) omitted]"),
+        });
     }
 }
 

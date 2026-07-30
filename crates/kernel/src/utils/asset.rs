@@ -69,13 +69,12 @@ pub async fn resolve_asset_url(url: &str, data_dir: &Path) -> Option<String> {
     Some(format!("data:{mime};base64,{b64}"))
 }
 
-/// Maximum raw image bytes inlined into model context. Larger assets degrade
-/// to a text placeholder so provider payloads stay bounded.
-const MAX_INLINE_ASSET_BYTES: u64 = 5 * 1024 * 1024;
-
 /// Replace `asset://` image references in a message with inline base64 data
 /// URLs, for building model context. Best-effort per image: missing or
-/// oversized assets become a text placeholder instead of failing the load.
+/// pathologically large (> [`crate::utils::image::MAX_IMAGE_SIZE`]) assets
+/// degrade to a text placeholder; oversized-but-decodable ones (legacy,
+/// from before ingress compression) are recompressed so the context
+/// always holds the compressed form.
 pub async fn inline_assets_in_message(msg: &mut crate::types::Message, data_dir: &Path) {
     for block in &mut msg.content {
         let crate::types::ContentBlock::ImageUrl { image_url } = block else {
@@ -85,20 +84,25 @@ pub async fn inline_assets_in_message(msg: &mut crate::types::Message, data_dir:
             continue;
         }
         let url = image_url.url.clone();
-        let oversized = match asset_path(&url, data_dir) {
+        // Refuse only pathological assets outright (decode-bomb guard).
+        let pathological = match asset_path(&url, data_dir) {
             Some(path) => fs::metadata(&path)
                 .await
-                .is_ok_and(|m| m.len() > MAX_INLINE_ASSET_BYTES),
+                .is_ok_and(|m| m.len() > crate::utils::image::MAX_IMAGE_SIZE),
             None => false,
         };
-        if oversized {
+        if pathological {
             *block = crate::types::ContentBlock::Text {
                 text: format!("[image omitted: too large, {url}]"),
             };
             continue;
         }
         match resolve_asset_url(&url, data_dir).await {
-            Some(data_url) => image_url.url = data_url,
+            Some(data_url) => {
+                image_url.url = crate::utils::image::normalize_data_url_async(&data_url)
+                    .await
+                    .unwrap_or(data_url);
+            }
             None => {
                 *block = crate::types::ContentBlock::Text {
                     text: format!("[image unavailable: {url}]"),
@@ -109,11 +113,18 @@ pub async fn inline_assets_in_message(msg: &mut crate::types::Message, data_dir:
 }
 
 /// Extract inline base64 images from a single message and replace with `asset://` references.
-/// Mutates the message in-place.
+/// Mutates the message in-place. Images are compressed BEFORE storing, so
+/// assets on disk always fit provider limits regardless of what an
+/// ingress let through.
 pub async fn extract_inline_image(msg: &mut crate::types::Message, data_dir: &Path) {
     for block in &mut msg.content {
         if let crate::types::ContentBlock::ImageUrl { image_url } = block {
             if image_url.url.starts_with("data:") {
+                if let Some(normalized) =
+                    crate::utils::image::normalize_data_url_async(&image_url.url).await
+                {
+                    image_url.url = normalized;
+                }
                 if let Some(asset_url) = store_inline_image(&image_url.url, data_dir).await {
                     image_url.url = asset_url;
                 }
@@ -134,3 +145,7 @@ pub fn asset_path(url: &str, data_dir: &Path) -> Option<std::path::PathBuf> {
     let hash_ext = url.strip_prefix("asset://")?;
     Some(data_dir.join("assets").join(hash_ext))
 }
+
+#[cfg(test)]
+#[path = "asset_test.rs"]
+mod tests;

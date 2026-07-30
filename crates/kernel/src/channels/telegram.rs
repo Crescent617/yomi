@@ -65,10 +65,9 @@ impl TelegramAdapter {
             .await
             .map_err(|e| ChannelError::Platform(format!("download_file failed: {e}")))?;
 
-        let mime_type = crate::utils::image::detect_mime_type(&buf).unwrap_or("image/jpeg");
-
-        let base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &buf);
-        Ok(format!("data:{mime_type};base64,{base64}"))
+        crate::utils::image::bytes_to_data_url_async(buf)
+            .await
+            .map_err(|e| ChannelError::Platform(format!("photo encode: {e}")))
     }
 
     /// Merge consecutive non-command messages into one channel message.
@@ -130,7 +129,7 @@ impl TelegramAdapter {
             .iter()
             .any(|m| Self::is_mention_of_bot(m, bot_username));
         let mut lines = Vec::new();
-        let mut content: Vec<ContentBlock> = Vec::new();
+        let mut image_keys = Vec::new();
 
         for msg in msgs {
             let user_id = msg
@@ -142,33 +141,23 @@ impl TelegramAdapter {
                 lines.push(line);
             }
 
+            // Largest size only. Photos are NOT downloaded here — keys
+            // travel with the message for post-gate download (see
+            // `ChannelMessage::image_keys`).
             if let Some(photo) = msg.photo().and_then(|p| p.last()) {
-                match self.download_photo(&photo.file.id).await {
-                    Ok(data_url) => content.push(ContentBlock::ImageUrl {
-                        image_url: data_url.into(),
-                    }),
-                    Err(e) => {
-                        warn!("Failed to download Telegram photo: {e}");
-                        let ts = msg.date.format("%Y-%m-%d %H:%M:%S");
-                        lines.push(format!(
-                            "[{ts}][from_user_id: {user_id}][chat_id: {chat_id}][platform: telegram]\n[Failed to download image: {e}]"
-                        ));
-                    }
-                }
+                image_keys.push(photo.file.id.clone());
             }
         }
 
-        if !lines.is_empty() {
-            content.insert(
-                0,
-                ContentBlock::Text {
-                    text: lines.join("\n"),
-                },
-            );
+        if lines.is_empty() && image_keys.is_empty() {
+            return None;
         }
 
-        if content.is_empty() {
-            return None;
+        let mut content: Vec<ContentBlock> = Vec::new();
+        if !lines.is_empty() {
+            content.push(ContentBlock::Text {
+                text: lines.join("\n"),
+            });
         }
 
         let user_id = msgs
@@ -190,6 +179,7 @@ impl TelegramAdapter {
             is_mention,
             raw_text,
             content,
+            image_keys,
             thread_id: None,
             root_id: None,
             is_group,
@@ -505,6 +495,17 @@ impl PlatformAdapter for TelegramAdapter {
                 failures.join("; ")
             )))
         }
+    }
+
+    async fn download_message_image(
+        &self,
+        _message_id: &str,
+        image_key: &str,
+    ) -> Result<ContentBlock, ChannelError> {
+        let data_url = self.download_photo(image_key).await?;
+        Ok(ContentBlock::ImageUrl {
+            image_url: data_url.into(),
+        })
     }
 
     async fn send_reaction(

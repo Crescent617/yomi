@@ -689,6 +689,7 @@ fn channel_message(
         is_mention: true,
         raw_text: None,
         content: vec![],
+        image_keys: vec![],
         thread_id: thread_id.map(str::to_string),
         root_id: None,
         is_group,
@@ -1052,12 +1053,14 @@ fn assemble_history_formats_chronological_capped_lines() {
             create_time: 1_700_000_000,
             sender_id: "ou_alice".into(),
             text: "  hello world  ".into(),
+            image_keys: vec![],
         },
         HistoryMessage {
             message_id: "m2".into(),
             create_time: 1_700_000_060,
             sender_id: "ou_bob".into(),
             text: "x".repeat(2500),
+            image_keys: vec![],
         },
     ];
     let refs: Vec<&HistoryMessage> = messages.iter().collect();
@@ -1076,6 +1079,7 @@ struct HistoryMockAdapter {
     fail: std::sync::atomic::AtomicBool,
     empty: std::sync::atomic::AtomicBool,
     with_root: std::sync::atomic::AtomicBool,
+    with_images: std::sync::atomic::AtomicBool,
 }
 
 #[async_trait::async_trait]
@@ -1120,6 +1124,7 @@ impl PlatformAdapter for HistoryMockAdapter {
                 create_time: 50,
                 sender_id: "ou_a".into(),
                 text: "thread root".into(),
+                image_keys: vec![],
             });
         }
         messages.extend([
@@ -1128,21 +1133,38 @@ impl PlatformAdapter for HistoryMockAdapter {
                 create_time: 100,
                 sender_id: "ou_a".into(),
                 text: "earlier".into(),
+                image_keys: vec![],
             },
             HistoryMessage {
                 message_id: "m1".into(),
                 create_time: 200,
                 sender_id: "ou_a".into(),
                 text: "latest".into(),
+                image_keys: if self.with_images.load(std::sync::atomic::Ordering::Relaxed) {
+                    vec!["img_x".into()]
+                } else {
+                    vec![]
+                },
             },
             HistoryMessage {
                 message_id: "trigger".into(),
                 create_time: 300,
                 sender_id: "ou_b".into(),
                 text: "trigger msg".into(),
+                image_keys: vec![],
             },
         ]);
         Ok(messages)
+    }
+
+    async fn download_message_image(
+        &self,
+        message_id: &str,
+        image_key: &str,
+    ) -> std::result::Result<ContentBlock, crate::channels::ChannelError> {
+        Ok(ContentBlock::ImageUrl {
+            image_url: format!("data:image/png;base64,mock-{message_id}-{image_key}").into(),
+        })
     }
 }
 
@@ -1154,11 +1176,17 @@ fn group_msg(thread_id: Option<String>) -> ChannelMessage {
         is_mention: true,
         raw_text: None,
         content: vec![],
+        image_keys: vec![],
         thread_id,
         root_id: None,
         is_group: true,
         create_time: None,
     }
+}
+
+/// Concatenate the text blocks of an assembled history prefix.
+fn blocks_text(blocks: &[ContentBlock]) -> String {
+    blocks.iter().filter_map(ContentBlock::as_text).collect()
 }
 
 #[tokio::test]
@@ -1170,8 +1198,9 @@ async fn history_prefix_assembles_drops_trigger_and_advances_cursor() {
     let config = ChannelConfig::default();
     let msg = group_msg(None);
 
-    let prefix = maybe_history_prefix(&adapter, &config, &store, "feishu", &msg).await;
-    let prefix = prefix.expect("history prefix");
+    let blocks = maybe_history_prefix(&adapter, &config, &store, "feishu", &msg).await;
+    let blocks = blocks.expect("history prefix");
+    let prefix = blocks_text(&blocks);
     assert!(prefix.contains("earlier"));
     assert!(prefix.contains("latest"));
     assert!(!prefix.contains("trigger msg"), "trigger dropped: {prefix}");
@@ -1369,6 +1398,7 @@ async fn history_prefix_drops_consumed_thread_root_only() {
     let prefix = maybe_history_prefix(&adapter, &config, &store, "feishu", &msg)
         .await
         .expect("history");
+    let prefix = blocks_text(&prefix);
     assert!(
         !prefix.contains("thread root"),
         "consumed root dropped: {prefix}"
@@ -1385,10 +1415,105 @@ async fn history_prefix_drops_consumed_thread_root_only() {
     let prefix = maybe_history_prefix(&adapter, &config, &store2, "feishu", &msg)
         .await
         .expect("history");
+    let prefix = blocks_text(&prefix);
     assert!(
         prefix.contains("thread root"),
         "unconsumed root kept: {prefix}"
     );
+}
+
+#[tokio::test]
+async fn history_prefix_attaches_history_images() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let mock = Arc::new(HistoryMockAdapter::default());
+    mock.with_images
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig::default();
+
+    let blocks = maybe_history_prefix(&adapter, &config, &store, "feishu", &group_msg(None))
+        .await
+        .expect("history blocks");
+
+    // Text block first, then the downloaded image of history message m1.
+    assert!(matches!(blocks[0], ContentBlock::Text { .. }));
+    let images: Vec<_> = blocks
+        .iter()
+        .filter(|b| matches!(b, ContentBlock::ImageUrl { .. }))
+        .collect();
+    assert_eq!(images.len(), 1, "one history image attached: {blocks:?}");
+    let ContentBlock::ImageUrl { image_url } = images[0] else {
+        unreachable!()
+    };
+    assert!(
+        image_url.url.contains("mock-m1-img_x"),
+        "url: {image_url:?}"
+    );
+}
+
+// ── Deferred image download (post-gate) ─────────────────────────────
+
+#[tokio::test]
+async fn append_message_images_downloads_and_appends() {
+    let adapter: Arc<dyn PlatformAdapter> = Arc::new(HistoryMockAdapter::default());
+    let mut content = vec![ContentBlock::Text {
+        text: "body".into(),
+    }];
+
+    append_message_images(&adapter, "trigger", &["img_x".to_string()], &mut content).await;
+
+    assert_eq!(content.len(), 2);
+    let ContentBlock::ImageUrl { image_url } = &content[1] else {
+        panic!("expected image block: {content:?}");
+    };
+    assert!(
+        image_url.url.contains("mock-trigger-img_x"),
+        "url: {image_url:?}"
+    );
+}
+
+#[tokio::test]
+async fn append_message_images_failure_degrades_to_placeholder() {
+    // MockAdapter does not implement download_message_image → default Err.
+    let adapter: Arc<dyn PlatformAdapter> = Arc::new(MockAdapter::new("fs"));
+    let mut content = Vec::new();
+
+    append_message_images(&adapter, "trigger", &["img_x".to_string()], &mut content).await;
+
+    assert_eq!(content.len(), 1);
+    let ContentBlock::Text { text } = &content[0] else {
+        panic!("expected placeholder: {content:?}");
+    };
+    assert!(text.contains("[Failed to download image:"), "{text}");
+}
+
+#[tokio::test]
+async fn append_message_images_no_keys_untouched() {
+    let adapter: Arc<dyn PlatformAdapter> = Arc::new(MockAdapter::new("fs"));
+    let mut content = vec![ContentBlock::Text {
+        text: "body".into(),
+    }];
+
+    append_message_images(&adapter, "trigger", &[], &mut content).await;
+
+    assert_eq!(content.len(), 1);
+}
+
+#[tokio::test]
+async fn append_message_images_caps_an_image_dump() {
+    let adapter: Arc<dyn PlatformAdapter> = Arc::new(HistoryMockAdapter::default());
+    let mut content = Vec::new();
+    let keys: Vec<String> = (0..8).map(|i| format!("img_{i}")).collect();
+
+    append_message_images(&adapter, "trigger", &keys, &mut content).await;
+
+    // IMAGE_DOWNLOAD_MAX images + one note for the rest.
+    assert_eq!(content.len(), IMAGE_DOWNLOAD_MAX + 1, "{content:?}");
+    let ContentBlock::Text { text } = &content[IMAGE_DOWNLOAD_MAX] else {
+        panic!("expected omission note: {content:?}");
+    };
+    assert!(text.contains("3 more image(s) omitted"), "{text}");
 }
 
 // ── Message gate reactions ──────────────────────────────────────────

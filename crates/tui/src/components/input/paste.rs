@@ -235,67 +235,16 @@ impl InputComponent {
         blocks
     }
 
-    /// Convert image file to base64 data URL
-    /// OpenAI/Anthropic expect format: `data:image/{format};base64,{base64_data`}
+    /// Convert image file to a base64 data URL via the kernel's shared
+    /// pipeline (magic-byte detection + recompression over the provider
+    /// size cap). Returns `None` for unreadable/unsupported files.
     fn image_to_base64_url(path: &std::path::Path) -> Option<String> {
-        // Read image file
-        let image_data = match std::fs::read(path) {
-            Ok(data) => data,
-            Err(e) => {
-                tracing::warn!("Failed to read image file {:?}: {}", path, e);
-                return None;
-            }
-        };
-
-        // Detect MIME type from file magic bytes
-        let mime_type = match Self::detect_image_mime_type(&image_data) {
-            Ok(mime) => mime,
-            Err(e) => {
-                tracing::error!("Failed to detect image format: {}", e);
-                return None;
-            }
-        };
-
-        // Encode to base64
-        let base64_data =
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &image_data);
-
-        // Remove any newlines that might be in the base64 output
-        let base64_clean: String = base64_data.chars().filter(|c| !c.is_whitespace()).collect();
-
-        // Create data URL with correct MIME type
-        let data_url = format!("data:{mime_type};base64,{base64_clean}");
-
-        tracing::debug!(
-            "Converted image {:?} to {} base64 ({} bytes -> {} chars)",
-            path,
-            mime_type,
-            image_data.len(),
-            base64_clean.len()
-        );
-
-        Some(data_url)
-    }
-
-    /// Detect image MIME type from file magic bytes
-    /// Returns error for unsupported formats
-    fn detect_image_mime_type(data: &[u8]) -> Result<&'static str, String> {
-        if data.starts_with(b"\x89PNG\r\n\x1a\n") {
-            Ok("image/png")
-        } else if data.starts_with(b"\xff\xd8\xff") {
-            Ok("image/jpeg")
-        } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
-            Ok("image/gif")
-        } else if data.starts_with(b"RIFF") && data.get(8..12) == Some(b"WEBP") {
-            Ok("image/webp")
-        } else {
-            let magic: String = data.iter().take(16).fold(String::new(), |mut acc, b| {
-                use std::fmt::Write;
-                let _ = write!(acc, "{b:02x}");
-                acc
-            });
-            Err(format!("Unsupported image format (magic bytes: {magic})"))
-        }
+        let data = std::fs::read(path)
+            .map_err(|e| tracing::warn!("Failed to read image file {:?}: {}", path, e))
+            .ok()?;
+        kernel::utils::image::bytes_to_data_url(&data)
+            .map_err(|e| tracing::warn!("Failed to convert image {:?}: {}", path, e))
+            .ok()
     }
 }
 

@@ -382,7 +382,7 @@ async fn run_single_tool(p: RunSingleToolParams<'_>) -> ToolExecutionResult {
     };
 
     let elapsed_ms = start.elapsed().as_millis() as u64;
-    let (event, message) = build_tool_result(
+    let (event, mut message) = build_tool_result(
         p.call_id,
         p.call_name,
         &output,
@@ -390,6 +390,10 @@ async fn run_single_tool(p: RunSingleToolParams<'_>) -> ToolExecutionResult {
         p.message_id.clone(),
         p.max_tool_output_length,
     );
+    // Recompress over-cap inline images (any tool, not just Read) so the
+    // persisted context stays within provider image limits; runs on the
+    // blocking pool. Once per tool result, before persistence.
+    crate::utils::image::normalize_image_blocks(&mut message.content).await;
 
     ToolExecutionResult {
         tool_call_id: p.call_id.to_string(),

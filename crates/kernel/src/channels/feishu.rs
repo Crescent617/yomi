@@ -237,6 +237,61 @@ impl FeishuAdapter {
         check_api_resp(resp)
     }
 
+    /// Download an image from a received message and encode it as a
+    /// base64 data URL (mirrors the Telegram adapter), so it can ride
+    /// along as an `ImageUrl` content block for the model.
+    ///
+    /// Message resources (including images) must go through the message
+    /// resources endpoint — `/im/v1/images/{key}` only serves images the
+    /// app uploaded itself and rejects message keys with HTTP 400.
+    async fn download_image(
+        &self,
+        token: &str,
+        message_id: &str,
+        image_key: &str,
+    ) -> Result<String, ChannelError> {
+        let resp = self
+            .client
+            .get(format!(
+                "{}/open-apis/im/v1/messages/{message_id}/resources/{image_key}",
+                self.base_url
+            ))
+            .query(&[("type", "image")])
+            .header("Authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .map_err(|e| api_err("image download", e))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            let body = crate::utils::strs::truncate_with_suffix(&body, 200, "...");
+            return Err(ChannelError::Platform(format!(
+                "image download HTTP {status}: {body}"
+            )));
+        }
+        let bytes = resp.bytes().await.map_err(|e| api_err("image read", e))?;
+        if bytes.len() as u64 > crate::utils::image::MAX_IMAGE_SIZE {
+            return Err(ChannelError::Platform(format!(
+                "image too large: {} bytes (max: {})",
+                bytes.len(),
+                crate::utils::image::MAX_IMAGE_SIZE
+            )));
+        }
+        // A rejected key comes back as a JSON error body, which fails
+        // magic-byte detection inside bytes_to_data_url.
+        let compressed = crate::utils::image::needs_compression(&bytes);
+        let data_url = crate::utils::image::bytes_to_data_url_async(bytes.clone())
+            .await
+            .map_err(|e| ChannelError::Platform(format!("image download: {e}")))?;
+        info!(
+            image_key,
+            bytes = bytes.len(),
+            compressed,
+            "image downloaded"
+        );
+        Ok(data_url)
+    }
+
     // ── Send helpers ─────────────────────────────────────────────────
 
     /// Upload and message a single file. Feishu expects `file_type` +
@@ -680,7 +735,7 @@ impl PlatformAdapter for FeishuAdapter {
             if sender["sender_type"].as_str() != Some("user") {
                 continue;
             }
-            let text = Self::extract_history_text(item);
+            let (text, image_keys) = Self::extract_history_content(item);
             if text.trim().is_empty() {
                 continue;
             }
@@ -689,11 +744,24 @@ impl PlatformAdapter for FeishuAdapter {
                 create_time,
                 sender_id: sender["id"].as_str().unwrap_or("").to_string(),
                 text,
+                image_keys,
             });
         }
         // The API returns newest-first; assemble chronologically.
         out.reverse();
         Ok(out)
+    }
+
+    async fn download_message_image(
+        &self,
+        message_id: &str,
+        image_key: &str,
+    ) -> Result<ContentBlock, ChannelError> {
+        let token = self.get_token().await?;
+        let data_url = self.download_image(&token, message_id, image_key).await?;
+        Ok(ContentBlock::ImageUrl {
+            image_url: data_url.into(),
+        })
     }
 }
 
@@ -793,16 +861,17 @@ impl FeishuAdapter {
         self.parse_event_json(&msg, incoming).await
     }
 
-    /// Extract display text from a history item: text messages get their
-    /// content, posts get concatenated text runs, everything else becomes a
-    /// `[msg_type]` placeholder.
-    fn extract_history_text(item: &serde_json::Value) -> String {
+    /// Extract display text and image keys from a history item in one
+    /// pass: text messages get their content, posts get concatenated text
+    /// runs, everything else becomes a `[msg_type]` placeholder; image
+    /// keys come from `image` message bodies and post `img` runs.
+    fn extract_history_content(item: &serde_json::Value) -> (String, Vec<String>) {
         let msg_type = item["msg_type"].as_str().unwrap_or("unknown");
         let content: serde_json::Value = item["body"]["content"]
             .as_str()
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or_default();
-        match msg_type {
+        let text = match msg_type {
             "text" => content["text"].as_str().unwrap_or("").to_string(),
             "post" => {
                 let text = Self::extract_post_text(&content);
@@ -813,17 +882,41 @@ impl FeishuAdapter {
                 }
             }
             other => format!("[{other}]"),
-        }
+        };
+        let image_keys = match msg_type {
+            "image" => content["image_key"]
+                .as_str()
+                .map(|k| vec![k.to_string()])
+                .unwrap_or_default(),
+            "post" => Self::extract_post_image_keys(&content),
+            _ => Vec::new(),
+        };
+        (text, image_keys)
     }
 
-    /// Concatenate the text runs of a post message's paragraphs, trying
-    /// the known locales (posts in other locales degrade to `[post]`).
-    fn extract_post_text(content: &serde_json::Value) -> String {
-        let mut parts = Vec::new();
-        let paragraphs = ["zh_cn", "en_us", "ja_jp"]
+    /// Locate the post body node: the first known locale with a content
+    /// array, else the content itself (bare `{title, content}` form).
+    fn post_node(content: &serde_json::Value) -> &serde_json::Value {
+        ["zh_cn", "en_us", "ja_jp"]
             .iter()
-            .find_map(|k| content[k]["content"].as_array());
-        if let Some(paragraphs) = paragraphs {
+            .map(|k| &content[*k])
+            .find(|n| n["content"].is_array())
+            .unwrap_or(content)
+    }
+
+    /// Concatenate a post message's title and paragraph text runs (posts
+    /// in other locales degrade to `[post]`).
+    fn extract_post_text(content: &serde_json::Value) -> String {
+        let node = Self::post_node(content);
+        let mut parts = Vec::new();
+        if let Some(title) = node["title"]
+            .as_str()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        {
+            parts.push(title.to_string());
+        }
+        if let Some(paragraphs) = node["content"].as_array() {
             for para in paragraphs {
                 let line: String = para
                     .as_array()
@@ -839,6 +932,21 @@ impl FeishuAdapter {
             }
         }
         parts.join("\n")
+    }
+
+    /// Collect the `image_key`s of a post's `img` runs, in paragraph order.
+    fn extract_post_image_keys(content: &serde_json::Value) -> Vec<String> {
+        Self::post_node(content)["content"]
+            .as_array()
+            .map(|paras| {
+                paras
+                    .iter()
+                    .flat_map(|p| p.as_array().into_iter().flatten())
+                    .filter(|r| r["tag"].as_str() == Some("img"))
+                    .filter_map(|r| r["image_key"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Feishu `create_time` is in milliseconds, but some v1.x events may be in
@@ -905,8 +1013,30 @@ impl FeishuAdapter {
             .ok_or_else(|| api_err("missing content", ""))?;
         let content_json: serde_json::Value =
             serde_json::from_str(content_str).map_err(|e| api_err("content JSON", e))?;
-        let text = content_json["text"].as_str().unwrap_or("");
-        if text.is_empty() {
+        // Rich-text (post) content has no top-level `text` — its body lives
+        // in per-locale paragraphs; images ride along as `img` runs there
+        // or as the whole body of an `image` message.
+        let msg_type = message["message_type"].as_str().unwrap_or("");
+        let (text, image_keys) = match msg_type {
+            "text" => (
+                content_json["text"].as_str().unwrap_or("").to_string(),
+                Vec::new(),
+            ),
+            "post" => (
+                Self::extract_post_text(&content_json),
+                Self::extract_post_image_keys(&content_json),
+            ),
+            "image" => (
+                String::new(),
+                content_json["image_key"]
+                    .as_str()
+                    .map(|k| vec![k.to_string()])
+                    .unwrap_or_default(),
+            ),
+            _ => (String::new(), Vec::new()),
+        };
+        if text.is_empty() && image_keys.is_empty() {
+            debug!(chat_id, msg_type, "ignoring message without usable content");
             return Ok(None);
         }
 
@@ -933,15 +1063,33 @@ impl FeishuAdapter {
         let thread_part = thread_id
             .as_ref()
             .map_or(String::new(), |tid| format!("[thread: {tid}]"));
-        let formatted = format!(
-            "[{ts}][from_user_id: {user_id}][chat_id: {chat_id}]{thread_part}[platform: feishu]\n{text}"
+        let header = format!(
+            "[{ts}][from_user_id: {user_id}][chat_id: {chat_id}]{thread_part}[platform: feishu]"
+        );
+        let formatted = if text.is_empty() {
+            header
+        } else {
+            format!("{header}\n{text}")
+        };
+
+        info!(
+            chat_id,
+            msg_id,
+            user_id,
+            is_mention,
+            text,
+            image_count = image_keys.len(),
+            "Feishu message"
         );
 
-        info!(chat_id, msg_id, user_id, is_mention, text, "Feishu message");
+        let raw_text = strip_bot_mention(
+            &text,
+            message["mentions"].as_array(),
+            bot_open_id.as_deref(),
+        );
 
-        let raw_text =
-            strip_bot_mention(text, message["mentions"].as_array(), bot_open_id.as_deref());
-
+        // Images are NOT downloaded here — keys travel with the message
+        // for post-gate download (see `ChannelMessage::image_keys`).
         let channel_msg = ChannelMessage {
             external_chat_id: chat_id.to_string(),
             external_user_id: user_id.to_string(),
@@ -949,6 +1097,7 @@ impl FeishuAdapter {
             is_mention,
             raw_text: Some(raw_text),
             content: vec![ContentBlock::Text { text: formatted }],
+            image_keys,
             thread_id,
             root_id,
             is_group: chat_type == "group",

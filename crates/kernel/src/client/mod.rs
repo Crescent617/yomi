@@ -524,7 +524,7 @@ impl KernelApi for Kernel {
     }
 
     async fn send_steer(&self, session_id: &SessionId, content: Vec<ContentBlock>) -> Result<()> {
-        Self::send_steer(self, session_id, content);
+        Self::send_steer(self, session_id, content).await;
         Ok(())
     }
 
