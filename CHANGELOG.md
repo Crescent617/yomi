@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.29] - 2026-07-30
+
+### Fixed
+- 修复飞书群开启 `reply_in_thread` 后，引用旧消息向机器人提问会串进被引用消息所在会话的问题：现在引用回复会开启独立会话，其话题内的后续交流复用该会话。
+
+### Changed
+- 通道消息日志补充话题与引用标识，会话的新建与复用现在可以直接在 daemon 日志中观察。
+
 ## [0.7.28] - 2026-07-30
 
 ### Fixed
