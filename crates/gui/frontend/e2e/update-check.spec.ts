@@ -45,9 +45,8 @@ async function stubTauri(page: Page) {
 
 async function mountStatusBar(page: Page) {
   await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const { default: StatusBar } =
-      await import("/src/lib/components/layout/StatusBar.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const { default: StatusBar } = window.__e2e.StatusBar;
     document.body.innerHTML =
       '<div id="statusbar-host" style="position:fixed;left:0;right:0;bottom:0"></div>';
     const target = document.querySelector<HTMLDivElement>("#statusbar-host");
@@ -59,7 +58,7 @@ async function mountStatusBar(page: Page) {
 
 async function runUpdateCheck(page: Page) {
   await page.evaluate(async () => {
-    const mod = await import("/src/lib/update-check.svelte.ts");
+    const mod = window.__e2e.updateCheck;
     await mod.checkForUpdates();
   });
 }
@@ -75,7 +74,9 @@ test("prompts for a newer release, opens it, and snoozes until a newer one", asy
       body: JSON.stringify(releasePayload("9.9.9")),
     }),
   );
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
   await mountStatusBar(page);
 
   // Up to date before any check: no prompt.
@@ -129,8 +130,7 @@ test("prompts for a newer release, opens it, and snoozes until a newer one", asy
     .poll(async () =>
       page.evaluate(
         async () =>
-          (await import("/src/lib/settings.svelte.ts")).guiPreferences.updates
-            .dismissed_version,
+          window.__e2e.settings.guiPreferences.updates.dismissed_version,
       ),
     )
     .toBe("9.9.9");
@@ -157,7 +157,9 @@ test("prompts for a newer release, opens it, and snoozes until a newer one", asy
 test("stays silent when the release check fails", async ({ page }) => {
   await stubTauri(page);
   await page.route(RELEASE_API, (route) => route.abort());
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
   await mountStatusBar(page);
 
   await runUpdateCheck(page);
@@ -165,9 +167,7 @@ test("stays silent when the release check fails", async ({ page }) => {
   await expect
     .poll(async () =>
       page.evaluate(
-        async () =>
-          (await import("/src/lib/update-check.svelte.ts")).updateCheckState
-            .status,
+        async () => window.__e2e.updateCheck.updateCheckState.status,
       ),
     )
     .toBe("error");

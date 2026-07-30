@@ -3,15 +3,16 @@ import { expect, test } from "@playwright/test";
 test("expands an independent user query navigator and jumps to queries", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
   await page.setViewportSize({ width: 1280, height: 640 });
 
   await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     const created_at = new Date().toISOString();
     const messages = Array.from({ length: 6 }, (_, index) => [
@@ -66,7 +67,7 @@ test("expands an independent user query navigator and jumps to queries", async (
     element.setAttribute("data-instance", "before-streaming");
   });
   await page.evaluate(async () => {
-    const events = await import("/src/lib/events.ts");
+    const events = window.__e2e.events;
     for (let index = 0; index < 20; index += 1) {
       events.handleEvent("query-minimap-test", `token-${index}`, {
         model: {
@@ -77,7 +78,7 @@ test("expands an independent user query navigator and jumps to queries", async (
         },
       });
     }
-    await (await import("/@id/svelte")).tick();
+    await window.__e2e.svelte.tick();
   });
   await expect(navigator).toHaveAttribute("data-instance", "before-streaming");
 
@@ -150,15 +151,16 @@ test("expands an independent user query navigator and jumps to queries", async (
 test("caps the compact strip at 30 ticks and auto-scrolls to the active query", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
   await page.setViewportSize({ width: 1280, height: 640 });
 
   await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     const created_at = new Date().toISOString();
     const messages = Array.from({ length: 40 }, (_, index) => [

@@ -3,15 +3,16 @@ import { expect, test } from "@playwright/test";
 test("keeps a completed historical Mermaid mounted during streaming updates", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const result = await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const events = await import("/src/lib/events.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const events = window.__e2e.events;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     document.body.innerHTML = '<div id="message-list-test"></div>';
     const target = document.querySelector<HTMLDivElement>("#message-list-test");

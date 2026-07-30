@@ -7,10 +7,12 @@ test("discards a Mermaid render when the theme changes in flight", async ({
     await new Promise((resolve) => setTimeout(resolve, 200));
     await route.continue();
   });
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const result = await page.evaluate(async () => {
-    const { renderMermaid } = await import("/src/lib/mermaid.ts");
+    const { renderMermaid } = window.__e2e.mermaid;
     const pending = renderMermaid("graph TD; A-->B").then(
       () => ({ resolved: true, name: "" }),
       (error: unknown) => ({
@@ -31,13 +33,14 @@ test("discards a Mermaid render when the theme changes in flight", async ({
 test("renders a Mermaid block only when it approaches the viewport", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const target = page.locator("#mermaid-lazy-test");
   await page.evaluate(async () => {
-    const { mount } = await import("/@id/svelte");
-    const { default: MermaidBlock } =
-      await import("/src/lib/components/chat/MermaidBlock.svelte");
+    const { mount } = window.__e2e.svelte;
+    const { default: MermaidBlock } = window.__e2e.MermaidBlock;
     const scrollContainer = document.createElement("div");
     scrollContainer.style.height = "400px";
     scrollContainer.style.overflowY = "auto";

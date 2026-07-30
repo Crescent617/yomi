@@ -13,14 +13,15 @@ test("entry with real code blocks lands and stays at the bottom", async ({
   page,
 }) => {
   test.setTimeout(60_000);
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const result = await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     const target = document.createElement("div");
     target.style.height = "600px";
@@ -32,9 +33,7 @@ test("entry with real code blocks lands and stays at the bottom", async ({
       messages_loaded: true,
     });
     state.sessionState.sessions.push(session);
-    const live = state.sessionState.sessions.find(
-      (s) => s.id === session.id,
-    );
+    const live = state.sessionState.sessions.find((s) => s.id === session.id);
     if (!live) throw new Error("session not registered");
 
     const now = new Date().toISOString();
@@ -117,7 +116,14 @@ test("entry with real code blocks lands and stays at the bottom", async ({
     };
   });
 
-  console.log("checkpoints:", result.checkpoints, "shiki:", result.shikiBlocks, "/", result.codeBlocks);
+  console.log(
+    "checkpoints:",
+    result.checkpoints,
+    "shiki:",
+    result.shikiBlocks,
+    "/",
+    result.codeBlocks,
+  );
   expect(result.codeBlocks).toBeGreaterThanOrEqual(3);
   for (const [label, d] of Object.entries(result.checkpoints)) {
     expect(d, `checkpoint ${label}`).toBeLessThanOrEqual(2);

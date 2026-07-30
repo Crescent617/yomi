@@ -3,15 +3,16 @@ import { expect, test } from "@playwright/test";
 test("shows a skeleton while the initial message history loads", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
   await page.setViewportSize({ width: 1280, height: 640 });
 
   await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     const session = sessionLib.createSessionState({
       id: "message-loading-test",
@@ -35,7 +36,7 @@ test("shows a skeleton while the initial message history loads", async ({
 
   // Once the history arrives the skeleton is replaced by real messages.
   await page.evaluate(async () => {
-    const sessionLib = await import("/src/lib/session.ts");
+    const sessionLib = window.__e2e.sessionLib;
     sessionLib.loadSessionMessages("message-loading-test", [
       {
         id: "query-1",
@@ -44,7 +45,7 @@ test("shows a skeleton while the initial message history loads", async ({
         created_at: new Date().toISOString(),
       },
     ]);
-    await (await import("/@id/svelte")).tick();
+    await window.__e2e.svelte.tick();
   });
   await expect(skeleton).toHaveCount(0);
   await expect(page.getByText("Hello skeleton")).toBeVisible();
@@ -53,15 +54,16 @@ test("shows a skeleton while the initial message history loads", async ({
 test("renders cached messages immediately without a skeleton", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
   await page.setViewportSize({ width: 1280, height: 640 });
 
   await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     const created_at = new Date().toISOString();
     const session = sessionLib.createSessionState({

@@ -100,6 +100,17 @@
   let suppressReengageUntil = 0;
   const REENGAGE_SUPPRESS_MS = 800;
 
+  // Last RO-observed geometry change; gates the intent classifier below.
+  // A sub-frame height dip at the bottom can clamp scrollTop and recover
+  // in the same layout cycle — invisible to the baseline triple — and its
+  // late scroll echo would read as upward intent. The settle window keeps
+  // such echoes inert; real input still releases via wheel/touch/keys.
+  let lastGeometryChangeAt = 0;
+  const GEOMETRY_SETTLE_MS = 150;
+  function geometryRecentlyChanged() {
+    return performance.now() - lastGeometryChangeAt < GEOMETRY_SETTLE_MS;
+  }
+
   // Browser scroll measurements are expressed in CSS pixels. Keep these
   // named so layout styling can continue to use the Tailwind/rem scale.
   const NEAR_BOTTOM_THRESHOLD = 80;
@@ -181,9 +192,7 @@
       () => activeSession?.messages_loaded ?? false,
     );
     releaseSignature =
-      autoScroll || !historyLoaded
-        ? null
-        : untrack(() => liveTailSignature);
+      autoScroll || !historyLoaded ? null : untrack(() => liveTailSignature);
     releaseAfterLoad = !autoScroll && !historyLoaded;
   }
 
@@ -237,8 +246,9 @@
   }
 
   // Classify scroll movement as user intent ONLY against stable geometry:
-  // movement measured across a geometry change is a clamp echo, movement
-  // with unchanged (scrollHeight, clientHeight) can only be a real scroll.
+  // movement measured across a geometry change or inside the settle window
+  // is a clamp echo; movement with unchanged (scrollHeight, clientHeight)
+  // can only be a real scroll.
   function onScroll() {
     if (!scrollContainer) return;
     const scrollTop = scrollContainer.scrollTop;
@@ -249,16 +259,24 @@
     const movedDown = scrollTop > geomBaseline.scrollTop + 1;
     const distance = distanceFromBottom();
     isNearBottom = distance <= NEAR_BOTTOM_THRESHOLD;
+    // Pinned + moved up while the gate can't vouch for the movement = a
+    // clamp echo: real input releases via wheel/touch/keys before its
+    // scroll events arrive. No resize may follow to re-arm the glue, so
+    // re-assert the bottom from the echo itself. Note the distance says
+    // nothing here: a collapse-then-regrow echo can displace thousands
+    // of px, indistinguishable from a scrollbar drag by geometry alone.
+    const clampEchoRepair = pinned && movedUp && distance > 2;
     if (!geomChanged) {
-      if (movedUp && distance > LEAVE_BOTTOM_THRESHOLD) {
-        releasePin();
-      } else if (
-        movedDown &&
-        distance <= NEAR_BOTTOM_THRESHOLD &&
-        canReengage()
-      ) {
+      // An echo moving down lands on the bottom anyway — no window needed.
+      if (movedDown && distance <= NEAR_BOTTOM_THRESHOLD && canReengage()) {
         engagePin();
+      } else if (!geometryRecentlyChanged()) {
+        if (movedUp && distance > LEAVE_BOTTOM_THRESHOLD) releasePin();
+      } else if (clampEchoRepair) {
+        glueToBottom();
       }
+    } else if (clampEchoRepair) {
+      glueToBottom();
     }
     syncGeomBaseline();
   }
@@ -467,6 +485,7 @@
       // visibility — and leave the classifier's geometry baseline alone,
       // so the clamp echo this resize queued still reads as "geometry
       // changed" when its scroll event runs.
+      lastGeometryChangeAt = performance.now(); // feed the settle window
       if (pinned) glueToBottom();
       else isNearBottom = distanceFromBottom() <= NEAR_BOTTOM_THRESHOLD;
     });

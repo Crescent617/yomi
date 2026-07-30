@@ -3,15 +3,16 @@ import { expect, test } from "@playwright/test";
 test("highlights a code fence once it closes and keeps it mounted", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const result = await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const events = await import("/src/lib/events.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const events = window.__e2e.events;
+    const { default: MessageList } = window.__e2e.MessageList;
     const target = document.createElement("div");
     target.style.height = "800px";
     document.body.replaceChildren(target);
@@ -96,13 +97,14 @@ test("highlights a code fence once it closes and keeps it mounted", async ({
 test("defers highlighting until a code block approaches the viewport", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const target = page.locator("#lazy-code-test");
   await page.evaluate(async () => {
-    const { mount } = await import("/@id/svelte");
-    const { default: CodeBlock } =
-      await import("/src/lib/components/chat/CodeBlock.svelte");
+    const { mount } = window.__e2e.svelte;
+    const { default: CodeBlock } = window.__e2e.CodeBlock;
     const scrollContainer = document.createElement("div");
     scrollContainer.style.height = "400px";
     scrollContainer.style.overflowY = "auto";

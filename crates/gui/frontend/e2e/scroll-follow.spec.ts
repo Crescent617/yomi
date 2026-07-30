@@ -11,15 +11,16 @@ import { expect, test } from "@playwright/test";
 test("activity group collapse at run end does not re-engage following", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const result = await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const phaseLib = await import("/src/lib/session-phase.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const phaseLib = window.__e2e.phaseLib;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     const target = document.createElement("div");
     target.style.height = "600px";
@@ -79,7 +80,12 @@ test("activity group collapse at run end does not re-engage following", async ({
     const initiallyFollowing = distanceFromBottom() <= 80;
 
     // User scrolls up to re-read the answer while tools stream below. The
-    // position is inside the region the collapse will clamp away.
+    // position is inside the region the collapse will clamp away. Real
+    // input announces intent via the wheel channel — a bare scroll event
+    // mid-churn reads as a clamp echo.
+    scroller.dispatchEvent(
+      new WheelEvent("wheel", { deltaY: -120, bubbles: true, composed: true }),
+    );
     const maxScroll = scroller.scrollHeight - scroller.clientHeight;
     scroller.scrollTop = maxScroll - 800;
     scroller.dispatchEvent(new Event("scroll"));
@@ -123,15 +129,16 @@ test("activity group collapse at run end does not re-engage following", async ({
 test("session entry lands at the bottom while history loads, autoScroll off", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const result = await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const { guiPreferences } = await import("/src/lib/settings.svelte.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { guiPreferences } = window.__e2e.settings;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     // Entry navigation scrolls independently of the follow preference.
     guiPreferences.chat.autoScroll = false;
@@ -208,14 +215,15 @@ test("session entry lands at the bottom while history loads, autoScroll off", as
 test("scrolling back down to the bottom re-engages following", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const result = await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     const target = document.createElement("div");
     target.style.height = "600px";
@@ -284,14 +292,15 @@ test("scrolling back down to the bottom re-engages following", async ({
 test("streaming growth stays pinned, including large single chunks", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const result = await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     const target = document.createElement("div");
     target.style.height = "600px";
@@ -362,14 +371,15 @@ test("streaming growth stays pinned, including large single chunks", async ({
 test("scrolling up during streaming frees the view; a new user message re-pins it", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const result = await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     const target = document.createElement("div");
     target.style.height = "600px";
@@ -414,7 +424,11 @@ test("scrolling up during streaming frees the view; a new user message re-pins i
     const distance = () =>
       scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
 
-    // User scrolls up to read while the run continues.
+    // User scrolls up to read while the run continues (wheel = intent,
+    // scrollTop change = movement).
+    scroller.dispatchEvent(
+      new WheelEvent("wheel", { deltaY: -120, bubbles: true, composed: true }),
+    );
     scroller.scrollTop -= 500;
     scroller.dispatchEvent(new Event("scroll"));
     await tick();
@@ -455,15 +469,16 @@ test("scrolling up during streaming frees the view; a new user message re-pins i
 test("group collapse while FOLLOWING keeps the bottom pinned", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const result = await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const phaseLib = await import("/src/lib/session-phase.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const phaseLib = window.__e2e.phaseLib;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     const target = document.createElement("div");
     target.style.height = "600px";
@@ -552,14 +567,15 @@ test("group collapse while FOLLOWING keeps the bottom pinned", async ({
 test("clientHeight shrink below the list re-pins without content growth", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const result = await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     const target = document.createElement("div");
     target.style.height = "600px";
@@ -622,15 +638,16 @@ test("clientHeight shrink below the list re-pins without content growth", async 
 test("entry pin holds through deferred layout churn; new content releases it (autoScroll off)", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const result = await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const { guiPreferences } = await import("/src/lib/settings.svelte.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { guiPreferences } = window.__e2e.settings;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     // Entry navigation pins independently of the follow preference.
     guiPreferences.chat.autoScroll = false;
@@ -716,14 +733,15 @@ test("entry pin holds through deferred layout churn; new content releases it (au
 test("a clamp echo observed after regrowth cannot kill the pin", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const result = await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     const target = document.createElement("div");
     target.style.height = "600px";
@@ -753,7 +771,10 @@ test("a clamp echo observed after regrowth cannot kill the pin", async ({
       created_at: now,
     });
 
-    state.streamingMessages[session.id] = [userMessage, assistantText("a1", 300)];
+    state.streamingMessages[session.id] = [
+      userMessage,
+      assistantText("a1", 300),
+    ];
     mount(MessageList, { target });
     await tick();
     await new Promise(requestAnimationFrame);
@@ -770,7 +791,10 @@ test("a clamp echo observed after regrowth cannot kill the pin", async ({
     // observed AFTER the stream regrows the content — and before the
     // ResizeObserver re-glues. Everything stays in this task, so no
     // rendering update (and no RO callback) can interleave.
-    state.streamingMessages[session.id] = [userMessage, assistantText("a1", 40)];
+    state.streamingMessages[session.id] = [
+      userMessage,
+      assistantText("a1", 40),
+    ];
     await tick();
     void scroller.scrollHeight; // force layout: the shrink clamps scrollTop
     state.streamingMessages[session.id] = [
@@ -804,17 +828,204 @@ test("a clamp echo observed after regrowth cannot kill the pin", async ({
   expect(result.afterMoreOutput).toBeLessThanOrEqual(2);
 });
 
+test("a clamp echo dispatching after geometry restored neither releases nor strands the pin", async ({
+  page,
+}) => {
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
+
+  const result = await page.evaluate(async () => {
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { default: MessageList } = window.__e2e.MessageList;
+
+    const target = document.createElement("div");
+    target.style.height = "600px";
+    document.body.replaceChildren(target);
+
+    const session = sessionLib.createSessionState({
+      id: "restored-echo-test",
+      phase: "streaming",
+      is_running: true,
+    });
+    state.sessionState.sessions.push(session);
+    state.sessionState.activeSessionId = session.id;
+
+    const now = new Date().toISOString();
+    const filler = (lines: number) =>
+      Array.from({ length: lines }, (_, i) => `line ${i}`).join("\n");
+    const userMessage = {
+      id: "u1",
+      type: "user" as const,
+      content: [{ type: "text", text: "run" }],
+      created_at: now,
+    };
+    const assistantText = (id: string, lines: number) => ({
+      id,
+      type: "assistant" as const,
+      content: [{ type: "text", text: filler(lines) }],
+      created_at: now,
+    });
+
+    state.streamingMessages[session.id] = [
+      userMessage,
+      assistantText("a1", 300),
+    ];
+    mount(MessageList, { target });
+    await tick();
+    await new Promise(requestAnimationFrame);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    const scroller = target.querySelector<HTMLDivElement>(".overflow-y-auto");
+    if (!scroller) throw new Error("scroll container not found");
+    const distance = () =>
+      scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    const pinnedBefore = distance() <= 2;
+
+    // A late stream chunk re-opens the geometry settle window via the RO
+    // glue. Then reproduce the production failure: a sub-frame dip steals
+    // the scroll position and its clamp echo dispatches with geometry
+    // that matches the baseline again — inside the settle window.
+    state.streamingMessages[session.id] = [
+      userMessage,
+      assistantText("a1", 300),
+      assistantText("a2", 20),
+    ];
+    await tick();
+    await new Promise(requestAnimationFrame);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    // 60px: a realistic sub-frame dip-and-recover echo.
+    scroller.scrollTop -= 60;
+    scroller.dispatchEvent(new Event("scroll"));
+
+    // No release, and the echo itself re-asserts the bottom.
+    const afterEcho = distance();
+
+    // The pin survived iff later growth is glued.
+    state.streamingMessages[session.id] = [
+      ...state.streamingMessages[session.id]!,
+      assistantText("a3", 100),
+    ];
+    await tick();
+    await new Promise(requestAnimationFrame);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const afterMoreOutput = distance();
+
+    return { pinnedBefore, afterEcho, afterMoreOutput };
+  });
+
+  expect(result.pinnedBefore).toBe(true);
+  expect(result.afterEcho).toBeLessThanOrEqual(2);
+  expect(result.afterMoreOutput).toBeLessThanOrEqual(2);
+});
+
+test("a lone upward scroll event in a quiet layout still releases the pin", async ({
+  page,
+}) => {
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
+
+  const result = await page.evaluate(async () => {
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { default: MessageList } = window.__e2e.MessageList;
+
+    const target = document.createElement("div");
+    target.style.height = "600px";
+    document.body.replaceChildren(target);
+
+    const session = sessionLib.createSessionState({
+      id: "drag-release-test",
+      phase: "idle",
+      messages_loaded: true,
+    });
+    state.sessionState.sessions.push(session);
+    const live = state.sessionState.sessions.find((s) => s.id === session.id);
+    if (!live) throw new Error("session not registered");
+    state.sessionState.activeSessionId = session.id;
+
+    const now = new Date().toISOString();
+    const filler = (lines: number) =>
+      Array.from({ length: lines }, (_, i) => `line ${i}`).join("\n");
+    live.messages.push(
+      {
+        id: "u1",
+        type: "user",
+        content: [{ type: "text", text: "hi" }],
+        created_at: now,
+      },
+      {
+        id: "a1",
+        type: "assistant",
+        content: [{ type: "text", text: filler(300) }],
+        created_at: now,
+      },
+    );
+    mount(MessageList, { target });
+    await tick();
+    await new Promise(requestAnimationFrame);
+    // Let the geometry settle window expire: the scroller has been quiet.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    const scroller = target.querySelector<HTMLDivElement>(".overflow-y-auto");
+    if (!scroller) throw new Error("scroll container not found");
+    const distance = () =>
+      scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    const pinnedBefore = distance() <= 2;
+
+    // A scrollbar drag is the one input the wheel/touch/key channels
+    // cannot see: with no churn to blame, a lone upward event IS intent.
+    scroller.scrollTop -= 500;
+    scroller.dispatchEvent(new Event("scroll"));
+    await tick();
+    const distanceWhileReading = distance();
+    const jumpButtonVisible =
+      target.querySelector('button[aria-label="Jump to latest message"]') !==
+      null;
+
+    // Released: later growth is not glued.
+    live.messages.push({
+      id: "a2",
+      type: "assistant",
+      content: [{ type: "text", text: filler(100) }],
+      created_at: now,
+    });
+    await tick();
+    await new Promise(requestAnimationFrame);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const afterMoreOutput = distance();
+
+    return {
+      pinnedBefore,
+      distanceWhileReading,
+      jumpButtonVisible,
+      afterMoreOutput,
+    };
+  });
+
+  expect(result.pinnedBefore).toBe(true);
+  expect(result.distanceWhileReading).toBeGreaterThan(120);
+  expect(result.jumpButtonVisible).toBe(true);
+  expect(result.afterMoreOutput).toBeGreaterThan(120);
+});
+
 test("wheel up releases immediately; scrolling back down re-engages", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const result = await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     const target = document.createElement("div");
     target.style.height = "600px";
@@ -899,14 +1110,15 @@ test("wheel up releases immediately; scrolling back down re-engages", async ({
 test("wheel up over a scrollable tool output does not release the pin", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const result = await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     const target = document.createElement("div");
     target.style.height = "600px";
@@ -1003,19 +1215,19 @@ test("wheel up over a scrollable tool output does not release the pin", async ({
   expect(result.afterChainedWheel).toBeGreaterThan(120);
 });
 
-
 test("cold session entry holds the pin through the initial history load, autoScroll off", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const result = await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const { guiPreferences } = await import("/src/lib/settings.svelte.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { guiPreferences } = window.__e2e.settings;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     guiPreferences.chat.autoScroll = false;
 
@@ -1089,15 +1301,16 @@ test("cold session entry holds the pin through the initial history load, autoScr
 test("toggling the autoScroll preference does not yank a reader to the bottom", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const result = await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const { guiPreferences } = await import("/src/lib/settings.svelte.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { guiPreferences } = window.__e2e.settings;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     const target = document.createElement("div");
     target.style.height = "600px";
@@ -1140,7 +1353,10 @@ test("toggling the autoScroll preference does not yank a reader to the bottom", 
     const distance = () =>
       scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
 
-    // The user scrolls up to read.
+    // The user scrolls up to read (wheel = intent, scrollTop = movement).
+    scroller.dispatchEvent(
+      new WheelEvent("wheel", { deltaY: -120, bubbles: true, composed: true }),
+    );
     scroller.scrollTop = 0;
     scroller.dispatchEvent(new Event("scroll"));
     await tick();
@@ -1161,18 +1377,18 @@ test("toggling the autoScroll preference does not yank a reader to the bottom", 
   expect(result.afterToggle).toBeGreaterThan(120);
 });
 
-
 test("PageUp on the page releases the pin during streaming", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const result = await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     const target = document.createElement("div");
     target.style.height = "600px";
@@ -1239,7 +1455,9 @@ test("PageUp on the page releases the pin during streaming", async ({
 test("a touch drag toward older messages releases the pin", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const result = await page.evaluate(async () => {
     // Some engines expose the Touch interface but forbid constructing it;
@@ -1251,11 +1469,10 @@ test("a touch drag toward older messages releases the pin", async ({
       return { skipped: true };
     }
 
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     const target = document.createElement("div");
     target.style.height = "600px";
@@ -1330,15 +1547,16 @@ test("a touch drag toward older messages releases the pin", async ({
 test("toggling autoScroll off→on disarms the new-content release", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/e2e");
+  // ssr=false route: the harness module runs after the shell load event.
+  await page.waitForFunction(() => window.__e2e);
 
   const result = await page.evaluate(async () => {
-    const { mount, tick } = await import("/@id/svelte");
-    const state = await import("/src/lib/state.svelte.ts");
-    const sessionLib = await import("/src/lib/session.ts");
-    const { guiPreferences } = await import("/src/lib/settings.svelte.ts");
-    const { default: MessageList } =
-      await import("/src/lib/components/chat/MessageList.svelte");
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { guiPreferences } = window.__e2e.settings;
+    const { default: MessageList } = window.__e2e.MessageList;
 
     // Start with the preference OFF so the entry pin arms a release
     // signature, then flip it ON before new content arrives.
