@@ -26,6 +26,7 @@ pub mod cron;
 pub mod event;
 pub mod goal;
 pub mod kernel;
+pub mod kv_cache;
 pub mod memory;
 pub mod notification;
 pub mod permission;
@@ -52,8 +53,7 @@ pub use permission::{Checker, Level, ToolLevelResolver};
 pub use prompt::SystemPromptBuilder;
 pub use provider::{AnthropicProvider, NoKeyProvider, OpenAIProvider, OpenAIResponseProvider};
 pub use provider::{
-    HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, RetryingProvider,
-    ThinkingConfig, ToolCallRequest,
+    HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, ThinkingConfig, ToolCallRequest,
 };
 pub use skill::{deduplicate_skills, Skill, SkillLoader};
 pub use storage::{

@@ -42,6 +42,9 @@ pub struct StorageSet {
     cron_store: Arc<dyn crate::cron::CronStore>,
     /// Channel session mapping store
     channel_store: Arc<dyn crate::channels::ChannelStore>,
+    /// Disposable persistent KV cache (`cache.db`; `None` when it failed
+    /// to open — cache must never take the kernel down with it).
+    kv_cache: Option<Arc<crate::kv_cache::KvCache>>,
 }
 
 impl std::fmt::Debug for StorageSet {
@@ -60,6 +63,7 @@ impl std::fmt::Debug for StorageSet {
             .field("favorite_store", &"<dyn FavoriteStore>")
             .field("cron_store", &"<dyn CronStore>")
             .field("channel_store", &"<dyn ChannelStore>")
+            .field("kv_cache", &self.kv_cache.is_some())
             .finish()
     }
 }
@@ -177,6 +181,16 @@ impl StorageSet {
                 Arc::new(crate::checkpoint::FilesystemCheckpointStore::new(&data_dir))
             };
 
+        // The cache db is disposable — a failure to open it must not take
+        // down storage init; just run without persistence.
+        let kv_cache = match crate::kv_cache::KvCache::open(&data_dir.join("cache.db")).await {
+            Ok(kv) => Some(Arc::new(kv)),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to open cache.db, KV cache disabled");
+                None
+            }
+        };
+
         Ok(Self {
             pool,
             data_dir,
@@ -191,6 +205,7 @@ impl StorageSet {
             favorite_store,
             cron_store,
             channel_store,
+            kv_cache,
         })
     }
 
@@ -273,6 +288,11 @@ impl StorageSet {
     /// Get the channel store
     pub fn channel_store(&self) -> Arc<dyn crate::channels::ChannelStore> {
         self.channel_store.clone()
+    }
+
+    /// Get the disposable persistent KV cache (`None` when it failed to open).
+    pub fn kv_cache(&self) -> Option<Arc<crate::kv_cache::KvCache>> {
+        self.kv_cache.clone()
     }
 
     /// `SQLite` pool for gc-internal queries

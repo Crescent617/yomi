@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- 修复引用卡片消息时正文丢失（只剩 `[interactive]` 占位符）的问题：机器人自己发送的卡片注入缓存的 markdown 正文（本地持久化，服务重启后仍有效），旧版（v1）卡片注入 API 返回的渲染文本。
+
 ## [0.7.33] - 2026-07-31
 
 ### Added

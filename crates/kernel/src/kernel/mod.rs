@@ -64,6 +64,8 @@ pub struct Kernel {
     pub(crate) cron_scheduler: Arc<std::sync::Mutex<Option<Arc<crate::cron::CronScheduler>>>>,
     /// Shared slot for the daemon restart sink (filled by `KernelServer`).
     pub(crate) restart_tx: Arc<std::sync::Mutex<Option<tokio::sync::mpsc::Sender<()>>>>,
+    /// Disposable persistent KV cache (`cache.db`), shared with channel adapters.
+    pub(crate) kv_cache: Option<Arc<crate::kv_cache::KvCache>>,
     pub(crate) channel_manager: Option<Arc<crate::channels::hub::ChannelHub>>,
     /// Global notification bus for state changes and other broadcasts.
     notification_bus: Arc<crate::notification::NotificationBus>,
@@ -176,6 +178,11 @@ impl Kernel {
         if let Some(tx) = self.restart_tx.lock().unwrap().clone() {
             let _ = tx.try_send(());
         }
+    }
+
+    /// Get the disposable persistent KV cache (`None` when it failed to open).
+    pub fn kv_cache(&self) -> Option<Arc<crate::kv_cache::KvCache>> {
+        self.kv_cache.clone()
     }
 
     /// Get data directory from `agent_shared`
@@ -367,6 +374,7 @@ impl Kernel {
             cron_store,
             cron_scheduler,
             restart_tx: Arc::new(std::sync::Mutex::new(None)),
+            kv_cache: storage.kv_cache(),
             channel_manager,
             notification_bus,
             shutdown: tokio_util::sync::CancellationToken::new(),

@@ -38,6 +38,9 @@ const MSG_TYPE_PONG: &str = "pong";
 const PAYLOAD_GZIP: u8 = 1;
 const PAYLOAD_PB: u8 = 2;
 
+/// Legacy-rendered echo of a schema 2.0 card (real content unavailable).
+const UPGRADE_CLIENT_NOTICE: &str = "请升级至最新版本客户端，以查看内容";
+
 /// Application-level ping cadence; the gateway answers every ping with a pong.
 const PING_INTERVAL: std::time::Duration = std::time::Duration::from_mins(1);
 /// No inbound frame (pongs included) for this long means a zombie
@@ -62,6 +65,15 @@ struct TokenCache {
 /// Bounded dedup of forwarded message IDs: Feishu resends events whose ACK
 /// was lost; redeliveries land within seconds, so a few thousand is ample.
 const DEDUP_CAP: NonZeroUsize = NonZeroUsize::new(4096).unwrap();
+/// Cap for the sent-card text cache (see [`FeishuAdapter::cache_card_text`]).
+const SENT_TEXT_CAP: NonZeroUsize = DEDUP_CAP;
+/// KV namespace and retention for the sent-card text cache: quoting a
+/// reply happens in the same conversation arc, so a week is ample.
+const SENT_TEXT_NS: &str = "feishu_sent_card_text";
+const SENT_TEXT_TTL_MS: i64 = 7 * 24 * 3600 * 1000;
+/// The full-table prune is throttled: `update_card` fires per status-card
+/// patch, so per-write pruning would churn cache.db.
+const PRUNE_INTERVAL: std::time::Duration = std::time::Duration::from_hours(1);
 
 // ── Adapter ─────────────────────────────────────────────────────────
 
@@ -73,6 +85,12 @@ pub struct FeishuAdapter {
     token_cache: Mutex<Option<TokenCache>>,
     bot_open_id: tokio::sync::Mutex<Option<String>>,
     seen_messages: Mutex<LruCache<String, ()>>,
+    sent_texts: Mutex<LruCache<String, String>>,
+    /// Persistent backstop for `sent_texts` (survives restarts); `None`
+    /// in tests and when the kernel has no cache db.
+    kv: Option<std::sync::Arc<crate::kv_cache::KvCache>>,
+    /// Last `sent_texts` prune time (throttled, see PRUNE_INTERVAL).
+    last_prune: tokio::sync::Mutex<Option<std::time::Instant>>,
 }
 
 impl FeishuAdapter {
@@ -88,7 +106,15 @@ impl FeishuAdapter {
             token_cache: Mutex::new(None),
             bot_open_id: tokio::sync::Mutex::new(None),
             seen_messages: Mutex::new(LruCache::new(DEDUP_CAP)),
+            sent_texts: Mutex::new(LruCache::new(SENT_TEXT_CAP)),
+            kv: None,
+            last_prune: tokio::sync::Mutex::new(None),
         }
+    }
+
+    /// Attach the persistent KV backstop for the sent-card text cache.
+    pub fn set_kv_cache(&mut self, kv: Option<std::sync::Arc<crate::kv_cache::KvCache>>) {
+        self.kv = kv;
     }
 
     /// Point the adapter at a different API base URL (tests only).
@@ -437,7 +463,11 @@ impl FeishuAdapter {
                 json!({ "receive_id": receive_id, "content": content, "msg_type": msg_type }),
             )
             .await?;
-        Ok(resp_data_str(&resp, "message_id"))
+        let id = resp_data_str(&resp, "message_id");
+        if msg_type == "interactive" {
+            self.cache_card_text(id.as_deref(), content).await;
+        }
+        Ok(id)
     }
 
     async fn reply_msg(
@@ -458,7 +488,66 @@ impl FeishuAdapter {
                 }),
             )
             .await?;
-        Ok(resp_data_str(&resp, "message_id"))
+        let id = resp_data_str(&resp, "message_id");
+        if msg_type == "interactive" {
+            self.cache_card_text(id.as_deref(), content).await;
+        }
+        Ok(id)
+    }
+
+    /// Cache a sent card's markdown body by message id, so `fetch_message`
+    /// can return real text for our own cards: the get-message API only
+    /// echoes a legacy-rendered fallback for schema 2.0 cards ("请升级至
+    /// 最新版本客户端" notice), never the card JSON we sent. Writes through
+    /// to the persistent KV cache (best-effort) so restarts keep the text.
+    async fn cache_card_text(&self, msg_id: Option<&str>, content: &str) {
+        let Some(msg_id) = msg_id else { return };
+        let Ok(card) = serde_json::from_str::<serde_json::Value>(content) else {
+            return;
+        };
+        let text = Self::extract_card_text(&card);
+        if text.is_empty() {
+            return;
+        }
+        self.sent_texts
+            .lock()
+            .await
+            .put(msg_id.to_string(), text.clone());
+        let Some(kv) = &self.kv else { return };
+        if let Err(e) = kv.put(SENT_TEXT_NS, msg_id, &text).await {
+            warn!(error = %e, "sent-text kv put failed");
+        }
+        let mut last = self.last_prune.lock().await;
+        if last.is_none_or(|t| t.elapsed() >= PRUNE_INTERVAL) {
+            let cutoff = chrono::Utc::now().timestamp_millis() - SENT_TEXT_TTL_MS;
+            if let Err(e) = kv.prune_older_than(SENT_TEXT_NS, cutoff).await {
+                warn!(error = %e, "sent-text kv prune failed");
+            }
+            *last = Some(std::time::Instant::now());
+        }
+    }
+
+    /// The text of one of our own cards: memory first, persistent KV as
+    /// the backstop (a hit backfills memory).
+    async fn sent_card_text(&self, msg_id: &str) -> Option<String> {
+        if let Some(text) = self.sent_texts.lock().await.get(msg_id) {
+            return Some(text.clone());
+        }
+        let kv = self.kv.as_ref()?;
+        match kv.get(SENT_TEXT_NS, msg_id).await {
+            Ok(Some(text)) => {
+                self.sent_texts
+                    .lock()
+                    .await
+                    .put(msg_id.to_string(), text.clone());
+                Some(text)
+            }
+            Ok(None) => None,
+            Err(e) => {
+                warn!(error = %e, "sent-text kv get failed");
+                None
+            }
+        }
     }
 
     // ── WebSocket helpers ───────────────────────────────────────────
@@ -750,6 +839,8 @@ impl PlatformAdapter for FeishuAdapter {
             json!({ "content": card_json }),
         )
         .await?;
+        // The card morphed (status → reply) — refresh the cached text.
+        self.cache_card_text(Some(message_id), card_json).await;
         Ok(())
     }
 
@@ -928,8 +1019,14 @@ impl PlatformAdapter for FeishuAdapter {
             return Ok(None);
         }
         // No sender filter here — quoting the bot's own answer is a
-        // primary use case.
+        // primary use case. For our own cards the API only echoes a legacy
+        // placeholder, so the text we actually sent wins when cached.
         let (text, image_keys) = Self::extract_history_content(item);
+        let text = if item["msg_type"].as_str() == Some("interactive") {
+            self.sent_card_text(message_id).await.unwrap_or(text)
+        } else {
+            text
+        };
         Ok(Some(super::HistoryMessage {
             message_id: item["message_id"]
                 .as_str()
@@ -1091,6 +1188,16 @@ impl FeishuAdapter {
                     text
                 }
             }
+            // Bot replies are cards — quoting one must yield its markdown
+            // body, not a bare placeholder.
+            "interactive" => {
+                let text = Self::extract_card_text(&content);
+                if text.is_empty() {
+                    "[interactive]".to_string()
+                } else {
+                    text
+                }
+            }
             other => format!("[{other}]"),
         };
         let image_keys = match msg_type {
@@ -1112,6 +1219,50 @@ impl FeishuAdapter {
             .map(|k| &content[*k])
             .find(|n| n["content"].is_array())
             .unwrap_or(content)
+    }
+
+    /// Extract readable text from a card (interactive) message body.
+    /// Two shapes: the sent card JSON (markdown elements — schema 2.0
+    /// `body.elements` or legacy v1 top-level `elements`), and the
+    /// get-message API echo (legacy-rendered paragraphs of text runs —
+    /// v1 cards keep their real text there). Schema 2.0 echoes degrade
+    /// to the "upgrade client" notice, which must not leak into context.
+    fn extract_card_text(content: &serde_json::Value) -> String {
+        let from_markdown = content["body"]["elements"]
+            .as_array()
+            .or_else(|| content["elements"].as_array())
+            .map(|els| {
+                els.iter()
+                    .filter(|e| e["tag"].as_str() == Some("markdown"))
+                    .filter_map(|e| e["content"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        if !from_markdown.is_empty() {
+            return from_markdown;
+        }
+        let from_runs = content["elements"]
+            .as_array()
+            .map(|paras| {
+                paras
+                    .iter()
+                    .map(|para| {
+                        para.as_array()
+                            .map(|runs| {
+                                runs.iter()
+                                    .filter_map(|r| r["text"].as_str())
+                                    .filter(|t| *t != UPGRADE_CLIENT_NOTICE)
+                                    .collect::<String>()
+                            })
+                            .unwrap_or_default()
+                    })
+                    .filter(|line| !line.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        from_runs
     }
 
     /// Concatenate a post message's title and paragraph text runs (posts

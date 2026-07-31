@@ -163,6 +163,14 @@ fn response_for(method: &str, path: &str) -> Vec<u8> {
                  "sender":{"id":"ou_q","sender_type":"user"},"body":{"content":"{\"text\":\"gone\"}"}}
             ]}}"#
             .into(),
+            // The get-message API echoes schema 2.0 cards as a legacy-
+            // rendered placeholder, never the card JSON that was sent.
+            "/open-apis/im/v1/messages/om_new" => r#"{"code":0,"msg":"ok","data":{"items":[
+                {"message_id":"om_new","create_time":"1700000000000","msg_type":"interactive","deleted":false,
+                 "sender":{"id":"cli_bot","sender_type":"app"},
+                 "body":{"content":"{\"title\":null,\"elements\":[[{\"tag\":\"text\",\"text\":\"请升级至最新版本客户端，以查看内容\"}]]}"}}
+            ]}}"#
+            .into(),
             _ => r#"{"code":0,"msg":"ok","data":{"items":[]}}"#.into(),
         };
     }
@@ -420,6 +428,62 @@ async fn fetch_message_returns_quoted_content() {
     assert!(adapter.fetch_message("om_missing").await.unwrap().is_none());
 }
 
+#[tokio::test]
+async fn sent_card_text_is_cached_and_served_on_fetch() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let card = r#"{"schema":"2.0","body":{"elements":[{"tag":"markdown","content":"答案正文"}]}}"#;
+
+    // The API echoes only a legacy placeholder for our card; the cached
+    // sent text must win.
+    adapter.send_card("oc_chat", card, None).await.unwrap();
+    let m = adapter
+        .fetch_message("om_new")
+        .await
+        .unwrap()
+        .expect("found");
+    assert_eq!(m.text, "答案正文");
+
+    // A card morph (status → reply) refreshes the cached text.
+    let morphed =
+        r#"{"schema":"2.0","body":{"elements":[{"tag":"markdown","content":"morph 后的正文"}]}}"#;
+    adapter.update_card("om_new", morphed).await.unwrap();
+    let m = adapter
+        .fetch_message("om_new")
+        .await
+        .unwrap()
+        .expect("found");
+    assert_eq!(m.text, "morph 后的正文");
+}
+
+/// Restart simulation: process A sends the card (memory + kv db), process
+/// B (fresh adapter, cold memory, same db) must still serve the text.
+#[tokio::test]
+async fn sent_card_text_survives_restart_via_kv() {
+    let stub = StubFeishu::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let kv_path = dir.path().join("cache.db");
+    let card =
+        r#"{"schema":"2.0","body":{"elements":[{"tag":"markdown","content":"重启前的答案"}]}}"#;
+
+    let mut adapter_a = stub_adapter(&stub.base_url);
+    adapter_a.set_kv_cache(Some(std::sync::Arc::new(
+        crate::kv_cache::KvCache::open(&kv_path).await.unwrap(),
+    )));
+    adapter_a.send_card("oc_chat", card, None).await.unwrap();
+
+    let mut adapter_b = stub_adapter(&stub.base_url);
+    adapter_b.set_kv_cache(Some(std::sync::Arc::new(
+        crate::kv_cache::KvCache::open(&kv_path).await.unwrap(),
+    )));
+    let m = adapter_b
+        .fetch_message("om_new")
+        .await
+        .unwrap()
+        .expect("found");
+    assert_eq!(m.text, "重启前的答案");
+}
+
 // ── send_files: multipart form contract (regression for API error 234001) ──
 
 #[tokio::test]
@@ -566,6 +630,64 @@ fn extract_post_text_falls_back_to_bare_form() {
     });
 
     assert_eq!(super::FeishuAdapter::extract_post_text(&content), "t\nbody");
+}
+
+#[test]
+fn extract_history_content_reads_card_markdown() {
+    // Schema 2.0 card: markdown elements concatenated, panels skipped.
+    let item = json!({
+        "msg_type": "interactive",
+        "body": { "content": r#"{"schema":"2.0","body":{"elements":[
+            {"tag":"markdown","content":"答案正文"},
+            {"tag":"collapsible_panel","elements":[{"tag":"markdown","content":"轨迹噪声"}]},
+            {"tag":"markdown","content":"第二段"}
+        ]}}"# }
+    });
+    let (text, _) = super::FeishuAdapter::extract_history_content(&item);
+    assert_eq!(text, "答案正文\n第二段");
+
+    // Legacy v1 shape (top-level elements).
+    let item = json!({
+        "msg_type": "interactive",
+        "body": { "content": r#"{"elements":[{"tag":"markdown","content":"旧卡"}]}"# }
+    });
+    let (text, _) = super::FeishuAdapter::extract_history_content(&item);
+    assert_eq!(text, "旧卡");
+
+    // No markdown elements → placeholder fallback.
+    let item = json!({
+        "msg_type": "interactive",
+        "body": { "content": r#"{"schema":"2.0","body":{"elements":[{"tag":"div"}]}}"# }
+    });
+    let (text, _) = super::FeishuAdapter::extract_history_content(&item);
+    assert_eq!(text, "[interactive]");
+
+    // get-message API echo of a v1 card: legacy-rendered runs keep the
+    // real text.
+    let item = json!({
+        "msg_type": "interactive",
+        "body": { "content": r#"{"title":null,"elements":[[{"tag":"text","text":"真实文本"}]]}"# }
+    });
+    let (text, _) = super::FeishuAdapter::extract_history_content(&item);
+    assert_eq!(text, "真实文本");
+
+    // get-message API echo of a schema 2.0 card: the upgrade notice must
+    // NOT leak — degrade to the placeholder instead.
+    let item = json!({
+        "msg_type": "interactive",
+        "body": { "content": r#"{"title":null,"elements":[[{"tag":"img","image_key":"img_v3_x"},{"tag":"text","text":"请升级至最新版本客户端，以查看内容"},{"tag":"text","text":""}]]}"# }
+    });
+    let (text, _) = super::FeishuAdapter::extract_history_content(&item);
+    assert_eq!(text, "[interactive]");
+
+    // The notice riding alongside real content: only the notice run is
+    // filtered, the real text survives.
+    let item = json!({
+        "msg_type": "interactive",
+        "body": { "content": r#"{"title":null,"elements":[[{"tag":"text","text":"真实内容"}],[{"tag":"text","text":"请升级至最新版本客户端，以查看内容"}]]}"# }
+    });
+    let (text, _) = super::FeishuAdapter::extract_history_content(&item);
+    assert_eq!(text, "真实内容");
 }
 
 #[test]
@@ -1158,4 +1280,43 @@ async fn e2e_fetch_message_round_trip() {
     // Sent by the bot itself — proves app senders are not filtered out
     // (quoting the bot's own answer is a primary use case).
     assert!(!fetched.sender_id.is_empty());
+
+    // A card message reads back as its markdown body — quoting the bot's
+    // own reply card must not degrade to an `[interactive]` placeholder.
+    let card = serde_json::json!({
+        "schema": "2.0",
+        "body": { "elements": [{ "tag": "markdown", "content": marker }] }
+    })
+    .to_string();
+    let card_mid = adapter
+        .send_direct_card(&user_id, &card)
+        .await
+        .expect("send card")
+        .expect("card message id");
+    let fetched = adapter
+        .fetch_message(&card_mid)
+        .await
+        .expect("fetch card ok")
+        .expect("card message found");
+    assert_eq!(fetched.text, marker);
+
+    // A legacy v1 card has no cache entry (no markdown elements in its
+    // JSON) — but the get-message echo keeps its real text in
+    // legacy-rendered runs.
+    let v1_card = serde_json::json!({
+        "config": { "wide_screen_mode": true },
+        "elements": [{ "tag": "div", "text": { "tag": "lark_md", "content": marker } }]
+    })
+    .to_string();
+    let v1_mid = adapter
+        .send_msg_to(&token, "open_id", &user_id, &v1_card, "interactive")
+        .await
+        .expect("send v1 card")
+        .expect("v1 card message id");
+    let fetched = adapter
+        .fetch_message(&v1_mid)
+        .await
+        .expect("fetch v1 ok")
+        .expect("v1 message found");
+    assert_eq!(fetched.text, marker);
 }
