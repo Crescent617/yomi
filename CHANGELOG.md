@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.33] - 2026-07-31
+
 ### Added
 - 引用回复消息时，机器人现在能看到被引用消息的内容（文本与图片），可以针对某条特定消息提问；话题内对根消息的例行回复不重复注入。
 
