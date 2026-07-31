@@ -957,3 +957,133 @@ async fn card_action_without_operator_is_ignored() {
         .unwrap();
     assert!(rx.try_recv().is_err(), "nothing forwarded");
 }
+
+// ── Receive path: redelivery dedup ─────────────────────────────────
+
+#[tokio::test]
+async fn redelivered_message_is_deduplicated() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+    let event = receive_event("text", &json!({ "text": "hello" }));
+
+    let first = adapter.parse_event_json(&event, &tx).await.unwrap();
+    assert_eq!(first.as_deref(), Some("om_1"));
+    let msg = expect_message(rx.try_recv().expect("first delivery forwarded"));
+    assert_eq!(msg.raw_text.as_deref(), Some("hello"));
+
+    // A redelivery (lost ACK, reconnect replay) is dropped instead of
+    // triggering the agent a second time.
+    let dup = adapter.parse_event_json(&event, &tx).await.unwrap();
+    assert_eq!(dup, None);
+    assert!(rx.try_recv().is_err(), "redelivery must not be forwarded");
+}
+
+#[test]
+fn dedup_cache_is_bounded() {
+    let mut cache = lru::LruCache::<String, ()>::new(super::DEDUP_CAP);
+    for i in 0..super::DEDUP_CAP.get() {
+        cache.put(format!("om_{i}"), ());
+    }
+    cache.put("om_extra".to_string(), ());
+    assert_eq!(cache.len(), super::DEDUP_CAP.get());
+    assert!(!cache.contains("om_0"), "oldest evicted at capacity");
+    assert!(cache.contains("om_extra"));
+}
+
+// ── e2e against the real Feishu ws gateway ─────────────────────────
+//
+// Run manually: FEISHU_E2E_APP_ID=cli_xxx FEISHU_E2E_APP_SECRET=xxx \
+//   cargo test -p kernel channels::feishu::tests::e2e -- --ignored --nocapture
+//
+// Verifies the assumption behind FRAME_TIMEOUT: every app-level ping gets
+// a pong. Data frames are NOT acked (they redeliver to a running daemon),
+// so the soak is safe alongside production traffic.
+#[tokio::test]
+#[ignore = "e2e: real Feishu ws gateway, needs FEISHU_E2E_APP_ID/FEISHU_E2E_APP_SECRET"]
+async fn e2e_ws_gateway_pongs_keep_connection_alive() {
+    use futures::{SinkExt, StreamExt};
+    use prost::Message as _;
+    use tokio_tungstenite::tungstenite;
+
+    let app_id = std::env::var("FEISHU_E2E_APP_ID").expect("FEISHU_E2E_APP_ID");
+    let app_secret = std::env::var("FEISHU_E2E_APP_SECRET").expect("FEISHU_E2E_APP_SECRET");
+    // The binaries do this at startup; the test binary must pick its own
+    // rustls provider (both ring and aws-lc-rs are in the tree).
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let adapter = super::FeishuAdapter::new(app_id, app_secret);
+    let (url, service_id) = adapter.ws_endpoint().await.expect("ws endpoint");
+    let (ws, _) = tokio_tungstenite::connect_async(&url)
+        .await
+        .expect("ws connect");
+    let (write, mut read) = ws.split();
+    let write = std::sync::Arc::new(tokio::sync::Mutex::new(write));
+
+    // Mirror the production ping cadence (first tick immediate, then
+    // every PING_INTERVAL).
+    let ping_write = std::sync::Arc::clone(&write);
+    let ping_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(super::PING_INTERVAL);
+        loop {
+            interval.tick().await;
+            let mut w = ping_write.lock().await;
+            let ping = super::build_ping(service_id);
+            if w.send(tungstenite::Message::Binary(ping.into()))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+
+    // Soak long enough to cover 3 ping intervals; track pongs and the
+    // longest silence between any two inbound frames.
+    let soak = std::time::Duration::from_secs(190);
+    let started = std::time::Instant::now();
+    let mut last_frame_at = started;
+    let mut max_gap = std::time::Duration::ZERO;
+    let mut pongs = 0u32;
+    while started.elapsed() < soak {
+        let remaining = soak.saturating_sub(started.elapsed());
+        let Ok(frame) = tokio::time::timeout(remaining, read.next()).await else {
+            break; // soak window over
+        };
+        let frame = frame
+            .expect("server closed the connection during soak")
+            .expect("ws read error during soak");
+        let now = std::time::Instant::now();
+        max_gap = max_gap.max(now - last_frame_at);
+        last_frame_at = now;
+        if let tungstenite::Message::Binary(data) = frame {
+            if let Ok(f) = lark_websocket_protobuf::pbbp2::Frame::decode(&data[..]) {
+                let ty = f
+                    .headers
+                    .iter()
+                    .find(|h| h.key == "type")
+                    .map(|h| h.value.as_str());
+                if ty == Some("pong") {
+                    pongs += 1;
+                    println!("[{:.1?}] pong #{pongs}", started.elapsed());
+                } else {
+                    println!(
+                        "[{:.1?}] data frame type={ty:?} (not acked)",
+                        started.elapsed()
+                    );
+                }
+            }
+        }
+    }
+    ping_task.abort();
+
+    assert!(
+        pongs >= 3,
+        "every ping should be answered: {pongs} pongs in {soak:?}"
+    );
+    assert!(
+        max_gap < super::FRAME_TIMEOUT,
+        "longest silence {max_gap:?} must stay under FRAME_TIMEOUT {:?}",
+        super::FRAME_TIMEOUT
+    );
+    println!("soak ok: {pongs} pongs, longest silence {max_gap:?}");
+}

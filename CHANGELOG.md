@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- 修复飞书长连接假死（网络半开、服务端不再推送）时消息长时间静默丢失的问题：现在约两分半收不到任何服务端帧即自动断线重连。
+- 修复网络异常导致飞书重复投递同一条消息时，机器人会重复处理并重复回复的问题：现在按消息标识去重，重复投递直接忽略。
+
 ## [0.7.30] - 2026-07-31
 
 ### Added

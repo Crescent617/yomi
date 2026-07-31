@@ -1,9 +1,11 @@
 use crate::types::ContentBlock;
 use futures::{SinkExt, StreamExt};
+use lru::LruCache;
 use prost::Message as ProstMessage;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
+use std::num::NonZeroUsize;
 use tokio_tungstenite::tungstenite;
 
 use tokio::sync::mpsc;
@@ -36,6 +38,12 @@ const MSG_TYPE_PONG: &str = "pong";
 const PAYLOAD_GZIP: u8 = 1;
 const PAYLOAD_PB: u8 = 2;
 
+/// Application-level ping cadence; the gateway answers every ping with a pong.
+const PING_INTERVAL: std::time::Duration = std::time::Duration::from_mins(1);
+/// No inbound frame (pongs included) for this long means a zombie
+/// connection (half-open TCP never errors) — reconnect. 2.5× ping interval.
+const FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(150);
+
 // ── Types ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
@@ -51,6 +59,10 @@ struct TokenCache {
     expires_at: std::time::Instant,
 }
 
+/// Bounded dedup of forwarded message IDs: Feishu resends events whose ACK
+/// was lost; redeliveries land within seconds, so a few thousand is ample.
+const DEDUP_CAP: NonZeroUsize = NonZeroUsize::new(4096).unwrap();
+
 // ── Adapter ─────────────────────────────────────────────────────────
 
 pub struct FeishuAdapter {
@@ -60,6 +72,7 @@ pub struct FeishuAdapter {
     base_url: String,
     token_cache: Mutex<Option<TokenCache>>,
     bot_open_id: tokio::sync::Mutex<Option<String>>,
+    seen_messages: Mutex<LruCache<String, ()>>,
 }
 
 impl FeishuAdapter {
@@ -74,6 +87,7 @@ impl FeishuAdapter {
             base_url: FEISHU_BASE_URL.to_string(),
             token_cache: Mutex::new(None),
             bot_open_id: tokio::sync::Mutex::new(None),
+            seen_messages: Mutex::new(LruCache::new(DEDUP_CAP)),
         }
     }
 
@@ -535,7 +549,7 @@ impl PlatformAdapter for FeishuAdapter {
             let write_ping = write.clone();
             let ping_cancel = cancel.clone();
             let ping = tokio::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_mins(1));
+                let mut interval = tokio::time::interval(PING_INTERVAL);
                 loop {
                     tokio::select! {
                         _ = interval.tick() => {
@@ -548,16 +562,31 @@ impl PlatformAdapter for FeishuAdapter {
                 }
             });
 
-            // Receive loop
+            // Receive loop. The timeout catches zombie connections: any
+            // inbound frame (a pong every PING_INTERVAL) proves liveness;
+            // silence means half-open TCP — break to reconnect.
             loop {
                 tokio::select! {
                     biased;
                     () = cancel.cancelled() => break,
-                    Some(msg) = read.next() => {
+                    msg = tokio::time::timeout(FRAME_TIMEOUT, read.next()) => {
+                        let msg = match msg {
+                            Ok(Some(msg)) => msg,
+                            Ok(None) => {
+                                warn!("ws stream ended");
+                                break;
+                            }
+                            Err(_) => {
+                                warn!(
+                                    timeout_secs = FRAME_TIMEOUT.as_secs(),
+                                    "no frame within timeout (pong overdue), reconnecting"
+                                );
+                                break;
+                            }
+                        };
                         match msg {
                             Ok(tungstenite::Message::Binary(data)) => {
-                                let mut w = write.lock().await;
-                                if let Err(e) = self.handle_binary(&data, &incoming, &mut *w).await {
+                                if let Err(e) = self.handle_binary(&data, &incoming, &write).await {
                                     warn!(error = %e, "handle binary failed");
                                 }
                             }
@@ -581,10 +610,6 @@ impl PlatformAdapter for FeishuAdapter {
                                 break;
                             }
                         }
-                    }
-                    else => {
-                        warn!("ws stream ended");
-                        break;
                     }
                 }
             }
@@ -896,14 +921,16 @@ impl PlatformAdapter for FeishuAdapter {
 // ── Message handlers ────────────────────────────────────────────────
 
 impl FeishuAdapter {
-    async fn handle_binary<W>(
+    /// Handle one binary frame. The `write` lock is held only around the
+    /// ACK send — parsing (token HTTP, queue send) must not starve pings.
+    async fn handle_binary<S>(
         &self,
         data: &[u8],
         incoming: &mpsc::Sender<ChannelEvent>,
-        write: &mut W,
+        write: &Mutex<S>,
     ) -> Result<(), ChannelError>
     where
-        W: futures::Sink<tungstenite::Message, Error = tungstenite::Error> + Unpin,
+        S: futures::Sink<tungstenite::Message, Error = tungstenite::Error> + Unpin,
     {
         if data.is_empty() {
             return Ok(());
@@ -937,6 +964,8 @@ impl FeishuAdapter {
             FRAME_TYPE_DATA => {
                 let ack = build_ack(&frame);
                 write
+                    .lock()
+                    .await
                     .send(tungstenite::Message::Binary(ack.into()))
                     .await
                     .map_err(|e| api_err("ACK", e))?;
@@ -1160,6 +1189,13 @@ impl FeishuAdapter {
             .as_str()
             .ok_or_else(|| api_err("missing message_id", ""))?
             .to_string();
+        // Redelivery guard (lost ACK → resend): don't trigger the agent
+        // twice. Chat messages only — perm events / card actions dedup in
+        // the store. Relies on the sequential receive loop.
+        if self.seen_messages.lock().await.contains(&msg_id) {
+            info!(chat_id, msg_id, "duplicate event delivery, skipped");
+            return Ok(None);
+        }
         let user_id = sender["sender_id"]["open_id"].as_str().unwrap_or("unknown");
         let content_str = message["content"]
             .as_str()
@@ -1271,6 +1307,10 @@ impl FeishuAdapter {
         {
             return Err(ChannelError::Platform("incoming closed".to_string()));
         }
+
+        // Record only after a successful forward, so a copy that failed
+        // mid-parse never blocks a later delivery of the same message.
+        let _ = self.seen_messages.lock().await.put(msg_id.clone(), ());
 
         Ok(Some(msg_id))
     }
