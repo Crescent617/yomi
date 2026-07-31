@@ -201,6 +201,20 @@ impl FeishuAdapter {
         check_api_resp(resp)
     }
 
+    async fn api_delete(&self, token: &str, url: &str) -> Result<serde_json::Value, ChannelError> {
+        let resp = self
+            .client
+            .delete(url)
+            .header("Authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .map_err(|e| api_err("API request", e))?
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| api_err("API parse", e))?;
+        check_api_resp(resp)
+    }
+
     async fn api_json(
         &self,
         builder: reqwest::RequestBuilder,
@@ -766,6 +780,25 @@ impl PlatformAdapter for FeishuAdapter {
             .await?;
 
         Ok(resp_data_str(&resp, "reaction_id"))
+    }
+
+    /// refer: <https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message-reaction/delete>
+    async fn delete_reaction(
+        &self,
+        _external_chat_id: &str,
+        message_id: &str,
+        reaction_id: &str,
+    ) -> Result<(), ChannelError> {
+        let token = self.get_token().await?;
+        self.api_delete(
+            &token,
+            &format!(
+                "{}/open-apis/im/v1/messages/{message_id}/reactions/{reaction_id}",
+                self.base_url
+            ),
+        )
+        .await?;
+        Ok(())
     }
 
     fn supports_status_card(&self) -> bool {

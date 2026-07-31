@@ -1191,8 +1191,10 @@ fn assemble_history(messages: &[&HistoryMessage]) -> String {
 /// the mid-run post detection (morph vs. new-message settle). Messages that
 /// arrive while the session is idle are run triggers, not mid-run posts —
 /// recording only while running also means a receipt can never outlive its
-/// run into the next one (settlement clears them). No-op when observability
-/// is disabled or the message carries no platform ID.
+/// run into the next one (settlement clears them). Every accepted message
+/// additionally refreshes the session's settle-reaction target (its latest
+/// user message), so async runs without a fresh trigger still have one.
+/// No-op when observability is disabled or the message carries no platform ID.
 fn record_receipt(
     config: &ChannelConfig,
     obs: &ObsTracker,
@@ -1202,6 +1204,9 @@ fn record_receipt(
 ) {
     if !config.observability {
         return;
+    }
+    if let Some(msg_id) = &msg.external_message_id {
+        obs.record_user_msg(session_id, msg_id.clone());
     }
     if !kernel.is_session_running(session_id) {
         return;

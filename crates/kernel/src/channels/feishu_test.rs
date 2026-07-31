@@ -283,6 +283,18 @@ async fn send_reaction_posts_emoji_and_returns_reaction_id() {
 }
 
 #[tokio::test]
+async fn delete_reaction_deletes_by_message_and_reaction_id() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+
+    adapter.delete_reaction("", "om_1", "rid_1").await.unwrap();
+
+    let req = stub.find("DELETE", "/open-apis/im/v1/messages/om_1/reactions/rid_1");
+    assert_eq!(req.0, "DELETE");
+    assert_eq!(req.1, "/open-apis/im/v1/messages/om_1/reactions/rid_1");
+}
+
+#[tokio::test]
 async fn fetch_history_queries_filters_and_orders() {
     let stub = StubFeishu::start().await;
     let adapter = stub_adapter(&stub.base_url);

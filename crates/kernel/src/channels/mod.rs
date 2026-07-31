@@ -524,6 +524,21 @@ pub trait PlatformAdapter: Send + Sync {
         Ok(None)
     }
 
+    /// Remove a reaction previously added by the bot (`reaction_id` from
+    /// [`send_reaction`](Self::send_reaction)). Re-adding the same emoji
+    /// on the same message is deduplicated by platforms (no new event, no
+    /// re-notification), so repeated signals delete-then-re-add instead.
+    /// Default implementation does nothing for platforms that don't
+    /// support it.
+    async fn delete_reaction(
+        &self,
+        _external_chat_id: &str,
+        _message_id: &str,
+        _reaction_id: &str,
+    ) -> Result<(), ChannelError> {
+        Ok(())
+    }
+
     /// Send a typing action to indicate the bot is processing.
     ///
     /// Default implementation does nothing for platforms that don't support it.

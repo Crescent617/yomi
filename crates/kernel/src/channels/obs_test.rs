@@ -12,6 +12,7 @@ struct MockAdapter {
     cards: Mutex<Vec<(String, String, Option<String>)>>, // chat_id, json, anchor
     patches: Mutex<Vec<(String, String)>>,               // msg_id, json
     reactions_added: Mutex<Vec<(String, String)>>,       // msg_id, emoji
+    reactions_removed: Mutex<Vec<(String, String)>>,     // msg_id, reaction_id
     content_msgs: Mutex<Vec<String>>,                    // sent content replies
     counter: AtomicUsize,
     fail_send_cards: std::sync::atomic::AtomicBool,
@@ -24,6 +25,7 @@ impl MockAdapter {
             cards: Mutex::new(Vec::new()),
             patches: Mutex::new(Vec::new()),
             reactions_added: Mutex::new(Vec::new()),
+            reactions_removed: Mutex::new(Vec::new()),
             content_msgs: Mutex::new(Vec::new()),
             counter: AtomicUsize::new(0),
             fail_send_cards: std::sync::atomic::AtomicBool::new(false),
@@ -99,6 +101,19 @@ impl PlatformAdapter for MockAdapter {
             "reaction-{}",
             self.counter.fetch_add(1, Ordering::Relaxed)
         )))
+    }
+
+    async fn delete_reaction(
+        &self,
+        _external_chat_id: &str,
+        message_id: &str,
+        reaction_id: &str,
+    ) -> Result<(), ChannelError> {
+        self.reactions_removed
+            .lock()
+            .await
+            .push((message_id.to_string(), reaction_id.to_string()));
+        Ok(())
     }
 }
 
@@ -1550,4 +1565,290 @@ async fn stats_line_counts_textless_model_end_as_step() {
         last.contains("1 steps"),
         "tool-call-only turn is a step: {last}"
     );
+}
+
+// ── Settle reaction (completion signal for silent card settles) ─────
+
+/// Drive a run far enough to materialize the status card (first tool).
+async fn drive_materialized_run(tracker: &ObsTracker, mock: &Arc<MockAdapter>, sid: &SessionId) {
+    let adapter = adapter_ref(mock);
+    tracker
+        .handle_event(&adapter, sid, "chat-1", None, &running())
+        .await;
+    tracker
+        .handle_event(&adapter, sid, "chat-1", None, &tool_start("bash"))
+        .await;
+}
+
+#[tokio::test]
+async fn settle_morph_reacts_done_on_latest_user_message() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+
+    tracker.record_user_msg(&sid, "user-msg-1".into());
+    drive_materialized_run(&tracker, &mock, &sid).await;
+    tracker
+        .handle_stopped(
+            &sid,
+            &StopReason::Completed {
+                finish_reason: None,
+            },
+            Some(reply_with("the final answer")),
+        )
+        .await;
+
+    // The card morphed in place (silent) — the reaction is the only
+    // completion signal.
+    assert_eq!(mock.patches.lock().await.len(), 1);
+    let reactions = mock.reactions_added.lock().await;
+    assert_eq!(
+        reactions.as_slice(),
+        [("user-msg-1".to_string(), "DONE".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn settle_failed_reacts_cross_mark() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+
+    tracker.record_user_msg(&sid, "user-msg-1".into());
+    drive_materialized_run(&tracker, &mock, &sid).await;
+    tracker
+        .handle_stopped(
+            &sid,
+            &StopReason::Failed {
+                error: "provider exploded".to_string(),
+            },
+            Some(reply_with("partial answer")),
+        )
+        .await;
+
+    let reactions = mock.reactions_added.lock().await;
+    assert_eq!(
+        reactions.as_slice(),
+        [("user-msg-1".to_string(), "CrossMark".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn settle_timeout_reacts_cross_mark() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+
+    tracker.record_user_msg(&sid, "user-msg-1".into());
+    drive_materialized_run(&tracker, &mock, &sid).await;
+    tracker
+        .handle_timeout(&sid, Some(reply_with("partial output")))
+        .await;
+
+    let reactions = mock.reactions_added.lock().await;
+    assert_eq!(
+        reactions.as_slice(),
+        [("user-msg-1".to_string(), "CrossMark".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn settle_cancelled_sends_no_reaction() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+
+    tracker.record_user_msg(&sid, "user-msg-1".into());
+    drive_materialized_run(&tracker, &mock, &sid).await;
+    tracker
+        .handle_stopped(
+            &sid,
+            &StopReason::Cancelled {
+                operation: Some("streaming".to_string()),
+            },
+            Some(reply_with("partial answer")),
+        )
+        .await;
+
+    // The user stopped the run themselves — the card still morphs, but no
+    // completion signal is needed.
+    assert_eq!(mock.patches.lock().await.len(), 1);
+    assert!(mock.reactions_added.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn settle_with_mid_run_posts_sends_no_reaction() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+
+    tracker.record_user_msg(&sid, "user-msg-1".into());
+    // A mid-run post means the reply lands as a NEW message below it —
+    // that message notifies by itself.
+    tracker.record_receipt(&sid, "mid-run".into());
+    drive_materialized_run(&tracker, &mock, &sid).await;
+    tracker
+        .handle_stopped(
+            &sid,
+            &StopReason::Completed {
+                finish_reason: None,
+            },
+            None,
+        )
+        .await;
+
+    assert!(mock.reactions_added.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn settle_without_recorded_user_msg_sends_no_reaction() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+
+    drive_materialized_run(&tracker, &mock, &sid).await;
+    tracker
+        .handle_stopped(
+            &sid,
+            &StopReason::Completed {
+                finish_reason: None,
+            },
+            Some(reply_with("the final answer")),
+        )
+        .await;
+
+    assert_eq!(mock.patches.lock().await.len(), 1);
+    assert!(mock.reactions_added.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn settle_reaction_targets_latest_recorded_message() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+
+    tracker.record_user_msg(&sid, "user-msg-1".into());
+    tracker.record_user_msg(&sid, "user-msg-2".into());
+    drive_materialized_run(&tracker, &mock, &sid).await;
+    tracker
+        .handle_stopped(
+            &sid,
+            &StopReason::Completed {
+                finish_reason: None,
+            },
+            Some(reply_with("the final answer")),
+        )
+        .await;
+
+    let reactions = mock.reactions_added.lock().await;
+    assert_eq!(
+        reactions.as_slice(),
+        [("user-msg-2".to_string(), "DONE".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn settle_reaction_skipped_when_card_never_materialized() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+
+    tracker.record_user_msg(&sid, "user-msg-1".into());
+    let adapter = adapter_ref(&mock);
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    // No tools, no chunks: the settle sends the reply as a NEW card
+    // message (which notifies), so no reaction.
+    tracker
+        .handle_stopped(
+            &sid,
+            &StopReason::Completed {
+                finish_reason: None,
+            },
+            Some(reply_with("plain answer")),
+        )
+        .await;
+
+    assert_eq!(mock.cards.lock().await.len(), 1);
+    assert!(mock.patches.lock().await.is_empty());
+    assert!(mock.reactions_added.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn repeated_settle_on_same_message_replaces_previous_reaction() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+
+    tracker.record_user_msg(&sid, "user-msg-1".into());
+
+    // Two consecutive runs settle on the same silent session.
+    for _ in 0..2 {
+        drive_materialized_run(&tracker, &mock, &sid).await;
+        tracker
+            .handle_stopped(
+                &sid,
+                &StopReason::Completed {
+                    finish_reason: None,
+                },
+                Some(reply_with("the final answer")),
+            )
+            .await;
+    }
+
+    // Both settles added DONE on the same message; the second one deleted
+    // the first reaction beforehand so the platform re-surfaces the signal
+    // instead of deduplicating it.
+    let added = mock.reactions_added.lock().await;
+    assert_eq!(added.len(), 2);
+    assert!(
+        added
+            .iter()
+            .all(|(msg, emoji)| msg == "user-msg-1" && emoji == "DONE"),
+        "two DONE adds on the trigger message: {added:?}"
+    );
+    let removed = mock.reactions_removed.lock().await;
+    assert_eq!(removed.len(), 1, "previous reaction deleted once");
+    assert_eq!(removed[0].0, "user-msg-1");
+    assert!(removed[0].1.starts_with("reaction-"));
+}
+
+#[tokio::test]
+async fn settle_reaction_on_fresh_message_deletes_nothing() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+
+    tracker.record_user_msg(&sid, "user-msg-1".into());
+    drive_materialized_run(&tracker, &mock, &sid).await;
+    tracker
+        .handle_stopped(
+            &sid,
+            &StopReason::Completed {
+                finish_reason: None,
+            },
+            Some(reply_with("answer one")),
+        )
+        .await;
+
+    // A new user message moves the target; the next settle adds a fresh
+    // reaction without touching the old one.
+    tracker.record_user_msg(&sid, "user-msg-2".into());
+    drive_materialized_run(&tracker, &mock, &sid).await;
+    tracker
+        .handle_stopped(
+            &sid,
+            &StopReason::Completed {
+                finish_reason: None,
+            },
+            Some(reply_with("answer two")),
+        )
+        .await;
+
+    assert!(mock.reactions_removed.lock().await.is_empty());
+    let added = mock.reactions_added.lock().await;
+    assert_eq!(added.len(), 2);
+    assert_eq!(added[0].0, "user-msg-1");
+    assert_eq!(added[1].0, "user-msg-2");
 }

@@ -18,8 +18,19 @@
 //! lands at the bottom as bare text. Runs without a reply (crash / lost
 //! events) freeze into a terminal header style instead. User messages
 //! received during the run are recorded as receipts — used only for the
-//! mid-run post detection (morph vs. new-message settle); no reactions
-//! are sent at settlement.
+//! mid-run post detection (morph vs. new-message settle).
+//!
+//! Settle reaction: card patches never notify, so a run that settles
+//! silently (the morph above) additionally reacts on the session's
+//! **latest user message** — ✅ done / ❌ failed; the chat-list
+//! "回应了你的消息" surfacing stands in for a completion ping. Runs
+//! without a fresh trigger (goal continuations, cron-fired runs, API
+//! steers) react on the last recorded user message instead of a run
+//! trigger. No reaction when the reply lands as a new message (mid-run
+//! posts) — that message notifies by itself. Repeated settles on the
+//! same message delete the bot's previous reaction before re-adding:
+//! platforms deduplicate identical reactions, so only delete-then-re-add
+//! re-surfaces the signal (async runs on a silent session).
 
 use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolEvent};
 use crate::types::SessionId;
@@ -184,6 +195,17 @@ impl Settle {
             Settle::Timeout => Some("⏰ Session lost (timed out)".to_string()),
         }
     }
+
+    /// Settle-reaction emoji (Feishu `emoji_type`): the completion signal
+    /// for a silently-settled card. `None` for cancelled runs — the user
+    /// stopped it themselves, they know.
+    fn reaction_emoji(&self) -> Option<&'static str> {
+        match self {
+            Settle::Completed => Some("DONE"),
+            Settle::Failed(_) | Settle::MaxIterations(_) | Settle::Timeout => Some("CrossMark"),
+            Settle::Cancelled => None,
+        }
+    }
 }
 
 /// Truncated one-line error summary for card bodies — the single truncation
@@ -195,12 +217,29 @@ fn error_line(error: &str) -> String {
     )
 }
 
+/// Settle-reaction target: the session's latest user message plus the
+/// reaction the bot added there at the previous settle. The previous
+/// reaction is deleted before re-adding — platforms deduplicate an
+/// identical reaction from the same operator (no new event, no
+/// re-notification), so repeated settles on the same message (async runs
+/// on a silent session) only re-surface via delete-then-re-add.
+#[derive(Debug, Clone)]
+struct ReactionTarget {
+    msg_id: String,
+    reaction_id: Option<String>,
+}
+
 /// Tracks per-session observability state and drives the platform adapter.
 pub(crate) struct ObsTracker {
     states: DashMap<SessionId, ObsCardState>,
     /// IDs of user messages received during each run (drives the mid-run
     /// post detection); cleared at settlement.
     receipts: DashMap<SessionId, Vec<String>>,
+    /// The session's settle-reaction target (its latest user message).
+    /// Sticky across runs (settlement does NOT clear it), so async runs
+    /// without a fresh trigger (goal continuations, cron-fired runs, API
+    /// steers) still have a message to react on.
+    last_user_msg: DashMap<SessionId, ReactionTarget>,
     patch_interval: Duration,
 }
 
@@ -209,6 +248,7 @@ impl ObsTracker {
         Self {
             states: DashMap::new(),
             receipts: DashMap::new(),
+            last_user_msg: DashMap::new(),
             patch_interval: PATCH_MIN_INTERVAL,
         }
     }
@@ -228,6 +268,20 @@ impl ObsTracker {
             .entry(session_id.clone())
             .or_default()
             .push(message_id);
+    }
+
+    /// Record the session's latest user message as the settle-reaction
+    /// target. Called for every accepted user message (trigger / steer /
+    /// queue), so runs without a fresh trigger still have somewhere to
+    /// land the reaction.
+    pub(crate) fn record_user_msg(&self, session_id: &SessionId, message_id: String) {
+        self.last_user_msg.insert(
+            session_id.clone(),
+            ReactionTarget {
+                msg_id: message_id,
+                reaction_id: None,
+            },
+        );
     }
 
     /// Whether the user posted messages mid-run — receipts hold only
@@ -532,17 +586,22 @@ impl ObsTracker {
     /// run. Without a reply (crash/lost events), it freezes into the
     /// terminal header style. Cards never materialized (no-tool runs) send
     /// a new message only when there is something to show: a reply, or a
-    /// failure notice (failures always get an explanation).
+    /// failure notice (failures always get an explanation). A successful
+    /// in-place settle (morph or freeze) is silent on the platform, so it
+    /// additionally reacts on the session's latest user message — skipped
+    /// when the reply lands as a new message (mid-run posts).
     async fn settle_card(
         &self,
         session_id: &SessionId,
         settle: &Settle,
         reply: Option<FinalReply>,
     ) -> Option<FinalReply> {
-        // Receipts serve only the mid-run post detection, which the caller
-        // evaluates before settling — always drop them at run end (covers
-        // stopped/timeout/sweep, including truly-dead sessions whose real
-        // `Stopped` never arrives).
+        // Evaluate the mid-run detection BEFORE clearing receipts: when
+        // the reply lands as a new message it notifies by itself, making
+        // the settle reaction redundant. Receipts are always dropped at
+        // run end (covers stopped/timeout/sweep, including truly-dead
+        // sessions whose real `Stopped` never arrives).
+        let mid_run_posts = self.has_mid_run_posts(session_id);
         self.receipts.remove(session_id);
         let Some((_, state)) = self.states.remove(session_id) else {
             return reply;
@@ -571,10 +630,65 @@ impl ObsTracker {
             }
             return None;
         }
-        if let Err(e) = state.adapter.update_card(&state.status_msg_id, &card).await {
-            warn!(error = %e, "obs settle card patch failed");
+        match state.adapter.update_card(&state.status_msg_id, &card).await {
+            Err(e) => warn!(error = %e, "obs settle card patch failed"),
+            // A silent in-place settle carries no notification — react on
+            // the latest user message as the completion signal instead.
+            Ok(()) if !mid_run_posts => {
+                self.send_settle_reaction(session_id, &state, settle).await;
+            }
+            Ok(()) => {}
         }
         None
+    }
+
+    /// React on the session's latest user message as the completion
+    /// signal for a silently-settled card. A reaction the bot added on a
+    /// previous settle is deleted first: platforms deduplicate identical
+    /// reactions, so delete-then-re-add is what makes repeated settles on
+    /// the same message (async runs on a silent session) re-surface.
+    /// Best-effort: no recorded target (fresh session, hub restart) or a
+    /// platform failure just skips the reaction.
+    async fn send_settle_reaction(
+        &self,
+        session_id: &SessionId,
+        state: &ObsCardState,
+        settle: &Settle,
+    ) {
+        let Some(emoji) = settle.reaction_emoji() else {
+            return;
+        };
+        // Clone out of the map instead of holding a shard guard across await.
+        let target = self.last_user_msg.get(session_id).map(|t| t.clone());
+        let Some(target) = target else {
+            return;
+        };
+        if let Some(reaction_id) = &target.reaction_id {
+            if let Err(e) = state
+                .adapter
+                .delete_reaction(&state.chat_id, &target.msg_id, reaction_id)
+                .await
+            {
+                // A stale/gone reaction must not block the fresh add.
+                warn!(error = %e, "obs settle reaction delete failed");
+            }
+        }
+        match state
+            .adapter
+            .send_reaction(&state.chat_id, &target.msg_id, emoji)
+            .await
+        {
+            Ok(reaction_id) => {
+                // Remember the reaction for the next settle's re-add —
+                // unless a newer user message already moved the target.
+                if let Some(mut entry) = self.last_user_msg.get_mut(session_id) {
+                    if entry.msg_id == target.msg_id {
+                        entry.reaction_id = reaction_id;
+                    }
+                }
+            }
+            Err(e) => warn!(error = %e, "obs settle reaction failed"),
+        }
     }
 }
 
