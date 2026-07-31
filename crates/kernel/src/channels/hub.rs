@@ -819,9 +819,7 @@ async fn handle_incoming_message(
             )
             .await?;
             record_receipt(config, obs, &kernel, &sid, &msg);
-            let mut blocks = maybe_history_prefix(adapter, config, store, channel_name, &msg)
-                .await
-                .unwrap_or_default();
+            let mut blocks = context_prefix(adapter, config, store, channel_name, &msg).await;
             blocks.push(ContentBlock::Text { text });
             kernel.send_steer(&sid, blocks).await;
             Ok(None)
@@ -837,9 +835,7 @@ async fn handle_incoming_message(
             )
             .await?;
             record_receipt(config, obs, &kernel, &sid, &msg);
-            let mut blocks = maybe_history_prefix(adapter, config, store, channel_name, &msg)
-                .await
-                .unwrap_or_default();
+            let mut blocks = context_prefix(adapter, config, store, channel_name, &msg).await;
             blocks.push(ContentBlock::Text { text });
             kernel.send_message(&sid, blocks).await?;
             Ok(None)
@@ -991,9 +987,7 @@ async fn handle_incoming_message(
             )
             .await?;
             record_receipt(config, obs, &kernel, &sid, &msg);
-            let mut content = maybe_history_prefix(adapter, config, store, channel_name, &msg)
-                .await
-                .unwrap_or_default();
+            let mut content = context_prefix(adapter, config, store, channel_name, &msg).await;
             content.extend(msg.content);
             // Deferred image download — only now, after the gate, does
             // an attached image cost bandwidth.
@@ -1160,6 +1154,74 @@ async fn maybe_history_prefix(
 /// keeps the first ones and gets a note for the rest.
 const IMAGE_DOWNLOAD_MAX: usize = 5;
 
+/// Assemble the context blocks for a triggering message: the quoted
+/// message (when the trigger is a quote-reply) followed by recent-chat
+/// history. Both are best-effort and degrade independently.
+async fn context_prefix(
+    adapter: &Arc<dyn PlatformAdapter>,
+    config: &ChannelConfig,
+    store: &Arc<dyn ChannelStore>,
+    channel_name: &str,
+    msg: &ChannelMessage,
+) -> Vec<ContentBlock> {
+    let mut blocks = maybe_quoted_prefix(adapter, msg).await.unwrap_or_default();
+    blocks.extend(
+        maybe_history_prefix(adapter, config, store, channel_name, msg)
+            .await
+            .unwrap_or_default(),
+    );
+    blocks
+}
+
+/// Fetch and assemble the message a quote-reply points at, as a
+/// `<quoted_message>` context block followed by any attached images
+/// (same cap as history). Skipped for routine thread replies to the
+/// root message — that context is already in the thread's session.
+/// Best-effort: any failure degrades to no block.
+async fn maybe_quoted_prefix(
+    adapter: &Arc<dyn PlatformAdapter>,
+    msg: &ChannelMessage,
+) -> Option<Vec<ContentBlock>> {
+    let parent_id = msg.parent_id.as_deref()?;
+    if msg.thread_id.is_some() && msg.root_id.as_deref() == Some(parent_id) {
+        return None;
+    }
+    let quoted = match adapter.fetch_message(parent_id).await {
+        Ok(Some(q)) => q,
+        Ok(None) => return None,
+        Err(e) => {
+            warn!(error = %e, parent_id, "quoted message fetch failed");
+            return None;
+        }
+    };
+    let mut blocks = vec![ContentBlock::Text {
+        text: format!(
+            "<quoted_message>\n{}\n</quoted_message>",
+            sender_line(&quoted)
+        ),
+    }];
+    let downloaded = futures::future::join_all(
+        quoted
+            .image_keys
+            .iter()
+            .take(IMAGE_DOWNLOAD_MAX)
+            .map(|key| adapter.download_message_image(&quoted.message_id, key)),
+    )
+    .await;
+    blocks.extend(downloaded.into_iter().flatten());
+    Some(blocks)
+}
+
+/// `[HH:MM] sender: text` (local time, per-message capped) — the shared
+/// line format for quoted and history context blocks.
+fn sender_line(m: &HistoryMessage) -> String {
+    let ts = chrono::DateTime::from_timestamp_millis(m.create_time)
+        .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M").to_string())
+        .unwrap_or_default();
+    let text = crate::utils::strs::truncate_by_chars(m.text.trim(), HISTORY_MESSAGE_MAX_CHARS, "…");
+    format!("[{ts}] {}: {text}", m.sender_id)
+}
+
 /// Download a message's attached images (deferred until post-gate) and
 /// append them to the content, capped at [`IMAGE_DOWNLOAD_MAX`]; a
 /// failure degrades to a visible text placeholder instead of dropping
@@ -1204,12 +1266,7 @@ fn assemble_history(messages: &[&HistoryMessage]) -> String {
     use std::fmt::Write as _;
     let mut out = String::from("<recent_chat_history>\n");
     for m in messages {
-        let ts = chrono::DateTime::from_timestamp_millis(m.create_time)
-            .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M").to_string())
-            .unwrap_or_default();
-        let text =
-            crate::utils::strs::truncate_by_chars(m.text.trim(), HISTORY_MESSAGE_MAX_CHARS, "…");
-        let _ = writeln!(out, "[{ts}] {}: {text}", m.sender_id);
+        let _ = writeln!(out, "{}", sender_line(m));
     }
     out.push_str("</recent_chat_history>");
     out

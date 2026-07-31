@@ -905,6 +905,46 @@ impl PlatformAdapter for FeishuAdapter {
         Ok(out)
     }
 
+    /// refer: <https://open.feishu.cn/document/server-docs/im-v1/message/get>
+    async fn fetch_message(
+        &self,
+        message_id: &str,
+    ) -> Result<Option<super::HistoryMessage>, ChannelError> {
+        let token = self.get_token().await?;
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.api_get(
+                &token,
+                &format!("{}/open-apis/im/v1/messages/{message_id}", self.base_url),
+                &[],
+            ),
+        )
+        .await
+        .map_err(|_| ChannelError::Platform("message fetch timed out".into()))??;
+        let Some(item) = resp["data"]["items"].as_array().and_then(|a| a.first()) else {
+            return Ok(None);
+        };
+        if item["deleted"].as_bool().unwrap_or(false) {
+            return Ok(None);
+        }
+        // No sender filter here — quoting the bot's own answer is a
+        // primary use case.
+        let (text, image_keys) = Self::extract_history_content(item);
+        Ok(Some(super::HistoryMessage {
+            message_id: item["message_id"]
+                .as_str()
+                .unwrap_or(message_id)
+                .to_string(),
+            create_time: item["create_time"]
+                .as_str()
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or_default(),
+            sender_id: item["sender"]["id"].as_str().unwrap_or("").to_string(),
+            text,
+            image_keys,
+        }))
+    }
+
     async fn download_message_image(
         &self,
         message_id: &str,
@@ -1231,6 +1271,7 @@ impl FeishuAdapter {
 
         let thread_id = message["thread_id"].as_str().map(|s| s.to_string());
         let root_id = message["root_id"].as_str().map(|s| s.to_string());
+        let parent_id = message["parent_id"].as_str().map(|s| s.to_string());
 
         let ts = Self::parse_feishu_timestamp(&message["create_time"]);
 
@@ -1294,6 +1335,7 @@ impl FeishuAdapter {
             image_keys,
             thread_id,
             root_id,
+            parent_id,
             is_group: chat_type == "group",
             create_time: message["create_time"]
                 .as_str()

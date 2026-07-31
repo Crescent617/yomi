@@ -148,6 +148,24 @@ fn response_for(method: &str, path: &str) -> Vec<u8> {
         }
         return br#"{"code":234001,"msg":"no such image"}"#.into();
     }
+    // Single message get (quoted-reply injection): `om_quoted` serves a
+    // text message, `om_deleted` a deleted one, anything else an empty list.
+    if method == "GET" && path.starts_with("/open-apis/im/v1/messages/") {
+        let p = path.split('?').next().unwrap_or(path);
+        return match p {
+            "/open-apis/im/v1/messages/om_quoted" => r#"{"code":0,"msg":"ok","data":{"items":[
+                {"message_id":"om_quoted","create_time":"1700000000000","msg_type":"text","deleted":false,
+                 "sender":{"id":"ou_q","sender_type":"user"},"body":{"content":"{\"text\":\"被引用的内容\"}"}}
+            ]}}"#
+            .into(),
+            "/open-apis/im/v1/messages/om_deleted" => r#"{"code":0,"msg":"ok","data":{"items":[
+                {"message_id":"om_deleted","create_time":"1700000000000","msg_type":"text","deleted":true,
+                 "sender":{"id":"ou_q","sender_type":"user"},"body":{"content":"{\"text\":\"gone\"}"}}
+            ]}}"#
+            .into(),
+            _ => r#"{"code":0,"msg":"ok","data":{"items":[]}}"#.into(),
+        };
+    }
     // Query-marked variant for history edge cases (boundary/deleted/empty/
     // placeholder/same-second).
     if method == "GET"
@@ -380,6 +398,26 @@ async fn fetch_history_edge_cases_and_millisecond_cursor() {
     assert_eq!(out[1].message_id, "e4");
     assert_eq!(out[1].text, "same second later");
     assert_eq!(out[1].create_time, 1_700_000_060_800);
+}
+
+#[tokio::test]
+async fn fetch_message_returns_quoted_content() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+
+    let m = adapter
+        .fetch_message("om_quoted")
+        .await
+        .unwrap()
+        .expect("message found");
+    assert_eq!(m.message_id, "om_quoted");
+    assert_eq!(m.text, "被引用的内容");
+    assert_eq!(m.sender_id, "ou_q");
+    assert_eq!(m.create_time, 1_700_000_000_000);
+
+    // Deleted and missing messages yield None, not an error.
+    assert!(adapter.fetch_message("om_deleted").await.unwrap().is_none());
+    assert!(adapter.fetch_message("om_missing").await.unwrap().is_none());
 }
 
 // ── send_files: multipart form contract (regression for API error 234001) ──
@@ -1086,4 +1124,38 @@ async fn e2e_ws_gateway_pongs_keep_connection_alive() {
         super::FRAME_TIMEOUT
     );
     println!("soak ok: {pongs} pongs, longest silence {max_gap:?}");
+}
+
+// e2e: send a real message, then read it back through the get-message API
+// fetch_message relies on — proves the response contract (items[0], body
+// content, sender) against the live service. The sent message stays in the
+// target DM; use your own open_id. Needs FEISHU_E2E_USER_ID too.
+#[tokio::test]
+#[ignore = "e2e: real Feishu API, needs FEISHU_E2E_APP_ID/FEISHU_E2E_APP_SECRET/FEISHU_E2E_USER_ID"]
+async fn e2e_fetch_message_round_trip() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let app_id = std::env::var("FEISHU_E2E_APP_ID").expect("FEISHU_E2E_APP_ID");
+    let app_secret = std::env::var("FEISHU_E2E_APP_SECRET").expect("FEISHU_E2E_APP_SECRET");
+    let user_id = std::env::var("FEISHU_E2E_USER_ID").expect("FEISHU_E2E_USER_ID");
+    let adapter = super::FeishuAdapter::new(app_id, app_secret);
+
+    let token = adapter.get_token().await.expect("token");
+    let marker = format!("e2e 引用回读测试 {}", ulid::Ulid::new());
+    let content = serde_json::json!({ "text": marker }).to_string();
+    let mid = adapter
+        .send_msg_to(&token, "open_id", &user_id, &content, "text")
+        .await
+        .expect("send")
+        .expect("message id");
+
+    let fetched = adapter
+        .fetch_message(&mid)
+        .await
+        .expect("fetch ok")
+        .expect("message found");
+    assert_eq!(fetched.text, marker);
+    assert!(fetched.image_keys.is_empty());
+    // Sent by the bot itself — proves app senders are not filtered out
+    // (quoting the bot's own answer is a primary use case).
+    assert!(!fetched.sender_id.is_empty());
 }

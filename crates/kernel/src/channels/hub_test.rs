@@ -14,6 +14,11 @@ use sqlx::sqlite::SqlitePoolOptions;
 pub struct MockAdapter {
     pub outgoing: tokio::sync::Mutex<Vec<(String, Vec<ContentBlock>)>>,
     pub reactions: tokio::sync::Mutex<Vec<(String, String)>>,
+    pub quoted: tokio::sync::Mutex<Option<crate::channels::HistoryMessage>>,
+    pub quoted_calls: tokio::sync::Mutex<Vec<String>>,
+    /// When false (default), image downloads fail — mirroring the trait's
+    /// default unsupported behavior so degradation paths stay testable.
+    pub image_download_ok: tokio::sync::Mutex<bool>,
 }
 
 impl MockAdapter {
@@ -21,6 +26,9 @@ impl MockAdapter {
         Self {
             outgoing: tokio::sync::Mutex::new(Vec::new()),
             reactions: tokio::sync::Mutex::new(Vec::new()),
+            quoted: tokio::sync::Mutex::new(None),
+            quoted_calls: tokio::sync::Mutex::new(Vec::new()),
+            image_download_ok: tokio::sync::Mutex::new(false),
         }
     }
 }
@@ -60,6 +68,30 @@ impl PlatformAdapter for MockAdapter {
             .await
             .push((message_id.to_string(), emoji.to_string()));
         Ok(Some("reaction-1".to_string()))
+    }
+
+    async fn fetch_message(
+        &self,
+        message_id: &str,
+    ) -> std::result::Result<Option<crate::channels::HistoryMessage>, crate::channels::ChannelError>
+    {
+        self.quoted_calls.lock().await.push(message_id.to_string());
+        Ok(self.quoted.lock().await.clone())
+    }
+
+    async fn download_message_image(
+        &self,
+        _message_id: &str,
+        image_key: &str,
+    ) -> std::result::Result<ContentBlock, crate::channels::ChannelError> {
+        if !*self.image_download_ok.lock().await {
+            return Err(crate::channels::ChannelError::Platform(
+                "mock: image download disabled".into(),
+            ));
+        }
+        Ok(ContentBlock::ImageUrl {
+            image_url: format!("data:image/png;base64,fake-{image_key}").into(),
+        })
     }
 }
 
@@ -675,6 +707,7 @@ async fn test_restart_command_gate_and_trigger() {
         image_keys: vec![],
         thread_id: None,
         root_id: None,
+        parent_id: None,
         is_group: false,
         create_time: None,
     };
@@ -819,6 +852,7 @@ fn channel_message(
         image_keys: vec![],
         thread_id: thread_id.map(str::to_string),
         root_id: None,
+        parent_id: None,
         is_group,
         create_time: None,
     }
@@ -1372,6 +1406,7 @@ fn group_msg(thread_id: Option<String>) -> ChannelMessage {
         image_keys: vec![],
         thread_id,
         root_id: None,
+        parent_id: None,
         is_group: true,
         create_time: None,
     }
@@ -1380,6 +1415,83 @@ fn group_msg(thread_id: Option<String>) -> ChannelMessage {
 /// Concatenate the text blocks of an assembled history prefix.
 fn blocks_text(blocks: &[ContentBlock]) -> String {
     blocks.iter().filter_map(ContentBlock::as_text).collect()
+}
+
+fn quoted_history_msg() -> HistoryMessage {
+    HistoryMessage {
+        message_id: "om_q".into(),
+        create_time: 1_700_000_000_000,
+        sender_id: "ou_x".into(),
+        text: "被引用的内容".into(),
+        image_keys: vec![],
+    }
+}
+
+#[tokio::test]
+async fn test_quoted_prefix_rules() {
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    *mock.quoted.lock().await = Some(quoted_history_msg());
+
+    let base = group_msg(None);
+
+    // No quote → nothing, and no fetch attempted.
+    assert!(maybe_quoted_prefix(&adapter, &base).await.is_none());
+    assert!(mock.quoted_calls.lock().await.is_empty());
+
+    // Routine thread reply to the root → skipped (already in the session).
+    let mut thread_reply = base.clone();
+    thread_reply.thread_id = Some("omt_1".into());
+    thread_reply.root_id = Some("om_root".into());
+    thread_reply.parent_id = Some("om_root".into());
+    assert!(maybe_quoted_prefix(&adapter, &thread_reply).await.is_none());
+    assert!(mock.quoted_calls.lock().await.is_empty());
+
+    // Top-level quote → injected (a fresh session: the quote IS the context).
+    let mut top_quote = base.clone();
+    top_quote.parent_id = Some("om_q".into());
+    top_quote.root_id = Some("om_q".into());
+    let blocks = maybe_quoted_prefix(&adapter, &top_quote)
+        .await
+        .expect("quoted block");
+    let text = blocks_text(&blocks);
+    assert!(text.contains("<quoted_message>"), "{text}");
+    assert!(text.contains("ou_x: 被引用的内容"), "{text}");
+
+    // Mid-thread quote → injected.
+    let mut mid_quote = base;
+    mid_quote.thread_id = Some("omt_1".into());
+    mid_quote.root_id = Some("om_root".into());
+    mid_quote.parent_id = Some("om_q".into());
+    assert!(maybe_quoted_prefix(&adapter, &mid_quote).await.is_some());
+
+    assert_eq!(mock.quoted_calls.lock().await.as_slice(), ["om_q", "om_q"]);
+}
+
+#[tokio::test]
+async fn test_quoted_prefix_includes_images() {
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    *mock.image_download_ok.lock().await = true;
+    *mock.quoted.lock().await = Some(HistoryMessage {
+        message_id: "om_img".into(),
+        create_time: 1_700_000_000_000,
+        sender_id: "ou_x".into(),
+        text: "[image]".into(),
+        image_keys: vec!["img_1".into()],
+    });
+
+    let mut msg = group_msg(None);
+    msg.parent_id = Some("om_img".into());
+    let blocks = maybe_quoted_prefix(&adapter, &msg)
+        .await
+        .expect("quoted block");
+    assert!(
+        blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::ImageUrl { .. })),
+        "quoted image should be downloaded: {blocks:?}"
+    );
 }
 
 #[tokio::test]

@@ -235,6 +235,11 @@ pub struct ChannelMessage {
     /// outside any thread carry it too — the hub only uses it for session
     /// mapping when `thread_id` is also present.
     pub root_id: Option<String>,
+    /// The message this message directly quote-replies to (Feishu
+    /// `parent_id`). Distinct from `root_id` (the chain root): this is the
+    /// specific message the user pointed at. The hub fetches its content
+    /// post-gate for quoted-message context injection.
+    pub parent_id: Option<String>,
     /// Whether the message was sent in a group chat (vs. private/p2p).
     pub is_group: bool,
     /// The platform's creation timestamp in unix **milliseconds** (Feishu;
@@ -576,6 +581,16 @@ pub trait PlatformAdapter: Send + Sync {
         _limit: usize,
     ) -> Result<Vec<HistoryMessage>, ChannelError> {
         Ok(Vec::new())
+    }
+
+    /// Fetch a single message by id, for quoted-reply context injection.
+    /// Unlike the history fetch, bot messages are kept — quoting the bot's
+    /// own answer is a primary use case. Default: unsupported.
+    async fn fetch_message(
+        &self,
+        _message_id: &str,
+    ) -> Result<Option<HistoryMessage>, ChannelError> {
+        Ok(None)
     }
 
     /// Download one image attached to a message as an `ImageUrl` content
