@@ -62,6 +62,8 @@ pub struct Kernel {
     pub(crate) cron_store: Option<Arc<dyn crate::cron::CronStore>>,
     /// Shared slot for the running cron scheduler (shared with `AgentShared`).
     pub(crate) cron_scheduler: Arc<std::sync::Mutex<Option<Arc<crate::cron::CronScheduler>>>>,
+    /// Shared slot for the daemon restart sink (filled by `KernelServer`).
+    pub(crate) restart_tx: Arc<std::sync::Mutex<Option<tokio::sync::mpsc::Sender<()>>>>,
     pub(crate) channel_manager: Option<Arc<crate::channels::hub::ChannelHub>>,
     /// Global notification bus for state changes and other broadcasts.
     notification_bus: Arc<crate::notification::NotificationBus>,
@@ -155,6 +157,25 @@ impl Kernel {
         &self,
     ) -> Arc<std::sync::Mutex<Option<Arc<crate::cron::CronScheduler>>>> {
         Arc::clone(&self.cron_scheduler)
+    }
+
+    /// Shared slot for the daemon restart sink. `KernelServer` fills it
+    /// when the daemon lifecycle supports restart (otherwise `None`).
+    pub fn restart_slot(&self) -> Arc<std::sync::Mutex<Option<tokio::sync::mpsc::Sender<()>>>> {
+        Arc::clone(&self.restart_tx)
+    }
+
+    /// Whether this kernel runs under a daemon that supports restart.
+    pub fn can_restart(&self) -> bool {
+        self.restart_tx.lock().unwrap().is_some()
+    }
+
+    /// Request a daemon restart. A request already in flight wins, making
+    /// concurrent calls no-ops — the restart happens either way.
+    pub fn request_restart(&self) {
+        if let Some(tx) = self.restart_tx.lock().unwrap().clone() {
+            let _ = tx.try_send(());
+        }
     }
 
     /// Get data directory from `agent_shared`
@@ -345,6 +366,7 @@ impl Kernel {
             favorite_store,
             cron_store,
             cron_scheduler,
+            restart_tx: Arc::new(std::sync::Mutex::new(None)),
             channel_manager,
             notification_bus,
             shutdown: tokio_util::sync::CancellationToken::new(),

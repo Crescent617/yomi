@@ -16,8 +16,6 @@ pub enum DaemonCommands {
     Restart,
     /// Check daemon status
     Status,
-    /// Reload skills into running daemon
-    Reload,
 }
 
 pub async fn run(cmd: DaemonCommands) -> Result<()> {
@@ -154,10 +152,6 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
         DaemonCommands::Status => {
             let status = crate::daemon::daemon_status().await?;
             println!("{status}");
-        }
-        DaemonCommands::Reload => {
-            println!("Restart the daemon to apply configuration changes.");
-            println!("Use: yomi daemon restart");
         }
     }
     Ok(())

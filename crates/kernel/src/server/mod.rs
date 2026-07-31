@@ -113,6 +113,11 @@ impl KernelServer {
         // Adopt the kernel's slot so the RPC dispatcher and agents (cron
         // tool) notify the same scheduler instance.
         let cron_scheduler = kernel.cron_scheduler_slot();
+        kernel
+            .restart_slot()
+            .lock()
+            .unwrap()
+            .clone_from(&restart_tx);
         Self {
             kernel,
             config_path,

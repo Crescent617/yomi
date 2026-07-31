@@ -619,6 +619,129 @@ fn test_parse_help_command() {
 }
 
 #[test]
+fn test_parse_restart_command() {
+    assert!(matches!(
+        parse_channel_command(Some("/restart")),
+        ChannelCommand::Restart
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/restart@yomi_bot")),
+        ChannelCommand::Restart
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/restart now")),
+        ChannelCommand::None
+    ));
+    assert!(HELP_TEXT.contains("/restart"));
+}
+
+/// `/restart` (admin-only): the ack goes out inline via the adapter —
+/// never through the spawned reply path, which the shutdown could abort —
+/// and only then is the restart requested.
+#[tokio::test]
+async fn test_restart_command_gate_and_trigger() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram {
+            token: "fake".into(),
+        },
+        require_mention: false,
+        admin_users: vec!["ou_admin".to_string()],
+        ..Default::default()
+    };
+    let msg = |user: &str| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: user.to_string(),
+        external_message_id: Some("m1".to_string()),
+        is_mention: true,
+        raw_text: Some("/restart".to_string()),
+        content: vec![ContentBlock::Text {
+            text: "/restart".to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        is_group: false,
+        create_time: None,
+    };
+
+    // Non-admin: denied via the normal reply path; nothing sent inline.
+    let reply = handle_incoming_message(
+        "mock",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        msg("ou_random"),
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        reply.as_deref(),
+        Some("permission denied：你不在 admin_users 中。")
+    );
+    assert!(mock.outgoing.lock().await.is_empty());
+
+    // Admin on a daemon without lifecycle support: polite refusal.
+    assert!(!kernel.can_restart());
+    let reply = handle_incoming_message(
+        "mock",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        msg("ou_admin"),
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        reply.as_deref(),
+        Some("Restart is not supported by this daemon.")
+    );
+    assert!(mock.outgoing.lock().await.is_empty());
+
+    // Admin with lifecycle support: inline ack, then the restart request.
+    let (restart_tx, mut restart_rx) = mpsc::channel(1);
+    *kernel.restart_slot().lock().unwrap() = Some(restart_tx);
+    let reply = handle_incoming_message(
+        "mock",
+        &config,
+        &store,
+        kernel,
+        msg("ou_admin"),
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert_eq!(reply, None, "ack sent inline, nothing for the reply path");
+    restart_rx.try_recv().expect("restart requested");
+    let outgoing = mock.outgoing.lock().await;
+    assert_eq!(outgoing.len(), 1);
+    assert_eq!(outgoing[0].0, "oc_1");
+    let ContentBlock::Text { text } = &outgoing[0].1[0] else {
+        panic!("expected text ack");
+    };
+    assert!(text.contains("Restarting daemon"), "ack: {text}");
+}
+
+#[test]
 fn test_longer_words_are_not_commands() {
     // Prefix matching must not hijack longer words ("/clearance" would
     // trigger the destructive /clear otherwise).

@@ -364,7 +364,7 @@ async fn update_notify_cards(adapter: &Arc<dyn PlatformAdapter>, row: &PermReque
     any
 }
 
-fn check_admin(config: &ChannelConfig, user_id: &str) -> Option<String> {
+pub(super) fn check_admin(config: &ChannelConfig, user_id: &str) -> Option<String> {
     if config.admin_users.iter().any(|u| u == user_id) {
         None
     } else {

@@ -780,6 +780,34 @@ async fn handle_incoming_message(
             }
             Ok(Some("No active session to stop.".to_string()))
         }
+        ChannelCommand::Restart => {
+            if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
+                return Ok(Some(deny));
+            }
+            if !kernel.can_restart() {
+                return Ok(Some("Restart is not supported by this daemon.".to_string()));
+            }
+            let runs = kernel.live_session_count();
+            let text = if runs == 0 {
+                "🔄 Restarting daemon…".to_string()
+            } else {
+                format!("🔄 Restarting daemon… {runs} active run(s) will be interrupted.")
+            };
+            // The ack is sent inline: the usual spawned command reply
+            // could be aborted when the daemon shuts down mid-flight.
+            if let Err(e) = adapter
+                .send_message(
+                    &chat_id,
+                    vec![ContentBlock::Text { text }],
+                    reply_msg_id.as_deref(),
+                )
+                .await
+            {
+                warn!(channel = %channel_name, error = %e, "restart ack send failed");
+            }
+            kernel.request_restart();
+            Ok(None)
+        }
         ChannelCommand::Steer(text) => {
             let sid = get_or_create_session(
                 channel_name,
@@ -1350,6 +1378,7 @@ const CMD_HELP: &str = "/help";
 const CMD_PERMITS: &str = "/permits";
 const CMD_APPROVE: &str = "/approve";
 const CMD_DENY: &str = "/deny";
+const CMD_RESTART: &str = "/restart";
 
 /// All channel command prefixes, longest-first so `/models` is matched
 /// before `/model` (the latter is a prefix of the former).
@@ -1365,6 +1394,7 @@ const CMD_PREFIXES: &[&str] = &[
     CMD_PERMITS,
     CMD_APPROVE,
     CMD_DENY,
+    CMD_RESTART,
 ];
 
 /// `/help` response: the channel command list.
@@ -1381,6 +1411,7 @@ const HELP_TEXT: &str = "\
 `/permits` — list pending doc-permission requests (admin)
 `/approve <id> [perm]` — approve a doc-permission request (admin)
 `/deny <id>` — deny a doc-permission request (admin)
+`/restart` — restart the daemon (admin)
 
 Anything else is sent to the agent as a message.";
 
@@ -1414,6 +1445,8 @@ enum ChannelCommand {
     Deny { id: i64 },
     /// An approval command with missing or malformed arguments.
     InvalidApprovalCommand,
+    /// Restart the daemon (admin only).
+    Restart,
     /// Not a command.
     None,
 }
@@ -1472,6 +1505,7 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
             },
             _ => ChannelCommand::InvalidApprovalCommand,
         },
+        CMD_RESTART if parts.next().is_none() => ChannelCommand::Restart,
         _ => ChannelCommand::None,
     }
 }
