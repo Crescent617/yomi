@@ -1,5 +1,5 @@
 use super::*;
-use crate::channels::{ChannelError, ChannelMessage};
+use crate::channels::{ChannelError, ChannelEvent};
 use std::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -15,7 +15,7 @@ struct MockAdapter {
 impl PlatformAdapter for MockAdapter {
     async fn run_receiver(
         &self,
-        _incoming: mpsc::Sender<ChannelMessage>,
+        _incoming: mpsc::Sender<ChannelEvent>,
         _cancel: CancellationToken,
     ) -> Result<(), ChannelError> {
         std::future::pending().await

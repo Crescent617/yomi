@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::channels::{ChannelError, ChannelMessage};
+use crate::channels::{ChannelError, ChannelEvent};
 use crate::types::ContentBlock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{mpsc, Mutex};
@@ -36,7 +36,7 @@ impl MockAdapter {
 impl PlatformAdapter for MockAdapter {
     async fn run_receiver(
         &self,
-        _incoming: mpsc::Sender<ChannelMessage>,
+        _incoming: mpsc::Sender<ChannelEvent>,
         cancel: CancellationToken,
     ) -> Result<(), ChannelError> {
         cancel.cancelled().await;

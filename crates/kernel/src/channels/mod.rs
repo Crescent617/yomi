@@ -9,6 +9,8 @@ pub(crate) use utils::MAX_RETRY_DELAY;
 
 pub(crate) mod attachments;
 
+pub(crate) mod approval;
+
 /// Why a channel message was rejected by access control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessDeniedReason {
@@ -127,6 +129,16 @@ pub struct ChannelConfig {
     /// newest cap). 0 disables.
     #[serde(default = "default_history_context")]
     pub history_context: usize,
+    /// Target group chat for doc-permission application notifications.
+    /// When unset, each of `admin_users` is notified by DM instead; when
+    /// both are unset the feature is off (applications are only logged).
+    #[serde(default)]
+    pub approval_chat_id: Option<String>,
+    /// `open_id`s allowed to approve/deny doc-permission applications
+    /// (buttons and `/approve` `/deny` `/permits` commands alike). Also the
+    /// DM recipients when `approval_chat_id` is unset.
+    #[serde(default)]
+    pub admin_users: Vec<String>,
 }
 
 fn default_history_context() -> usize {
@@ -163,6 +175,8 @@ impl Default for ChannelConfig {
             observability: true,
             tool_trace: true,
             history_context: default_history_context(),
+            approval_chat_id: None,
+            admin_users: Vec::new(),
         }
     }
 }
@@ -227,6 +241,49 @@ pub struct ChannelMessage {
     /// `None` on platforms that don't provide one). Used to advance the
     /// history cursor on every processed message.
     pub create_time: Option<i64>,
+}
+
+/// Platform inbound payload: a chat message, a platform event, or a card
+/// button callback. Platform events and callbacks bypass access control
+/// and the mention requirement (they are not user chat messages).
+#[derive(Debug, Clone)]
+pub enum ChannelEvent {
+    Message(ChannelMessage),
+    /// Feishu `drive.file.permission_member_applied_v1`: someone requested
+    /// collaborator access to an app-owned document.
+    DocPermissionApplied(DocPermissionRequest),
+    /// Feishu `card.action.trigger`: a button tap on a notification card.
+    /// The button's `value` carries the approval action and request id.
+    CardAction(CardAction),
+}
+
+/// A Feishu cloud-document collaborator-permission application. The
+/// applicant can be any mix of users / chats / departments.
+#[derive(Debug, Clone)]
+pub struct DocPermissionRequest {
+    pub file_token: String,
+    /// docx/sheet/bitable/...
+    pub file_type: String,
+    /// `view` / `edit` / `full_access`
+    pub permission: String,
+    pub remark: Option<String>,
+    /// `open_id` list.
+    pub applicant_users: Vec<String>,
+    /// `chat_id` list.
+    pub applicant_chats: Vec<String>,
+    /// department id list.
+    pub applicant_departments: Vec<String>,
+}
+
+/// A card button callback (`card.action.trigger`).
+#[derive(Debug, Clone)]
+pub struct CardAction {
+    pub operator_open_id: String,
+    /// Chat the callback happened in (for feedback messages), when the
+    /// platform provides it.
+    pub chat_id: Option<String>,
+    /// Button value, e.g. `{"action": "approve"|"deny", "id": N}`.
+    pub value: serde_json::Value,
 }
 
 /// Runtime info about a channel, for UI listing
@@ -302,6 +359,61 @@ pub trait ChannelStore: Send + Sync {
         let _ = (channel_name, container_id, cursor_ts);
         Ok(())
     }
+
+    /// Persist a doc-permission application as a pending approval row.
+    /// Deduplicates on (channel, file, permission, applicant sets) while a
+    /// pending row exists — ws redelivery carries no unique event id, so
+    /// this is the best dedup key. Returns `None` on a duplicate.
+    async fn save_perm_request(
+        &self,
+        channel_name: &str,
+        req: &DocPermissionRequest,
+    ) -> KernelResult<Option<i64>>;
+
+    /// Record the notification card message ids for later terminal-state
+    /// updates (one id in group mode, one per admin in DM mode).
+    async fn set_perm_notify_msgs(&self, id: i64, msg_ids: &[String]) -> KernelResult<()>;
+
+    /// List a channel's pending applications, oldest first.
+    async fn list_pending_perm_requests(
+        &self,
+        channel_name: &str,
+    ) -> KernelResult<Vec<PermRequestRow>>;
+
+    /// Conditionally flip a pending request to `status` ("approved" /
+    /// "denied"), returning the row only when this call won the race —
+    /// concurrent resolutions (buttons and commands alike) take effect
+    /// exactly once.
+    async fn resolve_perm_request(
+        &self,
+        id: i64,
+        status: &str,
+        resolved_by: &str,
+        resolved_perm: Option<&str>,
+    ) -> KernelResult<Option<PermRequestRow>>;
+
+    /// Reopen a request whose grant API call failed after winning the
+    /// resolve race: back to pending, resolution fields cleared.
+    async fn reopen_perm_request(&self, id: i64) -> KernelResult<()>;
+}
+
+/// A persisted doc-permission application row.
+#[derive(Debug, Clone)]
+pub struct PermRequestRow {
+    pub id: i64,
+    pub channel_name: String,
+    pub file_token: String,
+    pub file_type: String,
+    pub permission: String,
+    pub remark: Option<String>,
+    pub applicant_users: Vec<String>,
+    pub applicant_chats: Vec<String>,
+    pub applicant_departments: Vec<String>,
+    pub status: String,
+    pub notify_msg_ids: Vec<String>,
+    pub resolved_by: Option<String>,
+    pub resolved_perm: Option<String>,
+    pub created_at: String,
 }
 
 // ── Platform adapter trait ─────────────────────────────────────────
@@ -314,10 +426,10 @@ pub trait PlatformAdapter: Send + Sync {
     /// Start receiving messages from the platform.
     ///
     /// This should run until `cancel` is triggered.
-    /// Received messages are sent through `incoming`.
+    /// Received messages and platform events are sent through `incoming`.
     async fn run_receiver(
         &self,
-        incoming: mpsc::Sender<ChannelMessage>,
+        incoming: mpsc::Sender<ChannelEvent>,
         cancel: CancellationToken,
     ) -> Result<(), ChannelError>;
 
@@ -347,6 +459,40 @@ pub trait PlatformAdapter: Send + Sync {
         _reply_msg_id: Option<&str>,
     ) -> Result<Option<String>, ChannelError> {
         Ok(None)
+    }
+
+    /// Send a raw card message directly to a user (DM / p2p), returning
+    /// its message ID for later [`update_card`](Self::update_card) calls.
+    /// Default: unsupported on this platform.
+    async fn send_direct_card(
+        &self,
+        _user_id: &str,
+        _card_json: &str,
+    ) -> Result<Option<String>, ChannelError> {
+        Err(ChannelError::Platform(
+            "direct card not supported for this platform".into(),
+        ))
+    }
+
+    /// Grant collaborator permission on an app-owned document to every
+    /// applicant of a doc-permission request (users, chats, departments).
+    /// Default: unsupported on this platform.
+    async fn grant_doc_permission(
+        &self,
+        _file_token: &str,
+        _file_type: &str,
+        _req: &DocPermissionRequest,
+        _perm: &str,
+    ) -> Result<(), ChannelError> {
+        Err(ChannelError::Platform(
+            "doc permission grant not supported for this platform".into(),
+        ))
+    }
+
+    /// Fetch a document's display title for notification cards. Default:
+    /// `None` — cards fall back to the raw file token.
+    async fn fetch_doc_title(&self, _file_token: &str, _file_type: &str) -> Option<String> {
+        None
     }
 
     /// Update a previously sent card message in place.

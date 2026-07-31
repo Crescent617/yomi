@@ -11,8 +11,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use super::{
-    obs::ObsTracker, reply, ChannelConfig, ChannelInfo, ChannelMessage, ChannelStatus,
-    ChannelStore, HistoryContainer, HistoryMessage, PlatformAdapter, SessionRouting,
+    obs::ObsTracker, reply, ChannelConfig, ChannelEvent, ChannelInfo, ChannelMessage,
+    ChannelStatus, ChannelStore, HistoryContainer, HistoryMessage, PlatformAdapter, SessionRouting,
 };
 
 const STATUS_IDLE: u8 = 0;
@@ -108,7 +108,7 @@ impl ChannelHub {
         let adapter = build_adapter(&config.platform);
         let status = Arc::new(AtomicU8::new(STATUS_CONNECTING));
 
-        let (incoming_tx, incoming_rx) = mpsc::channel::<ChannelMessage>(256);
+        let (incoming_tx, incoming_rx) = mpsc::channel::<ChannelEvent>(256);
         let sub_cancel = token.child_token();
         let store = Arc::clone(&self.store);
 
@@ -146,7 +146,46 @@ impl ChannelHub {
                         info!(channel = %name_proc, "processing loop cancelled");
                         break;
                     }
-                    Some(msg) = incoming_rx.recv() => {
+                    Some(event) = incoming_rx.recv() => {
+                        let msg = match event {
+                            ChannelEvent::Message(msg) => msg,
+                            // Platform events and callbacks bypass access
+                            // control / the mention requirement — they are
+                            // not user chat messages (callbacks have their
+                            // own admin check downstream). Handled off-loop
+                            // so slow platform APIs (notification fans out
+                            // to N admins, grant + card updates) can't stall
+                            // chat processing; the resolve race is guarded
+                            // by the store's conditional update.
+                            ChannelEvent::DocPermissionApplied(req) => {
+                                let (name, config, store, adapter) = (
+                                    name_proc.clone(),
+                                    config_proc.clone(),
+                                    Arc::clone(&store),
+                                    Arc::clone(&adapter_proc),
+                                );
+                                tokio::spawn(async move {
+                                    super::approval::handle_doc_permission_applied(
+                                        &name, &config, &store, &adapter, req,
+                                    ).await;
+                                });
+                                continue;
+                            }
+                            ChannelEvent::CardAction(action) => {
+                                let (name, config, store, adapter) = (
+                                    name_proc.clone(),
+                                    config_proc.clone(),
+                                    Arc::clone(&store),
+                                    Arc::clone(&adapter_proc),
+                                );
+                                tokio::spawn(async move {
+                                    super::approval::handle_card_action(
+                                        &name, &config, &store, &adapter, action,
+                                    ).await;
+                                });
+                                continue;
+                            }
+                        };
                         if !gate_message(&adapter_proc, &config_proc, &msg).await {
                             continue;
                         }
@@ -703,7 +742,7 @@ async fn handle_incoming_message(
     let chat_id = msg.external_chat_id.clone();
     let reply_msg_id = reply_anchor(&msg, config.reply_in_thread);
     let mapping_key = session_mapping_key(&msg, &chat_id, config.reply_in_thread);
-    info!(
+    tracing::debug!(
         channel = %channel_name,
         chat_id = %chat_id,
         msg_id = msg.external_message_id.as_deref().unwrap_or(""),
@@ -886,6 +925,33 @@ async fn handle_incoming_message(
                 &shells,
             )))
         }
+        ChannelCommand::Permits => {
+            super::approval::list_pending(channel_name, config, store, &msg.external_user_id).await
+        }
+        ChannelCommand::Approve { id, perm } => {
+            super::approval::approve(
+                channel_name,
+                config,
+                store,
+                adapter,
+                &msg.external_user_id,
+                id,
+                perm.as_deref(),
+            )
+            .await
+        }
+        ChannelCommand::Deny { id } => {
+            super::approval::deny(
+                channel_name,
+                config,
+                store,
+                adapter,
+                &msg.external_user_id,
+                id,
+            )
+            .await
+        }
+        ChannelCommand::InvalidApprovalCommand => Ok(Some(super::approval::usage())),
         ChannelCommand::None => {
             let sid = get_or_create_session(
                 channel_name,
@@ -1276,11 +1342,24 @@ const CMD_STEER: &str = "/steer";
 const CMD_QUEUE: &str = "/queue";
 const CMD_INFO: &str = "/info";
 const CMD_HELP: &str = "/help";
+const CMD_PERMITS: &str = "/permits";
+const CMD_APPROVE: &str = "/approve";
+const CMD_DENY: &str = "/deny";
 
 /// All channel command prefixes, longest-first so `/models` is matched
 /// before `/model` (the latter is a prefix of the former).
 const CMD_PREFIXES: &[&str] = &[
-    CMD_MODELS, CMD_MODEL, CMD_CLEAR, CMD_STOP, CMD_STEER, CMD_QUEUE, CMD_INFO, CMD_HELP,
+    CMD_MODELS,
+    CMD_MODEL,
+    CMD_CLEAR,
+    CMD_STOP,
+    CMD_STEER,
+    CMD_QUEUE,
+    CMD_INFO,
+    CMD_HELP,
+    CMD_PERMITS,
+    CMD_APPROVE,
+    CMD_DENY,
 ];
 
 /// `/help` response: the channel command list.
@@ -1294,6 +1373,9 @@ const HELP_TEXT: &str = "\
 `/stop` — stop the current run
 `/steer <text>` — inject a message into the current run
 `/queue <text>` — queue a message for a later turn
+`/permits` — list pending doc-permission requests (admin)
+`/approve <id> [perm]` — approve a doc-permission request (admin)
+`/deny <id>` — deny a doc-permission request (admin)
 
 Anything else is sent to the agent as a message.";
 
@@ -1319,6 +1401,14 @@ enum ChannelCommand {
     Info,
     /// Show the command list.
     Help,
+    /// List pending doc-permission applications (admin only).
+    Permits,
+    /// Approve a doc-permission application, optionally overriding the level.
+    Approve { id: i64, perm: Option<String> },
+    /// Deny a doc-permission application.
+    Deny { id: i64 },
+    /// An approval command with missing or malformed arguments.
+    InvalidApprovalCommand,
     /// Not a command.
     None,
 }
@@ -1356,6 +1446,26 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
             (None, None) => ChannelCommand::CurrentModel,
             (Some(key), None) => ChannelCommand::SwitchModel(key.to_string()),
             _ => ChannelCommand::InvalidModelCommand,
+        },
+        CMD_PERMITS if parts.next().is_none() => ChannelCommand::Permits,
+        CMD_APPROVE => match (parts.next(), parts.next()) {
+            (Some(id), extra) if extra.is_none() || parts.next().is_none() => {
+                match id.parse::<i64>() {
+                    Ok(id) => ChannelCommand::Approve {
+                        id,
+                        perm: extra.map(str::to_string),
+                    },
+                    Err(_) => ChannelCommand::InvalidApprovalCommand,
+                }
+            }
+            _ => ChannelCommand::InvalidApprovalCommand,
+        },
+        CMD_DENY => match (parts.next(), parts.next()) {
+            (Some(id), None) => match id.parse::<i64>() {
+                Ok(id) => ChannelCommand::Deny { id },
+                Err(_) => ChannelCommand::InvalidApprovalCommand,
+            },
+            _ => ChannelCommand::InvalidApprovalCommand,
         },
         _ => ChannelCommand::None,
     }

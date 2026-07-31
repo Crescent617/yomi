@@ -11,7 +11,10 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use super::{ChannelError, ChannelMessage, PlatformAdapter, MAX_RETRY_DELAY};
+use super::{
+    CardAction, ChannelError, ChannelEvent, ChannelMessage, DocPermissionRequest, PlatformAdapter,
+    MAX_RETRY_DELAY,
+};
 
 const FEISHU_BASE_URL: &str = "https://open.feishu.cn";
 
@@ -26,6 +29,7 @@ const FRAME_TYPE_CONTROL: i32 = 0;
 const FRAME_TYPE_DATA: i32 = 1;
 const HEADER_TYPE: &str = "type";
 const MSG_TYPE_EVENT: &str = "event";
+const MSG_TYPE_CARD: &str = "card";
 const MSG_TYPE_PING: &str = "ping";
 const MSG_TYPE_PONG: &str = "pong";
 
@@ -380,14 +384,29 @@ impl FeishuAdapter {
         content: &str,
         msg_type: &str,
     ) -> Result<Option<String>, ChannelError> {
+        self.send_msg_to(token, RECEIVE_ID_TYPE, chat_id, content, msg_type)
+            .await
+    }
+
+    /// Send a message to an arbitrary receive id type (`chat_id` for group
+    /// or p2p chats, `open_id` to DM a user directly — the p2p chat is
+    /// used/created implicitly).
+    async fn send_msg_to(
+        &self,
+        token: &str,
+        receive_id_type: &str,
+        receive_id: &str,
+        content: &str,
+        msg_type: &str,
+    ) -> Result<Option<String>, ChannelError> {
         let resp = self
             .api_post(
                 token,
                 &format!(
-                    "{}/open-apis/im/v1/messages?receive_id_type={RECEIVE_ID_TYPE}",
+                    "{}/open-apis/im/v1/messages?receive_id_type={receive_id_type}",
                     self.base_url
                 ),
-                json!({ "receive_id": chat_id, "content": content, "msg_type": msg_type }),
+                json!({ "receive_id": receive_id, "content": content, "msg_type": msg_type }),
             )
             .await?;
         Ok(resp_data_str(&resp, "message_id"))
@@ -455,7 +474,7 @@ impl FeishuAdapter {
 impl PlatformAdapter for FeishuAdapter {
     async fn run_receiver(
         &self,
-        incoming: mpsc::Sender<ChannelMessage>,
+        incoming: mpsc::Sender<ChannelEvent>,
         cancel: CancellationToken,
     ) -> Result<(), ChannelError> {
         let mut retry = std::time::Duration::from_secs(5);
@@ -605,6 +624,82 @@ impl PlatformAdapter for FeishuAdapter {
             "interactive",
         )
         .await
+    }
+
+    /// DM a card to a user by `open_id` (`receive_id_type=open_id`).
+    async fn send_direct_card(
+        &self,
+        user_id: &str,
+        card_json: &str,
+    ) -> Result<Option<String>, ChannelError> {
+        let token = self.get_token().await?;
+        self.send_msg_to(&token, "open_id", user_id, card_json, "interactive")
+            .await
+    }
+
+    /// Grant collaborator permission to all applicants of the request in
+    /// one batch call. `need_notification=true` lets Feishu notify approved
+    /// users itself; denial has no API (not approving *is* the denial).
+    async fn grant_doc_permission(
+        &self,
+        file_token: &str,
+        file_type: &str,
+        req: &DocPermissionRequest,
+        perm: &str,
+    ) -> Result<(), ChannelError> {
+        let mut members = Vec::new();
+        members.extend(req.applicant_users.iter().map(
+            |id| json!({ "member_type": "openid", "member_id": id, "perm": perm, "type": "user" }),
+        ));
+        members.extend(req.applicant_chats.iter().map(|id| {
+            json!({ "member_type": "openchat", "member_id": id, "perm": perm, "type": "chat" })
+        }));
+        members.extend(req.applicant_departments.iter().map(|id| {
+            json!({ "member_type": "opendepartmentid", "member_id": id, "perm": perm, "type": "department" })
+        }));
+        if members.is_empty() {
+            return Err(ChannelError::Platform("no applicants to grant".into()));
+        }
+        let token = self.get_token().await?;
+        let resp = self
+            .api_post(
+                &token,
+                &format!(
+                    "{}/open-apis/drive/v1/permissions/{file_token}/members/batch_create?type={file_type}&need_notification=true",
+                    self.base_url
+                ),
+                json!({ "members": &members }),
+            )
+            .await?;
+        // Partial grant failures (R4) are handled manually for now — the
+        // response data is logged so a mismatch is at least visible.
+        debug!(
+            file_token,
+            requested = members.len(),
+            response = %resp["data"],
+            "doc permission grant response"
+        );
+        Ok(())
+    }
+
+    /// Resolve a document's display title via the drive meta API (for
+    /// human-friendly notification cards).
+    async fn fetch_doc_title(&self, file_token: &str, file_type: &str) -> Option<String> {
+        let token = self.get_token().await.ok()?;
+        let resp = self
+            .api_post(
+                &token,
+                &format!("{}/open-apis/drive/v1/metas/batch_query", self.base_url),
+                json!({
+                    "request_docs": [{ "doc_token": file_token, "doc_type": file_type }],
+                    "with_url": false,
+                }),
+            )
+            .await
+            .ok()?;
+        resp["data"]["metas"][0]["title"]
+            .as_str()
+            .map(str::to_string)
     }
 
     /// refer: <https://open.feishu.cn/document/server-docs/im-v1/message-card/patch>
@@ -771,7 +866,7 @@ impl FeishuAdapter {
     async fn handle_binary<W>(
         &self,
         data: &[u8],
-        incoming: &mpsc::Sender<ChannelMessage>,
+        incoming: &mpsc::Sender<ChannelEvent>,
         write: &mut W,
     ) -> Result<(), ChannelError>
     where
@@ -813,15 +908,27 @@ impl FeishuAdapter {
                     .await
                     .map_err(|e| api_err("ACK", e))?;
 
-                if msg_type == MSG_TYPE_EVENT {
-                    if let Some(ref payload) = frame.payload {
-                        let text = String::from_utf8_lossy(payload);
+                let Some(ref payload) = frame.payload else {
+                    return Ok(());
+                };
+                let text = String::from_utf8_lossy(payload);
+                match msg_type {
+                    MSG_TYPE_EVENT => {
                         debug!(payload = %text, "event payload");
                         // The frame is already ACKed — a parse failure
                         // loses the event for good, so at least log it.
                         if let Err(e) = self.parse_event(&text, incoming).await {
                             warn!(error = %e, "event parse failed, event lost");
                         }
+                    }
+                    MSG_TYPE_CARD => {
+                        debug!(payload = %text, "card callback payload");
+                        if let Err(e) = Self::forward_card_action_str(&text, incoming).await {
+                            warn!(error = %e, "card action parse failed, action lost");
+                        }
+                    }
+                    _ => {
+                        debug!(msg_type, "ignoring unknown data frame type");
                     }
                 }
             }
@@ -833,7 +940,7 @@ impl FeishuAdapter {
     async fn handle_text(
         &self,
         text: &str,
-        incoming: &mpsc::Sender<ChannelMessage>,
+        incoming: &mpsc::Sender<ChannelEvent>,
     ) -> Result<(), ChannelError> {
         let msg: serde_json::Value =
             serde_json::from_str(text).map_err(|e| api_err("JSON parse", e))?;
@@ -842,6 +949,7 @@ impl FeishuAdapter {
                 let _ = self.parse_event_json(&msg, incoming).await;
                 Ok(())
             }
+            MSG_TYPE_CARD => Self::forward_card_action(&msg, incoming).await,
             "ping" | "pong" | "auth_result" => {
                 debug!(msg_type = msg["type"].as_str(), "control msg");
                 Ok(())
@@ -854,7 +962,7 @@ impl FeishuAdapter {
     async fn parse_event(
         &self,
         payload: &str,
-        incoming: &mpsc::Sender<ChannelMessage>,
+        incoming: &mpsc::Sender<ChannelEvent>,
     ) -> Result<Option<String>, ChannelError> {
         let msg: serde_json::Value =
             serde_json::from_str(payload).map_err(|e| api_err("event JSON", e))?;
@@ -984,7 +1092,7 @@ impl FeishuAdapter {
     async fn parse_event_json(
         &self,
         msg: &serde_json::Value,
-        incoming: &mpsc::Sender<ChannelMessage>,
+        incoming: &mpsc::Sender<ChannelEvent>,
     ) -> Result<Option<String>, ChannelError> {
         // v2.0: header.event_type; v1.x: type
         let event_type = msg["header"]["event_type"]
@@ -992,9 +1100,21 @@ impl FeishuAdapter {
             .or_else(|| msg["type"].as_str())
             .unwrap_or("");
 
-        if event_type != "im.message.receive_v1" {
-            debug!(event_type, "ignoring non-message event");
-            return Ok(None);
+        match event_type {
+            "im.message.receive_v1" => {} // parsed below
+            "drive.file.permission_member_applied_v1" => {
+                return Self::forward_doc_permission_event(&msg["event"], incoming).await;
+            }
+            // Card callbacks are normally delivered as `card` data frames,
+            // but tolerate delivery as a plain event too.
+            "card.action.trigger" => {
+                Self::forward_card_action(msg, incoming).await?;
+                return Ok(None);
+            }
+            _ => {
+                debug!(event_type, "ignoring event");
+                return Ok(None);
+            }
         }
 
         let event = &msg["event"];
@@ -1111,11 +1231,127 @@ impl FeishuAdapter {
                 .and_then(|s| s.parse::<i64>().ok()),
         };
 
-        if incoming.send(channel_msg).await.is_err() {
+        if incoming
+            .send(ChannelEvent::Message(channel_msg))
+            .await
+            .is_err()
+        {
             return Err(ChannelError::Platform("incoming closed".to_string()));
         }
 
         Ok(Some(msg_id))
+    }
+
+    /// Parse a `drive.file.permission_member_applied_v1` event and forward
+    /// it as a [`ChannelEvent::DocPermissionApplied`]. The applicant can be
+    /// any mix of users / chats / departments; all three lists ride along.
+    async fn forward_doc_permission_event(
+        event: &serde_json::Value,
+        incoming: &mpsc::Sender<ChannelEvent>,
+    ) -> Result<Option<String>, ChannelError> {
+        let open_ids = |key: &str| {
+            event[key]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|m| m["open_id"].as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let id_strings = |key: &str| {
+            event[key]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let req = DocPermissionRequest {
+            file_token: event["file_token"].as_str().unwrap_or_default().to_string(),
+            file_type: event["file_type"].as_str().unwrap_or_default().to_string(),
+            permission: event["permission"].as_str().unwrap_or_default().to_string(),
+            remark: event["application_remark"].as_str().map(str::to_string),
+            applicant_users: open_ids("application_user_list"),
+            applicant_chats: id_strings("application_chat_list"),
+            applicant_departments: id_strings("application_department_list"),
+        };
+        if req.file_token.is_empty() {
+            warn!("doc permission event missing file_token, ignored");
+            return Ok(None);
+        }
+        info!(
+            file_token = %req.file_token,
+            file_type = %req.file_type,
+            permission = %req.permission,
+            users = req.applicant_users.len(),
+            chats = req.applicant_chats.len(),
+            departments = req.applicant_departments.len(),
+            "doc permission applied"
+        );
+        if incoming
+            .send(ChannelEvent::DocPermissionApplied(req))
+            .await
+            .is_err()
+        {
+            return Err(ChannelError::Platform("incoming closed".to_string()));
+        }
+        Ok(None)
+    }
+
+    /// Parse a `card.action.trigger` callback from a protobuf `card` frame
+    /// payload (JSON string).
+    async fn forward_card_action_str(
+        payload: &str,
+        incoming: &mpsc::Sender<ChannelEvent>,
+    ) -> Result<(), ChannelError> {
+        let msg: serde_json::Value =
+            serde_json::from_str(payload).map_err(|e| api_err("card action JSON", e))?;
+        Self::forward_card_action(&msg, incoming).await
+    }
+
+    /// Forward a card button callback as a [`ChannelEvent::CardAction`].
+    /// The real `card.action.trigger` payload is a v2 envelope
+    /// (`{schema, header, event: {operator, action, context, token}}`) —
+    /// a bare callback body is tolerated as well. The button value rides
+    /// along opaquely — the hub validates its shape
+    /// (`{"action": "approve"|"deny", "id": N}`).
+    async fn forward_card_action(
+        payload: &serde_json::Value,
+        incoming: &mpsc::Sender<ChannelEvent>,
+    ) -> Result<(), ChannelError> {
+        let body = if payload["event"].is_object() {
+            &payload["event"]
+        } else {
+            payload
+        };
+        let action = CardAction {
+            operator_open_id: body["operator"]["open_id"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            chat_id: body["context"]["open_chat_id"].as_str().map(str::to_string),
+            value: body["action"]["value"].clone(),
+        };
+        if action.operator_open_id.is_empty() || action.value.is_null() {
+            warn!(payload = %payload, "card action missing operator or value, ignored");
+            return Ok(());
+        }
+        info!(
+            operator = %action.operator_open_id,
+            value = %action.value,
+            "card action received"
+        );
+        if incoming
+            .send(ChannelEvent::CardAction(action))
+            .await
+            .is_err()
+        {
+            return Err(ChannelError::Platform("incoming closed".to_string()));
+        }
+        Ok(())
     }
 }
 

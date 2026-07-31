@@ -168,3 +168,141 @@ async fn test_history_cursor_round_trip() {
         Some(7)
     );
 }
+
+// ── Doc permission requests ────────────────────────────────────────
+
+fn perm_req() -> DocPermissionRequest {
+    DocPermissionRequest {
+        file_token: "doxcnABC".to_string(),
+        file_type: "docx".to_string(),
+        permission: "view".to_string(),
+        remark: Some("求权限".to_string()),
+        applicant_users: vec!["ou_aaa".to_string()],
+        applicant_chats: vec!["oc_bbb".to_string()],
+        applicant_departments: vec![],
+    }
+}
+
+#[tokio::test]
+async fn perm_request_save_dedups_pending_duplicates() {
+    let pool = create_test_pool().await;
+    let store = SqliteChannelStore::new(pool);
+
+    let id = store
+        .save_perm_request("feishu", &perm_req())
+        .await
+        .unwrap();
+    assert!(id.is_some());
+
+    // Same application still pending → dedup hit (ws redelivery).
+    let dup = store
+        .save_perm_request("feishu", &perm_req())
+        .await
+        .unwrap();
+    assert_eq!(dup, None);
+
+    // A different permission level is a different application.
+    let mut edit_req = perm_req();
+    edit_req.permission = "edit".to_string();
+    let id2 = store.save_perm_request("feishu", &edit_req).await.unwrap();
+    assert!(id2.is_some() && id2 != id);
+
+    // Once resolved, a fresh application for the same file is accepted.
+    store
+        .resolve_perm_request(id.unwrap(), "approved", "ou_admin", None)
+        .await
+        .unwrap();
+    let id3 = store
+        .save_perm_request("feishu", &perm_req())
+        .await
+        .unwrap();
+    assert!(id3.is_some());
+}
+
+#[tokio::test]
+async fn perm_request_resolve_wins_once_and_reopen_restores() {
+    let pool = create_test_pool().await;
+    let store = SqliteChannelStore::new(pool);
+    let id = store
+        .save_perm_request("feishu", &perm_req())
+        .await
+        .unwrap()
+        .unwrap();
+
+    let row = store
+        .resolve_perm_request(id, "approved", "ou_admin", Some("edit"))
+        .await
+        .unwrap()
+        .expect("first resolve wins");
+    assert_eq!(row.status, "approved");
+    assert_eq!(row.resolved_by.as_deref(), Some("ou_admin"));
+    assert_eq!(row.resolved_perm.as_deref(), Some("edit"));
+    assert_eq!(row.applicant_users, vec!["ou_aaa".to_string()]);
+    assert_eq!(row.applicant_chats, vec!["oc_bbb".to_string()]);
+
+    // Second resolve loses the race — concurrent approvals run once.
+    let lost = store
+        .resolve_perm_request(id, "denied", "ou_other", None)
+        .await
+        .unwrap();
+    assert!(lost.is_none());
+
+    // Reopen (grant API failed): back to pending, resolvable again.
+    store.reopen_perm_request(id).await.unwrap();
+    let pending = store.list_pending_perm_requests("feishu").await.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].resolved_by, None);
+    assert_eq!(pending[0].resolved_perm, None);
+
+    let row = store
+        .resolve_perm_request(id, "denied", "ou_admin", None)
+        .await
+        .unwrap()
+        .expect("resolvable after reopen");
+    assert_eq!(row.status, "denied");
+}
+
+#[tokio::test]
+async fn perm_request_list_pending_and_notify_msgs() {
+    let pool = create_test_pool().await;
+    let store = SqliteChannelStore::new(pool);
+
+    let id1 = store
+        .save_perm_request("feishu", &perm_req())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut other = perm_req();
+    other.file_token = "doxcnOTHER".to_string();
+    let id2 = store
+        .save_perm_request("feishu", &other)
+        .await
+        .unwrap()
+        .unwrap();
+    // Another channel's rows don't leak in.
+    store.save_perm_request("lark", &perm_req()).await.unwrap();
+
+    store
+        .set_perm_notify_msgs(id1, &["om_x".to_string(), "om_y".to_string()])
+        .await
+        .unwrap();
+
+    let rows = store.list_pending_perm_requests("feishu").await.unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].id, id1, "oldest first");
+    assert_eq!(rows[1].id, id2);
+    assert_eq!(rows[0].notify_msg_ids, vec!["om_x", "om_y"]);
+    assert!(rows[1].notify_msg_ids.is_empty());
+    assert_eq!(rows[0].remark.as_deref(), Some("求权限"));
+    assert_eq!(rows[0].file_type, "docx");
+    assert!(!rows[0].created_at.is_empty());
+
+    // Resolved rows leave the pending list.
+    store
+        .resolve_perm_request(id1, "approved", "ou_admin", None)
+        .await
+        .unwrap();
+    let rows = store.list_pending_perm_requests("feishu").await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, id2);
+}

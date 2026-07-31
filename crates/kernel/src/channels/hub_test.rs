@@ -29,7 +29,7 @@ impl MockAdapter {
 impl PlatformAdapter for MockAdapter {
     async fn run_receiver(
         &self,
-        _incoming: mpsc::Sender<ChannelMessage>,
+        _incoming: mpsc::Sender<ChannelEvent>,
         cancel: CancellationToken,
     ) -> std::result::Result<(), crate::channels::ChannelError> {
         cancel.cancelled().await;
@@ -214,6 +214,8 @@ async fn test_start_and_shutdown() {
             observability: true,
             tool_trace: true,
             history_context: 0,
+            approval_chat_id: None,
+            admin_users: vec![],
         },
         ChannelConfig {
             name: "mock2".to_string(),
@@ -231,6 +233,8 @@ async fn test_start_and_shutdown() {
             observability: true,
             tool_trace: true,
             history_context: 0,
+            approval_chat_id: None,
+            admin_users: vec![],
         },
     ];
 
@@ -344,7 +348,7 @@ impl CardMockAdapter {
 impl PlatformAdapter for CardMockAdapter {
     async fn run_receiver(
         &self,
-        _incoming: mpsc::Sender<ChannelMessage>,
+        _incoming: mpsc::Sender<ChannelEvent>,
         cancel: CancellationToken,
     ) -> std::result::Result<(), crate::channels::ChannelError> {
         cancel.cancelled().await;
@@ -839,6 +843,60 @@ fn test_parse_info_command() {
 }
 
 #[test]
+fn test_parse_approval_commands() {
+    assert!(matches!(
+        parse_channel_command(Some("/permits")),
+        ChannelCommand::Permits
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/permits@yomi_bot")),
+        ChannelCommand::Permits
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/approve 3")),
+        ChannelCommand::Approve { id: 3, perm: None }
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/approve 3 edit")),
+        ChannelCommand::Approve {
+            id: 3,
+            perm: Some(_)
+        }
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/deny 3")),
+        ChannelCommand::Deny { id: 3 }
+    ));
+
+    // Malformed: missing/invalid ids, extra arguments.
+    assert!(matches!(
+        parse_channel_command(Some("/approve")),
+        ChannelCommand::InvalidApprovalCommand
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/approve abc")),
+        ChannelCommand::InvalidApprovalCommand
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/approve 3 edit extra")),
+        ChannelCommand::InvalidApprovalCommand
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/deny")),
+        ChannelCommand::InvalidApprovalCommand
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/deny 3 4")),
+        ChannelCommand::InvalidApprovalCommand
+    ));
+    // Prefix lookalikes are not commands.
+    assert!(matches!(
+        parse_channel_command(Some("/approved 3")),
+        ChannelCommand::None
+    ));
+}
+
+#[test]
 fn test_format_session_info() {
     let now = chrono::Utc::now();
     let session = crate::types::SessionResponse {
@@ -1098,7 +1156,7 @@ struct HistoryMockAdapter {
 impl PlatformAdapter for HistoryMockAdapter {
     async fn run_receiver(
         &self,
-        _incoming: mpsc::Sender<ChannelMessage>,
+        _incoming: mpsc::Sender<ChannelEvent>,
         cancel: CancellationToken,
     ) -> std::result::Result<(), crate::channels::ChannelError> {
         cancel.cancelled().await;

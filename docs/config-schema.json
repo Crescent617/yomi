@@ -265,6 +265,16 @@
             "description": "Recent-chat messages injected as context when the bot is triggered in a group (fetched since the last trigger in that thread/chat, newest cap; 0 disables; capped at 50 per platform page).",
             "type": "integer",
             "default": 20
+          },
+          "approval_chat_id": {
+            "description": "Target group chat_id for Feishu doc-permission application notifications. When unset, every admin in admin_users is notified by DM instead; when both are unset the feature is off (applications are only logged, queryable via /permits). Note: docs events are two-level — each document also needs one file-level subscribe API call (POST /open-apis/drive/v1/files/{token}/subscribe?file_type=docx, body {\"event_type\":\"drive.file.permission_member_applied_v1\"}) or no event is generated.",
+            "type": ["string", "null"]
+          },
+          "admin_users": {
+            "description": "Admin open_ids allowed to approve/deny doc-permission applications (card buttons and /permits /approve /deny commands alike). Also the DM recipients when approval_chat_id is unset.",
+            "type": "array",
+            "items": { "type": "string" },
+            "default": []
           }
         },
         "required": ["name", "platform"],

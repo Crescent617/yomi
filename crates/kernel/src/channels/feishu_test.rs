@@ -205,6 +205,9 @@ fn response_for(method: &str, path: &str) -> Vec<u8> {
         "PATCH" if p.starts_with("/open-apis/im/v1/messages/") => {
             r#"{"code":0,"msg":"ok"}"#.into()
         }
+        "POST" if p.starts_with("/open-apis/drive/v1/permissions/") => {
+            r#"{"code":0,"msg":"ok","data":{}}"#.into()
+        }
         "DELETE" if p.contains("/reactions/") => r#"{"code":0,"msg":"ok"}"#.into(),
         _ => r#"{"code":999,"msg":"unexpected request"}"#.into(),
     }
@@ -539,6 +542,15 @@ fn receive_event(msg_type: &str, content: &serde_json::Value) -> serde_json::Val
     })
 }
 
+/// Unwrap a received [`ChannelEvent`] into its chat message — message-path
+/// tests never expect platform events.
+fn expect_message(event: crate::channels::ChannelEvent) -> crate::channels::ChannelMessage {
+    let crate::channels::ChannelEvent::Message(msg) = event else {
+        panic!("expected ChannelEvent::Message, got {event:?}");
+    };
+    msg
+}
+
 #[tokio::test]
 async fn post_event_is_forwarded_with_extracted_text() {
     let stub = StubFeishu::start().await;
@@ -560,7 +572,7 @@ async fn post_event_is_forwarded_with_extracted_text() {
     let msg_id = adapter.parse_event_json(&event, &tx).await.unwrap();
 
     assert_eq!(msg_id.as_deref(), Some("om_1"));
-    let msg = rx.try_recv().expect("post message forwarded");
+    let msg = expect_message(rx.try_recv().expect("post message forwarded"));
     assert!(msg.is_mention, "p2p counts as mention");
     assert_eq!(msg.raw_text.as_deref(), Some("标题\n第一行\n第二行"));
     let crate::types::ContentBlock::Text { text } = &msg.content[0] else {
@@ -578,7 +590,7 @@ async fn text_event_still_forwarded() {
 
     adapter.parse_event_json(&event, &tx).await.unwrap();
 
-    let msg = rx.try_recv().expect("text message forwarded");
+    let msg = expect_message(rx.try_recv().expect("text message forwarded"));
     assert_eq!(msg.raw_text.as_deref(), Some("hello"));
 }
 
@@ -629,7 +641,7 @@ async fn image_message_forwards_keys_without_downloading() {
 
     adapter.parse_event_json(&event, &tx).await.unwrap();
 
-    let msg = rx.try_recv().expect("image message forwarded");
+    let msg = expect_message(rx.try_recv().expect("image message forwarded"));
     assert_eq!(msg.raw_text.as_deref(), Some(""));
     assert_eq!(msg.image_keys, vec!["img_ok".to_string()]);
     // Deferred download: no image block, no resources request (yet).
@@ -666,7 +678,7 @@ async fn pure_image_post_is_forwarded() {
 
     adapter.parse_event_json(&event, &tx).await.unwrap();
 
-    let msg = rx.try_recv().expect("pure-image post forwarded");
+    let msg = expect_message(rx.try_recv().expect("pure-image post forwarded"));
     assert_eq!(msg.image_keys, vec!["img_ok".to_string()]);
 }
 
@@ -695,4 +707,241 @@ async fn download_message_image_returns_image_block() {
         .download_message_image("om_1", "img_bad")
         .await
         .is_err());
+}
+
+// ── Receive path: doc permission events ────────────────────────────
+
+#[tokio::test]
+async fn doc_permission_event_is_forwarded() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let event = json!({
+        "header": { "event_type": "drive.file.permission_member_applied_v1" },
+        "event": {
+            "file_type": "docx",
+            "file_token": "doxcnXXXX",
+            "permission": "view",
+            "application_remark": "求权限看下方案",
+            "application_user_list": [{ "open_id": "ou_aaa" }],
+            "application_chat_list": ["oc_bbb"],
+            "application_department_list": ["od_ccc"]
+        }
+    });
+
+    adapter.parse_event_json(&event, &tx).await.unwrap();
+
+    let crate::channels::ChannelEvent::DocPermissionApplied(req) =
+        rx.try_recv().expect("doc permission event forwarded")
+    else {
+        panic!("expected DocPermissionApplied");
+    };
+    assert_eq!(req.file_token, "doxcnXXXX");
+    assert_eq!(req.file_type, "docx");
+    assert_eq!(req.permission, "view");
+    assert_eq!(req.remark.as_deref(), Some("求权限看下方案"));
+    assert_eq!(req.applicant_users, vec!["ou_aaa".to_string()]);
+    assert_eq!(req.applicant_chats, vec!["oc_bbb".to_string()]);
+    assert_eq!(req.applicant_departments, vec!["od_ccc".to_string()]);
+}
+
+#[tokio::test]
+async fn doc_permission_event_without_file_token_is_ignored() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let event = json!({
+        "header": { "event_type": "drive.file.permission_member_applied_v1" },
+        "event": { "file_type": "docx", "permission": "view" }
+    });
+
+    adapter.parse_event_json(&event, &tx).await.unwrap();
+    assert!(rx.try_recv().is_err(), "nothing forwarded");
+}
+
+#[tokio::test]
+async fn unknown_event_type_is_ignored() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let event = json!({
+        "header": { "event_type": "im.chat.updated_v1" },
+        "event": {}
+    });
+
+    adapter.parse_event_json(&event, &tx).await.unwrap();
+    assert!(rx.try_recv().is_err(), "nothing forwarded");
+}
+
+// ── Doc permission grant & DM cards & card actions ─────────────────
+
+#[tokio::test]
+async fn grant_doc_permission_batches_all_applicant_kinds() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let req = crate::channels::DocPermissionRequest {
+        file_token: "doxcnABC".to_string(),
+        file_type: "docx".to_string(),
+        permission: "view".to_string(),
+        remark: None,
+        applicant_users: vec!["ou_a".to_string()],
+        applicant_chats: vec!["oc_c".to_string()],
+        applicant_departments: vec!["od_d".to_string()],
+    };
+
+    adapter
+        .grant_doc_permission("doxcnABC", "docx", &req, "edit")
+        .await
+        .unwrap();
+
+    let requests = stub.requests.lock().unwrap();
+    let (_, path, body) = requests
+        .iter()
+        .find(|(_, p, _)| p.contains("/members/batch_create"))
+        .expect("batch_create called");
+    assert!(path.contains("type=docx"), "{path}");
+    assert!(path.contains("need_notification=true"), "{path}");
+    let body: serde_json::Value = serde_json::from_str(body).unwrap();
+    let members = body["members"].as_array().unwrap();
+    assert_eq!(
+        members.as_slice(),
+        &[
+            json!({ "member_type": "openid", "member_id": "ou_a", "perm": "edit", "type": "user" }),
+            json!({ "member_type": "openchat", "member_id": "oc_c", "perm": "edit", "type": "chat" }),
+            json!({ "member_type": "opendepartmentid", "member_id": "od_d", "perm": "edit", "type": "department" }),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn grant_doc_permission_without_applicants_fails_fast() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let req = crate::channels::DocPermissionRequest {
+        file_token: "doxcnABC".to_string(),
+        file_type: "docx".to_string(),
+        permission: "view".to_string(),
+        remark: None,
+        applicant_users: vec![],
+        applicant_chats: vec![],
+        applicant_departments: vec![],
+    };
+
+    let err = adapter
+        .grant_doc_permission("doxcnABC", "docx", &req, "view")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("no applicants"), "{err}");
+}
+
+#[tokio::test]
+async fn direct_card_sent_to_open_id() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+
+    let mid = adapter
+        .send_direct_card("ou_admin", r#"{"schema":"2.0"}"#)
+        .await
+        .unwrap();
+    assert_eq!(mid.as_deref(), Some("om_new"));
+
+    let requests = stub.requests.lock().unwrap();
+    let (_, path, body) = requests
+        .iter()
+        .find(|(_, p, _)| p.starts_with("/open-apis/im/v1/messages?"))
+        .expect("message sent");
+    assert!(path.contains("receive_id_type=open_id"), "{path}");
+    let body: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(body["receive_id"], "ou_admin");
+    assert_eq!(body["msg_type"], "interactive");
+}
+
+#[tokio::test]
+async fn card_action_payload_is_forwarded() {
+    // Real card.action.trigger callbacks arrive as a v2 envelope.
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let payload = json!({
+        "schema": "2.0",
+        "header": { "event_type": "card.action.trigger" },
+        "event": {
+            "operator": { "open_id": "ou_admin" },
+            "action": { "value": { "action": "approve", "id": 3 } },
+            "context": { "open_chat_id": "oc_chat" }
+        }
+    });
+
+    super::FeishuAdapter::forward_card_action(&payload, &tx)
+        .await
+        .unwrap();
+
+    let crate::channels::ChannelEvent::CardAction(action) =
+        rx.try_recv().expect("card action forwarded")
+    else {
+        panic!("expected CardAction");
+    };
+    assert_eq!(action.operator_open_id, "ou_admin");
+    assert_eq!(action.chat_id.as_deref(), Some("oc_chat"));
+    assert_eq!(action.value, json!({ "action": "approve", "id": 3 }));
+}
+
+#[tokio::test]
+async fn card_action_bare_body_is_tolerated() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let payload = json!({
+        "operator": { "open_id": "ou_admin" },
+        "action": { "value": { "action": "deny", "id": 5 } }
+    });
+
+    super::FeishuAdapter::forward_card_action(&payload, &tx)
+        .await
+        .unwrap();
+
+    let crate::channels::ChannelEvent::CardAction(action) =
+        rx.try_recv().expect("card action forwarded")
+    else {
+        panic!("expected CardAction");
+    };
+    assert_eq!(action.operator_open_id, "ou_admin");
+    assert_eq!(action.value, json!({ "action": "deny", "id": 5 }));
+}
+
+#[tokio::test]
+async fn card_action_trigger_event_frame_is_forwarded() {
+    // Tolerated delivery shape: the callback riding a plain event frame.
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let event = json!({
+        "schema": "2.0",
+        "header": { "event_type": "card.action.trigger" },
+        "event": {
+            "operator": { "open_id": "ou_admin" },
+            "action": { "value": { "action": "approve", "id": 3 } }
+        }
+    });
+
+    adapter.parse_event_json(&event, &tx).await.unwrap();
+
+    let crate::channels::ChannelEvent::CardAction(action) =
+        rx.try_recv().expect("card action forwarded")
+    else {
+        panic!("expected CardAction");
+    };
+    assert_eq!(action.operator_open_id, "ou_admin");
+    assert_eq!(action.value, json!({ "action": "approve", "id": 3 }));
+}
+
+#[tokio::test]
+async fn card_action_without_operator_is_ignored() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let payload = json!({
+        "schema": "2.0",
+        "header": { "event_type": "card.action.trigger" },
+        "event": { "action": { "value": { "action": "approve", "id": 3 } } }
+    });
+
+    super::FeishuAdapter::forward_card_action(&payload, &tx)
+        .await
+        .unwrap();
+    assert!(rx.try_recv().is_err(), "nothing forwarded");
 }

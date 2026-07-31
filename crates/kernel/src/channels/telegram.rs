@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use super::{ChannelError, ChannelMessage, PlatformAdapter};
+use super::{ChannelError, ChannelEvent, ChannelMessage, PlatformAdapter};
 
 pub struct TelegramAdapter {
     bot: Bot,
@@ -330,7 +330,7 @@ async fn skip_backlog(bot: &teloxide_core::Bot) -> i64 {
 impl PlatformAdapter for TelegramAdapter {
     async fn run_receiver(
         &self,
-        incoming: mpsc::Sender<ChannelMessage>,
+        incoming: mpsc::Sender<ChannelEvent>,
         cancel: CancellationToken,
     ) -> Result<(), ChannelError> {
         // Skip the update backlog: Telegram keeps unconfirmed updates for
@@ -411,7 +411,11 @@ impl PlatformAdapter for TelegramAdapter {
                                 continue;
                             };
 
-                            if incoming.send(channel_msg).await.is_err() {
+                            if incoming
+                                .send(ChannelEvent::Message(channel_msg))
+                                .await
+                                .is_err()
+                            {
                                 warn!("incoming channel closed, stopping receiver");
                                 return Ok(());
                             }
