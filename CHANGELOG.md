@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.32] - 2026-07-31
+
 ### Added
 - 新增通道命令 `/restart`：`admin_users` 中的管理员可在聊天中重启 daemon；确认消息送达后执行，进行中的运行会被打断。
 
