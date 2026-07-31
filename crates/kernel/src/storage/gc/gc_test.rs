@@ -668,3 +668,55 @@ async fn test_gc_exclude_sessions_skips_victims() {
         .unwrap()
         .is_some());
 }
+
+#[tokio::test]
+async fn gc_sweeps_expired_cache_entries() {
+    let (tmp, storage) = setup().await;
+    let kv = storage.kv_cache().expect("kv cache");
+    kv.put("ns_a", "old", "x").await.unwrap();
+    kv.put("ns_b", "old2", "y").await.unwrap();
+    kv.put("ns_a", "fresh", "z").await.unwrap();
+
+    // Backdate two rows (put always writes the current time).
+    let raw = sqlx::SqlitePool::connect(&format!(
+        "sqlite://{}",
+        tmp.path().join("cache.db").display()
+    ))
+    .await
+    .unwrap();
+    sqlx::query("UPDATE kv SET created_at = 0 WHERE key != 'fresh'")
+        .execute(&raw)
+        .await
+        .unwrap();
+    drop(raw);
+
+    // Dry run counts, deletes nothing.
+    let report = storage
+        .gc()
+        .run(&GcOptions {
+            retention_days: 90,
+            dry_run: true,
+            ..GcOptions::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(report.cache_entries_deleted, 2);
+    assert_eq!(kv.get("ns_a", "old").await.unwrap().as_deref(), Some("x"));
+
+    // Real run deletes exactly the stale rows; vacuum covers cache.db too.
+    let report = storage
+        .gc()
+        .run(&GcOptions {
+            retention_days: 90,
+            dry_run: false,
+            vacuum: true,
+            ..GcOptions::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(report.cache_entries_deleted, 2);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    assert_eq!(kv.get("ns_a", "old").await.unwrap(), None);
+    assert_eq!(kv.get("ns_b", "old2").await.unwrap(), None);
+    assert_eq!(kv.get("ns_a", "fresh").await.unwrap().as_deref(), Some("z"));
+}

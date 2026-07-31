@@ -27,7 +27,7 @@ daemon 是常驻进程：IM 通道（飞书/Telegram）、多客户端共享都�
 
 ## 清理
 
-- `yomi gc` **默认 dry-run**，`--yes` 才真删；`--days`、`--keep-pinned`、`--sweep-orphans`、`--vacuum` 缺省全部回落 `[gc]` 配置段；`--json` 输出报告。daemon 侧可在 `[gc]` 配 `auto` 每天自动清。
+- `yomi gc` **默认 dry-run**，`--yes` 才真删；`--days`、`--keep-pinned`、`--sweep-orphans`、`--vacuum` 缺省全部回落 `[gc]` 配置段；`--json` 输出报告。daemon 侧可在 `[gc]` 配 `auto` 每天自动清。清理范围：过期会话 + 无属主文件 + 本地缓存库（cache.db，vacuum 时压缩）。
 
 ## 查询与调试
 

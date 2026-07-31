@@ -101,6 +101,7 @@ fn print_report(report: &GcReport, days: i64) {
     if report.sessions.is_empty()
         && report.orphan_files_deleted == 0
         && report.assets_deleted == 0
+        && report.cache_entries_deleted == 0
         && report.errors.is_empty()
     {
         println!("  Nothing to collect.");
@@ -126,6 +127,9 @@ fn print_report(report: &GcReport, days: i64) {
     }
     println!("  orphan files  {:>6}", report.orphan_files_deleted);
     println!("  assets        {:>6}", report.assets_deleted);
+    if report.cache_entries_deleted > 0 {
+        println!("  cache entries {:>6}", report.cache_entries_deleted);
+    }
     let reclaim_label = if report.dry_run {
         "est. reclaim"
     } else {

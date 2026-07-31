@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `yomi gc` 现在会按保留天数清理本地缓存数据库（cache.db），开启 vacuum 时一并压缩缓存文件。
+
 ### Fixed
 - 修复引用卡片消息时正文丢失（只剩 `[interactive]` 占位符）的问题：机器人自己发送的卡片注入缓存的 markdown 正文（本地持久化，服务重启后仍有效），旧版（v1）卡片注入 API 返回的渲染文本。
 

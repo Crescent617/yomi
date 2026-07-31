@@ -101,12 +101,55 @@ pub struct GcReport {
     pub orphan_files_deleted: u64,
     /// Unreferenced asset files deleted during the orphan sweep
     pub assets_deleted: u64,
+    /// Cache entries (cache.db) deleted during the cache sweep
+    #[serde(default)]
+    pub cache_entries_deleted: u64,
     /// Bytes reclaimed (estimated from file sizes before deletion)
     pub bytes_reclaimed: u64,
     /// Non-fatal errors encountered (gc continues past individual failures)
     pub errors: Vec<String>,
     /// Whether this was a dry run
     pub dry_run: bool,
+}
+
+/// What a swept file or directory counts as in the report.
+#[derive(Debug, Clone, Copy)]
+enum CountAs {
+    /// A victim session's data file (`files_deleted`).
+    SessionFile,
+    /// A victim session's checkpoint directory (`checkpoint_dirs_deleted`).
+    CheckpointDir,
+    /// An orphan file or checkpoint directory (`orphan_files_deleted`).
+    Orphan,
+    /// An unreferenced asset file (`assets_deleted`).
+    Asset,
+}
+
+/// One unit of gc work discovered during a traversal. The same actions
+/// feed both outcomes — a dry run only counts, a real run deletes — so
+/// the two paths can never drift apart.
+enum SweepAction {
+    File {
+        path: PathBuf,
+        count_as: CountAs,
+    },
+    Dir {
+        path: PathBuf,
+        count_as: CountAs,
+    },
+    /// Expired cache entries (cache.db) older than this cutoff (unix ms).
+    CacheRows {
+        cutoff_ms: i64,
+    },
+}
+
+fn counter_mut(report: &mut GcReport, count_as: CountAs) -> &mut u64 {
+    match count_as {
+        CountAs::SessionFile => &mut report.files_deleted,
+        CountAs::CheckpointDir => &mut report.checkpoint_dirs_deleted,
+        CountAs::Orphan => &mut report.orphan_files_deleted,
+        CountAs::Asset => &mut report.assets_deleted,
+    }
 }
 
 /// Garbage collector for session resources.
@@ -143,23 +186,17 @@ impl GarbageCollector {
         report.subagent_sessions = victims.iter().filter(|id| id.is_subagent()).count() as u64;
 
         if opts.dry_run {
-            // Estimate sizes without deleting
-            for id in &victims {
-                for path in self.session_files(id.as_str()) {
-                    if let Ok(meta) = tokio::fs::metadata(&path).await {
-                        report.bytes_reclaimed += meta.len();
-                        report.files_deleted += 1;
-                    }
-                }
-                let cp_dir = self.checkpoints_dir().join(id.as_str());
-                if cp_dir.is_dir() {
-                    report.bytes_reclaimed += dir_size(&cp_dir).await;
-                    report.checkpoint_dirs_deleted += 1;
-                }
-            }
+            self.purge_files(&victims, &mut report).await;
             if opts.sweep_orphans {
-                self.sweep(&victims, &mut report, true).await;
+                self.sweep(&victims, &mut report).await;
             }
+            self.execute(
+                SweepAction::CacheRows {
+                    cutoff_ms: cutoff.timestamp_millis(),
+                },
+                &mut report,
+            )
+            .await;
             report.sessions = victims;
             return Ok(report);
         }
@@ -169,13 +206,27 @@ impl GarbageCollector {
 
         // ── Phase 4: orphan sweep ────────────────────────────────────
         if opts.sweep_orphans {
-            self.sweep(&[], &mut report, false).await;
+            self.sweep(&[], &mut report).await;
         }
+
+        // ── Phase 4.5: cache sweep ───────────────────────────────────
+        self.execute(
+            SweepAction::CacheRows {
+                cutoff_ms: cutoff.timestamp_millis(),
+            },
+            &mut report,
+        )
+        .await;
 
         // ── Phase 5: vacuum ──────────────────────────────────────────
         if opts.vacuum {
             if let Err(e) = self.vacuum().await {
                 report.errors.push(format!("vacuum: {e}"));
+            }
+            if let Some(kv) = self.storage.kv_cache() {
+                if let Err(e) = kv.vacuum().await {
+                    report.errors.push(format!("cache vacuum: {e}"));
+                }
             }
         }
 
@@ -200,42 +251,52 @@ impl GarbageCollector {
 
     /// Delete DB rows (before files) and then per-session files for `victims`.
     async fn purge_into(&self, victims: &[SessionId], report: &mut GcReport) -> Result<()> {
-        // DB rows first: a crash mid-way leaves orphan files (recoverable by
-        // the orphan sweep) rather than dangling DB rows.
-        if !victims.is_empty() {
-            self.storage.session_store().delete_batch(victims).await?;
-            report.channel_mappings_deleted = self
-                .storage
-                .channel_store()
-                .delete_by_sessions(victims)
-                .await?;
-        }
+        self.purge_db_rows(victims, report).await?;
+        self.purge_files(victims, report).await;
+        Ok(())
+    }
 
+    /// Delete DB rows (before files) for `victims`: a crash mid-way leaves
+    /// orphan files (recoverable by the orphan sweep) rather than dangling
+    /// DB rows. Real runs only — dry runs never reach here.
+    async fn purge_db_rows(&self, victims: &[SessionId], report: &mut GcReport) -> Result<()> {
+        if victims.is_empty() {
+            return Ok(());
+        }
+        self.storage.session_store().delete_batch(victims).await?;
+        report.channel_mappings_deleted = self
+            .storage
+            .channel_store()
+            .delete_by_sessions(victims)
+            .await?;
+        Ok(())
+    }
+
+    /// Per-victim session files and checkpoint directories, as actions.
+    async fn purge_files(&self, victims: &[SessionId], report: &mut GcReport) {
         for id in victims {
             for path in self.session_files(id.as_str()) {
-                match remove_file_sized(&path).await {
-                    Ok(Some(size)) => {
-                        report.files_deleted += 1;
-                        report.bytes_reclaimed += size;
-                    }
-                    Ok(None) => {}
-                    Err(e) => report.errors.push(format!("{}: {e}", path.display())),
-                }
+                self.execute(
+                    SweepAction::File {
+                        path,
+                        count_as: CountAs::SessionFile,
+                    },
+                    report,
+                )
+                .await;
             }
-
             let cp_dir = self.checkpoints_dir().join(id.as_str());
             if cp_dir.is_dir() {
-                let size = dir_size(&cp_dir).await;
-                match tokio::fs::remove_dir_all(&cp_dir).await {
-                    Ok(()) => {
-                        report.checkpoint_dirs_deleted += 1;
-                        report.bytes_reclaimed += size;
-                    }
-                    Err(e) => report.errors.push(format!("{}: {e}", cp_dir.display())),
-                }
+                self.execute(
+                    SweepAction::Dir {
+                        path: cp_dir,
+                        count_as: CountAs::CheckpointDir,
+                    },
+                    report,
+                )
+                .await;
             }
         }
-        Ok(())
     }
 
     /// Per-session data files (messages, todos, goals, file states)
@@ -259,7 +320,7 @@ impl GarbageCollector {
     /// the live session set. `excluded_sessions` are live sessions whose
     /// message histories must not count as asset references (dry-run victims:
     /// they would be deleted, so their references must not protect assets).
-    async fn sweep(&self, excluded_sessions: &[SessionId], report: &mut GcReport, dry_run: bool) {
+    async fn sweep(&self, excluded_sessions: &[SessionId], report: &mut GcReport) {
         let live = match self.live_session_ids().await {
             Ok(set) => set,
             Err(e) => {
@@ -269,14 +330,13 @@ impl GarbageCollector {
                 return;
             }
         };
-        self.sweep_orphans(&live, report, dry_run).await;
-        self.sweep_assets(excluded_sessions, &live, report, dry_run)
-            .await;
+        self.sweep_orphans(&live, report).await;
+        self.sweep_assets(excluded_sessions, &live, report).await;
     }
 
     /// Sweep files/directories whose session no longer exists in the DB.
     /// Also removes stale `.tmp` files (atomic-write leftovers).
-    async fn sweep_orphans(&self, live: &HashSet<String>, report: &mut GcReport, dry_run: bool) {
+    async fn sweep_orphans(&self, live: &HashSet<String>, report: &mut GcReport) {
         let sessions_dir = self.sessions_dir();
         // (dir, extension) pairs holding per-session files
         let file_dirs: Vec<(PathBuf, &str)> = SESSION_FILE_KINDS
@@ -297,7 +357,7 @@ impl GarbageCollector {
                 // Stale .tmp files: judged by mtime, not by session liveness
                 if path.extension().is_some_and(|e| e == "tmp") {
                     if is_stale(&path, TMP_STALE_SECS).await {
-                        self.sweep_file(&path, report, dry_run).await;
+                        self.orphan_file(path, report).await;
                     }
                     continue;
                 }
@@ -309,7 +369,7 @@ impl GarbageCollector {
                     continue;
                 };
                 if !live.contains(stem) {
-                    self.sweep_file(&path, report, dry_run).await;
+                    self.orphan_file(path, report).await;
                 }
             }
         }
@@ -327,39 +387,27 @@ impl GarbageCollector {
                 if live.contains(name) {
                     continue;
                 }
-                let size = dir_size(&path).await;
-                if dry_run {
-                    report.orphan_files_deleted += 1;
-                    report.bytes_reclaimed += size;
-                } else {
-                    match tokio::fs::remove_dir_all(&path).await {
-                        Ok(()) => {
-                            report.orphan_files_deleted += 1;
-                            report.bytes_reclaimed += size;
-                        }
-                        Err(e) => report.errors.push(format!("{}: {e}", path.display())),
-                    }
-                }
+                self.execute(
+                    SweepAction::Dir {
+                        path,
+                        count_as: CountAs::Orphan,
+                    },
+                    report,
+                )
+                .await;
             }
         }
     }
 
-    async fn sweep_file(&self, path: &Path, report: &mut GcReport, dry_run: bool) {
-        if dry_run {
-            if let Ok(meta) = tokio::fs::metadata(path).await {
-                report.orphan_files_deleted += 1;
-                report.bytes_reclaimed += meta.len();
-            }
-            return;
-        }
-        match remove_file_sized(path).await {
-            Ok(Some(size)) => {
-                report.orphan_files_deleted += 1;
-                report.bytes_reclaimed += size;
-            }
-            Ok(None) => {}
-            Err(e) => report.errors.push(format!("{}: {e}", path.display())),
-        }
+    async fn orphan_file(&self, path: PathBuf, report: &mut GcReport) {
+        self.execute(
+            SweepAction::File {
+                path,
+                count_as: CountAs::Orphan,
+            },
+            report,
+        )
+        .await;
     }
 
     /// All session IDs currently present in the DB (including subagents)
@@ -380,7 +428,6 @@ impl GarbageCollector {
         excluded_sessions: &[SessionId],
         live: &HashSet<String>,
         report: &mut GcReport,
-        dry_run: bool,
     ) {
         let assets_dir = self.storage.data_dir().join("assets");
         if !assets_dir.is_dir() {
@@ -438,25 +485,14 @@ impl GarbageCollector {
                 continue;
             }
 
-            if dry_run {
-                if let Ok(meta) = entry.metadata().await {
-                    report.assets_deleted += 1;
-                    report.bytes_reclaimed += meta.len();
-                }
-            } else {
-                // The asset may have been reused after the directory scan.
-                if !is_stale(&path, ASSET_STALE_SECS).await {
-                    continue;
-                }
-                match remove_file_sized(&path).await {
-                    Ok(Some(size)) => {
-                        report.assets_deleted += 1;
-                        report.bytes_reclaimed += size;
-                    }
-                    Ok(None) => {}
-                    Err(e) => report.errors.push(format!("{}: {e}", path.display())),
-                }
-            }
+            self.execute(
+                SweepAction::File {
+                    path,
+                    count_as: CountAs::Asset,
+                },
+                report,
+            )
+            .await;
         }
     }
 
@@ -470,6 +506,67 @@ impl GarbageCollector {
             .await
             .map_err(|e| super::storage_err(format!("wal checkpoint failed: {e}")))?;
         Ok(())
+    }
+
+    /// Perform one swept action, folding the outcome into `report`: a dry
+    /// run (`report.dry_run`) only counts and estimates bytes, a real run
+    /// deletes. This is the single place where the two modes diverge, so
+    /// their counting and deletion logic cannot drift apart. Failures are
+    /// non-fatal — they land in `report.errors`.
+    async fn execute(&self, action: SweepAction, report: &mut GcReport) {
+        match action {
+            SweepAction::File { path, count_as } => {
+                if report.dry_run {
+                    if let Ok(meta) = tokio::fs::metadata(&path).await {
+                        *counter_mut(report, count_as) += 1;
+                        report.bytes_reclaimed += meta.len();
+                    }
+                    return;
+                }
+                // Assets are rechecked at delete time: one may have been
+                // reused since the directory scan.
+                if matches!(count_as, CountAs::Asset) && !is_stale(&path, ASSET_STALE_SECS).await {
+                    return;
+                }
+                match remove_file_sized(&path).await {
+                    Ok(Some(size)) => {
+                        *counter_mut(report, count_as) += 1;
+                        report.bytes_reclaimed += size;
+                    }
+                    Ok(None) => {}
+                    Err(e) => report.errors.push(format!("{}: {e}", path.display())),
+                }
+            }
+            SweepAction::Dir { path, count_as } => {
+                let size = dir_size(&path).await;
+                if report.dry_run {
+                    *counter_mut(report, count_as) += 1;
+                    report.bytes_reclaimed += size;
+                    return;
+                }
+                match tokio::fs::remove_dir_all(&path).await {
+                    Ok(()) => {
+                        *counter_mut(report, count_as) += 1;
+                        report.bytes_reclaimed += size;
+                    }
+                    Err(e) => report.errors.push(format!("{}: {e}", path.display())),
+                }
+            }
+            SweepAction::CacheRows { cutoff_ms } => {
+                let Some(kv) = self.storage.kv_cache() else {
+                    return;
+                };
+                let res = if report.dry_run {
+                    kv.count_older_than(cutoff_ms).await
+                } else {
+                    kv.sweep_older_than(cutoff_ms).await
+                };
+                match res {
+                    Ok(n) => report.cache_entries_deleted += n,
+                    Err(e) => report.errors.push(format!("cache sweep: {e}")),
+                }
+            }
+        }
     }
 }
 
