@@ -213,7 +213,7 @@ pub enum FinishReason {
     PauseTurn,
     /// Model refused the request (Anthropic: `refusal`)
     Refusal,
-    /// Model stopped due to repetition detection (e.g. Kimi: `repeat`)
+    /// Model stopped due to repetition detection (e.g. `repeat`)
     Repeat,
     /// `Unknown` finish reason
     Unknown,

@@ -539,12 +539,12 @@ fn test_parse_model_commands() {
         ChannelCommand::ListModels
     ));
     assert!(matches!(
-        parse_channel_command(Some("/model@yomi_bot kimi-k2")),
-        ChannelCommand::SwitchModel(ref key) if key == "kimi-k2"
+        parse_channel_command(Some("/model@yomi_bot nova-2")),
+        ChannelCommand::SwitchModel(ref key) if key == "nova-2"
     ));
     assert!(matches!(
-        parse_channel_command(Some("/models kimi-k2")),
-        ChannelCommand::SwitchModel(ref key) if key == "kimi-k2"
+        parse_channel_command(Some("/models nova-2")),
+        ChannelCommand::SwitchModel(ref key) if key == "nova-2"
     ));
 }
 
@@ -555,7 +555,7 @@ fn test_parse_invalid_model_command() {
         ChannelCommand::InvalidModelCommand
     ));
     assert!(matches!(
-        parse_channel_command(Some("please use /model kimi-k2")),
+        parse_channel_command(Some("please use /model nova-2")),
         ChannelCommand::None
     ));
     assert!(matches!(parse_channel_command(None), ChannelCommand::None));
@@ -658,27 +658,27 @@ fn model_info(name: &str, model_id: &str, context_window: u32) -> crate::kernel:
 fn test_format_model_list_marks_current_model() {
     let models = vec![
         model_info("claude", "claude-sonnet", 200_000),
-        model_info("kimi", "kimi-k2", 256_000),
+        model_info("nova", "nova-2", 256_000),
     ];
 
-    let output = format_model_list(&models, "kimi");
+    let output = format_model_list(&models, "nova");
 
     assert!(output.contains("`claude` · anthropic · `claude-sonnet` · 200k ctx"));
-    assert!(output.contains("`kimi` · anthropic · `kimi-k2` · 256k ctx **← current**"));
+    assert!(output.contains("`nova` · anthropic · `nova-2` · 256k ctx **← current**"));
     assert!(output.contains("/model <model_key>"));
 }
 
 #[test]
 fn test_format_current_and_unknown_model() {
-    let models = vec![model_info("kimi", "kimi-k2", 256_000)];
+    let models = vec![model_info("nova", "nova-2", 256_000)];
 
-    let current = format_current_model(&models, "kimi");
-    assert!(current.contains("Current model: `kimi`"));
-    assert!(current.contains("`kimi-k2`"));
+    let current = format_current_model(&models, "nova");
+    assert!(current.contains("Current model: `nova`"));
+    assert!(current.contains("`nova-2`"));
 
     let unknown = format_unknown_model("missing", &models);
     assert!(unknown.contains("Model `missing` was not found"));
-    assert!(unknown.contains("Available model keys: `kimi`"));
+    assert!(unknown.contains("Available model keys: `nova`"));
 }
 
 fn channel_message(
@@ -912,11 +912,11 @@ fn test_format_session_info() {
         auto_approve_level: Some("dangerous".to_string()),
         model_key: None,
     };
-    let models = vec![model_info("kimi", "kimi-k2", 256_000)];
+    let models = vec![model_info("nova", "nova-2", 256_000)];
 
-    let out = format_session_info(&session, "kimi", &models, 0, &[]);
+    let out = format_session_info(&session, "nova", &models, 0, &[]);
     assert!(out.contains(&format!("- ID: `{}`", session.id.0)));
-    assert!(out.contains("- Model: `kimi` · anthropic · `kimi-k2` · 256k ctx (default)"));
+    assert!(out.contains("- Model: `nova` · anthropic · `nova-2` · 256k ctx (default)"));
     assert!(out.contains("- Status: idle"));
     assert!(out.contains("- Created: 3h ago · Active: 5m ago"));
     assert!(out.contains("- Permission: dangerous"));
@@ -925,7 +925,7 @@ fn test_format_session_info() {
 
     // Persisted model key drops the (default) marker; shells are listed.
     let session = crate::types::SessionResponse {
-        model_key: Some("kimi".to_string()),
+        model_key: Some("nova".to_string()),
         ..session
     };
     let shells = vec![crate::agent::BackgroundShellTask {
@@ -936,8 +936,8 @@ fn test_format_session_info() {
         output_path: "/tmp/sh-1.log".to_string(),
         started_at: now - chrono::Duration::minutes(9),
     }];
-    let out = format_session_info(&session, "kimi", &models, 2, &shells);
-    assert!(out.contains("- Model: `kimi` · anthropic · `kimi-k2` · 256k ctx\n"));
+    let out = format_session_info(&session, "nova", &models, 2, &shells);
+    assert!(out.contains("- Model: `nova` · anthropic · `nova-2` · 256k ctx\n"));
     assert!(out.contains("- Subagents (running): 2"));
     assert!(out.contains("- Background Shell: `cargo test` (pid 42, 9m ago)"));
 }

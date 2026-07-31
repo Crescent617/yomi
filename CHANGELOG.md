@@ -357,7 +357,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - 新增 `/info` 命令：查看当前 session 的模型、状态、权限、subagent 与后台 shell 信息。
-- 支持 `repeat` finish_reason（如 Kimi 的重复检测停止），按正常结束处理。
+- 支持 `repeat` finish_reason（某些提供商的重复检测停止），按正常结束处理。
 
 ## [0.6.11] - 2026-07-22
 

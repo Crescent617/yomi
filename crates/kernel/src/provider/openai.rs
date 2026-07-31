@@ -376,7 +376,7 @@ impl MsgChunkAssembler {
                 self.finish_reason = Some(finish_reason);
             }
 
-            // Some providers (like Kimi) put usage inside the choice
+            // Some providers put usage inside the choice
             if let Some(usage) = choice.usage {
                 items.push(ModelStreamItem::TokenUsage(
                     crate::provider::TokenUsage::new(
@@ -640,7 +640,7 @@ struct OpenAIStreamResponse {
 struct OpenAIUsage {
     prompt_tokens: u32,
     completion_tokens: u32,
-    /// Cached tokens in `prompt_tokens_details` (OpenAI/Kimi unified format)
+    /// Cached tokens in `prompt_tokens_details` (OpenAI-compatible unified format)
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt_tokens_details: Option<OpenAIPromptTokensDetails>,
 }
@@ -662,7 +662,7 @@ struct OpenAIPromptTokensDetails {
 #[derive(Debug, Serialize, Deserialize)]
 struct OpenAIChoice {
     delta: Option<OpenAIDelta>,
-    /// Some providers (like Kimi) include usage in the choice
+    /// Some providers include usage in the choice
     #[serde(skip_serializing_if = "Option::is_none")]
     usage: Option<OpenAIUsage>,
     /// Finish reason from API (e.g., "stop", "length", "`content_filter`")

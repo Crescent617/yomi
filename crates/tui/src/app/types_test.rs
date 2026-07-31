@@ -14,15 +14,15 @@ fn model(name: &str, model_id: &str, provider: &str, ctx: u32) -> ModelInfo {
 fn test_model_picker_items_marks_and_sorts_current_first() {
     let models = vec![
         model("a-model", "model-a", "openai", 128_000),
-        model("k2", "kimi-k2", "user", 256_000),
+        model("b-model", "model-b", "acme", 256_000),
         model("z-model", "model-z", "anthropic", 200_000),
     ];
 
-    let items = model_picker_items(&models, "k2");
+    let items = model_picker_items(&models, "b-model");
     assert_eq!(items.len(), 3);
 
     // Current model first, marked with ●
-    assert_eq!(items[0].id, "k2");
+    assert_eq!(items[0].id, "b-model");
     assert!(items[0].label.starts_with("● "));
 
     // Others keep original order, unmarked
@@ -33,11 +33,11 @@ fn test_model_picker_items_marks_and_sorts_current_first() {
 
 #[test]
 fn test_model_picker_items_meta_format() {
-    let models = vec![model("k2", "kimi-k2", "user", 256_000)];
-    let items = model_picker_items(&models, "k2");
+    let models = vec![model("b-model", "model-b", "acme", 256_000)];
+    let items = model_picker_items(&models, "b-model");
     assert_eq!(
         items[0].meta.as_deref(),
-        Some("user · kimi-k2 · 256k ctx")
+        Some("acme · model-b · 256k ctx")
     );
 }
 

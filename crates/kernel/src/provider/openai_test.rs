@@ -1,10 +1,10 @@
 use super::*;
 
 #[test]
-fn test_parse_kimi_usage_with_cached_tokens() {
-    // Real SSE data from Kimi API - usage is in choices[0].usage
-    // Note: Kimi puts usage INSIDE choices, not at top level
-    let data = r#"{"id":"chatcmpl-69f75d4e42d433402b5cfc09","object":"chat.completion.chunk","created":1777818959,"model":"kimi-k2.5","choices":[{"index":0,"delta":{},"finish_reason":"stop","usage":{"prompt_tokens":8,"completion_tokens":113,"total_tokens":121,"prompt_tokens_details":{"cached_tokens":8}}}]}"#;
+fn test_parse_choice_level_usage_with_cached_tokens() {
+    // Real SSE data from an OpenAI-compatible API - usage is in choices[0].usage
+    // Note: usage is INSIDE choices, not at top level
+    let data = r#"{"id":"chatcmpl-69f75d4e42d433402b5cfc09","object":"chat.completion.chunk","created":1777818959,"model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"stop","usage":{"prompt_tokens":8,"completion_tokens":113,"total_tokens":121,"prompt_tokens_details":{"cached_tokens":8}}}]}"#;
 
     let response: OpenAIStreamResponse = serde_json::from_str(data).unwrap();
 
@@ -443,8 +443,8 @@ fn test_assembler_incomplete_tool_call_finish() {
 fn test_assembler_finish_reason_and_usage_in_same_chunk() {
     let mut assembler = MsgChunkAssembler::new();
 
-    // Real data from Kimi/free-tokens proxy: last chunk has both finish_reason and top-level usage
-    let data = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"kimi-k2.7-code-highspeed","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":16,"total_tokens":27}}"#;
+    // Real data from an OpenAI-compatible free-tokens proxy: last chunk has both finish_reason and top-level usage
+    let data = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":16,"total_tokens":27}}"#;
 
     let items = assembler.process(data);
     assert_eq!(items.len(), 1);
@@ -474,8 +474,8 @@ fn test_assembler_finish_reason_and_usage_in_same_chunk() {
 fn test_assembler_choice_usage_only() {
     let mut assembler = MsgChunkAssembler::new();
 
-    // Some providers (like older Kimi) put usage only inside the choice
-    let data = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"kimi-k2.5","choices":[{"index":0,"delta":{},"finish_reason":"stop","usage":{"prompt_tokens":8,"completion_tokens":113,"total_tokens":121}}]}"#;
+    // Some providers put usage only inside the choice
+    let data = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"stop","usage":{"prompt_tokens":8,"completion_tokens":113,"total_tokens":121}}]}"#;
 
     let items = assembler.process(data);
     assert_eq!(items.len(), 1);
@@ -505,7 +505,7 @@ fn test_assembler_empty_choices_with_usage() {
     let mut assembler = MsgChunkAssembler::new();
 
     // Some proxies send a chunk with empty choices but usage after the finish_reason chunk
-    let data = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"kimi-k2.7-code-highspeed","choices":[],"usage":{"prompt_tokens":11,"completion_tokens":16,"total_tokens":27}}"#;
+    let data = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"test-model","choices":[],"usage":{"prompt_tokens":11,"completion_tokens":16,"total_tokens":27}}"#;
 
     let items = assembler.process(data);
     assert_eq!(items.len(), 1);

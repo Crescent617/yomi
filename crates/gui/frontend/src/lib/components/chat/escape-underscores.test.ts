@@ -51,10 +51,10 @@ describe("escapeIntrawordUnderscores", () => {
     // An escaped underscore would truncate the renderer's raw-URL token.
     expect(
       escapeIntrawordUnderscores(
-        "见 https://dev.example.com/delivery/-/merge_requests/new?merge_request%5Bsource_branch%5D=fix-metrics 备用",
+        "见 https://example.com/delivery/-/merge_requests/new?merge_request%5Bsource_branch%5D=fix-metrics 备用",
       ),
     ).toBe(
-      "见 https://dev.example.com/delivery/-/merge_requests/new?merge_request%5Bsource_branch%5D=fix-metrics 备用",
+      "见 https://example.com/delivery/-/merge_requests/new?merge_request%5Bsource_branch%5D=fix-metrics 备用",
     );
     // Escaping resumes right after the URL.
     expect(escapeIntrawordUnderscores("https://a.com/b_c then d_e")).toBe(
