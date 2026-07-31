@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.30] - 2026-07-31
+
+### Added
+- 新增 `[gc]` 配置段统一管理会话清理策略：`retention_days`（保留天数，默认 90）、`keep_pinned`（跳过置顶会话，默认开）、`sweep_orphans`（清理无属主文件，默认开）、`vacuum`（删除后压缩数据库，默认关）、`auto`（自动清理，默认关）；支持 `YOMI_GC_RETENTION_DAYS`、`YOMI_GC_AUTO` 环境变量覆盖。
+- daemon 自动清理：`[gc]` 中开启 `auto` 后，启动时补做一次清理，之后每天本地零点自动执行，进行中的会话不受影响；`yomi gc` 各项开关缺省时回落到配置策略。
+- 飞书文档协作权限审批：他人在应用名下的飞书文档上申请权限时，机器人推送审批卡片到 `approval_chat_id`（未配置则私聊各管理员），管理员可直接在卡片上批准/拒绝，或使用 `/permits`、`/approve`、`/deny` 命令处理。
+- 运行结束但没有发出新消息时（回复在原地完成），会在会话最新一条用户消息上打完成或失败表情，不再无声收尾。
+
 ## [0.7.29] - 2026-07-30
 
 ### Fixed
