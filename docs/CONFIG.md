@@ -50,6 +50,10 @@ SERPER_API_KEY = "..."
 
 [tasks]
 fast_model = "default"
+
+[gc]
+retention_days = 90
+auto = false
 ```
 
 ---
@@ -140,6 +144,22 @@ effort = "medium"  # low | medium | high
 | `log_dir` | string | 日志目录，省略则 `<data_dir>/logs` | — |
 | `skill_folders` | string[] | 技能文件夹路径 | 标准路径 |
 | `max_checkpoints` | integer | 每会话保留的最大检查点数量 | `5` |
+
+---
+
+### `[gc]` — 垃圾回收策略
+
+回收过期会话的全部资源（sqlite 行、消息历史、todos、goals、file states、检查点目录、未引用资产）。`token_usage` 统计表永远不会被清理。
+
+| 字段 | 类型 | 说明 | 默认值 |
+|---|---|---|---|
+| `retention_days` | integer | 会话保留天数：`updated_at` 超过该天数后被回收（最小 1） | `90` |
+| `keep_pinned` | boolean | 跳过置顶会话 | `true` |
+| `sweep_orphans` | boolean | 清扫孤儿文件（会话已不存在的残留文件、过期 `.tmp`、未引用资产） | `true` |
+| `vacuum` | boolean | 删除后对 sqlite 执行 `VACUUM` + WAL truncate | `false` |
+| `auto` | boolean | daemon 启动时执行一次（弥补停机错过的档期），之后每天本地时间 0 点执行（真实删除，需显式开启） | `false` |
+
+`yomi gc` 命令行参数未指定时回落到这里的配置；`dry_run` 只能由 CLI `--yes` 控制，不可配置。
 
 ---
 
@@ -251,6 +271,8 @@ app_secret = "..."
 | `YOMI_COMPACTOR_RATIO` | 压缩阈值比例 | `0.8` |
 | `YOMI_MAX_TOOL_OUTPUT_LENGTH` | 最大工具输出（字节） | `40000` |
 | `YOMI_MAX_CHECKPOINTS` | 最大检查点数 | `5` |
+| `YOMI_GC_RETENTION_DAYS` | gc 回收的会话保留天数 | `90` |
+| `YOMI_GC_AUTO` | daemon 自动执行 gc（每天一次） | `false` |
 | `YOMI_TOOL_BLOCKLIST` | 工具禁用列表（逗号分隔正则） | — |
 | `YOMI_LOG_DIR` | 日志目录 | — |
 | `YOMI_DEFAULT_MODEL` | 默认模型标识名 | — |

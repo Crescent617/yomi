@@ -48,6 +48,8 @@ pub struct Kernel {
     models: Arc<std::collections::BTreeMap<String, crate::provider::ModelConfig>>,
     /// Configuration for lightweight model-backed tasks.
     tasks_config: crate::config::TasksConfig,
+    /// Garbage-collection policy for session resources (incl. auto-run settings).
+    gc_config: crate::config::GcConfig,
     /// Whether model-backed session title generation is enabled.
     update_session_title: bool,
     /// Project store for project operations
@@ -68,6 +70,20 @@ pub struct Kernel {
 }
 
 const SESSION_JSONL_CHUNK_BYTES: u64 = 256 * 1024;
+
+/// Wall-clock duration until the next local midnight (fallback: 24h).
+/// Recomputed before every auto-gc sleep, so clock changes and OS
+/// suspend/resume self-correct on the next iteration.
+fn duration_until_next_midnight() -> std::time::Duration {
+    use chrono::TimeZone as _;
+    let now = chrono::Local::now();
+    let tomorrow = now.date_naive() + chrono::Duration::days(1);
+    tomorrow
+        .and_hms_opt(0, 0, 0)
+        .and_then(|naive| chrono::Local.from_local_datetime(&naive).single())
+        .and_then(|midnight| (midnight - now).to_std().ok())
+        .unwrap_or(std::time::Duration::from_hours(24))
+}
 
 impl Kernel {
     /// Get session store from `agent_shared`
@@ -207,6 +223,7 @@ impl Kernel {
         channel_store: Option<Arc<dyn crate::channels::ChannelStore>>,
         models: Vec<crate::provider::ModelConfig>,
         tasks_config: crate::config::TasksConfig,
+        gc_config: crate::config::GcConfig,
         update_session_title: bool,
     ) -> Result<Arc<Self>> {
         let session_store = storage.session_store();
@@ -321,6 +338,7 @@ impl Kernel {
             agent_config,
             models: models_map,
             tasks_config,
+            gc_config,
             update_session_title,
             project_store,
             pinned_session_store,
@@ -337,6 +355,47 @@ impl Kernel {
         let conductor = self.conductor.clone();
         let token = self.shutdown.clone();
         tokio::spawn(async move { conductor.run(token).await });
+        self.start_auto_gc();
+    }
+
+    /// Garbage-collect expired session resources when `[gc] auto` is enabled.
+    /// Runs once at startup (catching up for downtime and missed midnights)
+    /// and then every day at local midnight; per-run failures are logged and
+    /// never interrupt the loop.
+    fn start_auto_gc(&self) {
+        if !self.gc_config.auto {
+            return;
+        }
+        let storage = self.storage.clone();
+        let base_opts = crate::storage::GcOptions::from_config(&self.gc_config, false);
+        let conductor = self.conductor.clone();
+        let token = self.shutdown.child_token();
+        tokio::spawn(async move {
+            loop {
+                // Refresh exclusions every round: sessions with a live agent
+                // must keep their data even when long expired.
+                let mut opts = base_opts.clone();
+                opts.exclude_sessions = conductor.loaded_session_ids();
+                match storage.gc().run(&opts).await {
+                    Ok(report) => {
+                        tracing::info!(
+                            sessions = report.sessions.len(),
+                            orphan_files = report.orphan_files_deleted,
+                            assets = report.assets_deleted,
+                            bytes_reclaimed = report.bytes_reclaimed,
+                            errors = report.errors.len(),
+                            "auto gc completed"
+                        );
+                    }
+                    Err(e) => tracing::warn!("auto gc failed: {e}"),
+                }
+                tokio::select! {
+                    biased;
+                    () = token.cancelled() => break,
+                    () = tokio::time::sleep(duration_until_next_midnight()) => {}
+                }
+            }
+        });
     }
 
     /// Gracefully stop the kernel and all background tasks.

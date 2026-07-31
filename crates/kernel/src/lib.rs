@@ -206,6 +206,7 @@ pub async fn build_kernel(config: &Config, enable_cron: bool) -> Result<Arc<Kern
         },
         config.models.clone(),
         config.tasks.clone(),
+        config.gc.clone(),
         config.features.update_session_title_enabled(),
     )?;
 

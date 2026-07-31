@@ -122,6 +122,39 @@
       "minimum": 1,
       "default": 5
     },
+    "gc": {
+      "description": "Garbage-collection policy for expired session resources. Whether a run actually deletes (dry_run) is controlled by the CLI only and is not configurable.",
+      "type": "object",
+      "properties": {
+        "retention_days": {
+          "description": "Sessions are retained for this many days after their last update before gc collects them.",
+          "type": "integer",
+          "minimum": 1,
+          "default": 90
+        },
+        "keep_pinned": {
+          "description": "Skip pinned sessions.",
+          "type": "boolean",
+          "default": true
+        },
+        "sweep_orphans": {
+          "description": "Sweep orphan files whose session no longer exists in the DB.",
+          "type": "boolean",
+          "default": true
+        },
+        "vacuum": {
+          "description": "Run VACUUM + WAL truncate after deletion.",
+          "type": "boolean",
+          "default": false
+        },
+        "auto": {
+          "description": "Run gc automatically in the daemon: once at startup (catching up for downtime), then every day at local midnight. Performs real deletions.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
     "channels": {
       "description": "External platform channels (Telegram, Feishu, etc.).",
       "type": "array",

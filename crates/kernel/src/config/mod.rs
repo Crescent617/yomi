@@ -54,6 +54,10 @@ pub mod env_names {
     pub const COMPACTOR_RATIO: &str = env_name!("COMPACTOR_RATIO");
     /// Maximum number of checkpoints to retain per session (default: 5)
     pub const MAX_CHECKPOINTS: &str = env_name!("MAX_CHECKPOINTS");
+    /// Sessions are retained for this many days before gc collects them (default: 90)
+    pub const GC_RETENTION_DAYS: &str = env_name!("GC_RETENTION_DAYS");
+    /// Run gc automatically in the daemon (default: false)
+    pub const GC_AUTO: &str = env_name!("GC_AUTO");
     /// Tool blocklist (comma-separated regex patterns)
     pub const TOOL_BLOCKLIST: &str = env_name!("TOOL_BLOCKLIST");
     /// Maximum tool output length in bytes (default `40_000`)
@@ -192,6 +196,41 @@ pub struct TasksConfig {
     pub fast_model: Option<String>,
 }
 
+/// Garbage-collection policy for expired session resources (`[gc]` section).
+///
+/// These are *policy* settings: what to collect and, for the daemon, how
+/// often. Whether a run actually deletes (`dry_run`) is a per-invocation
+/// flag and deliberately not configurable here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct GcConfig {
+    /// Sessions are retained for this many days after their last update
+    /// before gc collects them (min 1)
+    pub retention_days: i64,
+    /// Skip pinned sessions
+    pub keep_pinned: bool,
+    /// Sweep orphan files whose session no longer exists in the DB
+    pub sweep_orphans: bool,
+    /// Run `VACUUM` + WAL truncate after deletion
+    pub vacuum: bool,
+    /// Run gc automatically in the daemon (opt-in; performs real deletions).
+    /// Runs once at startup and then every day at local midnight.
+    pub auto: bool,
+}
+
+impl Default for GcConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: 90,
+            keep_pinned: true,
+            sweep_orphans: true,
+            vacuum: false,
+            auto: false,
+        }
+    }
+}
+
 /// Editable kernel configuration and its effective startup representation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KernelConfig {
@@ -219,6 +258,8 @@ pub struct Config {
     pub features: FeaturesConfig,
     /// Maximum number of checkpoints to retain per session (default: 5)
     pub max_checkpoints: usize,
+    /// Garbage-collection policy for expired session resources
+    pub gc: GcConfig,
     /// External platform channels (Telegram, Feishu, etc.)
     #[serde(default)]
     pub channels: Vec<crate::channels::ChannelConfig>,
@@ -240,6 +281,7 @@ impl Default for Config {
             skill_folders: None,
             features: FeaturesConfig::default(),
             max_checkpoints: 5,
+            gc: GcConfig::default(),
             channels: Vec::new(),
             models: vec![ModelConfig::default()],
         }
@@ -459,6 +501,13 @@ impl Config {
             ));
         }
 
+        if self.gc.retention_days < 1 {
+            return Err(KernelError::config(format!(
+                "gc.retention_days must be at least 1, got {}",
+                self.gc.retention_days
+            )));
+        }
+
         for model in &self.models {
             if model.context_window == 0 {
                 return Err(KernelError::config(format!(
@@ -627,6 +676,14 @@ impl Config {
         // Maximum checkpoints per session
         if let Some(max) = env_parse::<usize>(env_names::MAX_CHECKPOINTS) {
             self.max_checkpoints = max;
+        }
+
+        // GC policy
+        if let Some(days) = env_parse::<i64>(env_names::GC_RETENTION_DAYS) {
+            self.gc.retention_days = days;
+        }
+        if let Some(auto) = env_bool_opt(env_names::GC_AUTO) {
+            self.gc.auto = auto;
         }
 
         // Tool blocklist (comma-separated regex patterns)

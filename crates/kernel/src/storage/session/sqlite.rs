@@ -247,6 +247,7 @@ impl SessionStore for SqliteSessionStore {
             .into_iter()
             .filter_map(|r| r.try_get::<String, _>("id").ok())
             .collect();
+        let mut seen: std::collections::HashSet<String> = ids.iter().cloned().collect();
 
         // Phase 2: child subagent sessions of the expired parents (chunked IN)
         let parents: Vec<String> = ids.clone();
@@ -266,7 +267,7 @@ impl SessionStore for SqliteSessionStore {
                 .map_err(|e| storage_err(format!("failed to query child sessions: {e}")))?;
             for r in child_rows {
                 if let Ok(id) = r.try_get::<String, _>("id") {
-                    if !ids.contains(&id) {
+                    if seen.insert(id.clone()) {
                         ids.push(id);
                     }
                 }
@@ -285,7 +286,7 @@ impl SessionStore for SqliteSessionStore {
         .map_err(|e| storage_err(format!("failed to query orphan subagent sessions: {e}")))?;
         for r in orphan_rows {
             if let Ok(id) = r.try_get::<String, _>("id") {
-                if !ids.contains(&id) {
+                if seen.insert(id.clone()) {
                     ids.push(id);
                 }
             }

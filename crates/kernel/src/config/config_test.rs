@@ -412,6 +412,40 @@ fn validate_rejects_invalid_compactor_settings() {
 }
 
 #[test]
+fn gc_config_defaults_and_toml_parse() {
+    let default_config = Config::default();
+    assert_eq!(default_config.gc.retention_days, 90);
+    assert!(default_config.gc.keep_pinned);
+    assert!(default_config.gc.sweep_orphans);
+    assert!(!default_config.gc.vacuum);
+    assert!(!default_config.gc.auto);
+
+    let parsed: Config = toml::from_str(
+        "
+[gc]
+retention_days = 30
+keep_pinned = false
+auto = true
+",
+    )
+    .unwrap();
+    assert_eq!(parsed.gc.retention_days, 30);
+    assert!(!parsed.gc.keep_pinned);
+    assert!(parsed.gc.sweep_orphans); // serde default
+    assert!(parsed.gc.auto);
+}
+
+#[test]
+fn validate_rejects_invalid_gc_settings() {
+    let mut config = Config::default();
+    config.gc.retention_days = 0;
+    assert!(config.validate().is_err());
+
+    config.gc.retention_days = -3;
+    assert!(config.validate().is_err());
+}
+
+#[test]
 fn validate_rejects_zero_model_token_limits() {
     let mut config = Config::default();
     config.models[0].max_tokens = Some(0);

@@ -105,7 +105,7 @@ async fn test_gc_full_pipeline() {
     let report = storage
         .gc()
         .run(&GcOptions {
-            days: 90,
+            retention_days: 90,
             dry_run: false,
             ..GcOptions::default()
         })
@@ -160,7 +160,7 @@ async fn test_gc_dry_run_deletes_nothing() {
     let report = storage
         .gc()
         .run(&GcOptions {
-            days: 90,
+            retention_days: 90,
             dry_run: true,
             ..GcOptions::default()
         })
@@ -206,7 +206,7 @@ async fn test_gc_keeps_pinned_by_default() {
     let report = storage
         .gc()
         .run(&GcOptions {
-            days: 90,
+            retention_days: 90,
             dry_run: false,
             ..GcOptions::default()
         })
@@ -224,7 +224,7 @@ async fn test_gc_keeps_pinned_by_default() {
     let report = storage
         .gc()
         .run(&GcOptions {
-            days: 90,
+            retention_days: 90,
             keep_pinned: false,
             dry_run: false,
             ..GcOptions::default()
@@ -272,7 +272,7 @@ async fn test_gc_cascades_subagents() {
     let report = storage
         .gc()
         .run(&GcOptions {
-            days: 90,
+            retention_days: 90,
             dry_run: false,
             ..GcOptions::default()
         })
@@ -335,7 +335,7 @@ async fn test_gc_orphan_sweep() {
     let report = storage
         .gc()
         .run(&GcOptions {
-            days: 90,
+            retention_days: 90,
             dry_run: false,
             ..GcOptions::default()
         })
@@ -362,7 +362,7 @@ async fn test_gc_no_orphan_sweep_when_disabled() {
     let report = storage
         .gc()
         .run(&GcOptions {
-            days: 90,
+            retention_days: 90,
             sweep_orphans: false,
             dry_run: false,
             ..GcOptions::default()
@@ -394,7 +394,7 @@ async fn test_gc_days_minimum_enforced() {
     let report = storage
         .gc()
         .run(&GcOptions {
-            days: 0, // clamped to 1 internally
+            retention_days: 0, // clamped to 1 internally
             dry_run: false,
             ..GcOptions::default()
         })
@@ -482,7 +482,7 @@ async fn test_gc_works_with_real_checkpoint_store() {
     let report = storage
         .gc()
         .run(&GcOptions {
-            days: 90,
+            retention_days: 90,
             dry_run: false,
             ..GcOptions::default()
         })
@@ -532,7 +532,7 @@ async fn test_gc_sweeps_only_stale_unreferenced_assets() {
     let report = storage
         .gc()
         .run(&GcOptions {
-            days: 90,
+            retention_days: 90,
             dry_run: false,
             ..GcOptions::default()
         })
@@ -555,7 +555,7 @@ async fn test_gc_asset_dry_run_ignores_victim_references() {
     let report = storage
         .gc()
         .run(&GcOptions {
-            days: 90,
+            retention_days: 90,
             dry_run: true,
             ..GcOptions::default()
         })
@@ -580,7 +580,7 @@ async fn test_gc_asset_sweep_skips_all_on_malformed_live_history() {
     let report = storage
         .gc()
         .run(&GcOptions {
-            days: 90,
+            retention_days: 90,
             dry_run: false,
             ..GcOptions::default()
         })
@@ -603,7 +603,7 @@ async fn test_gc_no_orphans_keeps_unreferenced_assets() {
     let report = storage
         .gc()
         .run(&GcOptions {
-            days: 90,
+            retention_days: 90,
             sweep_orphans: false,
             dry_run: false,
             ..GcOptions::default()
@@ -613,4 +613,58 @@ async fn test_gc_no_orphans_keeps_unreferenced_assets() {
 
     assert_eq!(report.assets_deleted, 0);
     assert!(orphan.exists());
+}
+
+#[test]
+fn options_from_config_maps_policy_fields() {
+    let config = crate::config::GcConfig {
+        retention_days: 7,
+        keep_pinned: false,
+        sweep_orphans: false,
+        vacuum: true,
+        auto: true,
+    };
+
+    let opts = GcOptions::from_config(&config, true);
+    assert_eq!(opts.retention_days, 7);
+    assert!(!opts.keep_pinned);
+    assert!(!opts.sweep_orphans);
+    assert!(opts.vacuum);
+    assert!(opts.dry_run);
+    assert!(opts.exclude_sessions.is_empty());
+
+    // The scheduling field (auto) is not a per-run option.
+    let opts = GcOptions::from_config(&config, false);
+    assert!(!opts.dry_run);
+}
+
+#[tokio::test]
+async fn test_gc_exclude_sessions_skips_victims() {
+    let (_tmp, storage) = setup().await;
+    let victim = create_full_session(&storage, true).await;
+    let excluded = create_full_session(&storage, true).await;
+
+    let report = storage
+        .gc()
+        .run(&GcOptions {
+            dry_run: false,
+            exclude_sessions: vec![excluded.clone()],
+            ..GcOptions::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(report.sessions, vec![victim.clone()]);
+    assert!(storage
+        .session_store()
+        .get(&victim)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(storage
+        .session_store()
+        .get(&excluded)
+        .await
+        .unwrap()
+        .is_some());
 }

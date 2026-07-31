@@ -212,6 +212,18 @@ impl Conductor {
         self.active.len()
     }
 
+    /// IDs of sessions with a live in-memory agent, in any state (including
+    /// idle agents within their unload grace period). Auto gc excludes these
+    /// so a live agent never has its session data pulled out from under it —
+    /// a surviving agent would recreate data files the next orphan sweep
+    /// would then delete.
+    pub fn loaded_session_ids(&self) -> Vec<SessionId> {
+        self.active
+            .iter()
+            .map(|agent| agent.key().clone())
+            .collect()
+    }
+
     /// Snapshot sessions whose agent task is still live and not idle.
     pub fn running_sessions(&self) -> Vec<ActiveSessionSnapshot> {
         self.active

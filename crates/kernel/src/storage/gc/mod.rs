@@ -30,12 +30,23 @@ const TMP_STALE_SECS: u64 = 3600;
 /// Fresh assets may not have been persisted into message history yet.
 const ASSET_STALE_SECS: u64 = 3600;
 
+/// Per-session data files as `(subdirectory, extension)` pairs under
+/// `sessions/`. Both victim purging ([`GarbageCollector::session_files`]) and
+/// the orphan sweep derive their paths from this single list, so adding a new
+/// per-session file kind here covers purging and sweeping at once.
+const SESSION_FILE_KINDS: &[(&str, &str)] = &[
+    ("", "jsonl"), // {id}.jsonl — message history
+    ("todos", "json"),
+    ("goals", "json"),
+    ("file_states", "jsonl"),
+];
+
 /// Options controlling a gc run
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct GcOptions {
-    /// Sessions with `updated_at` older than `now - days` are collected (min 1)
-    pub days: i64,
+    /// Sessions with `updated_at` older than `now - retention_days` are collected (min 1)
+    pub retention_days: i64,
     /// Skip pinned sessions (default true)
     pub keep_pinned: bool,
     /// Sweep orphan files whose session no longer exists in the DB (default true)
@@ -44,16 +55,31 @@ pub struct GcOptions {
     pub vacuum: bool,
     /// Only report, delete nothing
     pub dry_run: bool,
+    /// Session IDs to exclude from collection (e.g. sessions with a live
+    /// in-memory agent). Runtime state, not policy — always empty when built
+    /// via [`GcOptions::from_config`].
+    pub exclude_sessions: Vec<SessionId>,
 }
 
 impl Default for GcOptions {
     fn default() -> Self {
+        // Policy defaults live in `crate::config::GcConfig`; dry-run by default.
+        Self::from_config(&crate::config::GcConfig::default(), true)
+    }
+}
+
+impl GcOptions {
+    /// Build run options from the configured gc policy. `dry_run` is a
+    /// per-invocation flag and deliberately not part of the configuration:
+    /// manual runs stay dry by default, the daemon's auto gc passes `false`.
+    pub fn from_config(config: &crate::config::GcConfig, dry_run: bool) -> Self {
         Self {
-            days: 90,
-            keep_pinned: true,
-            sweep_orphans: true,
-            vacuum: false,
-            dry_run: true,
+            retention_days: config.retention_days,
+            keep_pinned: config.keep_pinned,
+            sweep_orphans: config.sweep_orphans,
+            vacuum: config.vacuum,
+            dry_run,
+            exclude_sessions: Vec::new(),
         }
     }
 }
@@ -97,8 +123,8 @@ impl GarbageCollector {
 
     /// Run garbage collection according to `opts`.
     pub async fn run(&self, opts: &GcOptions) -> Result<GcReport> {
-        let days = opts.days.max(1);
-        let cutoff = chrono::Utc::now() - chrono::Duration::days(days);
+        let retention_days = opts.retention_days.max(1);
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days);
 
         let mut report = GcReport {
             dry_run: opts.dry_run,
@@ -106,11 +132,14 @@ impl GarbageCollector {
         };
 
         // ── Phase 1: find victims ────────────────────────────────────
-        let victims = self
+        let mut victims = self
             .storage
             .session_store()
             .list_expired(cutoff, opts.keep_pinned)
             .await?;
+        if !opts.exclude_sessions.is_empty() {
+            victims.retain(|id| !opts.exclude_sessions.contains(id));
+        }
         report.subagent_sessions = victims.iter().filter(|id| id.is_subagent()).count() as u64;
 
         if opts.dry_run {
@@ -129,8 +158,7 @@ impl GarbageCollector {
                 }
             }
             if opts.sweep_orphans {
-                self.sweep_orphans(&mut report, true).await;
-                self.sweep_assets(&victims, &mut report, true).await;
+                self.sweep(&victims, &mut report, true).await;
             }
             report.sessions = victims;
             return Ok(report);
@@ -141,8 +169,7 @@ impl GarbageCollector {
 
         // ── Phase 4: orphan sweep ────────────────────────────────────
         if opts.sweep_orphans {
-            self.sweep_orphans(&mut report, false).await;
-            self.sweep_assets(&[], &mut report, false).await;
+            self.sweep(&[], &mut report, false).await;
         }
 
         // ── Phase 5: vacuum ──────────────────────────────────────────
@@ -214,12 +241,10 @@ impl GarbageCollector {
     /// Per-session data files (messages, todos, goals, file states)
     fn session_files(&self, id: &str) -> Vec<PathBuf> {
         let sessions_dir = self.sessions_dir();
-        vec![
-            sessions_dir.join(format!("{id}.jsonl")),
-            sessions_dir.join("todos").join(format!("{id}.json")),
-            sessions_dir.join("goals").join(format!("{id}.json")),
-            sessions_dir.join("file_states").join(format!("{id}.jsonl")),
-        ]
+        SESSION_FILE_KINDS
+            .iter()
+            .map(|(sub, ext)| sessions_dir.join(sub).join(format!("{id}.{ext}")))
+            .collect()
     }
 
     fn sessions_dir(&self) -> PathBuf {
@@ -230,25 +255,34 @@ impl GarbageCollector {
         self.storage.data_dir().join("checkpoints")
     }
 
-    /// Sweep files/directories whose session no longer exists in the DB.
-    /// Also removes stale `.tmp` files (atomic-write leftovers).
-    async fn sweep_orphans(&self, report: &mut GcReport, dry_run: bool) {
+    /// Orphan file sweep + unreferenced asset sweep, sharing one snapshot of
+    /// the live session set. `excluded_sessions` are live sessions whose
+    /// message histories must not count as asset references (dry-run victims:
+    /// they would be deleted, so their references must not protect assets).
+    async fn sweep(&self, excluded_sessions: &[SessionId], report: &mut GcReport, dry_run: bool) {
         let live = match self.live_session_ids().await {
             Ok(set) => set,
             Err(e) => {
-                report.errors.push(format!("orphan sweep skipped: {e}"));
+                report
+                    .errors
+                    .push(format!("orphan/asset sweep skipped: {e}"));
                 return;
             }
         };
+        self.sweep_orphans(&live, report, dry_run).await;
+        self.sweep_assets(excluded_sessions, &live, report, dry_run)
+            .await;
+    }
 
+    /// Sweep files/directories whose session no longer exists in the DB.
+    /// Also removes stale `.tmp` files (atomic-write leftovers).
+    async fn sweep_orphans(&self, live: &HashSet<String>, report: &mut GcReport, dry_run: bool) {
         let sessions_dir = self.sessions_dir();
         // (dir, extension) pairs holding per-session files
-        let file_dirs = [
-            (sessions_dir.clone(), "jsonl"),
-            (sessions_dir.join("todos"), "json"),
-            (sessions_dir.join("goals"), "json"),
-            (sessions_dir.join("file_states"), "jsonl"),
-        ];
+        let file_dirs: Vec<(PathBuf, &str)> = SESSION_FILE_KINDS
+            .iter()
+            .map(|(sub, ext)| (sessions_dir.join(sub), *ext))
+            .collect();
 
         for (dir, ext) in &file_dirs {
             let Ok(mut entries) = tokio::fs::read_dir(dir).await else {
@@ -344,6 +378,7 @@ impl GarbageCollector {
     async fn sweep_assets(
         &self,
         excluded_sessions: &[SessionId],
+        live: &HashSet<String>,
         report: &mut GcReport,
         dry_run: bool,
     ) {
@@ -353,15 +388,6 @@ impl GarbageCollector {
         }
 
         let excluded: HashSet<&str> = excluded_sessions.iter().map(SessionId::as_str).collect();
-        let live = match self.live_session_ids().await {
-            Ok(live) => live,
-            Err(e) => {
-                report
-                    .errors
-                    .push(format!("asset sweep skipped: failed to list sessions: {e}"));
-                return;
-            }
-        };
         let message_paths: Vec<_> = live
             .iter()
             .filter(|id| !excluded.contains(id.as_str()))
