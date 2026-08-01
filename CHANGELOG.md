@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.36] - 2026-08-01
+
+### Fixed
+- 修复在机器人自己发起的话题里继续提问时，话题首条消息被重复带入上下文的问题。
+- 修复消息处理失败（如网络异常）后，后续提问丢失部分群聊上下文的问题。
+
+### Changed
+- 在还没有会话的话题里执行 `/models`、`/model`、`/info` 不再创建会话：`/model <key>` 改为对全群生效（之后新起的话题沿用该模型），`/info` 会如实提示会话尚未开始。
+
 ## [0.7.35] - 2026-08-01
 
 ### Fixed
