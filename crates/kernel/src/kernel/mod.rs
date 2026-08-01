@@ -626,6 +626,11 @@ impl Kernel {
         }
     }
 
+    /// The configured default model key.
+    pub fn default_model_key(&self) -> String {
+        self.agent_config.default_model.clone()
+    }
+
     /// Set the model for a session (persisted to database)
     pub async fn set_session_model(&self, session_id: &SessionId, key: &str) -> Result<()> {
         if !self.models.contains_key(key) {

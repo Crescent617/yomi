@@ -1317,6 +1317,7 @@ struct HistoryMockAdapter {
     with_root: std::sync::atomic::AtomicBool,
     with_images: std::sync::atomic::AtomicBool,
     quoted: tokio::sync::Mutex<Option<HistoryMessage>>,
+    fetch_calls: tokio::sync::Mutex<Vec<String>>,
 }
 
 #[async_trait::async_trait]
@@ -1341,8 +1342,9 @@ impl PlatformAdapter for HistoryMockAdapter {
 
     async fn fetch_message(
         &self,
-        _message_id: &str,
+        message_id: &str,
     ) -> std::result::Result<Option<HistoryMessage>, crate::channels::ChannelError> {
+        self.fetch_calls.lock().await.push(message_id.to_string());
         Ok(self.quoted.lock().await.clone())
     }
 
@@ -1714,39 +1716,241 @@ async fn context_prefix_fresh_thread_root_exactly_once() {
 }
 
 #[tokio::test]
-async fn root_consumed_rules() {
+async fn clear_does_not_rewind_history_cursor() {
     let (_pool, store) = create_test_pool().await;
     let store: Arc<dyn ChannelStore> = store;
-    let mut msg = group_msg(Some("omt_1".into()));
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram {
+            token: "fake".into(),
+        },
+        require_mention: false,
+        ..Default::default()
+    };
+    let clear = |create_time: i64| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: "ou_b".to_string(),
+        external_message_id: Some("msg-1".to_string()),
+        is_mention: true,
+        raw_text: Some("/clear".to_string()),
+        content: vec![ContentBlock::Text {
+            text: "/clear".to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: true,
+        create_time: Some(create_time),
+    };
 
-    // Fresh session → never consumed, even with messages reported.
-    assert!(!root_consumed(&store, "feishu", &msg, false, true).await);
-    // Reused session holding messages → consumed (bot-created thread,
-    // or a human thread after its first trigger).
-    assert!(root_consumed(&store, "feishu", &msg, true, true).await);
-    // Reused but EMPTY session and no cursor (a command created it) →
-    // not consumed: the root still has to arrive.
-    assert!(!root_consumed(&store, "feishu", &msg, true, false).await);
-    // Empty session but the thread cursor is set → deliberately cleared
-    // → counts as consumed.
+    // Cursor already ahead (later activity was consumed): a
+    // late-processed /clear must not rewind it. (The /clear arm itself
+    // touches no cursor — the loop-level advance does, monotonically.)
     store
-        .set_history_cursor("feishu", "omt_1", 100)
+        .set_history_cursor("mock", "oc_1", 1000)
         .await
         .unwrap();
-    assert!(root_consumed(&store, "feishu", &msg, true, false).await);
+    let msg = clear(500);
+    handle_incoming_message(
+        "mock",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        msg.clone(),
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    advance_history_cursor(&config, &store, "mock", &msg).await;
+    assert_eq!(
+        store.get_history_cursor("mock", "oc_1").await.unwrap(),
+        Some(1000),
+        "no rewind"
+    );
 
-    // Non-thread messages never consume a root.
-    msg.thread_id = None;
-    assert!(!root_consumed(&store, "feishu", &msg, true, true).await);
+    // Cursor behind: /clear advances to the command's own timestamp.
+    let msg = clear(2000);
+    handle_incoming_message(
+        "mock",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        msg.clone(),
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    advance_history_cursor(&config, &store, "mock", &msg).await;
+    assert_eq!(
+        store.get_history_cursor("mock", "oc_1").await.unwrap(),
+        Some(2000),
+        "advanced"
+    );
+}
+
+/// Model/info commands in a fresh thread must not claim it: thread
+/// mappings are conversation-only, so the first real trigger still
+/// treats the thread as fresh (and inherits the chat-level model).
+#[tokio::test]
+async fn model_commands_do_not_claim_fresh_thread() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        models: vec![
+            crate::provider::ModelConfig {
+                name: "m1".into(),
+                ..Default::default()
+            },
+            crate::provider::ModelConfig {
+                name: "m2".into(),
+                ..Default::default()
+            },
+        ],
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram {
+            token: "fake".into(),
+        },
+        require_mention: false,
+        reply_in_thread: true,
+        ..Default::default()
+    };
+    let msg = |raw_text: Option<&str>| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: "ou_b".to_string(),
+        external_message_id: Some("msg-1".to_string()),
+        is_mention: true,
+        raw_text: raw_text.map(str::to_string),
+        content: vec![ContentBlock::Text {
+            text: raw_text.unwrap_or("你好").to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: Some("omt_1".to_string()),
+        root_id: Some("om_root".to_string()),
+        parent_id: Some("om_root".to_string()),
+        is_group: true,
+        create_time: None,
+    };
+    let thread_claimed = || async {
+        store
+            .find_mapping("mock", "om_root")
+            .await
+            .unwrap()
+            .is_some()
+    };
+
+    // /models: answered from the resolved model, no mapping created.
+    let reply = handle_incoming_message(
+        "mock",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        msg(Some("/models")),
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert!(reply.is_some());
+    assert!(!thread_claimed().await, "/models must not claim the thread");
+
+    // /info: degrades to the resolved model, no mapping created.
+    let reply = handle_incoming_message(
+        "mock",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        msg(Some("/info")),
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert!(
+        reply
+            .as_deref()
+            .is_some_and(|r| r.contains("No session yet")),
+        "{reply:?}"
+    );
+    assert!(!thread_claimed().await, "/info must not claim the thread");
+
+    // /model m2: no thread session to switch → falls back to the chat
+    // session; the thread stays unclaimed.
+    let reply = handle_incoming_message(
+        "mock",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        msg(Some("/model m2")),
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert!(
+        reply.as_deref().is_some_and(|r| r.contains("all threads")),
+        "{reply:?}"
+    );
+    assert!(!thread_claimed().await, "/model must not claim the thread");
+    assert!(
+        store.find_mapping("mock", "oc_1").await.unwrap().is_some(),
+        "the choice lands on the chat session"
+    );
+
+    // The first real trigger now claims the thread — and inherits m2.
+    handle_incoming_message(
+        "mock",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        msg(None),
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    let sid = store
+        .find_mapping("mock", "om_root")
+        .await
+        .unwrap()
+        .expect("thread session created by the real trigger");
+    assert_eq!(kernel.get_session_model(&sid).await, "m2", "inherited");
 }
 
 #[test]
-fn consumes_history_only_for_run_triggers() {
+fn consumes_history_gate() {
+    // Run triggers consume context; /clear deliberately discards it —
+    // both may advance the cursor.
     assert!(consumes_history(&ChannelCommand::None));
     assert!(consumes_history(&ChannelCommand::Steer("x".into())));
     assert!(consumes_history(&ChannelCommand::Queue("x".into())));
+    assert!(consumes_history(&ChannelCommand::Clear));
+    // Read-only/other commands never read history → never advance.
     for cmd in [
-        ChannelCommand::Clear,
         ChannelCommand::Stop,
         ChannelCommand::ListModels,
         ChannelCommand::CurrentModel,
@@ -1793,6 +1997,11 @@ async fn history_prefix_backstops_root_outside_page() {
     .expect("history");
     let prefix = blocks_text(&prefix);
     assert!(prefix.contains("thread root"), "backstopped root: {prefix}");
+    assert_eq!(
+        mock.fetch_calls.lock().await.as_slice(),
+        ["root-msg"],
+        "backstop fetched the root once"
+    );
 
     // Consumed state → no backstop fetch.
     let (_pool2, store2) = create_test_pool().await;
@@ -1808,6 +2017,11 @@ async fn history_prefix_backstops_root_outside_page() {
     .await
     .expect("history");
     assert!(!blocks_text(&prefix).contains("thread root"));
+    assert_eq!(
+        mock.fetch_calls.lock().await.len(),
+        1,
+        "no backstop fetch when consumed"
+    );
 }
 
 #[tokio::test]
