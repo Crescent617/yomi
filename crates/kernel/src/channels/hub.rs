@@ -1082,8 +1082,9 @@ async fn maybe_history_prefix(
     if history.is_empty() {
         return None;
     }
+    let quotes = resolve_history_quotes(adapter, &messages, &history).await;
     let mut blocks = vec![ContentBlock::Text {
-        text: assemble_history(&history),
+        text: assemble_history(&history, &quotes),
     }];
 
     // Attach images behind `[image]`/`[post]` placeholders, capped at
@@ -1341,15 +1342,89 @@ async fn append_message_images(
 const HISTORY_MESSAGE_MAX_CHARS: usize = 2000;
 
 /// Format fetched messages as a context block: chronological, one line
-/// each (`[HH:MM] open_id: text`, per-message capped).
-fn assemble_history(messages: &[&HistoryMessage]) -> String {
+/// each (`[HH:MM] open_id: text`, per-message capped), quote-replies
+/// carrying an inline snippet of the quoted message (` ↩ sender: text`).
+fn assemble_history(
+    messages: &[&HistoryMessage],
+    quotes: &std::collections::HashMap<String, String>,
+) -> String {
     use std::fmt::Write as _;
     let mut out = String::from("<recent_chat_history>\n");
     for m in messages {
-        let _ = writeln!(out, "{}", sender_line(m));
+        let _ = write!(out, "{}", sender_line(m));
+        if let Some(q) = quotes.get(&m.message_id) {
+            let _ = write!(out, " ↩ {q}");
+        }
+        let _ = writeln!(out);
     }
     out.push_str("</recent_chat_history>");
     out
+}
+
+/// Max quoted parents fetched per history block for inline snippets
+/// (bounds extra latency; parents already in the fetched page are free).
+const HISTORY_QUOTE_FETCH_MAX: usize = 3;
+
+/// Per-quote snippet cap in history lines (quotes are secondary context).
+const QUOTE_SNIPPET_MAX_CHARS: usize = 80;
+
+/// `sender: text` for an inline quote snippet (whitespace-collapsed to
+/// keep the one-line-per-message block shape).
+fn quote_snippet(m: &HistoryMessage) -> String {
+    let collapsed = m.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let text = crate::utils::strs::truncate_by_chars(&collapsed, QUOTE_SNIPPET_MAX_CHARS, "…");
+    format!("{}: {text}", m.sender_id)
+}
+
+/// Resolve quoted-message snippets for quote-replies in `history` (one
+/// level only — history is background context). Parents already in the
+/// fetched page are free; others are fetched directly, distinct parents
+/// capped at [`HISTORY_QUOTE_FETCH_MAX`]. Keyed by history message id.
+async fn resolve_history_quotes(
+    adapter: &Arc<dyn PlatformAdapter>,
+    page: &[HistoryMessage],
+    history: &[&HistoryMessage],
+) -> std::collections::HashMap<String, String> {
+    let mut quotes = std::collections::HashMap::new();
+    let mut fetched: std::collections::HashMap<&str, Option<String>> =
+        std::collections::HashMap::new();
+    for m in history {
+        let Some(parent_id) = m.parent_id.as_deref() else {
+            continue;
+        };
+        // Free lookups: the kept history (incl. a backstopped root) and
+        // the fetched page (incl. a dropped root).
+        let parent = history
+            .iter()
+            .find(|p| p.message_id == parent_id)
+            .copied()
+            .or_else(|| page.iter().find(|p| p.message_id == parent_id));
+        if let Some(p) = parent {
+            quotes.insert(m.message_id.clone(), quote_snippet(p));
+            continue;
+        }
+        if fetched.len() >= HISTORY_QUOTE_FETCH_MAX && !fetched.contains_key(parent_id) {
+            continue;
+        }
+        let snippet = match fetched.entry(parent_id) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                let snippet = match adapter.fetch_message(parent_id).await {
+                    Ok(Some(p)) => Some(quote_snippet(&p)),
+                    Ok(None) => None,
+                    Err(err) => {
+                        warn!(error = %err, parent_id, "history quote fetch failed");
+                        None
+                    }
+                };
+                e.insert(snippet)
+            }
+        };
+        if let Some(snippet) = snippet {
+            quotes.insert(m.message_id.clone(), snippet.clone());
+        }
+    }
+    quotes
 }
 
 /// Record a user message posted while the session's agent is running, for

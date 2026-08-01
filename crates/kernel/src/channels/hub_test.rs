@@ -1300,13 +1300,17 @@ fn assemble_history_formats_chronological_capped_lines() {
         },
     ];
     let refs: Vec<&HistoryMessage> = messages.iter().collect();
-    let out = assemble_history(&refs);
+    let quotes =
+        std::collections::HashMap::from([("m1".to_string(), "ou_x: 前文摘要".to_string())]);
+    let out = assemble_history(&refs, &quotes);
     assert!(out.starts_with("<recent_chat_history>\n"));
     assert!(out.ends_with("</recent_chat_history>"));
     assert!(out.contains("ou_alice: hello world"), "trimmed: {out}");
+    assert!(out.contains("hello world ↩ ou_x: 前文摘要"), "quote: {out}");
     let bob_line = out.lines().find(|l| l.contains("ou_bob")).unwrap();
     assert!(bob_line.ends_with('…'), "capped: {bob_line}");
     assert!(bob_line.chars().count() <= 2000 + 40, "line: {bob_line}");
+    assert!(!bob_line.contains('↩'), "unquoted line has no snippet");
 }
 
 #[derive(Default)]
@@ -1316,6 +1320,10 @@ struct HistoryMockAdapter {
     empty: std::sync::atomic::AtomicBool,
     with_root: std::sync::atomic::AtomicBool,
     with_images: std::sync::atomic::AtomicBool,
+    /// When set, history message m0 quote-replies the thread root.
+    quote_m0: std::sync::atomic::AtomicBool,
+    /// When set, `fetch_message` fails.
+    fetch_fail: std::sync::atomic::AtomicBool,
     quoted: tokio::sync::Mutex<Option<HistoryMessage>>,
     fetch_calls: tokio::sync::Mutex<Vec<String>>,
 }
@@ -1345,7 +1353,16 @@ impl PlatformAdapter for HistoryMockAdapter {
         message_id: &str,
     ) -> std::result::Result<Option<HistoryMessage>, crate::channels::ChannelError> {
         self.fetch_calls.lock().await.push(message_id.to_string());
-        Ok(self.quoted.lock().await.clone())
+        if self.fetch_fail.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(crate::channels::ChannelError::Platform(
+                "mock fetch failure".into(),
+            ));
+        }
+        // Echo the requested id like the real API does.
+        Ok(self.quoted.lock().await.clone().map(|mut m| {
+            m.message_id = message_id.to_string();
+            m
+        }))
     }
 
     async fn fetch_history(
@@ -1381,7 +1398,10 @@ impl PlatformAdapter for HistoryMockAdapter {
                 sender_id: "ou_a".into(),
                 text: "earlier".into(),
                 image_keys: vec![],
-                parent_id: None,
+                parent_id: self
+                    .quote_m0
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    .then(|| "root-msg".to_string()),
             },
             HistoryMessage {
                 message_id: "m1".into(),
@@ -2021,6 +2041,158 @@ async fn history_prefix_backstops_root_outside_page() {
         mock.fetch_calls.lock().await.len(),
         1,
         "no backstop fetch when consumed"
+    );
+}
+
+#[tokio::test]
+async fn resolve_history_quotes_in_page_fetch_dedup_and_cap() {
+    let mock = Arc::new(HistoryMockAdapter::default());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    *mock.quoted.lock().await = Some(HistoryMessage {
+        message_id: "x".into(),
+        create_time: 1,
+        sender_id: "ou_x".into(),
+        text: "页外引用".into(),
+        image_keys: vec![],
+        parent_id: None,
+    });
+    let hmsg = |id: &str, text: &str, parent: Option<&str>| HistoryMessage {
+        message_id: id.into(),
+        create_time: 1,
+        sender_id: "ou_a".into(),
+        text: text.into(),
+        image_keys: vec![],
+        parent_id: parent.map(str::to_string),
+    };
+    let page = vec![
+        hmsg("p1", "页内引用", None),
+        hmsg("m1", "回复 p1", Some("p1")),
+        hmsg("m2", "回复 x1", Some("x1")),
+        hmsg("m3", "回复 x2", Some("x2")),
+        hmsg("m4", "回复 x3", Some("x3")),
+        hmsg("m5", "也回复 x1", Some("x1")),
+        hmsg("m6", "回复 x4", Some("x4")),
+    ];
+    let history: Vec<&HistoryMessage> = page.iter().collect();
+    let quotes = resolve_history_quotes(&adapter, &page, &history).await;
+
+    // In-page parent: free.
+    assert_eq!(quotes["m1"], "ou_a: 页内引用");
+    // Out-of-page parents: fetched once each, deduped by parent, and
+    // capped at HISTORY_QUOTE_FETCH_MAX distinct parents (x4 skipped).
+    assert_eq!(quotes["m2"], "ou_x: 页外引用");
+    assert_eq!(quotes["m5"], "ou_x: 页外引用");
+    assert!(!quotes.contains_key("m6"), "cap: {quotes:?}");
+    // m1 (in-page) + 3 distinct fetched parents (m2/m3/m4) + m5 reusing x1.
+    assert_eq!(quotes.len(), 2 + HISTORY_QUOTE_FETCH_MAX);
+    assert_eq!(mock.fetch_calls.lock().await.len(), HISTORY_QUOTE_FETCH_MAX);
+}
+
+#[tokio::test]
+async fn history_prefix_inlines_quote_snippet_from_page() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let mock = Arc::new(HistoryMockAdapter::default());
+    mock.with_root
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    mock.quote_m0
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig::default();
+    let mut msg = group_msg(Some("omt_1".into()));
+    msg.root_id = Some("root-msg".into());
+
+    // The root is dropped (consumed), but m0's quote of it is resolved
+    // from the fetched page for free — no fetch_message call.
+    let prefix = maybe_history_prefix(
+        &adapter,
+        &config,
+        &store,
+        "feishu",
+        &msg,
+        RootDelivery::Consumed,
+    )
+    .await
+    .expect("history");
+    let prefix = blocks_text(&prefix);
+    assert!(
+        prefix.contains("earlier ↩ ou_a: thread root"),
+        "inline quote: {prefix}"
+    );
+    assert!(mock.fetch_calls.lock().await.is_empty(), "in-page is free");
+}
+
+#[tokio::test]
+async fn resolve_history_quotes_failure_cached_and_counts_toward_cap() {
+    let mock = Arc::new(HistoryMockAdapter::default());
+    mock.fetch_fail
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let hmsg = |id: &str, parent: &str| HistoryMessage {
+        message_id: id.into(),
+        create_time: 1,
+        sender_id: "ou_a".into(),
+        text: id.into(),
+        image_keys: vec![],
+        parent_id: Some(parent.into()),
+    };
+    let page = vec![
+        hmsg("m1", "x1"),
+        hmsg("m2", "x1"),
+        hmsg("m3", "x2"),
+        hmsg("m4", "x3"),
+        hmsg("m5", "x4"),
+    ];
+    let history: Vec<&HistoryMessage> = page.iter().collect();
+    let quotes = resolve_history_quotes(&adapter, &page, &history).await;
+
+    assert!(quotes.is_empty(), "all fetches failed: {quotes:?}");
+    // Each distinct parent tried exactly once (x1's failure cached for
+    // m2), still capped at HISTORY_QUOTE_FETCH_MAX distinct parents.
+    assert_eq!(mock.fetch_calls.lock().await.len(), HISTORY_QUOTE_FETCH_MAX);
+}
+
+#[tokio::test]
+async fn history_quote_of_backstopped_root_resolves_free() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let mock = Arc::new(HistoryMockAdapter::default());
+    // The root is NOT in the fetched page — the backstop fetches it once.
+    *mock.quoted.lock().await = Some(HistoryMessage {
+        message_id: "root-msg".into(),
+        create_time: 50,
+        sender_id: "ou_a".into(),
+        text: "thread root".into(),
+        image_keys: vec![],
+        parent_id: None,
+    });
+    mock.quote_m0
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig::default();
+    let mut msg = group_msg(Some("omt_1".into()));
+    msg.root_id = Some("root-msg".into());
+    msg.parent_id = Some("m0".into());
+
+    let prefix = maybe_history_prefix(
+        &adapter,
+        &config,
+        &store,
+        "feishu",
+        &msg,
+        RootDelivery::Pending,
+    )
+    .await
+    .expect("history");
+    let prefix = blocks_text(&prefix);
+    assert!(
+        prefix.contains("earlier ↩ ou_a: thread root"),
+        "quote of backstopped root: {prefix}"
+    );
+    assert_eq!(
+        mock.fetch_calls.lock().await.as_slice(),
+        ["root-msg"],
+        "backstop's fetch is reused — no double fetch"
     );
 }
 
