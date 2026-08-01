@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.38] - 2026-08-01
+
+### Added
+- 群聊历史中属于引用回复的消息，现在会附带被引用消息的摘要（页内直接解析，页外最多补抓 3 条），机器人不再只看到"就按这个改"而不知道指的是什么。
+
 ## [0.7.37] - 2026-08-01
 
 无用户可见变化（内部注释清理）。
