@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.34] - 2026-08-01
+
 ### Added
 - `yomi gc` 现在会按保留天数清理本地缓存数据库（cache.db），开启 vacuum 时一并压缩缓存文件。
 - 新增环境变量 `YOMI_STREAM_MAX_RETRIES`（默认 `20`）：单轮模型请求失败时的重试上限。
