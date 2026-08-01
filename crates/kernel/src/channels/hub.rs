@@ -204,13 +204,10 @@ impl ChannelHub {
                             &obs_proc,
                             &adapter_proc,
                         ).await;
-                        // Advance the history cursor only after a
-                        // successfully handled message: a failed trigger
-                        // consumed nothing, and its messages must stay
-                        // fetchable for the next attempt. (A history
-                        // fetch that fails inside a successful handle
-                        // still leaves its window skipped — best-effort,
-                        // see maybe_history_prefix.)
+                        // Advance the cursor only after a successfully
+                        // handled message; a failed trigger consumed
+                        // nothing (a history fetch failing mid-handle
+                        // still skips its window — best-effort).
                         if handled.is_ok() {
                             advance_history_cursor(&config_proc, &store, &name_proc, &msg).await;
                         }
@@ -837,12 +834,9 @@ async fn handle_incoming_message(
             if !models.iter().any(|model| model.name == key) {
                 return Ok(Some(format_unknown_model(&key, &models)));
             }
-            // Switch the whole chat when addressed at chat level — or
-            // when this thread has no session yet: there is nothing to
-            // switch, so persist the choice on the chat session and let
-            // the thread inherit it when the conversation starts. This
-            // also keeps thread mappings conversation-only (see
-            // prepare_trigger).
+            // Chat level — or a thread without a session: switch the chat
+            // session instead and let the thread inherit it (also keeps
+            // thread mappings conversation-only).
             let chat_level = is_chat_level_message(&msg, config.reply_in_thread)
                 || store
                     .find_mapping(channel_name, &mapping_key)
@@ -890,9 +884,8 @@ async fn handle_incoming_message(
             "Usage: `/model` or `/model <model_key>`. Use `/models` to list models.".to_string(),
         )),
         ChannelCommand::Info => {
-            // Top-level group messages in reply_in_thread mode show the
-            // chat-level session; in-thread messages show the thread's.
-            // Read-only: never creates a session or mapping.
+            // Chat-level messages show the chat session, in-thread ones
+            // the thread's. Read-only: never creates a session or mapping.
             let chat_level = is_chat_level_message(&msg, config.reply_in_thread);
             let key = if chat_level { &chat_id } else { &mapping_key };
             let Some(sid) = store.find_mapping(channel_name, key).await? else {
@@ -977,11 +970,8 @@ fn history_container(msg: &ChannelMessage) -> HistoryContainer {
 }
 
 /// Advance the container's history cursor to a processed message's
-/// timestamp (group messages only, monotonic) — but only for messages
-/// that settle prior context: run triggers consume it, `/clear`
-/// discards it. Other commands never read history; advancing past
-/// older, unseen messages would drop them from later injections (e.g.
-/// a thread's root after `/models`).
+/// timestamp (group only, monotonic) — only for messages that settle
+/// prior context: run triggers consume it, `/clear` discards it.
 async fn advance_history_cursor(
     config: &ChannelConfig,
     store: &Arc<dyn ChannelStore>,
@@ -1024,18 +1014,12 @@ enum RootDelivery {
     ByQuote,
 }
 
-/// Fetch and assemble recent-chat context for a triggering group message:
-/// messages since the last trigger in this thread/chat, formatted as a
-/// `<recent_chat_history>` text block followed by any attached images.
-/// Best-effort — any failure degrades to no context. The cursor advances
-/// to the newest fetched message (usually the triggering message itself)
-/// so it isn't re-fetched next time; advancing happens at fetch time, so
-/// a downstream send failure can leave a small history gap (accepted).
-///
-/// `root`: delivery state of the thread root — anything but
-/// [`RootDelivery::Pending`] dedups the root out of the history below;
-/// a still-`Pending` root missing from the fetched page is backstopped
-/// with a direct fetch.
+/// Assemble recent-chat history since the last trigger as a
+/// `<recent_chat_history>` block plus images; best-effort. The cursor
+/// advances at fetch time, so a later send failure can leave a small
+/// gap (accepted). `root`: the thread root's delivery state — non-
+/// `Pending` dedups it; a `Pending` root missing from the page gets a
+/// direct-fetch backstop.
 async fn maybe_history_prefix(
     adapter: &Arc<dyn PlatformAdapter>,
     config: &ChannelConfig,
@@ -1081,12 +1065,7 @@ async fn maybe_history_prefix(
     }
     // Drop the triggering message itself — it's delivered verbatim below.
     let trigger_id = msg.external_message_id.as_deref();
-    // Drop the thread root only when it's already delivered (reused
-    // session or just quoted). Otherwise it stays — the root of a
-    // human-created thread is exactly the context the bot needs. (Comparing
-    // the root against the chat-level history cursor misfires here: that
-    // cursor advances on ANY processed top-level message, so a human
-    // thread's root — almost always older — would always be dropped.)
+    // The thread root stays unless already delivered (see RootDelivery).
     let drop_root = matches!(&container, HistoryContainer::Thread(_))
         && msg.root_id.is_some()
         && root != RootDelivery::Pending;
@@ -1107,11 +1086,8 @@ async fn maybe_history_prefix(
         text: assemble_history(&history),
     }];
 
-    // Attach the actual images behind the `[image]`/`[post]` placeholders
-    // (the "send an image, then @ the bot about it" flow). Capped at the
-    // newest few so an image-heavy backlog can't blow up the context.
-    // The backstopped root's images go last so the cap drops chatter
-    // images first — the topic matters more than the chatter.
+    // Attach images behind `[image]`/`[post]` placeholders, capped at
+    // the newest few; the backstopped root's images go last to survive.
     let mut pairs = image_pairs(
         history[usize::from(fetched_root.is_some())..]
             .iter()
@@ -1140,9 +1116,8 @@ fn image_pairs<'m>(messages: impl Iterator<Item = &'m HistoryMessage>) -> Vec<(&
         .collect()
 }
 
-/// Download (`message_id`, `image_key`) pairs, dropping failures silently —
-/// the `[image]` text marker in the history/quoted block already
-/// records that an image was there.
+/// Download (`message_id`, `image_key`) pairs; failures are dropped (the
+/// `[image]` text marker already records their presence).
 async fn download_image_pairs(
     adapter: &Arc<dyn PlatformAdapter>,
     pairs: &[(&str, &str)],
@@ -1158,10 +1133,9 @@ async fn download_image_pairs(
     .collect()
 }
 
-/// Backstop for a still-`Pending` thread root missing from the fetched
-/// page (long threads): fetch it directly so it arrives as the oldest
-/// history line. Skipped when the cursor already covers it (a `/clear`
-/// deliberately forgot it).
+/// Backstop a still-`Pending` thread root missing from the fetched page
+/// with a direct fetch (as the oldest history line); skipped when the
+/// cursor covers it (a `/clear` deliberately forgot it).
 async fn fetch_root_backstop(
     adapter: &Arc<dyn PlatformAdapter>,
     container: &HistoryContainer,
@@ -1195,15 +1169,10 @@ async fn fetch_root_backstop(
 /// keeps the first ones and gets a note for the rest.
 const IMAGE_DOWNLOAD_MAX: usize = 5;
 
-/// Resolve a run trigger's session and assemble its context blocks:
-/// get/create the session, record the receipt, then build quoted +
-/// history blocks. The arms only differ in how they deliver afterwards.
-///
-/// `root_in_session` is simply "the mapping predates this trigger":
-/// mappings are created exclusively by context-consuming triggers (model
-/// commands degrade or fall back to the chat session instead — see their
-/// arms), so an existing mapping always means the thread's root was
-/// already consumed into the session.
+/// Resolve a run trigger's session and assemble its context blocks.
+/// `root_in_session` = the mapping predates this trigger — mappings are
+/// conversation-only (model commands degrade or fall back to the chat
+/// session), so it means the thread's root is already in the session.
 async fn prepare_trigger(
     channel_name: &str,
     config: &ChannelConfig,
@@ -1230,16 +1199,11 @@ async fn prepare_trigger(
     Ok((sid, blocks))
 }
 
-/// Assemble the context blocks for a triggering message: recent-chat
-/// history first (ambient background), then the quoted message (when
-/// the trigger is a quote-reply) right before the trigger it belongs
-/// to. Both are best-effort and degrade independently.
-///
-/// `root_in_session` seeds the root's delivery state, which then
-/// coordinates the two sources so a human-created thread's root is
-/// delivered exactly once: the quoted block first, history as the
-/// fallback. (The quoted fetch runs first even though its block comes
-/// last — the history dedup needs its delivery verdict.)
+/// Assemble a trigger's context: recent-chat history first, then the
+/// quoted message adjacent to the trigger (both best-effort).
+/// `root_in_session` seeds the root's delivery state so a human-created
+/// thread's root arrives exactly once — quoted first, history as
+/// fallback (hence the quoted fetch runs before its block comes last).
 async fn context_prefix(
     adapter: &Arc<dyn PlatformAdapter>,
     config: &ChannelConfig,
@@ -1254,8 +1218,7 @@ async fn context_prefix(
         RootDelivery::Pending
     };
     let quoted = maybe_quoted_prefix(adapter, msg, root).await;
-    // The quoted block carrying the thread root (any chain link) flips
-    // the state — history must not repeat it.
+    // A quoted chain containing the thread root flips the state.
     if quoted.as_ref().is_some_and(|(_, in_chain)| *in_chain) {
         root = RootDelivery::ByQuote;
     }
@@ -1267,23 +1230,13 @@ async fn context_prefix(
     blocks
 }
 
-/// Fetch and assemble the message a quote-reply points at, as a
-/// `<quoted_message>` context block followed by any attached images
-/// (same cap as history). The quoted message's own quote chain is
-/// walked too (capped at [`QUOTE_CHAIN_MAX`] fetches) — a quoted
-/// message's own quoted context would otherwise be lost, e.g. when a
-/// human thread's root is itself a quote-reply.
-///
-/// A routine in-thread reply to the root is skipped once the root is
-/// delivered (a reused session — the only non-`Pending` state reachable
-/// here): on a fresh, human-created thread the root is exactly the
-/// missing context, so it is injected like any other quote.
-/// Best-effort: any failure degrades to no block (or, mid-chain, to the
-/// prefix assembled so far).
-///
-/// The bool reports whether any chain link IS the thread's root — the
-/// single place that decides root delivery, so `context_prefix` can
-/// dedup the history block against it.
+/// Assemble the quoted message as a `<quoted_message>` block plus
+/// images, walking its own quote chain (cap [`QUOTE_CHAIN_MAX`]) so a
+/// root that is itself a quote-reply keeps its context. In-thread
+/// replies to an already-delivered root are skipped; on a fresh
+/// (human-created) thread the root is injected like any other quote.
+/// The bool reports whether any chain link IS the thread root (drives
+/// history dedup). Best-effort: failures degrade to no/partial block.
 async fn maybe_quoted_prefix(
     adapter: &Arc<dyn PlatformAdapter>,
     msg: &ChannelMessage,
@@ -1328,8 +1281,7 @@ async fn maybe_quoted_prefix(
         text: format!("<quoted_message>\n{lines}\n</quoted_message>"),
     }];
     // The quoted message's own images win over its ancestors' under the
-    // cap (the chain is oldest-first for reading; iterate newest-first
-    // here).
+    // cap (chain is oldest-first; iterate newest-first here).
     let pairs = image_pairs(chain.iter().rev());
     blocks
         .extend(download_image_pairs(adapter, &pairs[..pairs.len().min(IMAGE_DOWNLOAD_MAX)]).await);
@@ -1529,10 +1481,8 @@ async fn get_or_create_session(
     Ok((sid, false))
 }
 
-/// The model key this mapping's session uses — or, when no mapping
-/// exists, what a fresh session would resolve to (thread sessions
-/// inherit the chat session's explicit choice). Read-only: creates
-/// neither session nor mapping.
+/// The session's model key, or what a fresh session would resolve to
+/// (threads inherit the chat session's explicit choice). Read-only.
 async fn session_model_key(
     channel_name: &str,
     store: &Arc<dyn ChannelStore>,
@@ -1664,10 +1614,8 @@ enum ChannelCommand {
     None,
 }
 
-/// Whether a channel command settles everything before it — run
-/// triggers by consuming context, `/clear` by deliberately discarding
-/// it. Only then may the history cursor advance past the message (see
-/// [`advance_history_cursor`]).
+/// Whether a command settles everything before it — run triggers by
+/// consuming context, `/clear` by discarding it.
 fn consumes_history(cmd: &ChannelCommand) -> bool {
     matches!(
         cmd,
