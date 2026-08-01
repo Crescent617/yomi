@@ -442,11 +442,12 @@ impl Agent {
     }
 
     /// Emit retrying event
-    fn emit_retrying(&self, attempt: u32, max_attempts: u32, reason: &str) {
+    fn emit_retrying(&self, attempt: u32, max_attempts: u32, reason: &str, wait: Duration) {
         self.emit(Event::Agent(AgentEvent::Retrying {
             attempt,
             max_attempts,
             reason: reason.to_string(),
+            wait_ms: u64::try_from(wait.as_millis()).unwrap_or(u64::MAX),
         }));
     }
 
@@ -1304,7 +1305,15 @@ impl Agent {
 
     #[tracing::instrument(skip(self))]
     async fn handle_streaming_with_retry(&mut self) -> Result<(), AgentError> {
-        let max_retries = 10;
+        // Loose budget for rate limits (429): exponential backoff with
+        // jitter, `Retry-After` honored. The counter is per turn — a
+        // successful stream returns Ok and the next turn starts fresh.
+        let max_retries = crate::utils::env::env_parse::<u32>(&format!(
+            "{}STREAM_MAX_RETRIES",
+            crate::ENV_PREFIX
+        ))
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_STREAM_MAX_RETRIES);
         let mut attempt = 0;
         let mut context_recovery_attempted = false;
 
@@ -1344,11 +1353,22 @@ impl Agent {
                 }
                 Err(e) => {
                     attempt += 1;
-                    tracing::warn!("Streaming failed (attempt {}), retrying: {}", attempt, e);
-                    self.emit_retrying(attempt, max_retries, &e.to_string());
+                    let delay = retry_delay(attempt, e.retry_after());
+                    tracing::warn!(
+                        "Streaming failed (attempt {}/{}), retrying in {:?}: {}",
+                        attempt,
+                        max_retries,
+                        delay,
+                        e
+                    );
+                    // Error first, Retrying second: the status card keeps a
+                    // single phase slot, and the Retrying phase (attempt
+                    // count + delay + reason) is strictly more informative
+                    // than the bare error line it would otherwise be
+                    // overwritten by.
                     self.emit_error(crate::event::ErrorPhase::Streaming, &e.to_string(), true);
-                    wait_for_retry(&self.cancel_token, Duration::from_secs(u64::from(attempt)))
-                        .await?;
+                    self.emit_retrying(attempt, max_retries, &e.to_string(), delay);
+                    wait_for_retry(&self.cancel_token, delay).await?;
                 }
             }
         }
@@ -1357,6 +1377,37 @@ impl Agent {
 
 fn should_retry_streaming_error(attempt: u32, retryable: bool) -> bool {
     retryable || attempt == 0
+}
+
+/// Default streaming retry budget per turn (`YOMI_STREAM_MAX_RETRIES` overrides).
+const DEFAULT_STREAM_MAX_RETRIES: u32 = 20;
+/// Exponential backoff for retries without a server hint: 1s × 2^(n-1), capped.
+const RETRY_BASE_DELAY: Duration = Duration::from_secs(1);
+const RETRY_MAX_DELAY: Duration = Duration::from_mins(5);
+/// Cap for server-provided `Retry-After` hints — window-based rate limits
+/// (per-minute/hour quotas) legitimately ask for long waits.
+const RETRY_AFTER_CAP: Duration = Duration::from_mins(30);
+/// Floor for server-provided hints — `Retry-After: 0` must not spin a hot
+/// retry loop.
+const RETRY_AFTER_FLOOR: Duration = Duration::from_secs(1);
+
+/// Delay before the next streaming retry (claude-code `withRetry.ts`
+/// shape): a server `Retry-After` hint wins (clamped to [1s, 30min]);
+/// otherwise exponential backoff. Both carry +0–25% jitter to avoid a
+/// retry herd.
+fn retry_delay(attempt: u32, retry_after: Option<Duration>) -> Duration {
+    use rand::RngExt;
+
+    let base = if let Some(hint) = retry_after {
+        hint.clamp(RETRY_AFTER_FLOOR, RETRY_AFTER_CAP)
+    } else {
+        let shift = attempt.saturating_sub(1).min(20);
+        RETRY_BASE_DELAY
+            .saturating_mul(1u32 << shift)
+            .min(RETRY_MAX_DELAY)
+    };
+    let jitter_ms = rand::rng().random_range(0..=base.as_millis() as u64 / 4);
+    (base + Duration::from_millis(jitter_ms)).min(RETRY_AFTER_CAP)
 }
 
 fn is_stream_completion_consistent(

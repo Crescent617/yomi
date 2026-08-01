@@ -280,9 +280,13 @@ impl Provider for AnthropicProvider {
 
         if !response.status().is_success() {
             let status = response.status();
+            let retry_after = super::parse_retry_after(response.headers());
             let text = response.text().await.unwrap_or_default();
             tracing::error!("Anthropic API error: {} - {}", status, text);
-            return Err(ProviderError::Http(HttpError(status.as_u16())));
+            return Err(ProviderError::Http(HttpError::new(
+                status.as_u16(),
+                retry_after,
+            )));
         }
 
         tracing::debug!("Anthropic API response received, starting stream processing");

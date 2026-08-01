@@ -1,6 +1,7 @@
 use super::{
-    is_stream_completion_consistent, should_auto_continue, should_retry_streaming_error,
-    wait_for_retry,
+    is_stream_completion_consistent, retry_delay, should_auto_continue,
+    should_retry_streaming_error, wait_for_retry, RETRY_AFTER_CAP, RETRY_BASE_DELAY,
+    RETRY_MAX_DELAY,
 };
 use crate::agent::{AgentError, CancelToken};
 use crate::types::FinishReason;
@@ -130,6 +131,61 @@ async fn retry_delay_observes_existing_cancellation() {
     let result = wait_for_retry(&token, Duration::from_secs(30)).await;
 
     assert!(matches!(result, Err(AgentError::Cancelled(_))));
+}
+
+#[test]
+fn retry_delay_honors_retry_after_hint_with_floor_and_cap() {
+    // A server hint wins over the exponential backoff (hint + up to 25% jitter).
+    let delay = retry_delay(3, Some(Duration::from_secs(7)));
+    let base = Duration::from_secs(7);
+    assert!(
+        delay >= base && delay <= base + base / 4,
+        "hint + jitter: {delay:?}"
+    );
+
+    // `Retry-After: 0` must not spin a hot retry loop — floored at 1s.
+    let delay = retry_delay(1, Some(Duration::ZERO));
+    let floor = Duration::from_secs(1);
+    assert!(
+        delay >= floor && delay <= floor + floor / 4,
+        "floor + jitter: {delay:?}"
+    );
+
+    // … capped generously — window-based rate limits ask for long waits
+    // (jitter is clamped back into the cap).
+    assert_eq!(
+        retry_delay(1, Some(Duration::from_hours(2))),
+        RETRY_AFTER_CAP
+    );
+}
+
+#[test]
+fn retry_delay_backs_off_exponentially_with_jitter_and_cap() {
+    let mut prev_base = Duration::ZERO;
+    for attempt in 1u32..=25 {
+        let shift = attempt.saturating_sub(1).min(20);
+        let base = RETRY_BASE_DELAY
+            .saturating_mul(1u32 << shift)
+            .min(RETRY_MAX_DELAY);
+        let delay = retry_delay(attempt, None);
+        assert!(
+            delay >= base,
+            "attempt {attempt}: {delay:?} below base {base:?}"
+        );
+        assert!(
+            delay <= base + base / 4,
+            "attempt {attempt}: {delay:?} above base {base:?} + 25% jitter"
+        );
+        assert!(base >= prev_base, "backoff never shrinks");
+        prev_base = base;
+    }
+    // Long attempts saturate at the cap.
+    assert_eq!(
+        RETRY_BASE_DELAY
+            .saturating_mul(1u32 << 20)
+            .min(RETRY_MAX_DELAY),
+        RETRY_MAX_DELAY
+    );
 }
 
 /// Providers may emit `TokenUsage` multiple times per response (e.g. both
@@ -400,4 +456,159 @@ async fn cancelled_agent_exits_loop() {
         .await
         .expect("cancelled agent should exit promptly");
     assert!(result.is_ok());
+}
+
+/// 429 + `Retry-After` end to end: the stub model endpoint always returns
+/// 429 with `Retry-After: 1`; the hint must flow HTTP header → provider
+/// error → retry loop → the emitted `Retrying` event's `wait_ms` (floored
+/// at 1s, plus up to 25% jitter).
+#[tokio::test]
+async fn retrying_event_carries_retry_after_wait() {
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs};
+    use crate::provider::ModelConfig;
+    use crate::types::SessionId;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // One retry only: the first failure emits the Retrying event under
+    // test, the second fails the run.
+    std::env::set_var("YOMI_STREAM_MAX_RETRIES", "1");
+
+    // Stub model endpoint: read the full request (so the client never sees
+    // a premature close), then always 429 with `Retry-After: 1`.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                let header_end = loop {
+                    let n = sock.read(&mut chunk).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
+                    {
+                        break pos;
+                    }
+                };
+                let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
+                let content_length: usize = headers
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .and_then(|v| v.trim().parse().ok())
+                    })
+                    .unwrap_or(0);
+                while buf.len() - header_end < content_length {
+                    let n = sock.read(&mut chunk).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                }
+                let body = r#"{"error":{"message":"rate limited","type":"rate_limit_error","code":"rate_limit_exceeded"}}"#;
+                let resp = format!(
+                    "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\nretry-after: 1\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+            });
+        }
+    });
+
+    let model_config = ModelConfig {
+        name: "test".to_string(),
+        model_id: "stub-model".to_string(),
+        endpoint: format!("http://{addr}"),
+        api_key: "stub-key".to_string(),
+        context_window: 128_000,
+        ..ModelConfig::default()
+    };
+    let mut models = BTreeMap::new();
+    models.insert("test".to_string(), model_config);
+    let event_bus = crate::comms::EventBus::new();
+    let mut shared = AgentShared::new(
+        Arc::new(models),
+        "test".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+        None,
+    );
+    shared.event_bus = Some(event_bus.clone());
+    let shared = Arc::new(shared);
+
+    let working_dir = tempfile::tempdir().unwrap();
+    let session_id = SessionId::new();
+    let args = AgentSpawnArgs {
+        base_prompt: "test".to_string(),
+        skills: Vec::new(),
+        history: Vec::new(),
+        session_id: session_id.to_string(),
+        parent_session_id: None,
+        max_iterations: 1,
+        working_dir: working_dir.path().to_path_buf(),
+        cancel_token: None,
+        tool_flags: crate::tools::ToolFlags::new(false),
+        file_state_store: None,
+        tool_blocklist: Vec::new(),
+        max_tool_output_length: 1024,
+        mailbox: Arc::new(crate::comms::Mailbox::new()),
+        input_bus: None,
+    };
+    let mut subscriber = event_bus.subscribe(session_id.clone());
+    let mut agent = Agent::new(&shared, args).await;
+
+    let result = agent.handle_streaming_with_retry().await;
+    std::env::remove_var("YOMI_STREAM_MAX_RETRIES");
+    assert!(result.is_err(), "stub always 429s — the run must fail");
+
+    // Drain events until the Retrying one shows up.
+    let mut seen = None;
+    let mut error_before_retrying = false;
+    while let Ok(Some((_, envelope))) =
+        tokio::time::timeout(Duration::from_secs(2), subscriber.recv()).await
+    {
+        match &envelope.event {
+            crate::event::Event::Agent(crate::event::AgentEvent::Error { .. }) => {
+                error_before_retrying = true;
+            }
+            crate::event::Event::Agent(crate::event::AgentEvent::Retrying { .. }) => {
+                seen = Some(envelope.event);
+                break;
+            }
+            _ => {}
+        }
+    }
+    // The Error event must precede Retrying so the status card's single
+    // phase slot settles on the richer Retrying title (attempt + delay).
+    assert!(
+        error_before_retrying,
+        "Error must be emitted before Retrying"
+    );
+    let Some(crate::event::Event::Agent(crate::event::AgentEvent::Retrying {
+        attempt,
+        max_attempts,
+        reason,
+        wait_ms,
+    })) = seen
+    else {
+        panic!("no Retrying event emitted");
+    };
+    assert_eq!((attempt, max_attempts), (1, 1));
+    assert!(reason.contains("429"), "reason: {reason}");
+    // `Retry-After: 1` + up to 25% jitter.
+    assert!((1000..=1250).contains(&wait_ms), "wait_ms: {wait_ms}");
 }

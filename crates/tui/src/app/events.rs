@@ -373,9 +373,14 @@ impl Model {
                     attempt,
                     max_attempts,
                     reason,
-                    ..
+                    wait_ms,
                 }) => {
-                    let message = format!("Retrying ({attempt}/{max_attempts}): {reason}");
+                    let message = match kernel::event::format_retry_delay(wait_ms) {
+                        Some(delay) => {
+                            format!("Retrying ({attempt}/{max_attempts}) {delay}: {reason}")
+                        }
+                        None => format!("Retrying ({attempt}/{max_attempts}): {reason}"),
+                    };
                     // 0 = no timeout, persists until cleared
                     self.show_notification(&crate::components::info_bar::Notification::info(
                         message, 0,

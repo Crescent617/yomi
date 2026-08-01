@@ -133,6 +133,9 @@ pub enum AgentEvent {
         attempt: u32,
         max_attempts: u32,
         reason: String,
+        /// Delay before the retry fires (for UI delay display).
+        #[serde(default)]
+        wait_ms: u64,
     },
     /// Messages for a session have been replaced (e.g. after /undo or /clear).
     /// UI should reload messages from store.
@@ -283,3 +286,16 @@ pub enum ToolEvent {
         is_error: bool,
     },
 }
+
+/// Format a [`AgentEvent::Retrying`] wait for display (`"in 34s"`).
+/// Returns `None` when the event carries no wait (events emitted before
+/// `wait_ms` existed default to 0). Shared by the channel status card and
+/// the TUI status bar so the two never drift.
+#[must_use]
+pub fn format_retry_delay(wait_ms: u64) -> Option<String> {
+    (wait_ms > 0).then(|| format!("in {}s", wait_ms.div_ceil(1000)))
+}
+
+#[cfg(test)]
+#[path = "mod_test.rs"]
+mod tests;

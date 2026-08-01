@@ -237,16 +237,42 @@ impl ModelConfig {
 
 /// HTTP error with status code for retry decisions
 #[derive(Error, Debug, Clone)]
-#[error("HTTP error {0}")]
-pub struct HttpError(pub u16);
+#[error("HTTP error {status}")]
+pub struct HttpError {
+    pub status: u16,
+    /// Server-provided `Retry-After` hint (seconds form), when present.
+    pub retry_after: Option<std::time::Duration>,
+}
 
 impl HttpError {
+    pub const fn new(status: u16, retry_after: Option<std::time::Duration>) -> Self {
+        Self {
+            status,
+            retry_after,
+        }
+    }
+
     /// Returns true if this error is retryable
     /// Retryable: 5xx, 429 rate limit
     /// Not retryable: other 4xx
     pub const fn is_retryable(&self) -> bool {
-        matches!(self.0, 429 | 500..=599)
+        matches!(self.status, 429 | 500..=599)
     }
+}
+
+/// Parse the `Retry-After` response header (seconds form; the HTTP-date
+/// form is not emitted by LLM APIs and is ignored).
+pub(crate) fn parse_retry_after(
+    headers: &reqwest::header::HeaderMap,
+) -> Option<std::time::Duration> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .map(std::time::Duration::from_secs)
 }
 
 /// Provider error type using thiserror
@@ -325,6 +351,14 @@ impl ProviderError {
             ProviderError::Parse(_) | ProviderError::Config(_) => false,
         }
     }
+
+    /// Server-provided retry delay hint (`Retry-After` header), when present.
+    pub const fn retry_after(&self) -> Option<std::time::Duration> {
+        match self {
+            ProviderError::Http(e) => e.retry_after,
+            _ => None,
+        }
+    }
 }
 
 impl From<reqwest::Error> for ProviderError {
@@ -332,7 +366,8 @@ impl From<reqwest::Error> for ProviderError {
         if e.is_timeout() {
             ProviderError::Timeout(format!("Request timeout: {e}"))
         } else if let Some(status) = e.status() {
-            ProviderError::Http(HttpError(status.as_u16()))
+            // reqwest::Error carries no response headers — no Retry-After.
+            ProviderError::Http(HttpError::new(status.as_u16(), None))
         } else {
             ProviderError::Request(format!("Request failed: {e}"))
         }
@@ -380,68 +415,5 @@ impl Provider for NoKeyProvider {
 
     fn name(&self) -> &'static str {
         "no-key"
-    }
-}
-
-/// Wrapper that adds rate limit retry with exponential backoff
-pub struct RetryingProvider<P: Provider> {
-    inner: P,
-    max_retries: u32,
-    base_delay_ms: u64,
-}
-
-impl<P: Provider> RetryingProvider<P> {
-    pub const fn new(inner: P) -> Self {
-        Self {
-            inner,
-            max_retries: 3,
-            base_delay_ms: 1000,
-        }
-    }
-
-    #[must_use]
-    pub const fn with_retries(mut self, max_retries: u32) -> Self {
-        self.max_retries = max_retries;
-        self
-    }
-}
-
-#[async_trait]
-impl<P: Provider> Provider for RetryingProvider<P> {
-    async fn stream(
-        &self,
-        messages: &[Arc<Message>],
-        tools: &[Arc<ToolDefinition>],
-        config: &ModelConfig,
-    ) -> Result<ModelStream, ProviderError> {
-        let mut attempt = 0;
-        loop {
-            match self.inner.stream(messages, tools, config).await {
-                Ok(stream) => return Ok(stream),
-                Err(e) => {
-                    attempt += 1;
-                    if attempt > self.max_retries {
-                        return Err(e);
-                    }
-                    if e.is_retryable() {
-                        let delay = self.base_delay_ms * 2_u64.pow(attempt - 1);
-                        tracing::warn!(
-                            "Provider error (retryable), retrying in {}ms (attempt {}/{}): {}",
-                            delay,
-                            attempt,
-                            self.max_retries,
-                            e
-                        );
-                        tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
-                        continue;
-                    }
-                    return Err(e);
-                }
-            }
-        }
-    }
-
-    fn name(&self) -> &str {
-        self.inner.name()
     }
 }

@@ -643,6 +643,14 @@ impl AgentError {
         matches!(self, AgentError::Cancelled(_))
     }
 
+    /// Server-provided retry delay hint (`Retry-After` header), when present.
+    pub const fn retry_after(&self) -> Option<std::time::Duration> {
+        match self {
+            AgentError::Provider(e) => e.retry_after(),
+            _ => None,
+        }
+    }
+
     /// Check if this is a shutdown error (graceful termination)
     pub fn is_shutdown(&self) -> bool {
         matches!(self, AgentError::Shutdown)

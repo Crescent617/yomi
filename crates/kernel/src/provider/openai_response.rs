@@ -235,6 +235,7 @@ impl Provider for OpenAIResponseProvider {
         let response = request.send().await?;
         if !response.status().is_success() {
             let status = response.status();
+            let retry_after = super::parse_retry_after(response.headers());
             let text = response.text().await.unwrap_or_default();
             let truncated = if text.len() > 200 {
                 format!("{}... (truncated)", &text[..200])
@@ -242,7 +243,10 @@ impl Provider for OpenAIResponseProvider {
                 text
             };
             tracing::error!("OpenAI Responses API error: {} - {}", status, truncated);
-            return Err(ProviderError::Http(HttpError(status.as_u16())));
+            return Err(ProviderError::Http(HttpError::new(
+                status.as_u16(),
+                retry_after,
+            )));
         }
 
         tracing::debug!("OpenAI Responses API response received, starting stream processing");

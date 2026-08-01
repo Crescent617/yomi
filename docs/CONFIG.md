@@ -279,6 +279,7 @@ app_secret = "..."
 | `YOMI_LOG_DIR` | 日志目录 | — |
 | `YOMI_DEFAULT_MODEL` | 默认模型标识名 | — |
 | `YOMI_SKILL_FOLDERS` | 技能文件夹（逗号分隔） | — |
+| `YOMI_STREAM_MAX_RETRIES` | 单轮 streaming 重试上限（指数退避 + `Retry-After`） | `20` |
 
 ### 搜索
 

@@ -3,10 +3,12 @@
 //! A "run" is bracketed by `AgentEvent::Lifecycle(Running)` and
 //! `AgentEvent::Lifecycle(Stopped)` (see `docs/design/feishu-channel-observability.md`).
 //! Run state is tracked from `Running`, and the status card is materialized
-//! on the first `ToolEvent::Start` or the first model output chunk (text or
-//! thinking) — since the card morphs into the final reply on settlement,
-//! every run is exactly one message (two when the user posted mid-run: the
-//! card freezes as a terminal receipt and the reply lands at the bottom).
+//! immediately at `Running` — the run is visible from the very start, so a
+//! slow first request (long thinking, a 429 retry loop) never leaves the
+//! user staring at nothing. Since the card morphs into the final reply on
+//! settlement, every run is exactly one message (two when the user posted
+//! mid-run: the card freezes as a terminal receipt and the reply lands at
+//! the bottom).
 //! While running, the card body shows the stats line, the live run trace
 //! (most recent tool entries), and a tail of the assistant's current text
 //! ("whisper"); a rotating placeholder fills the fresh card until the
@@ -316,9 +318,10 @@ impl ObsTracker {
             Event::Agent(AgentEvent::Lifecycle {
                 state: AgentStatus::Running,
             }) => {
-                // Running fires per turn; only the first one starts tracking.
-                // The card itself is materialized lazily on the first tool
-                // start or the first model output chunk.
+                // Running fires per turn; only the first one starts tracking
+                // and materializes the card — the run is visible from the
+                // very start (a rotating placeholder fills the card until
+                // the first tool or text arrives).
                 if self.states.contains_key(session_id) {
                     return;
                 }
@@ -326,6 +329,7 @@ impl ObsTracker {
                     session_id.clone(),
                     ObsCardState::new(Arc::clone(adapter), chat_id, reply_msg_id),
                 );
+                self.materialize_card(session_id).await;
             }
             Event::Agent(AgentEvent::Lifecycle {
                 state: AgentStatus::Stopped { reason },
@@ -351,8 +355,6 @@ impl ObsTracker {
                         .record_tool_start(&tool_id, &tool_name, arguments.as_deref());
                 })
                 .await;
-                // First tool of a run materializes the status card.
-                self.materialize_card(session_id).await;
             }
             Event::Tool(ToolEvent::End {
                 tool_id,
@@ -371,11 +373,14 @@ impl ObsTracker {
                 attempt,
                 max_attempts,
                 reason,
+                wait_ms,
             }) => {
-                let phase = Phase::Text(format!(
-                    "🔁 Retrying {attempt}/{max_attempts}: {}",
-                    truncate_by_chars(reason, 30, "…")
-                ));
+                let retry_of = format!("🔁 Retrying {attempt}/{max_attempts}");
+                let reason = truncate_by_chars(reason, 30, "…");
+                let phase = Phase::Text(match crate::event::format_retry_delay(*wait_ms) {
+                    Some(delay) => format!("{retry_of} {delay}: {reason}"),
+                    None => format!("{retry_of}: {reason}"),
+                });
                 self.update_running(session_id, |s| s.phase = phase).await;
             }
             Event::Agent(AgentEvent::Error { error, .. }) => {
@@ -424,11 +429,6 @@ impl ObsTracker {
                     }
                 })
                 .await;
-                // Materialize on the first model output of any kind (text or
-                // thinking): the card shows up as soon as the model starts
-                // responding and later morphs into the final reply — one
-                // message per run.
-                self.materialize_card(session_id).await;
             }
             Event::Model(ModelEvent::End { content, .. }) => {
                 // One completed model response = one step, text or not
@@ -511,9 +511,8 @@ impl ObsTracker {
     // ── internals ─────────────────────────────────────────────────────
 
     /// Send the status card if not yet materialized (triggered by the first
-    /// tool start or the first model output chunk). State is tracked from
-    /// `Running`, so the initial render already carries earlier phases,
-    /// token usage, and the whisper.
+    /// `Lifecycle(Running)` of a run). The fresh card renders from the live
+    /// state, so it already carries the phase, token usage, and the whisper.
     async fn materialize_card(&self, session_id: &SessionId) {
         let (card, chat_id, reply_msg_id, adapter) = {
             let Some(entry) = self.states.get(session_id) else {

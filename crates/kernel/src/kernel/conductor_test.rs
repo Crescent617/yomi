@@ -32,6 +32,7 @@ fn pet_activity_only_summarizes_relevant_events() {
             attempt: 1,
             max_attempts: 3,
             reason: "not globally forwarded".into(),
+            wait_ms: 0,
         }),
         None
     );

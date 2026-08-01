@@ -98,3 +98,40 @@ fn resolve_request_config_rejects_explicit_zero_max_tokens() {
         .expect_err("zero max_tokens must not reach a provider");
     assert!(matches!(error, ProviderError::Config(_)));
 }
+
+#[test]
+fn parse_retry_after_reads_seconds_form() {
+    use reqwest::header::{HeaderMap, RETRY_AFTER};
+
+    let mut headers = HeaderMap::new();
+    headers.insert(RETRY_AFTER, "12".parse().unwrap());
+    assert_eq!(
+        super::parse_retry_after(&headers),
+        Some(std::time::Duration::from_secs(12))
+    );
+
+    // Non-numeric forms (e.g. HTTP-date) are ignored.
+    headers.insert(
+        RETRY_AFTER,
+        "Wed, 21 Oct 2015 07:28:00 GMT".parse().unwrap(),
+    );
+    assert_eq!(super::parse_retry_after(&headers), None);
+
+    assert_eq!(super::parse_retry_after(&HeaderMap::new()), None);
+}
+
+#[test]
+fn http_error_carries_retry_after_into_provider_error() {
+    let error = ProviderError::Http(HttpError::new(
+        429,
+        Some(std::time::Duration::from_secs(30)),
+    ));
+    assert!(error.is_retryable());
+    assert_eq!(
+        error.retry_after(),
+        Some(std::time::Duration::from_secs(30))
+    );
+
+    let other = ProviderError::Timeout("stall".into());
+    assert_eq!(other.retry_after(), None);
+}

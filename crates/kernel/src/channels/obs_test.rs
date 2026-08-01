@@ -186,41 +186,35 @@ fn thinking_chunk(text: &str) -> Event {
 // ── Lifecycle ───────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn card_materializes_on_first_tool_start_not_on_running() {
+async fn card_materializes_on_running_and_never_twice() {
     let tracker = ObsTracker::new();
     let mock = MockAdapter::new();
     let sid = sid();
     let adapter = adapter_ref(&mock);
 
-    // Running alone never sends a card, no matter how many times it fires.
+    // The first Running materializes the card with the current anchor;
+    // repeat Running events (Running fires per turn) open no new cards.
     for _ in 0..3 {
         tracker
             .handle_event(&adapter, &sid, "chat-1", Some("msg-1"), &running())
             .await;
     }
-    assert_eq!(mock.cards.lock().await.len(), 0);
-
-    // First tool start materializes the card with the current anchor.
-    tracker
-        .handle_event(&adapter, &sid, "chat-1", Some("msg-1"), &tool_start("bash"))
-        .await;
     let cards = mock.cards.lock().await;
     assert_eq!(cards.len(), 1);
     assert_eq!(cards[0].0, "chat-1");
     assert_eq!(cards[0].2.as_deref(), Some("msg-1"));
-    assert!(cards[0].1.contains("🐹 Bash"));
     assert!(cards[0].1.contains("blue"));
     drop(cards);
 
-    // Subsequent tool starts do not open new cards.
+    // Tool starts do not open new cards either.
     tracker
-        .handle_event(&adapter, &sid, "chat-1", None, &tool_start("read"))
+        .handle_event(&adapter, &sid, "chat-1", None, &tool_start("bash"))
         .await;
     assert_eq!(mock.cards.lock().await.len(), 1);
 }
 
 #[tokio::test]
-async fn no_tool_run_never_shows_card_and_sends_no_reactions() {
+async fn no_tool_run_settles_card_in_place_and_sends_no_reactions() {
     let tracker = ObsTracker::new();
     let mock = MockAdapter::new();
     let sid = sid();
@@ -242,9 +236,14 @@ async fn no_tool_run_never_shows_card_and_sends_no_reactions() {
         )
         .await;
 
-    // No card, no patches, no reactions — and the receipts are cleared.
-    assert_eq!(mock.cards.lock().await.len(), 0);
-    assert_eq!(mock.patches.lock().await.len(), 0);
+    // The card materialized at Running is settled in place (a freeze —
+    // the mid-run post keeps the reply from morphing); no new message,
+    // no reactions — and the receipts are cleared.
+    assert_eq!(mock.cards.lock().await.len(), 1);
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1);
+    assert!(patches[0].1.contains("✅ Done"));
+    drop(patches);
     assert!(mock.reactions_added.lock().await.is_empty());
     assert!(!tracker.has_mid_run_posts(&sid));
 }
@@ -315,10 +314,10 @@ async fn tool_events_patch_card_with_stats() {
         .await;
 
     let patches = mock.patches.lock().await;
-    // Every tool event PATCHes at ZERO interval: end1, start2, end2 (the
-    // first start sent the card instead).
-    assert_eq!(patches.len(), 3);
-    let last = &patches[2].1;
+    // Every tool event PATCHes at ZERO interval: start1, end1, start2,
+    // end2 (the Running event sent the card instead).
+    assert_eq!(patches.len(), 4);
+    let last = &patches[3].1;
     assert!(last.contains("2 tools"), "tools summary: {last}");
     // The title drops back to a thinking title after the tool ends.
     assert!(
@@ -383,30 +382,31 @@ async fn title_reflects_thinking_typing_and_tool_states() {
         .handle_event(&adapter, &sid, "chat-1", None, &thinking_chunk("hmm"))
         .await;
 
-    // Card opens with the tool state; patches track request/chunk phases.
-    assert!(mock.cards.lock().await[0].1.contains("🐹 Bash"));
+    // The card opens at Running (placeholder); patches track tool and
+    // request/chunk phases.
     let patches = mock.patches.lock().await;
-    assert_eq!(patches.len(), 3);
+    assert_eq!(patches.len(), 4);
+    assert!(patches[0].1.contains("🐹 Bash"), "tool: {}", patches[0].1);
     assert!(
         super::THINKING_TITLES
             .iter()
-            .any(|t| patches[0].1.contains(t)),
+            .any(|t| patches[1].1.contains(t)),
         "request: {}",
-        patches[0].1
+        patches[1].1
     );
     assert!(
         super::TYPING_TITLES
             .iter()
-            .any(|t| patches[1].1.contains(t)),
+            .any(|t| patches[2].1.contains(t)),
         "text chunk: {}",
-        patches[1].1
+        patches[2].1
     );
     assert!(
         super::THINKING_TITLES
             .iter()
-            .any(|t| patches[2].1.contains(t)),
+            .any(|t| patches[3].1.contains(t)),
         "thinking chunk: {}",
-        patches[2].1
+        patches[3].1
     );
 }
 
@@ -439,11 +439,12 @@ async fn settle_completed_freezes_card_and_sends_no_reactions() {
         )
         .await;
 
-    // Terminal card: green + done.
+    // Terminal card (last patch — the tool start patched first): green + done.
     let patches = mock.patches.lock().await;
-    assert_eq!(patches.len(), 1);
-    assert!(patches[0].1.contains("green"));
-    assert!(patches[0].1.contains("✅ Done"));
+    assert_eq!(patches.len(), 2);
+    let terminal = &patches.last().unwrap().1;
+    assert!(terminal.contains("green"));
+    assert!(terminal.contains("✅ Done"));
     drop(patches);
 
     // No reactions at settlement; receipts cleared.
@@ -518,14 +519,15 @@ async fn settle_failed_shows_error_summary() {
 }
 
 #[tokio::test]
-async fn failed_settle_without_tools_sends_terminal_card() {
+async fn failed_settle_without_tools_patches_terminal_card() {
     let tracker = ObsTracker::new();
     let mock = MockAdapter::new();
     let sid = sid();
     let adapter = adapter_ref(&mock);
 
-    // Run fails before any tool call: the terminal card is SENT (not
-    // skipped) so the user gets an explanation, not just a CrossMark.
+    // Run fails before any tool call: the card (materialized at Running)
+    // is PATCHed into the red terminal card so the user gets an
+    // explanation, not just a CrossMark.
     tracker
         .handle_event(&adapter, &sid, "chat-1", Some("msg-1"), &running())
         .await;
@@ -545,11 +547,12 @@ async fn failed_settle_without_tools_sends_terminal_card() {
     assert_eq!(cards.len(), 1);
     assert_eq!(cards[0].0, "chat-1");
     assert_eq!(cards[0].2.as_deref(), Some("msg-1"));
-    assert!(cards[0].1.contains("red"));
-    assert!(cards[0].1.contains("❌ Failed"));
-    assert!(cards[0].1.contains("provider exploded"));
     drop(cards);
-    assert_eq!(mock.patches.lock().await.len(), 0);
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1);
+    assert!(patches[0].1.contains("red"));
+    assert!(patches[0].1.contains("❌ Failed"));
+    assert!(patches[0].1.contains("provider exploded"));
 }
 
 #[tokio::test]
@@ -579,13 +582,72 @@ async fn error_event_updates_phase_but_never_settles() {
         )
         .await;
 
+    // The error phase rides the last patch (the tool start patched first).
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 2);
+    let last = &patches.last().unwrap().1;
+    assert!(last.contains("⚠️ Error: rate limited"));
+    assert!(last.contains("blue"), "must not settle: {patches:?}");
+}
+
+#[tokio::test]
+async fn retrying_phase_shows_delay_and_reason() {
+    let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    tracker
+        .handle_event(
+            &adapter,
+            &sid,
+            "chat-1",
+            None,
+            &Event::Agent(AgentEvent::Retrying {
+                attempt: 2,
+                max_attempts: 20,
+                reason: "HTTP error 429".to_string(),
+                wait_ms: 34_000,
+            }),
+        )
+        .await;
+
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 1);
-    assert!(patches[0].1.contains("⚠️ Error: rate limited"));
     assert!(
-        patches[0].1.contains("blue"),
-        "must not settle: {patches:?}"
+        patches[0]
+            .1
+            .contains("🔁 Retrying 2/20 in 34s: HTTP error 429"),
+        "delay title: {}",
+        patches[0].1
     );
+    drop(patches);
+
+    // Old events without a wait render without the delay.
+    tracker
+        .handle_event(
+            &adapter,
+            &sid,
+            "chat-1",
+            None,
+            &Event::Agent(AgentEvent::Retrying {
+                attempt: 3,
+                max_attempts: 20,
+                reason: "HTTP error 502".to_string(),
+                wait_ms: 0,
+            }),
+        )
+        .await;
+    let patches = mock.patches.lock().await;
+    let last = &patches.last().unwrap().1;
+    assert!(
+        last.contains("🔁 Retrying 3/20: HTTP error 502"),
+        "title: {last}"
+    );
+    assert!(!last.contains(" in "), "no delay: {last}");
 }
 
 // ── Watchdog ────────────────────────────────────────────────────────
@@ -622,20 +684,23 @@ async fn watchdog_settles_dead_session_card_and_clears_receipts() {
 }
 
 #[tokio::test]
-async fn watchdog_drops_unmaterialized_state_silently() {
+async fn watchdog_settles_contentless_card_as_timed_out() {
     let tracker = ObsTracker::new();
     let mock = MockAdapter::new();
     let sid = sid();
     let adapter = adapter_ref(&mock);
 
-    // Run tracked but no tool ever started → nothing visible to settle.
+    // Card materialized at Running but no tool ever started → the
+    // watchdog settles the placeholder card as timed out.
     tracker
         .handle_event(&adapter, &sid, "chat-1", None, &running())
         .await;
+    assert_eq!(mock.cards.lock().await.len(), 1);
     tracker.sweep_dead_sessions(|_| false).await;
 
-    assert_eq!(mock.cards.lock().await.len(), 0);
-    assert_eq!(mock.patches.lock().await.len(), 0);
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1);
+    assert!(patches[0].1.contains("⏰ Timed out"));
 }
 
 #[tokio::test]
@@ -728,11 +793,13 @@ async fn token_usage_adds_footer() {
         )
         .await;
 
+    // Tokens merged into the ⏱ stats line (last patch — the tool start
+    // patched first).
     let patches = mock.patches.lock().await;
-    assert_eq!(patches.len(), 1);
-    // Tokens merged into the ⏱ stats line.
-    assert!(patches[0].1.contains("⏱"));
-    assert!(patches[0].1.contains("ctx: 12.3k / 200.0k"));
+    assert_eq!(patches.len(), 2);
+    let last = &patches.last().unwrap().1;
+    assert!(last.contains("⏱"));
+    assert!(last.contains("ctx: 12.3k / 200.0k"));
 }
 
 // ── Last tool & whisper ─────────────────────────────────────────────
@@ -770,12 +837,9 @@ async fn fresh_card_shows_placeholder_until_first_content() {
     let sid = sid();
     let adapter = adapter_ref(&mock);
 
+    // The card materializes at Running with no tools and no text yet.
     tracker
         .handle_event(&adapter, &sid, "chat-1", None, &running())
-        .await;
-    // A thinking chunk materializes the card with no tools and no text yet.
-    tracker
-        .handle_event(&adapter, &sid, "chat-1", None, &thinking_chunk("hmm"))
         .await;
 
     let cards = mock.cards.lock().await;
@@ -822,12 +886,15 @@ async fn running_card_shows_live_trace() {
         )
         .await;
 
-    // The materialized card already carries the trace: the tool shows as
-    // running (⏳) with its arg summary inline.
-    let cards = mock.cards.lock().await;
-    assert_eq!(cards.len(), 1);
-    assert!(cards[0].1.contains("⏳ **shell** · `cargo test -p kernel`"));
-    drop(cards);
+    // The card materialized at Running; the tool start PATCH carries the
+    // trace: the tool shows as running (⏳) with its arg summary inline.
+    assert_eq!(mock.cards.lock().await.len(), 1);
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1);
+    assert!(patches[0]
+        .1
+        .contains("⏳ **shell** · `cargo test -p kernel`"));
+    drop(patches);
 
     // Tool end flips the line to ✅ with the elapsed time.
     tracker
@@ -1065,8 +1132,8 @@ async fn trace_inline_arg_summary_is_capped() {
         )
         .await;
 
-    let cards = mock.cards.lock().await;
-    let body: serde_json::Value = serde_json::from_str(&cards[0].1).unwrap();
+    let patches = mock.patches.lock().await;
+    let body: serde_json::Value = serde_json::from_str(&patches.last().unwrap().1).unwrap();
     let content = body["body"]["elements"]
         .as_array()
         .unwrap()
@@ -1179,10 +1246,15 @@ async fn stopped_without_card_sends_reply_as_new_message() {
     let sid = sid();
     let adapter = adapter_ref(&mock);
 
-    // Pure Q&A run: no tools → no status card was materialized.
+    // The status-card send failed at Running → no card to morph; the
+    // reply falls back to a new message.
+    mock.fail_send_cards.store(true, Ordering::Relaxed);
     tracker
         .handle_event(&adapter, &sid, "chat-1", None, &running())
         .await;
+    assert_eq!(mock.cards.lock().await.len(), 0);
+    mock.fail_send_cards.store(false, Ordering::Relaxed);
+
     tracker
         .handle_stopped(
             &sid,
@@ -1239,10 +1311,14 @@ async fn stopped_failed_without_card_sends_notice_card() {
     let sid = sid();
     let adapter = adapter_ref(&mock);
 
+    // The status-card send failed at Running → no card to settle; the
+    // failure must still be explained as a new notice card.
+    mock.fail_send_cards.store(true, Ordering::Relaxed);
     tracker
         .handle_event(&adapter, &sid, "chat-1", None, &running())
         .await;
-    // No tools, no text — but the failure must still be explained.
+    mock.fail_send_cards.store(false, Ordering::Relaxed);
+
     tracker
         .handle_stopped(
             &sid,
@@ -1302,8 +1378,8 @@ async fn timeout_morphs_card_and_late_stopped_clears_receipts() {
 }
 
 #[tokio::test]
-async fn first_text_chunk_materializes_card_without_tools() {
-    let tracker = ObsTracker::new();
+async fn first_text_chunk_patches_card_without_tools() {
+    let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
     let mock = MockAdapter::new();
     let sid = sid();
     let adapter = adapter_ref(&mock);
@@ -1311,7 +1387,11 @@ async fn first_text_chunk_materializes_card_without_tools() {
     tracker
         .handle_event(&adapter, &sid, "chat-1", Some("msg-1"), &running())
         .await;
-    assert_eq!(mock.cards.lock().await.len(), 0);
+    assert_eq!(
+        mock.cards.lock().await.len(),
+        1,
+        "Running materializes the card"
+    );
 
     tracker
         .handle_event(
@@ -1322,11 +1402,13 @@ async fn first_text_chunk_materializes_card_without_tools() {
             &text_chunk("Hello"),
         )
         .await;
-    let cards = mock.cards.lock().await;
-    assert_eq!(cards.len(), 1, "text output materializes the card");
-    assert!(cards[0].1.contains("💬 Hello"));
-    assert!(super::TYPING_TITLES.iter().any(|t| cards[0].1.contains(t)));
-    drop(cards);
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1, "first text patches the card");
+    assert!(patches[0].1.contains("💬 Hello"));
+    assert!(super::TYPING_TITLES
+        .iter()
+        .any(|t| patches[0].1.contains(t)));
+    drop(patches);
 
     // The run then morphs that very card into the final reply.
     tracker
@@ -1345,8 +1427,8 @@ async fn first_text_chunk_materializes_card_without_tools() {
 }
 
 #[tokio::test]
-async fn thinking_chunk_materializes_card_with_thinking_title() {
-    let tracker = ObsTracker::new();
+async fn thinking_chunk_keeps_thinking_title_without_leaking_content() {
+    let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
     let mock = MockAdapter::new();
     let sid = sid();
     let adapter = adapter_ref(&mock);
@@ -1357,23 +1439,23 @@ async fn thinking_chunk_materializes_card_with_thinking_title() {
     tracker
         .handle_event(&adapter, &sid, "chat-1", None, &thinking_chunk("hmm"))
         .await;
-    // The card appears as soon as the model starts responding, even while
-    // it is still thinking (reasoning models can think for a long time).
-    let cards = mock.cards.lock().await;
-    assert_eq!(cards.len(), 1);
+    // The thinking chunk patches the (already materialized) card with a
+    // thinking title — reasoning models can think for a long time.
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1);
     assert!(super::THINKING_TITLES
         .iter()
-        .any(|t| cards[0].1.contains(t)));
+        .any(|t| patches[0].1.contains(t)));
     // Thinking content itself is never rendered (internal reasoning).
-    assert!(!cards[0].1.contains("hmm"));
-    assert!(!cards[0].1.contains("💬"));
+    assert!(!patches[0].1.contains("hmm"));
+    assert!(!patches[0].1.contains("💬"));
 }
 
 #[tokio::test]
 async fn tool_start_updates_are_throttled_uniformly() {
     // Huge patch interval: no throttled PATCH may fire — tool starts mutate
-    // state only; the tool title rides the next regular render (or the
-    // materialization render, for the tool that opens the card).
+    // state only; the tool title rides the next regular render (the card
+    // materialized at Running shows the placeholder until then).
     let tracker = ObsTracker::with_patch_interval(Duration::from_hours(1));
     let mock = MockAdapter::new();
     let sid = sid();
@@ -1382,18 +1464,21 @@ async fn tool_start_updates_are_throttled_uniformly() {
     tracker
         .handle_event(&adapter, &sid, "chat-1", None, &running())
         .await;
-    tracker
-        .handle_event(&adapter, &sid, "chat-1", None, &tool_start("bash"))
-        .await;
     let cards = mock.cards.lock().await;
-    assert_eq!(cards.len(), 1, "first tool materializes");
+    assert_eq!(cards.len(), 1, "Running materializes");
     assert!(
-        cards[0].1.contains("🐹 Bash"),
-        "creation render shows the tool"
+        super::IDLE_PLACEHOLDERS
+            .iter()
+            .any(|p| cards[0].1.contains(p)),
+        "creation render shows the placeholder: {}",
+        cards[0].1
     );
     drop(cards);
 
-    // A subsequent tool start inside the throttle window does NOT PATCH.
+    // Tool starts inside the throttle window do NOT PATCH.
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &tool_start("bash"))
+        .await;
     tracker
         .handle_event(&adapter, &sid, "chat-1", None, &tool_start("read"))
         .await;
@@ -1514,13 +1599,13 @@ async fn stats_line_shows_steps_after_first_model_end() {
         .handle_event(&adapter, &sid, "chat-1", None, &tool_start("bash"))
         .await;
 
-    // No completed model response yet (the just-materialized card): tools
+    // No completed model response yet (the tool-start patch): tools
     // only, no steps.
-    let cards = mock.cards.lock().await;
-    let first = cards[0].1.clone();
+    let patches = mock.patches.lock().await;
+    let first = patches[0].1.clone();
     assert!(first.contains("1 tools"));
     assert!(!first.contains("step"), "no steps yet: {first}");
-    drop(cards);
+    drop(patches);
 
     // First completed model response: the stats line gains a step.
     tracker
@@ -1569,7 +1654,8 @@ async fn stats_line_counts_textless_model_end_as_step() {
 
 // ── Settle reaction (completion signal for silent card settles) ─────
 
-/// Drive a run far enough to materialize the status card (first tool).
+/// Drive a run far enough to materialize the status card (Running sends
+/// it; the tool start gives the card some content).
 async fn drive_materialized_run(tracker: &ObsTracker, mock: &Arc<MockAdapter>, sid: &SessionId) {
     let adapter = adapter_ref(mock);
     tracker
@@ -1755,10 +1841,14 @@ async fn settle_reaction_skipped_when_card_never_materialized() {
 
     tracker.record_user_msg(&sid, "user-msg-1".into());
     let adapter = adapter_ref(&mock);
+    // The status-card send failed at Running → no card to morph.
+    mock.fail_send_cards.store(true, Ordering::Relaxed);
     tracker
         .handle_event(&adapter, &sid, "chat-1", None, &running())
         .await;
-    // No tools, no chunks: the settle sends the reply as a NEW card
+    mock.fail_send_cards.store(false, Ordering::Relaxed);
+
+    // No chunks: the settle sends the reply as a NEW card
     // message (which notifies), so no reaction.
     tracker
         .handle_stopped(

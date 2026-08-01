@@ -20,7 +20,7 @@ channel（Feishu/Telegram）中的 agent 原本是黑箱：用户 @ 机器人后
 
 | 信号 | 角色 |
 |------|------|
-| `Lifecycle(Running)` | 每次进入 Streaming 发射；首个 Running 开始内存跟踪 |
+| `Lifecycle(Running)` | 每次进入 Streaming 发射；首个 Running 开始内存跟踪并**立即开卡** |
 | `Lifecycle(Stopped{reason})` | agent 回 Idle 时发一次（Completed/Failed/Cancelled/MaxIterations）→ **结算** |
 | `ModelEvent::End` | 每轮 assistant message 完成都发 → 文本进回复缓冲，**不作结算信号** |
 | `AgentEvent::Error` | 重试中途（可恢复）也发 → 仅更新阶段标题 |
@@ -30,7 +30,7 @@ channel（Feishu/Telegram）中的 agent 原本是黑箱：用户 @ 机器人后
 
 ## 3. 状态卡（运行中）
 
-- **开卡**：首个 `ToolEvent::Start` 或首个模型输出 chunk（文本或 thinking）即发；`Running` 只开始内存跟踪。卡即回复——模型一开始响应卡片就到位（长 thinking 期间标题为 `💭 Thinking…`）。
+- **开卡**：首个 `Lifecycle(Running)` 即发——run 从一开始就可见（慢首请求、长 thinking、429 重试循环都有占位卡），占位文案（`Pondering…` 轮换）填充到首个 tool/文本到达；`Running` 每 turn 重发，每 run 只开一次卡。卡即回复——结算时同一张卡 morph 为最终回复。
 - **卡面**（compact 400px、蓝 header、12px notation 正文、英文文案）：
   - header 标题 = 当前阶段（💭 Thinking / 🐾 Typing / 🐹 工具名 / 🔁 重试 / ⚠️ 错误 / 📦 压缩 / ↪️ 降级 / 🎯 Goal，取最新事件值）
   - 统计行：`⏱ 耗时 · N tools · tokens: x / y（灰）`
@@ -43,13 +43,13 @@ channel（Feishu/Telegram）中的 agent 原本是黑箱：用户 @ 机器人后
 
 | 事件 | 动作 |
 |------|------|
-| `ToolEvent::Start` | tool_count+1；标题=🐹 工具名；last_tool 更新；首个则开卡 |
+| `ToolEvent::Start` | tool_count+1；标题=🐹 工具名；last_tool 更新 |
 | `ToolEvent::End` | 忽略（不进卡面） |
 | `ModelEvent::Request` | 标题=Thinking；清 whisper |
-| `ModelEvent::Chunk` | Text → 标题 Typing + whisper 累积；Thinking → 标题 Thinking；首个即开卡 |
+| `ModelEvent::Chunk` | Text → 标题 Typing + whisper 累积；Thinking → 标题 Thinking |
 | `ModelEvent::End` | whisper 用完整文本自愈；文本进回复缓冲（§5） |
 | `ModelEvent::TokenUsage` | 更新 token 统计（覆盖式） |
-| `Retrying` / `Error` / `Compacting` / `Fallback` / `GoalUpdated` | 更新阶段标题 |
+| `Retrying` / `Error` / `Compacting` / `Fallback` / `GoalUpdated` | 更新阶段标题（Retrying 含 `in Ns` 等待时长） |
 
 ## 4. 结算（deliver_reply）
 
