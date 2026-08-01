@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.37] - 2026-08-01
+
+无用户可见变化（内部注释清理）。
+
 ## [0.7.36] - 2026-08-01
 
 ### Fixed
