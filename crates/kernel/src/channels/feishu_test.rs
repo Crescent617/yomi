@@ -221,8 +221,10 @@ fn response_for(method: &str, path: &str) -> Vec<u8> {
                 {"message_id":"m2","create_time":"1700000050000","msg_type":"post","deleted":false,
                  "sender":{"id":"ou_b","sender_type":"user"},
                  "body":{"content":"{\"zh_cn\":{\"content\":[[{\"tag\":\"text\",\"text\":\"第一段 \"},{\"tag\":\"text\",\"text\":\"第二段\"}],[{\"tag\":\"img\",\"image_key\":\"img_p1\"}]]}}"}},
+                {"message_id":"m2b","create_time":"1700000046000","msg_type":"text","deleted":false,
+                 "sender":{"id":"cli_other","sender_type":"app"},"body":{"content":"{\"text\":\"CI 构建成功\"}"}},
                 {"message_id":"m1","create_time":"1700000040000","msg_type":"text","deleted":false,
-                 "sender":{"id":"ou_bot","sender_type":"app"},"body":{"content":"{\"text\":\"bot said\"}"}},
+                 "sender":{"id":"app","sender_type":"app"},"body":{"content":"{\"text\":\"bot said\"}"}},
                 {"message_id":"m0","create_time":"1700000010000","msg_type":"text","deleted":false,
                  "sender":{"id":"ou_a","sender_type":"user"},"body":{"content":"{\"text\":\"too old\"}"}}
             ]}}"#
@@ -344,16 +346,18 @@ async fn fetch_history_queries_filters_and_orders() {
     assert!(path.contains("page_size=20"), "path: {path}");
     assert!(path.contains("start_time=1700000030"), "path: {path}");
 
-    // m0 dropped (older than cursor), m1 dropped (app sender); text and
-    // post extracted; result is chronological (oldest first).
-    assert_eq!(out.len(), 2);
-    assert_eq!(out[0].message_id, "m2");
-    assert_eq!(out[0].text, "第一段 第二段");
-    assert_eq!(out[0].image_keys, vec!["img_p1".to_string()]);
-    assert_eq!(out[0].create_time, 1_700_000_050_000);
-    assert_eq!(out[1].message_id, "m3");
-    assert_eq!(out[1].text, "最新");
-    assert!(out[1].image_keys.is_empty());
+    // m0 dropped (older than cursor), m1 dropped (our own app — sender id
+    // == app_id); other apps and users kept; result is chronological.
+    assert_eq!(out.len(), 3);
+    assert_eq!(out[0].message_id, "m2b");
+    assert_eq!(out[0].text, "CI 构建成功");
+    assert_eq!(out[1].message_id, "m2");
+    assert_eq!(out[1].text, "第一段 第二段");
+    assert_eq!(out[1].image_keys, vec!["img_p1".to_string()]);
+    assert_eq!(out[1].create_time, 1_700_000_050_000);
+    assert_eq!(out[2].message_id, "m3");
+    assert_eq!(out[2].text, "最新");
+    assert!(out[2].image_keys.is_empty());
 }
 
 #[tokio::test]

@@ -974,9 +974,14 @@ impl PlatformAdapter for FeishuAdapter {
             if since_ts.is_some_and(|ts| create_time <= ts) {
                 continue;
             }
-            // Only humans — skips the bot itself and other apps.
+            // Skip only ourselves — our own replies are already in the
+            // session's conversation, re-injecting them as chat history
+            // is pure duplication. Other apps' messages stay: they can
+            // be real context (CI bots, other assistants).
             let sender = &item["sender"];
-            if sender["sender_type"].as_str() != Some("user") {
+            if sender["sender_type"].as_str() == Some("app")
+                && sender["id"].as_str() == Some(self.app_id.as_str())
+            {
                 continue;
             }
             let (text, image_keys) = Self::extract_history_content(item);
