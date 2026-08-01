@@ -994,6 +994,7 @@ impl PlatformAdapter for FeishuAdapter {
                 sender_id: sender["id"].as_str().unwrap_or("").to_string(),
                 text,
                 image_keys,
+                parent_id: item["parent_id"].as_str().map(str::to_string),
             });
         }
         // The API returns newest-first; assemble chronologically.
@@ -1044,6 +1045,7 @@ impl PlatformAdapter for FeishuAdapter {
             sender_id: item["sender"]["id"].as_str().unwrap_or("").to_string(),
             text,
             image_keys,
+            parent_id: item["parent_id"].as_str().map(str::to_string),
         }))
     }
 

@@ -642,6 +642,10 @@ pub struct HistoryMessage {
     /// `image_key`s from `image` messages and post `img` runs). Each is
     /// downloadable via [`PlatformAdapter::download_message_image`].
     pub image_keys: Vec<String>,
+    /// The message this one quote-replies to, when any — lets quoted
+    /// injection walk the quote chain (a quoted message's own quoted
+    /// context would otherwise be lost).
+    pub parent_id: Option<String>,
 }
 
 // ── Internal helper: access control ──────────────────────────────────

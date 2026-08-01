@@ -223,10 +223,14 @@ impl ChannelHub {
                                 error!(error = %e, "failed to handle incoming message");
                             }
                         }
-                        // Advance the history cursor for every processed
-                        // group message (triggers and commands alike), so
-                        // consumed messages are never re-injected later.
-                        advance_history_cursor(&config_proc, &store, &name_proc, &msg).await;
+                        // Advance the history cursor only for messages
+                        // that consumed context (run triggers). Commands
+                        // never read history — advancing past older,
+                        // unseen messages would drop them from later
+                        // injections (e.g. a thread's root after /models).
+                        if consumes_history(&parse_channel_command(msg.raw_text.as_deref())) {
+                            advance_history_cursor(&config_proc, &store, &name_proc, &msg).await;
+                        }
                     }
                     else => {
                         info!(channel = %name_proc, "incoming channel closed, exiting");
@@ -810,7 +814,7 @@ async fn handle_incoming_message(
             Ok(None)
         }
         ChannelCommand::Steer(text) => {
-            let sid = get_or_create_session(
+            let (sid, reused) = get_or_create_session(
                 channel_name,
                 store,
                 &kernel,
@@ -820,13 +824,22 @@ async fn handle_incoming_message(
             )
             .await?;
             record_receipt(config, obs, &kernel, &sid, &msg);
-            let mut blocks = context_prefix(adapter, config, store, channel_name, &msg).await;
+            let root_in_session = root_consumed(
+                store,
+                channel_name,
+                &msg,
+                reused,
+                has_messages(&kernel, &sid).await,
+            )
+            .await;
+            let mut blocks =
+                context_prefix(adapter, config, store, channel_name, &msg, root_in_session).await;
             blocks.push(ContentBlock::Text { text });
             kernel.send_steer(&sid, blocks).await;
             Ok(None)
         }
         ChannelCommand::Queue(text) => {
-            let sid = get_or_create_session(
+            let (sid, reused) = get_or_create_session(
                 channel_name,
                 store,
                 &kernel,
@@ -836,13 +849,22 @@ async fn handle_incoming_message(
             )
             .await?;
             record_receipt(config, obs, &kernel, &sid, &msg);
-            let mut blocks = context_prefix(adapter, config, store, channel_name, &msg).await;
+            let root_in_session = root_consumed(
+                store,
+                channel_name,
+                &msg,
+                reused,
+                has_messages(&kernel, &sid).await,
+            )
+            .await;
+            let mut blocks =
+                context_prefix(adapter, config, store, channel_name, &msg, root_in_session).await;
             blocks.push(ContentBlock::Text { text });
             kernel.send_message(&sid, blocks).await?;
             Ok(None)
         }
         ChannelCommand::ListModels => {
-            let sid = get_or_create_session(
+            let (sid, _) = get_or_create_session(
                 channel_name,
                 store,
                 &kernel,
@@ -856,7 +878,7 @@ async fn handle_incoming_message(
             Ok(Some(format_model_list(&models, &current)))
         }
         ChannelCommand::CurrentModel => {
-            let sid = get_or_create_session(
+            let (sid, _) = get_or_create_session(
                 channel_name,
                 store,
                 &kernel,
@@ -878,7 +900,7 @@ async fn handle_incoming_message(
                 // Switch the whole chat: update every existing thread
                 // session routed to this chat, and persist the choice on
                 // the chat-level session so future threads inherit it.
-                let chat_sid =
+                let (chat_sid, _) =
                     get_or_create_session(channel_name, store, &kernel, &chat_id, &chat_id, None)
                         .await?;
                 kernel.set_session_model(&chat_sid, &key).await?;
@@ -896,7 +918,7 @@ async fn handle_incoming_message(
                     "Switched all threads in this chat to `{key}`. It takes effect on the next model invocation."
                 )));
             }
-            let sid = get_or_create_session(
+            let (sid, _) = get_or_create_session(
                 channel_name,
                 store,
                 &kernel,
@@ -918,7 +940,7 @@ async fn handle_incoming_message(
             // chat-level session; in-thread messages show the thread's.
             let chat_level = is_chat_level_message(&msg, config.reply_in_thread);
             let key = if chat_level { &chat_id } else { &mapping_key };
-            let sid = get_or_create_session(
+            let (sid, _) = get_or_create_session(
                 channel_name,
                 store,
                 &kernel,
@@ -978,7 +1000,7 @@ async fn handle_incoming_message(
         }
         ChannelCommand::InvalidApprovalCommand => Ok(Some(super::approval::usage())),
         ChannelCommand::None => {
-            let sid = get_or_create_session(
+            let (sid, reused) = get_or_create_session(
                 channel_name,
                 store,
                 &kernel,
@@ -988,7 +1010,16 @@ async fn handle_incoming_message(
             )
             .await?;
             record_receipt(config, obs, &kernel, &sid, &msg);
-            let mut content = context_prefix(adapter, config, store, channel_name, &msg).await;
+            let root_in_session = root_consumed(
+                store,
+                channel_name,
+                &msg,
+                reused,
+                has_messages(&kernel, &sid).await,
+            )
+            .await;
+            let mut content =
+                context_prefix(adapter, config, store, channel_name, &msg, root_in_session).await;
             content.extend(msg.content);
             // Deferred image download — only now, after the gate, does
             // an attached image cost bandwidth.
@@ -1042,6 +1073,20 @@ async fn advance_history_cursor(
     }
 }
 
+/// Delivery state of a thread's root message for the current trigger.
+/// The root of a human-created thread is exactly the context the bot
+/// needs — but it must arrive exactly once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RootDelivery {
+    /// Fresh session: the root has not been delivered yet.
+    Pending,
+    /// Reused session: an earlier trigger already delivered the root.
+    Consumed,
+    /// The quoted block (any link of its chain) just delivered the root
+    /// for this trigger.
+    ByQuote,
+}
+
 /// Fetch and assemble recent-chat context for a triggering group message:
 /// messages since the last trigger in this thread/chat, formatted as a
 /// `<recent_chat_history>` text block followed by any attached images.
@@ -1049,12 +1094,18 @@ async fn advance_history_cursor(
 /// to the newest fetched message (usually the triggering message itself)
 /// so it isn't re-fetched next time; advancing happens at fetch time, so
 /// a downstream send failure can leave a small history gap (accepted).
+///
+/// `root`: delivery state of the thread root — anything but
+/// [`RootDelivery::Pending`] dedups the root out of the history below;
+/// a still-`Pending` root missing from the fetched page is backstopped
+/// with a direct fetch.
 async fn maybe_history_prefix(
     adapter: &Arc<dyn PlatformAdapter>,
     config: &ChannelConfig,
     store: &Arc<dyn ChannelStore>,
     channel_name: &str,
     msg: &ChannelMessage,
+    root: RootDelivery,
 ) -> Option<Vec<ContentBlock>> {
     if config.history_context == 0 || !msg.is_group {
         return None;
@@ -1093,27 +1144,40 @@ async fn maybe_history_prefix(
     }
     // Drop the triggering message itself — it's delivered verbatim below.
     let trigger_id = msg.external_message_id.as_deref();
-    // A bot-created thread's root was consumed at channel level (it's the
-    // session's first message) — drop it too when the chat cursor covers
-    // it. Roots of human threads (never consumed) are kept.
-    let chat_floor = match &container {
-        HistoryContainer::Thread(_) => match &msg.root_id {
-            Some(_) => store
-                .get_history_cursor(channel_name, &msg.external_chat_id)
-                .await
-                .ok()
-                .flatten(),
-            None => None,
-        },
-        HistoryContainer::Chat(_) => None,
-    };
-    let history: Vec<&HistoryMessage> = messages
+    // Drop the thread root only when it's already delivered (reused
+    // session or just quoted). Otherwise it stays — the root of a
+    // human-created thread is exactly the context the bot needs. (Comparing
+    // the root against the chat-level history cursor misfires here: that
+    // cursor advances on ANY processed top-level message, so a human
+    // thread's root — almost always older — would always be dropped.)
+    let drop_root = matches!(&container, HistoryContainer::Thread(_))
+        && msg.root_id.is_some()
+        && root != RootDelivery::Pending;
+    // Root backstop: on a fresh thread the root must arrive even when it
+    // fell outside the fetched page (long threads). Skipped when the
+    // cursor already covers it (a /clear deliberately forgot it).
+    let mut fetched_root: Option<HistoryMessage> = None;
+    if root == RootDelivery::Pending {
+        if let (HistoryContainer::Thread(_), Some(root_id)) = (&container, &msg.root_id) {
+            if !messages.iter().any(|m| &m.message_id == root_id) {
+                match adapter.fetch_message(root_id).await {
+                    Ok(Some(m)) if cursor.is_none_or(|c| m.create_time > c) => {
+                        fetched_root = Some(m);
+                    }
+                    Ok(_) => {}
+                    Err(e) => warn!(error = %e, root_id, "root backstop fetch failed"),
+                }
+            }
+        }
+    }
+    let history: Vec<&HistoryMessage> = fetched_root
         .iter()
-        .filter(|m| Some(m.message_id.as_str()) != trigger_id)
-        .filter(|m| match (&msg.root_id, chat_floor) {
-            (Some(root), Some(floor)) => !(m.message_id == *root && m.create_time <= floor),
-            _ => true,
-        })
+        .chain(
+            messages
+                .iter()
+                .filter(|m| Some(m.message_id.as_str()) != trigger_id)
+                .filter(|m| !drop_root || msg.root_id.as_deref() != Some(m.message_id.as_str())),
+        )
         .collect();
     if history.is_empty() {
         return None;
@@ -1155,63 +1219,166 @@ async fn maybe_history_prefix(
 /// keeps the first ones and gets a note for the rest.
 const IMAGE_DOWNLOAD_MAX: usize = 5;
 
-/// Assemble the context blocks for a triggering message: the quoted
-/// message (when the trigger is a quote-reply) followed by recent-chat
-/// history. Both are best-effort and degrade independently.
+/// Whether the session holds any messages — on lookup failure bias
+/// towards `false` (re-delivery): a duplicated root is recoverable, a
+/// lost one is not.
+async fn has_messages(kernel: &Kernel, sid: &SessionId) -> bool {
+    kernel
+        .get_session(sid)
+        .await
+        .is_ok_and(|s| s.message_count > 0)
+}
+
+/// Whether this trigger's thread session has already consumed its root
+/// message. A reused mapping alone is not proof — commands like
+/// `/models` create empty sessions without consuming any context. The
+/// root counts as consumed when the session holds messages, or when the
+/// thread was deliberately `/clear`ed (cursor set despite the empty
+/// session). Non-thread messages and fresh sessions: never consumed.
+async fn root_consumed(
+    store: &Arc<dyn ChannelStore>,
+    channel_name: &str,
+    msg: &ChannelMessage,
+    reused: bool,
+    has_messages: bool,
+) -> bool {
+    let Some(thread_id) = msg.thread_id.as_deref() else {
+        return false;
+    };
+    if !reused || has_messages {
+        return reused && has_messages;
+    }
+    store
+        .get_history_cursor(channel_name, thread_id)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+}
+
+/// Assemble the context blocks for a triggering message: recent-chat
+/// history first (ambient background), then the quoted message (when
+/// the trigger is a quote-reply) right before the trigger it belongs
+/// to. Both are best-effort and degrade independently.
+///
+/// `root_in_session` seeds the root's delivery state, which then
+/// coordinates the two sources so a human-created thread's root is
+/// delivered exactly once: the quoted block first, history as the
+/// fallback. (The quoted fetch runs first even though its block comes
+/// last — the history dedup needs its delivery verdict.)
 async fn context_prefix(
     adapter: &Arc<dyn PlatformAdapter>,
     config: &ChannelConfig,
     store: &Arc<dyn ChannelStore>,
     channel_name: &str,
     msg: &ChannelMessage,
+    root_in_session: bool,
 ) -> Vec<ContentBlock> {
-    let mut blocks = maybe_quoted_prefix(adapter, msg).await.unwrap_or_default();
-    blocks.extend(
-        maybe_history_prefix(adapter, config, store, channel_name, msg)
-            .await
-            .unwrap_or_default(),
-    );
+    let mut root = if root_in_session {
+        RootDelivery::Consumed
+    } else {
+        RootDelivery::Pending
+    };
+    let quoted = maybe_quoted_prefix(adapter, msg, root).await;
+    // The quoted block carrying the thread root (any chain link) flips
+    // the state — history must not repeat it.
+    if quoted.as_ref().is_some_and(|(_, in_chain)| *in_chain) {
+        root = RootDelivery::ByQuote;
+    }
+    // History first, quoted last — the quote belongs to the trigger.
+    let mut blocks = maybe_history_prefix(adapter, config, store, channel_name, msg, root)
+        .await
+        .unwrap_or_default();
+    blocks.extend(quoted.map(|(b, _)| b).unwrap_or_default());
     blocks
 }
 
 /// Fetch and assemble the message a quote-reply points at, as a
 /// `<quoted_message>` context block followed by any attached images
-/// (same cap as history). Skipped for routine thread replies to the
-/// root message — that context is already in the thread's session.
-/// Best-effort: any failure degrades to no block.
+/// (same cap as history). The quoted message's own quote chain is
+/// walked too (capped at [`QUOTE_CHAIN_MAX`] fetches) — a quoted
+/// message's own quoted context would otherwise be lost, e.g. when a
+/// human thread's root is itself a quote-reply.
+///
+/// A routine in-thread reply to the root is skipped once the root is
+/// delivered (a reused session — the only non-`Pending` state reachable
+/// here): on a fresh, human-created thread the root is exactly the
+/// missing context, so it is injected like any other quote.
+/// Best-effort: any failure degrades to no block (or, mid-chain, to the
+/// prefix assembled so far).
+///
+/// The bool reports whether any chain link IS the thread's root — the
+/// single place that decides root delivery, so `context_prefix` can
+/// dedup the history block against it.
 async fn maybe_quoted_prefix(
     adapter: &Arc<dyn PlatformAdapter>,
     msg: &ChannelMessage,
-) -> Option<Vec<ContentBlock>> {
+    root: RootDelivery,
+) -> Option<(Vec<ContentBlock>, bool)> {
     let parent_id = msg.parent_id.as_deref()?;
-    if msg.thread_id.is_some() && msg.root_id.as_deref() == Some(parent_id) {
+    if root != RootDelivery::Pending
+        && msg.thread_id.is_some()
+        && msg.root_id.as_deref() == Some(parent_id)
+    {
         return None;
     }
-    let quoted = match adapter.fetch_message(parent_id).await {
-        Ok(Some(q)) => q,
-        Ok(None) => return None,
-        Err(e) => {
-            warn!(error = %e, parent_id, "quoted message fetch failed");
-            return None;
+    // Walk the quote chain: the quoted message first, then its own
+    // quoted ancestors.
+    let mut chain = Vec::new();
+    let mut root_in_chain = false;
+    let mut next = Some(parent_id.to_string());
+    while let Some(id) = next.take() {
+        if chain.len() >= QUOTE_CHAIN_MAX {
+            break;
         }
-    };
+        match adapter.fetch_message(&id).await {
+            Ok(Some(m)) => {
+                next.clone_from(&m.parent_id);
+                root_in_chain |= msg.root_id.as_deref() == Some(m.message_id.as_str());
+                chain.push(m);
+            }
+            Ok(None) => break,
+            Err(e) => {
+                warn!(error = %e, message_id = %id, "quoted message fetch failed");
+                break;
+            }
+        }
+    }
+    if chain.is_empty() {
+        return None;
+    }
+    // Ancestors first, the quoted message last — chronological reading.
+    chain.reverse();
+    let lines = chain.iter().map(sender_line).collect::<Vec<_>>().join("\n");
     let mut blocks = vec![ContentBlock::Text {
-        text: format!(
-            "<quoted_message>\n{}\n</quoted_message>",
-            sender_line(&quoted)
-        ),
+        text: format!("<quoted_message>\n{lines}\n</quoted_message>"),
     }];
+    // The quoted message's own images win over its ancestors' under the
+    // cap (the chain is oldest-first for reading; iterate newest-first
+    // here).
+    let pairs: Vec<(&str, &str)> = chain
+        .iter()
+        .rev()
+        .flat_map(|m| {
+            m.image_keys
+                .iter()
+                .map(move |k| (m.message_id.as_str(), k.as_str()))
+        })
+        .collect();
     let downloaded = futures::future::join_all(
-        quoted
-            .image_keys
+        pairs
             .iter()
             .take(IMAGE_DOWNLOAD_MAX)
-            .map(|key| adapter.download_message_image(&quoted.message_id, key)),
+            .map(|(message_id, key)| adapter.download_message_image(message_id, key)),
     )
     .await;
     blocks.extend(downloaded.into_iter().flatten());
-    Some(blocks)
+    Some((blocks, root_in_chain))
 }
+
+/// Max messages fetched for one quoted block: the quoted message plus
+/// its quote ancestors (bounds latency on pathologically long chains).
+const QUOTE_CHAIN_MAX: usize = 3;
 
 /// `[HH:MM] sender: text` (local time, per-message capped) — the shared
 /// line format for quoted and history context blocks.
@@ -1359,6 +1526,9 @@ fn is_chat_level_message(msg: &ChannelMessage, reply_in_thread: bool) -> bool {
 }
 
 /// Get an existing session or create a new one, updating routing info.
+/// The bool reports whether an existing mapping was reused — callers
+/// injecting context need it to tell a fresh thread session apart from
+/// one that already consumed its root (see [`root_consumed`]).
 async fn get_or_create_session(
     channel_name: &str,
     store: &Arc<dyn ChannelStore>,
@@ -1366,13 +1536,13 @@ async fn get_or_create_session(
     chat_id: &str,
     mapping_key: &str,
     reply_msg_id: Option<&str>,
-) -> Result<SessionId> {
+) -> Result<(SessionId, bool)> {
     if let Some(sid) = store.find_mapping(channel_name, mapping_key).await? {
         info!(channel = %channel_name, mapping_key, session_id = %sid.0, "reusing session");
         store
             .save_mapping(channel_name, mapping_key, &sid, chat_id, reply_msg_id)
             .await?;
-        return Ok(sid);
+        return Ok((sid, true));
     }
 
     let model_key = model_key_for_new_channel_session(
@@ -1396,7 +1566,7 @@ async fn get_or_create_session(
         .save_mapping(channel_name, mapping_key, &sid, chat_id, reply_msg_id)
         .await?;
     info!(channel = %channel_name, mapping_key, session_id = %sid.0, "created session");
-    Ok(sid)
+    Ok((sid, false))
 }
 
 /// Resolve the persisted model key for a newly-created channel session.
@@ -1507,6 +1677,15 @@ enum ChannelCommand {
     Restart,
     /// Not a command.
     None,
+}
+
+/// Whether a channel command consumes chat context — only then may the
+/// history cursor advance past it (see the processing loop).
+fn consumes_history(cmd: &ChannelCommand) -> bool {
+    matches!(
+        cmd,
+        ChannelCommand::None | ChannelCommand::Steer(_) | ChannelCommand::Queue(_)
+    )
 }
 
 fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {

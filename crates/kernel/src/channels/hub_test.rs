@@ -15,6 +15,9 @@ pub struct MockAdapter {
     pub outgoing: tokio::sync::Mutex<Vec<(String, Vec<ContentBlock>)>>,
     pub reactions: tokio::sync::Mutex<Vec<(String, String)>>,
     pub quoted: tokio::sync::Mutex<Option<crate::channels::HistoryMessage>>,
+    /// Per-id quoted responses (quote chains); consulted before `quoted`.
+    pub quoted_map:
+        tokio::sync::Mutex<std::collections::HashMap<String, crate::channels::HistoryMessage>>,
     pub quoted_calls: tokio::sync::Mutex<Vec<String>>,
     /// When false (default), image downloads fail — mirroring the trait's
     /// default unsupported behavior so degradation paths stay testable.
@@ -27,6 +30,7 @@ impl MockAdapter {
             outgoing: tokio::sync::Mutex::new(Vec::new()),
             reactions: tokio::sync::Mutex::new(Vec::new()),
             quoted: tokio::sync::Mutex::new(None),
+            quoted_map: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             quoted_calls: tokio::sync::Mutex::new(Vec::new()),
             image_download_ok: tokio::sync::Mutex::new(false),
         }
@@ -76,6 +80,9 @@ impl PlatformAdapter for MockAdapter {
     ) -> std::result::Result<Option<crate::channels::HistoryMessage>, crate::channels::ChannelError>
     {
         self.quoted_calls.lock().await.push(message_id.to_string());
+        if let Some(m) = self.quoted_map.lock().await.get(message_id) {
+            return Ok(Some(m.clone()));
+        }
         Ok(self.quoted.lock().await.clone())
     }
 
@@ -1281,6 +1288,7 @@ fn assemble_history_formats_chronological_capped_lines() {
             sender_id: "ou_alice".into(),
             text: "  hello world  ".into(),
             image_keys: vec![],
+            parent_id: None,
         },
         HistoryMessage {
             message_id: "m2".into(),
@@ -1288,6 +1296,7 @@ fn assemble_history_formats_chronological_capped_lines() {
             sender_id: "ou_bob".into(),
             text: "x".repeat(2500),
             image_keys: vec![],
+            parent_id: None,
         },
     ];
     let refs: Vec<&HistoryMessage> = messages.iter().collect();
@@ -1307,6 +1316,7 @@ struct HistoryMockAdapter {
     empty: std::sync::atomic::AtomicBool,
     with_root: std::sync::atomic::AtomicBool,
     with_images: std::sync::atomic::AtomicBool,
+    quoted: tokio::sync::Mutex<Option<HistoryMessage>>,
 }
 
 #[async_trait::async_trait]
@@ -1327,6 +1337,13 @@ impl PlatformAdapter for HistoryMockAdapter {
         _reply_msg_id: Option<&str>,
     ) -> std::result::Result<Option<String>, crate::channels::ChannelError> {
         Ok(None)
+    }
+
+    async fn fetch_message(
+        &self,
+        _message_id: &str,
+    ) -> std::result::Result<Option<HistoryMessage>, crate::channels::ChannelError> {
+        Ok(self.quoted.lock().await.clone())
     }
 
     async fn fetch_history(
@@ -1352,6 +1369,7 @@ impl PlatformAdapter for HistoryMockAdapter {
                 sender_id: "ou_a".into(),
                 text: "thread root".into(),
                 image_keys: vec![],
+                parent_id: None,
             });
         }
         messages.extend([
@@ -1361,6 +1379,7 @@ impl PlatformAdapter for HistoryMockAdapter {
                 sender_id: "ou_a".into(),
                 text: "earlier".into(),
                 image_keys: vec![],
+                parent_id: None,
             },
             HistoryMessage {
                 message_id: "m1".into(),
@@ -1372,6 +1391,7 @@ impl PlatformAdapter for HistoryMockAdapter {
                 } else {
                     vec![]
                 },
+                parent_id: None,
             },
             HistoryMessage {
                 message_id: "trigger".into(),
@@ -1379,6 +1399,7 @@ impl PlatformAdapter for HistoryMockAdapter {
                 sender_id: "ou_b".into(),
                 text: "trigger msg".into(),
                 image_keys: vec![],
+                parent_id: None,
             },
         ]);
         Ok(messages)
@@ -1424,6 +1445,7 @@ fn quoted_history_msg() -> HistoryMessage {
         sender_id: "ou_x".into(),
         text: "被引用的内容".into(),
         image_keys: vec![],
+        parent_id: None,
     }
 }
 
@@ -1436,22 +1458,49 @@ async fn test_quoted_prefix_rules() {
     let base = group_msg(None);
 
     // No quote → nothing, and no fetch attempted.
-    assert!(maybe_quoted_prefix(&adapter, &base).await.is_none());
+    assert!(maybe_quoted_prefix(&adapter, &base, RootDelivery::Pending)
+        .await
+        .is_none());
     assert!(mock.quoted_calls.lock().await.is_empty());
 
-    // Routine thread reply to the root → skipped (already in the session).
+    // Routine thread reply to the root in a reused session → skipped
+    // (the root was already consumed into the session).
     let mut thread_reply = base.clone();
     thread_reply.thread_id = Some("omt_1".into());
     thread_reply.root_id = Some("om_root".into());
     thread_reply.parent_id = Some("om_root".into());
-    assert!(maybe_quoted_prefix(&adapter, &thread_reply).await.is_none());
+    assert!(
+        maybe_quoted_prefix(&adapter, &thread_reply, RootDelivery::Consumed)
+            .await
+            .is_none()
+    );
     assert!(mock.quoted_calls.lock().await.is_empty());
+
+    // Same reply on a FRESH session (human-created thread): the root is
+    // exactly the missing context → injected like any other quote, and
+    // reported as root-delivering.
+    mock.quoted_map.lock().await.insert(
+        "om_root".into(),
+        HistoryMessage {
+            message_id: "om_root".into(),
+            create_time: 1_700_000_000_000,
+            sender_id: "ou_x".into(),
+            text: "话题根消息".into(),
+            image_keys: vec![],
+            parent_id: None,
+        },
+    );
+    let (blocks, in_chain) = maybe_quoted_prefix(&adapter, &thread_reply, RootDelivery::Pending)
+        .await
+        .expect("fresh thread root injected");
+    assert!(blocks_text(&blocks).contains("<quoted_message>"));
+    assert!(in_chain, "the chain link IS the root");
 
     // Top-level quote → injected (a fresh session: the quote IS the context).
     let mut top_quote = base.clone();
     top_quote.parent_id = Some("om_q".into());
     top_quote.root_id = Some("om_q".into());
-    let blocks = maybe_quoted_prefix(&adapter, &top_quote)
+    let (blocks, _) = maybe_quoted_prefix(&adapter, &top_quote, RootDelivery::Pending)
         .await
         .expect("quoted block");
     let text = blocks_text(&blocks);
@@ -1463,9 +1512,16 @@ async fn test_quoted_prefix_rules() {
     mid_quote.thread_id = Some("omt_1".into());
     mid_quote.root_id = Some("om_root".into());
     mid_quote.parent_id = Some("om_q".into());
-    assert!(maybe_quoted_prefix(&adapter, &mid_quote).await.is_some());
+    assert!(
+        maybe_quoted_prefix(&adapter, &mid_quote, RootDelivery::Consumed)
+            .await
+            .is_some()
+    );
 
-    assert_eq!(mock.quoted_calls.lock().await.as_slice(), ["om_q", "om_q"]);
+    assert_eq!(
+        mock.quoted_calls.lock().await.as_slice(),
+        ["om_root", "om_q", "om_q"]
+    );
 }
 
 #[tokio::test]
@@ -1479,11 +1535,12 @@ async fn test_quoted_prefix_includes_images() {
         sender_id: "ou_x".into(),
         text: "[image]".into(),
         image_keys: vec!["img_1".into()],
+        parent_id: None,
     });
 
     let mut msg = group_msg(None);
     msg.parent_id = Some("om_img".into());
-    let blocks = maybe_quoted_prefix(&adapter, &msg)
+    let (blocks, _) = maybe_quoted_prefix(&adapter, &msg, RootDelivery::Pending)
         .await
         .expect("quoted block");
     assert!(
@@ -1495,6 +1552,265 @@ async fn test_quoted_prefix_includes_images() {
 }
 
 #[tokio::test]
+async fn test_quoted_prefix_walks_quote_chain() {
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let mut map = mock.quoted_map.lock().await;
+    map.insert(
+        "om_r".into(),
+        HistoryMessage {
+            message_id: "om_r".into(),
+            create_time: 1_700_000_060_000,
+            sender_id: "ou_b".into(),
+            text: "引用回复：这根消息说了啥".into(),
+            image_keys: vec![],
+            parent_id: Some("om_m0".into()),
+        },
+    );
+    map.insert(
+        "om_m0".into(),
+        HistoryMessage {
+            message_id: "om_m0".into(),
+            create_time: 1_700_000_000_000,
+            sender_id: "ou_a".into(),
+            text: "原始消息".into(),
+            image_keys: vec![],
+            parent_id: None,
+        },
+    );
+    drop(map);
+
+    // A human thread whose root is itself a quote-reply: the fresh
+    // session gets the whole chain, ancestors first.
+    let mut msg = group_msg(Some("omt_1".into()));
+    msg.root_id = Some("om_r".into());
+    msg.parent_id = Some("om_r".into());
+    let (blocks, in_chain) = maybe_quoted_prefix(&adapter, &msg, RootDelivery::Pending)
+        .await
+        .expect("quoted chain");
+    let text = blocks_text(&blocks);
+    let ancestor = text.find("ou_a: 原始消息").expect("ancestor: {text}");
+    let quoted = text.find("ou_b: 引用回复").expect("quoted: {text}");
+    assert!(ancestor < quoted, "chronological: {text}");
+    assert!(in_chain, "chain reached the root: {text}");
+    assert_eq!(mock.quoted_calls.lock().await.as_slice(), ["om_r", "om_m0"]);
+}
+
+#[tokio::test]
+async fn test_quoted_prefix_chain_capped_and_partial() {
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    // Four-deep chain → capped at QUOTE_CHAIN_MAX fetches.
+    {
+        let mut map = mock.quoted_map.lock().await;
+        for (id, parent) in [("m1", "m2"), ("m2", "m3"), ("m3", "m4"), ("m4", "m5")] {
+            map.insert(
+                id.into(),
+                HistoryMessage {
+                    message_id: id.into(),
+                    create_time: 1,
+                    sender_id: "ou_a".into(),
+                    text: id.into(),
+                    image_keys: vec![],
+                    parent_id: Some(parent.into()),
+                },
+            );
+        }
+    }
+    let mut msg = group_msg(None);
+    msg.parent_id = Some("m1".into());
+    let (blocks, _) = maybe_quoted_prefix(&adapter, &msg, RootDelivery::Pending)
+        .await
+        .expect("chain");
+    let text = blocks_text(&blocks);
+    assert!(text.contains("m3"), "three links assembled: {text}");
+    assert!(!text.contains("m4"), "capped before the fourth: {text}");
+    assert_eq!(mock.quoted_calls.lock().await.len(), QUOTE_CHAIN_MAX);
+
+    // A mid-chain miss keeps the prefix assembled so far.
+    let mock2 = Arc::new(MockAdapter::new("mock2"));
+    let adapter2: Arc<dyn PlatformAdapter> = mock2.clone();
+    mock2.quoted_map.lock().await.insert(
+        "only".into(),
+        HistoryMessage {
+            message_id: "only".into(),
+            create_time: 1,
+            sender_id: "ou_a".into(),
+            text: "第一层".into(),
+            image_keys: vec![],
+            parent_id: Some("missing".into()),
+        },
+    );
+    let mut msg2 = group_msg(None);
+    msg2.parent_id = Some("only".into());
+    let (blocks, _) = maybe_quoted_prefix(&adapter2, &msg2, RootDelivery::Pending)
+        .await
+        .expect("partial chain");
+    assert!(blocks_text(&blocks).contains("第一层"));
+    assert_eq!(
+        mock2.quoted_calls.lock().await.as_slice(),
+        ["only", "missing"]
+    );
+}
+
+#[tokio::test]
+async fn context_prefix_orders_history_before_quoted() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let mock = Arc::new(HistoryMockAdapter::default());
+    *mock.quoted.lock().await = Some(HistoryMessage {
+        message_id: "om_q".into(),
+        create_time: 50,
+        sender_id: "ou_x".into(),
+        text: "被引用的内容".into(),
+        image_keys: vec![],
+        parent_id: None,
+    });
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig::default();
+    // In-thread trigger quoting a mid-thread message (not the root), so
+    // both blocks are produced: history as background, quoted adjacent
+    // to the trigger.
+    let mut msg = group_msg(Some("omt_1".into()));
+    msg.root_id = Some("om_root".into());
+    msg.parent_id = Some("om_q".into());
+    let blocks = context_prefix(&adapter, &config, &store, "feishu", &msg, false).await;
+    let text = blocks_text(&blocks);
+    let history = text.find("<recent_chat_history>").expect("history: {text}");
+    let quoted = text.find("<quoted_message>").expect("quoted: {text}");
+    assert!(history < quoted, "history first, quoted last: {text}");
+}
+
+#[tokio::test]
+async fn context_prefix_fresh_thread_root_exactly_once() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let mock = Arc::new(HistoryMockAdapter::default());
+    mock.with_root
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    *mock.quoted.lock().await = Some(HistoryMessage {
+        message_id: "root-msg".into(),
+        create_time: 50,
+        sender_id: "ou_a".into(),
+        text: "thread root".into(),
+        image_keys: vec![],
+        parent_id: None,
+    });
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig::default();
+    // Fresh in-thread trigger replying to the root: the quoted block
+    // delivers it (Pending → ByQuote), history must not repeat it.
+    let mut msg = group_msg(Some("omt_1".into()));
+    msg.root_id = Some("root-msg".into());
+    msg.parent_id = Some("root-msg".into());
+    let blocks = context_prefix(&adapter, &config, &store, "feishu", &msg, false).await;
+    let text = blocks_text(&blocks);
+    assert_eq!(
+        text.matches("thread root").count(),
+        1,
+        "root exactly once: {text}"
+    );
+    assert!(text.contains("<quoted_message>"), "via quoted: {text}");
+}
+
+#[tokio::test]
+async fn root_consumed_rules() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let mut msg = group_msg(Some("omt_1".into()));
+
+    // Fresh session → never consumed, even with messages reported.
+    assert!(!root_consumed(&store, "feishu", &msg, false, true).await);
+    // Reused session holding messages → consumed (bot-created thread,
+    // or a human thread after its first trigger).
+    assert!(root_consumed(&store, "feishu", &msg, true, true).await);
+    // Reused but EMPTY session and no cursor (a command created it) →
+    // not consumed: the root still has to arrive.
+    assert!(!root_consumed(&store, "feishu", &msg, true, false).await);
+    // Empty session but the thread cursor is set → deliberately cleared
+    // → counts as consumed.
+    store
+        .set_history_cursor("feishu", "omt_1", 100)
+        .await
+        .unwrap();
+    assert!(root_consumed(&store, "feishu", &msg, true, false).await);
+
+    // Non-thread messages never consume a root.
+    msg.thread_id = None;
+    assert!(!root_consumed(&store, "feishu", &msg, true, true).await);
+}
+
+#[test]
+fn consumes_history_only_for_run_triggers() {
+    assert!(consumes_history(&ChannelCommand::None));
+    assert!(consumes_history(&ChannelCommand::Steer("x".into())));
+    assert!(consumes_history(&ChannelCommand::Queue("x".into())));
+    for cmd in [
+        ChannelCommand::Clear,
+        ChannelCommand::Stop,
+        ChannelCommand::ListModels,
+        ChannelCommand::CurrentModel,
+        ChannelCommand::SwitchModel("k".into()),
+        ChannelCommand::Info,
+        ChannelCommand::Help,
+        ChannelCommand::Restart,
+    ] {
+        assert!(!consumes_history(&cmd));
+    }
+}
+
+#[tokio::test]
+async fn history_prefix_backstops_root_outside_page() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let mock = Arc::new(HistoryMockAdapter::default());
+    // No with_root: the fetched page does NOT include the root.
+    *mock.quoted.lock().await = Some(HistoryMessage {
+        message_id: "root-msg".into(),
+        create_time: 50,
+        sender_id: "ou_a".into(),
+        text: "thread root".into(),
+        image_keys: vec![],
+        parent_id: None,
+    });
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig::default();
+    let mut msg = group_msg(Some("omt_1".into()));
+    msg.root_id = Some("root-msg".into());
+    // The trigger replies to a mid-thread message, so the quoted path
+    // does not carry the root; the backstop must.
+    msg.parent_id = Some("m0".into());
+
+    let prefix = maybe_history_prefix(
+        &adapter,
+        &config,
+        &store,
+        "feishu",
+        &msg,
+        RootDelivery::Pending,
+    )
+    .await
+    .expect("history");
+    let prefix = blocks_text(&prefix);
+    assert!(prefix.contains("thread root"), "backstopped root: {prefix}");
+
+    // Consumed state → no backstop fetch.
+    let (_pool2, store2) = create_test_pool().await;
+    let store2: Arc<dyn ChannelStore> = store2;
+    let prefix = maybe_history_prefix(
+        &adapter,
+        &config,
+        &store2,
+        "feishu",
+        &msg,
+        RootDelivery::Consumed,
+    )
+    .await
+    .expect("history");
+    assert!(!blocks_text(&prefix).contains("thread root"));
+}
+
+#[tokio::test]
 async fn history_prefix_assembles_drops_trigger_and_advances_cursor() {
     let (_pool, store) = create_test_pool().await;
     let store: Arc<dyn ChannelStore> = store;
@@ -1503,7 +1819,15 @@ async fn history_prefix_assembles_drops_trigger_and_advances_cursor() {
     let config = ChannelConfig::default();
     let msg = group_msg(None);
 
-    let blocks = maybe_history_prefix(&adapter, &config, &store, "feishu", &msg).await;
+    let blocks = maybe_history_prefix(
+        &adapter,
+        &config,
+        &store,
+        "feishu",
+        &msg,
+        RootDelivery::Pending,
+    )
+    .await;
     let blocks = blocks.expect("history prefix");
     let prefix = blocks_text(&blocks);
     assert!(prefix.contains("earlier"));
@@ -1515,7 +1839,15 @@ async fn history_prefix_assembles_drops_trigger_and_advances_cursor() {
     assert_eq!(cursor, Some(300));
 
     // Second call passes the stored cursor through to the adapter.
-    let _ = maybe_history_prefix(&adapter, &config, &store, "feishu", &msg).await;
+    let _ = maybe_history_prefix(
+        &adapter,
+        &config,
+        &store,
+        "feishu",
+        &msg,
+        RootDelivery::Pending,
+    )
+    .await;
     let calls = mock.calls.lock().await;
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[0], (None, 20));
@@ -1531,7 +1863,15 @@ async fn history_prefix_skips_private_chats() {
     let mut msg = group_msg(None);
     msg.is_group = false;
 
-    let prefix = maybe_history_prefix(&adapter, &config, &store, "feishu", &msg).await;
+    let prefix = maybe_history_prefix(
+        &adapter,
+        &config,
+        &store,
+        "feishu",
+        &msg,
+        RootDelivery::Pending,
+    )
+    .await;
     assert!(prefix.is_none());
 }
 
@@ -1543,7 +1883,15 @@ async fn history_prefix_uses_thread_container_when_present() {
     let config = ChannelConfig::default();
     let msg = group_msg(Some("omt_1".into()));
 
-    let _ = maybe_history_prefix(&adapter, &config, &store, "feishu", &msg).await;
+    let _ = maybe_history_prefix(
+        &adapter,
+        &config,
+        &store,
+        "feishu",
+        &msg,
+        RootDelivery::Pending,
+    )
+    .await;
     // Cursor is keyed by the thread id, not the chat id.
     let cursor = store.get_history_cursor("feishu", "omt_1").await.unwrap();
     assert_eq!(cursor, Some(300));
@@ -1562,7 +1910,15 @@ async fn history_prefix_degrades_to_none_on_fetch_error() {
     let adapter: Arc<dyn PlatformAdapter> = mock.clone();
     let config = ChannelConfig::default();
 
-    let prefix = maybe_history_prefix(&adapter, &config, &store, "feishu", &group_msg(None)).await;
+    let prefix = maybe_history_prefix(
+        &adapter,
+        &config,
+        &store,
+        "feishu",
+        &group_msg(None),
+        RootDelivery::Pending,
+    )
+    .await;
     assert!(prefix.is_none(), "fetch failure degrades to no context");
 }
 
@@ -1577,7 +1933,15 @@ async fn history_prefix_disabled_by_zero_config() {
         ..ChannelConfig::default()
     };
 
-    let prefix = maybe_history_prefix(&adapter, &config, &store, "feishu", &group_msg(None)).await;
+    let prefix = maybe_history_prefix(
+        &adapter,
+        &config,
+        &store,
+        "feishu",
+        &group_msg(None),
+        RootDelivery::Pending,
+    )
+    .await;
     assert!(prefix.is_none());
     assert!(mock.calls.lock().await.is_empty(), "no fetch issued");
 }
@@ -1591,7 +1955,15 @@ async fn history_prefix_empty_fetch_keeps_cursor_unset() {
     let adapter: Arc<dyn PlatformAdapter> = mock.clone();
     let config = ChannelConfig::default();
 
-    let prefix = maybe_history_prefix(&adapter, &config, &store, "feishu", &group_msg(None)).await;
+    let prefix = maybe_history_prefix(
+        &adapter,
+        &config,
+        &store,
+        "feishu",
+        &group_msg(None),
+        RootDelivery::Pending,
+    )
+    .await;
     assert!(prefix.is_none());
     assert_eq!(
         store.get_history_cursor("feishu", "oc_1").await.unwrap(),
@@ -1613,7 +1985,15 @@ async fn history_prefix_skips_channel_level_when_reply_in_thread() {
 
     // Channel-level trigger with reply_in_thread: no history (a fresh
     // thread starts; cross-topic chatter is noise there).
-    let prefix = maybe_history_prefix(&adapter, &config, &store, "feishu", &group_msg(None)).await;
+    let prefix = maybe_history_prefix(
+        &adapter,
+        &config,
+        &store,
+        "feishu",
+        &group_msg(None),
+        RootDelivery::Pending,
+    )
+    .await;
     assert!(prefix.is_none());
     assert!(mock.calls.lock().await.is_empty(), "no fetch issued");
 
@@ -1624,6 +2004,7 @@ async fn history_prefix_skips_channel_level_when_reply_in_thread() {
         &store,
         "feishu",
         &group_msg(Some("omt_1".into())),
+        RootDelivery::Pending,
     )
     .await;
     assert!(prefix.is_some(), "thread history still injected");
@@ -1683,9 +2064,7 @@ async fn advance_cursor_is_monotonic_and_gated() {
 }
 
 #[tokio::test]
-async fn history_prefix_drops_consumed_thread_root_only() {
-    let (_pool, store) = create_test_pool().await;
-    let store: Arc<dyn ChannelStore> = store;
+async fn history_prefix_thread_root_drop_rules() {
     let mock = Arc::new(HistoryMockAdapter::default());
     mock.with_root
         .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -1694,15 +2073,44 @@ async fn history_prefix_drops_consumed_thread_root_only() {
     let mut msg = group_msg(Some("omt_1".into()));
     msg.root_id = Some("root-msg".into());
 
-    // Bot-created thread: the root was consumed at channel level (chat
-    // cursor covers it) → dropped from the thread history.
+    // Fresh human thread → the root is kept, even with a chat cursor far
+    // newer than it (the old heuristic's misfire condition).
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
     store
         .set_history_cursor("feishu", "oc_1", 100)
         .await
         .unwrap();
-    let prefix = maybe_history_prefix(&adapter, &config, &store, "feishu", &msg)
-        .await
-        .expect("history");
+    let prefix = maybe_history_prefix(
+        &adapter,
+        &config,
+        &store,
+        "feishu",
+        &msg,
+        RootDelivery::Pending,
+    )
+    .await
+    .expect("history");
+    let prefix = blocks_text(&prefix);
+    assert!(
+        prefix.contains("thread root"),
+        "fresh thread root kept: {prefix}"
+    );
+    assert!(prefix.contains("earlier"), "other entries kept: {prefix}");
+
+    // Reused session → the root was already consumed → dropped.
+    let (_pool2, store2) = create_test_pool().await;
+    let store2: Arc<dyn ChannelStore> = store2;
+    let prefix = maybe_history_prefix(
+        &adapter,
+        &config,
+        &store2,
+        "feishu",
+        &msg,
+        RootDelivery::Consumed,
+    )
+    .await
+    .expect("history");
     let prefix = blocks_text(&prefix);
     assert!(
         !prefix.contains("thread root"),
@@ -1710,20 +2118,24 @@ async fn history_prefix_drops_consumed_thread_root_only() {
     );
     assert!(prefix.contains("earlier"), "other entries kept: {prefix}");
 
-    // Human thread: chat cursor does NOT cover the root → kept.
-    let (_pool2, store2) = create_test_pool().await;
-    let store2: Arc<dyn ChannelStore> = store2;
-    store2
-        .set_history_cursor("feishu", "oc_1", 10)
-        .await
-        .unwrap();
-    let prefix = maybe_history_prefix(&adapter, &config, &store2, "feishu", &msg)
-        .await
-        .expect("history");
+    // Fresh session, but the quoted block just delivered the root →
+    // dropped here so it isn't injected twice.
+    let (_pool3, store3) = create_test_pool().await;
+    let store3: Arc<dyn ChannelStore> = store3;
+    let prefix = maybe_history_prefix(
+        &adapter,
+        &config,
+        &store3,
+        "feishu",
+        &msg,
+        RootDelivery::ByQuote,
+    )
+    .await
+    .expect("history");
     let prefix = blocks_text(&prefix);
     assert!(
-        prefix.contains("thread root"),
-        "unconsumed root kept: {prefix}"
+        !prefix.contains("thread root"),
+        "quoted root deduped: {prefix}"
     );
 }
 
@@ -1737,9 +2149,16 @@ async fn history_prefix_attaches_history_images() {
     let adapter: Arc<dyn PlatformAdapter> = mock.clone();
     let config = ChannelConfig::default();
 
-    let blocks = maybe_history_prefix(&adapter, &config, &store, "feishu", &group_msg(None))
-        .await
-        .expect("history blocks");
+    let blocks = maybe_history_prefix(
+        &adapter,
+        &config,
+        &store,
+        "feishu",
+        &group_msg(None),
+        RootDelivery::Pending,
+    )
+    .await
+    .expect("history blocks");
 
     // Text block first, then the downloaded image of history message m1.
     assert!(matches!(blocks[0], ContentBlock::Text { .. }));
@@ -1956,4 +2375,139 @@ async fn gate_skips_reaction_without_message_id() {
 
     assert!(!gate_message(&adapter, &feishu_gate_config(), &msg).await);
     assert!(mock.reactions.lock().await.is_empty());
+}
+
+// ── Live Feishu E2E (manual) ─────────────────────────────────────────
+
+/// Live-e2e env vars: feishu credentials plus a real thread —
+/// `YOMI_E2E_ROOT` its root message, `YOMI_E2E_TRIGGER` an in-thread
+/// @bot message replying to that root. `None` (with a skip note) when
+/// unset.
+///
+/// ```sh
+/// YOMI_E2E_FEISHU_APP_ID=… YOMI_E2E_FEISHU_APP_SECRET=… \
+/// YOMI_E2E_THREAD=omt_… YOMI_E2E_ROOT=om_… YOMI_E2E_TRIGGER=om_… \
+/// cargo test -p kernel e2e_feishu -- --ignored --nocapture
+/// ```
+fn e2e_vars() -> Option<[String; 5]> {
+    let keys = [
+        "YOMI_E2E_FEISHU_APP_ID",
+        "YOMI_E2E_FEISHU_APP_SECRET",
+        "YOMI_E2E_THREAD",
+        "YOMI_E2E_ROOT",
+        "YOMI_E2E_TRIGGER",
+    ];
+    if keys.iter().any(|k| std::env::var(k).is_err()) {
+        eprintln!("YOMI_E2E_* env vars not set; skipping live e2e");
+        return None;
+    }
+    let v: Vec<String> = keys.iter().map(|k| std::env::var(k).unwrap()).collect();
+    Some(v.try_into().expect("5 env vars"))
+}
+
+/// Run `context_prefix` for a fresh-session, in-thread trigger replying
+/// to the root, against the real Feishu adapter.
+async fn e2e_setup(
+    app_id: String,
+    app_secret: String,
+    thread_id: String,
+    root_id: String,
+    trigger_id: String,
+) -> (Arc<dyn PlatformAdapter>, Vec<ContentBlock>) {
+    let adapter: Arc<dyn PlatformAdapter> = Arc::new(crate::channels::feishu::FeishuAdapter::new(
+        app_id, app_secret,
+    ));
+    let mut msg = group_msg(Some(thread_id));
+    msg.root_id = Some(root_id.clone());
+    msg.parent_id = Some(root_id);
+    msg.external_message_id = Some(trigger_id);
+
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let config = ChannelConfig {
+        reply_in_thread: true,
+        ..ChannelConfig::default()
+    };
+    let blocks = context_prefix(&adapter, &config, &store, "feishu", &msg, false).await;
+    (adapter, blocks)
+}
+
+/// End-to-end against the real Feishu API: a trigger inside a
+/// human-created thread must deliver the thread root — via the quoted
+/// block on a fresh session, image included — exactly once. Point the
+/// env vars at a thread whose root is an image message (exercises the
+/// download path too).
+#[tokio::test]
+#[ignore = "hits the real Feishu API; env-var driven, run manually"]
+async fn e2e_feishu_fresh_thread_root_delivered_once() {
+    let Some([app_id, app_secret, thread_id, root_id, trigger_id]) = e2e_vars() else {
+        return;
+    };
+    let (adapter, blocks) = e2e_setup(
+        app_id,
+        app_secret,
+        thread_id.clone(),
+        root_id.clone(),
+        trigger_id,
+    )
+    .await;
+
+    // Platform behavior the fix relies on: the thread container listing
+    // includes the root message.
+    let items = adapter
+        .fetch_history(
+            &crate::channels::HistoryContainer::Thread(thread_id),
+            None,
+            20,
+        )
+        .await
+        .expect("fetch history");
+    assert!(
+        items.iter().any(|m| m.message_id == root_id),
+        "thread listing must include the root"
+    );
+
+    // Delivered exactly once: as the quoted message (fresh thread), with
+    // the root's image; the history block stays empty here (the only
+    // other thread messages are the trigger and our own card).
+    let text = blocks_text(&blocks);
+    assert!(text.contains("<quoted_message>"), "root quoted: {text}");
+    let images = blocks
+        .iter()
+        .filter(|b| matches!(b, ContentBlock::ImageUrl { .. }))
+        .count();
+    assert_eq!(images, 1, "root image downloaded exactly once: {blocks:?}");
+}
+
+/// Same, against a thread whose root is itself a quote-reply: the whole
+/// quote chain must arrive — the ancestor (an image message, exercising
+/// the download path) first, then the root's text. Point the env vars
+/// at such a thread (root = a text quote-reply of an image message).
+#[tokio::test]
+#[ignore = "hits the real Feishu API; env-var driven, run manually"]
+async fn e2e_feishu_quoted_root_chain() {
+    let Some([app_id, app_secret, thread_id, root_id, trigger_id]) = e2e_vars() else {
+        return;
+    };
+    let (adapter, blocks) =
+        e2e_setup(app_id, app_secret, thread_id, root_id.clone(), trigger_id).await;
+    let text = blocks_text(&blocks);
+    assert!(text.contains("<quoted_message>"), "root quoted: {text}");
+    // The chain's two links, oldest first: the ancestor (an image) then
+    // the root's own text (derived live, not hardcoded).
+    let root_text = adapter
+        .fetch_message(&root_id)
+        .await
+        .expect("fetch root")
+        .expect("root exists")
+        .text;
+    let snippet: String = root_text.trim().chars().take(8).collect();
+    let ancestor = text.find("[image]").expect("ancestor line: {text}");
+    let root_pos = text.find(&snippet).expect("root line: {text}");
+    assert!(ancestor < root_pos, "chronological: {text}");
+    let images = blocks
+        .iter()
+        .filter(|b| matches!(b, ContentBlock::ImageUrl { .. }))
+        .count();
+    assert_eq!(images, 1, "ancestor image downloaded once: {blocks:?}");
 }
