@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.39] - 2026-08-02
+
+### Changed
+- 飞书状态卡统计行新增输出 token 实时预估：模型流式输出（含首个长思考）期间可见 token 增长，响应结束后照旧显示实际上下文占用。
+
 ## [0.7.38] - 2026-08-01
 
 ### Added
