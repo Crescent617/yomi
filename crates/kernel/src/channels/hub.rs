@@ -768,6 +768,16 @@ async fn handle_incoming_message(
             }
             Ok(Some("Context cleared.".to_string()))
         }
+        ChannelCommand::Compact => {
+            // Fire-and-forget: compacting progress shows on the status
+            // card when a run is live; otherwise this ack is the only
+            // feedback (outcome is only logged).
+            if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
+                kernel.compact_session(&sid);
+                return Ok(Some("⏳ Compacting context…".to_string()));
+            }
+            Ok(Some("No session to compact.".to_string()))
+        }
         ChannelCommand::Stop => {
             if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
                 kernel.cancel(&sid);
@@ -1608,6 +1618,7 @@ async fn model_key_for_new_channel_session(
 const CMD_MODELS: &str = "/models";
 const CMD_MODEL: &str = "/model";
 const CMD_CLEAR: &str = "/clear";
+const CMD_COMPACT: &str = "/compact";
 const CMD_STOP: &str = "/stop";
 const CMD_STEER: &str = "/steer";
 const CMD_QUEUE: &str = "/queue";
@@ -1624,6 +1635,7 @@ const CMD_PREFIXES: &[&str] = &[
     CMD_MODELS,
     CMD_MODEL,
     CMD_CLEAR,
+    CMD_COMPACT,
     CMD_STOP,
     CMD_STEER,
     CMD_QUEUE,
@@ -1643,6 +1655,7 @@ const HELP_TEXT: &str = "\
 `/models` — list configured models (current one marked)
 `/model` — show current model; `/model <key>` to switch
 `/clear` — clear context and start fresh
+`/compact` — summarize and compact the context
 `/stop` — stop the current run
 `/steer <text>` — inject a message into the current run
 `/queue <text>` — queue a message for a later turn
@@ -1657,6 +1670,8 @@ Anything else is sent to the agent as a message.";
 enum ChannelCommand {
     /// Clear context and start fresh.
     Clear,
+    /// Summarize and compact the session context.
+    Compact,
     /// Stop current streaming.
     Stop,
     /// Inject a steer message before the next turn.
@@ -1716,6 +1731,7 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
 
     match command {
         CMD_CLEAR if parts.next().is_none() => ChannelCommand::Clear,
+        CMD_COMPACT if parts.next().is_none() => ChannelCommand::Compact,
         CMD_STOP if parts.next().is_none() => ChannelCommand::Stop,
         CMD_INFO if parts.next().is_none() => ChannelCommand::Info,
         CMD_HELP if parts.next().is_none() => ChannelCommand::Help,

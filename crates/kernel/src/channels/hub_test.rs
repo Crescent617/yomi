@@ -658,6 +658,28 @@ fn test_parse_help_command() {
 }
 
 #[test]
+fn test_parse_compact_command() {
+    assert!(matches!(
+        parse_channel_command(Some("/compact")),
+        ChannelCommand::Compact
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/compact@yomi_bot")),
+        ChannelCommand::Compact
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/compact now")),
+        ChannelCommand::None
+    ));
+    // Prefix lookalikes are not commands.
+    assert!(matches!(
+        parse_channel_command(Some("/compaction")),
+        ChannelCommand::None
+    ));
+    assert!(HELP_TEXT.contains("/compact"));
+}
+
+#[test]
 fn test_parse_restart_command() {
     assert!(matches!(
         parse_channel_command(Some("/restart")),
