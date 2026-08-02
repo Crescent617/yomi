@@ -15,6 +15,7 @@ import {
   type KernelEvent,
 } from "./state.svelte";
 import { ensureSessionPhase, setSessionPhase } from "./session-phase";
+import { estimateStreamTokens, utf8Length } from "./tokens";
 import {
   sendDesktopNotification,
   refreshCheckpoints,
@@ -130,6 +131,11 @@ export function handleEvent(
 
 // ── Model events ───────────────────────────────────────────────────────
 
+/** The session's run-output counters, created on first streamed byte. */
+function outStream(session: SessionState) {
+  return (session.out_stream ??= { text: 0, json: 0, run: 0 });
+}
+
 function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
   if (event.chunk || event.tool_call_delta) {
     ensureSessionPhase(session, "streaming");
@@ -142,6 +148,12 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
       completion_tokens: u.completion_tokens,
       total_tokens: u.total_tokens,
     };
+    // Hold the real output for the end-fold; providers may report usage
+    // multiple times per response — the last report wins (as the kernel).
+    const s = outStream(session);
+    s.pending = u.completion_tokens;
+    s.text = 0;
+    s.json = 0;
     return true;
   }
 
@@ -151,6 +163,7 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
 
     if (content?.text) {
       const text = content.text;
+      outStream(session).text += utf8Length(text);
       const buf = streamingMessages[session.id] ?? [];
       const lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
       if (
@@ -182,6 +195,7 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
       const buf = streamingMessages[session.id] ?? [];
       const lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
       const thinkingText = content.thinking.thinking ?? "";
+      outStream(session).text += utf8Length(thinkingText);
       if (
         lastMsg &&
         lastMsg.type === "assistant" &&
@@ -219,6 +233,7 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
     return true;
   } else if (event.tool_call_delta) {
     const delta = event.tool_call_delta;
+    outStream(session).json += utf8Length(delta.arguments_delta ?? "");
     if (delta.tool_name) {
       session.streaming_tool_name = delta.tool_name;
     }
@@ -274,6 +289,22 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
     showNotification(`Model error: ${err.error}`, "error");
     return false;
   } else if (event.request) {
+    // New model call: discard the in-flight counters — a retried attempt
+    // restarts here, so its partial output is never double-counted.
+    const s = outStream(session);
+    s.text = 0;
+    s.json = 0;
+    s.pending = undefined;
+    return true;
+  } else if (event.end) {
+    // Response finished: fold the real completion when reported, the
+    // estimate otherwise (usage-less providers). Success-only — a failed
+    // attempt's counters were already discarded at the retry's request.
+    const s = outStream(session);
+    s.run += s.pending ?? estimateStreamTokens(s.text, s.json);
+    s.pending = undefined;
+    s.text = 0;
+    s.json = 0;
     return true;
   } else if (event.fallback) {
     const fb = event.fallback;
@@ -385,6 +416,10 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
       return true;
     } else if (typeof state === "object" && state.stopped) {
       setSessionPhase(session, "idle");
+      // The run is over — reset the output accumulation. Resetting here
+      // (not at the next Running) keeps the count across mid-run
+      // compaction, which fires MessageReplaced but never Stopped.
+      session.out_stream = undefined;
       const buf = streamingMessages[session.id] ?? [];
       if (buf.length > 0) {
         const seen = new Set(session.messages.map((m) => m.id));

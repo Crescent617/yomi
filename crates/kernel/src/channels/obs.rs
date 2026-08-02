@@ -14,7 +14,8 @@
 //! ("whisper"); a rotating placeholder fills the fresh card until the
 //! first tool or text arrives, and idle phase titles rotate for fun. The
 //! stats line shows real usage once reported (providers only emit it at
-//! response end); a live output estimate (`out ~z`) stands in mid-stream.
+//! response end); a live output estimate (`out ~z`), accumulated across
+//! the whole run, stands in mid-stream.
 //! On settlement the card **morphs** into the final reply (last text +
 //! run-trace panel, no header; abnormal endings get a notice line in the
 //! content). With mid-run posts the card freezes as a terminal receipt
@@ -138,10 +139,14 @@ struct ObsCardState {
     /// placeholder so it can't reappear after a Request boundary cleared
     /// the whisper.
     seen_text: bool,
-    /// Live output estimate for the in-flight response: text/thinking
-    /// bytes (≈4/token) and tool-arg bytes (≈2/token), reset per request.
+    /// Live output estimate: bytes of the in-flight response
+    /// (text/thinking ≈4/token, tool args ≈2/token), reset per request —
+    /// a retried attempt's bytes are discarded, never double-counted.
     out_text_bytes: usize,
     out_json_bytes: usize,
+    /// Estimated output tokens of completed responses this run, folded in
+    /// at `ModelEvent::End`; the run total grows monotonically.
+    out_run_tokens: u32,
     token_footer: Option<String>,
     last_patch_at: Instant,
     /// Set when the materialize send failed — no more attempts this run
@@ -165,6 +170,7 @@ impl ObsCardState {
             seen_text: false,
             out_text_bytes: 0,
             out_json_bytes: 0,
+            out_run_tokens: 0,
             token_footer: None,
             last_patch_at: now,
             send_failed: false,
@@ -180,14 +186,25 @@ impl ObsCardState {
     }
 
     /// Estimated output tokens of the in-flight response.
-    fn out_estimate(&self) -> u32 {
+    fn current_out_estimate(&self) -> u32 {
         (self.out_text_bytes.div_ceil(4) + self.out_json_bytes.div_ceil(2)) as u32
     }
 
-    /// Reset the output estimate (request boundary / response end).
+    /// Run-total output estimate: completed responses + in-flight.
+    fn out_estimate(&self) -> u32 {
+        self.out_run_tokens + self.current_out_estimate()
+    }
+
+    /// Reset the in-flight estimate (request boundary).
     fn reset_out_estimate(&mut self) {
         self.out_text_bytes = 0;
         self.out_json_bytes = 0;
+    }
+
+    /// Fold the finished response's estimate into the run total.
+    fn fold_out_estimate(&mut self) {
+        self.out_run_tokens += self.current_out_estimate();
+        self.reset_out_estimate();
     }
 }
 
@@ -473,7 +490,7 @@ impl ObsTracker {
                 self.update_running(session_id, |s| {
                     s.trace.record_model_end(&text);
                     s.whisper.clear();
-                    s.reset_out_estimate();
+                    s.fold_out_estimate();
                 })
                 .await;
             }
@@ -853,8 +870,8 @@ fn card_json_elements(template: &str, title: &str, elements: &[serde_json::Value
 }
 
 /// One-line run stats: elapsed · steps · tool total · tokens (greyed).
-/// Real usage (`ctx: x / y`) only lands at response end; while streaming,
-/// the output estimate (`out ~z`) stands in.
+/// Real usage (`ctx: x / y`) only lands at response end; `out ~z` is the
+/// run-cumulative output estimate.
 fn stats_line(s: &ObsCardState) -> String {
     use std::fmt::Write as _;
     let mut line = format!("⏱ {}", fmt_elapsed(s.started_at.elapsed()));

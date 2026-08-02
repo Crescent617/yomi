@@ -825,6 +825,14 @@ fn out_estimate_ratios() {
     assert_eq!(s.out_estimate(), 100);
     s.out_json_bytes = 200; // ≈2 bytes/token → +100
     assert_eq!(s.out_estimate(), 200);
+
+    // Folding moves the in-flight estimate into the run total.
+    s.fold_out_estimate();
+    assert_eq!(s.current_out_estimate(), 0);
+    assert_eq!(s.out_estimate(), 200);
+    // ...and further streaming adds on top.
+    s.out_text_bytes = 40;
+    assert_eq!(s.out_estimate(), 210);
 }
 
 #[tokio::test]
@@ -866,6 +874,52 @@ async fn thinking_only_stream_shows_estimate_on_placeholder_card() {
 }
 
 #[tokio::test]
+async fn retried_request_discards_failed_attempt_estimate() {
+    let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &request())
+        .await;
+    tracker
+        .handle_event(
+            &adapter,
+            &sid,
+            "chat-1",
+            None,
+            &text_chunk(&"x".repeat(400)),
+        )
+        .await;
+    let patches = mock.patches.lock().await;
+    let last = patches.last().unwrap().1.clone();
+    assert!(last.contains("out ~100"), "first attempt: {last}");
+    drop(patches);
+
+    // Stream fails; the retry re-fires Request and the failed attempt's
+    // bytes are discarded — never folded, never double-counted.
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &request())
+        .await;
+    let patches = mock.patches.lock().await;
+    let last = patches.last().unwrap().1.clone();
+    assert!(!last.contains("out ~"), "discarded at retry: {last}");
+    drop(patches);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &text_chunk(&"y".repeat(40)))
+        .await;
+    let patches = mock.patches.lock().await;
+    let last = patches.last().unwrap().1.clone();
+    assert!(last.contains("out ~10"), "restarted from zero: {last}");
+    assert!(!last.contains("out ~110"), "no double count: {last}");
+}
+
+#[tokio::test]
 async fn tool_call_deltas_count_toward_estimate() {
     let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
     let mock = MockAdapter::new();
@@ -894,7 +948,7 @@ async fn tool_call_deltas_count_toward_estimate() {
 }
 
 #[tokio::test]
-async fn estimate_resets_per_request_and_hands_off_to_real_usage() {
+async fn estimate_accumulates_across_the_run() {
     let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
     let mock = MockAdapter::new();
     let sid = sid();
@@ -914,16 +968,18 @@ async fn estimate_resets_per_request_and_hands_off_to_real_usage() {
     assert!(last.contains("out ~10"), "estimate while streaming: {last}");
     drop(patches);
 
-    // Response ends: the estimate hands off to real usage.
+    // Response ends: the estimate folds into the run total — it persists
+    // through tool execution instead of vanishing.
     tracker
         .handle_event(&adapter, &sid, "chat-1", None, &end_with_text("done"))
         .await;
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
-    assert!(!last.contains("out ~"), "handed off at end: {last}");
+    assert!(last.contains("out ~10"), "folded at end: {last}");
     drop(patches);
 
-    // Next request: estimate restarts from zero, real ctx rides along.
+    // Next request: the run total carries over, new streaming adds on
+    // top, real ctx rides along.
     tracker
         .handle_event(&adapter, &sid, "chat-1", None, &request())
         .await;
@@ -942,7 +998,7 @@ async fn estimate_resets_per_request_and_hands_off_to_real_usage() {
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
     assert!(last.contains("ctx: 12.3k / 200.0k"), "real usage: {last}");
-    assert!(last.contains("out ~10"), "estimate rides along: {last}");
+    assert!(last.contains("out ~20"), "run-cumulative estimate: {last}");
 }
 
 // ── Last tool & whisper ─────────────────────────────────────────────

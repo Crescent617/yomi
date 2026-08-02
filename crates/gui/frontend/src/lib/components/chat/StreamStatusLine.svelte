@@ -4,9 +4,8 @@
   import { findThinking, hasText } from "../../session";
   import { isActiveSessionPhase, noteRunStart } from "../../session-phase";
   import { humanizeToolName } from "../tool/tool-utils";
+  import { estimateStreamTokens } from "../../tokens";
   import {
-    estimateJsonTokens,
-    estimateTextTokens,
     extractPartialTarget,
     formatStreamTokens,
     formatTapeElapsed,
@@ -94,24 +93,13 @@
         : null,
   );
 
-  // Live token estimate for whatever is currently streaming: thinking text
-  // or tool call argument deltas. Null when nothing countable is streaming.
+  // Run-cumulative output tokens: real completions folded at each response
+  // end, the in-flight estimate (or pending usage report) on top.
   const streamTokens = $derived.by(() => {
-    const lastMsg = messages.at(-1);
-    if (lastMsg?.type !== "assistant") return null;
-
-    if (session.streaming_tool_name) {
-      const args = lastMsg.tool_calls?.at(-1)?.arguments;
-      if (!args) return null;
-      const tokens = estimateJsonTokens(args);
-      return tokens > 0 ? formatStreamTokens(tokens) : null;
-    }
-
-    if (status !== "Thinking") return null;
-    const lastBlock = lastMsg.content.at(-1);
-    if (lastBlock?.type !== "thinking" || !lastBlock.thinking) return null;
-    const tokens = estimateTextTokens(lastBlock.thinking);
-    return tokens > 0 ? formatStreamTokens(tokens) : null;
+    const s = session.out_stream;
+    if (!s) return null;
+    const total = s.run + (s.pending ?? estimateStreamTokens(s.text, s.json));
+    return total > 0 ? formatStreamTokens(total) : null;
   });
 
   const visible = $derived(isActiveSessionPhase(session.phase));

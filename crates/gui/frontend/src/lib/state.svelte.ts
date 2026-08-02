@@ -376,6 +376,11 @@ export interface SessionState {
     completion_tokens: number;
     total_tokens: number;
   };
+  /** Run-cumulative streamed output for the inline status line: in-flight
+   *  response bytes (reset per request — a retried attempt is discarded)
+   *  plus real completion tokens folded at each response end (`pending`
+   *  holds the latest usage report until then). Cleared when the run stops. */
+  out_stream?: { text: number; json: number; run: number; pending?: number };
   streaming_tool_name?: string;
   git_info?: GitInfo | null;
   git_refresh_revision?: number;
@@ -401,7 +406,7 @@ export interface ModelChunk {
     tool_name: string;
     arguments_delta: string;
   };
-  completed?: { message_id: string };
+  end?: { message_id: string };
   error?: { message_id: string; error: string };
   fallback?: { message_id: string; from: string; to: string };
   compacting?: { active: boolean };

@@ -33,7 +33,7 @@ channel（Feishu/Telegram）中的 agent 原本是黑箱：用户 @ 机器人后
 - **开卡**：首个 `Lifecycle(Running)` 即发——run 从一开始就可见（慢首请求、长 thinking、429 重试循环都有占位卡），占位文案（`Pondering…` 轮换）填充到首个 tool/文本到达；`Running` 每 turn 重发，每 run 只开一次卡。卡即回复——结算时同一张卡 morph 为最终回复。
 - **卡面**（compact 400px、蓝 header、12px notation 正文、英文文案）：
   - header 标题 = 当前阶段（💭 Thinking / 🐾 Typing / 🐹 工具名 / 🔁 重试 / ⚠️ 错误 / 📦 压缩 / ↪️ 降级 / 🎯 Goal，取最新事件值）
-  - 统计行：`⏱ 耗时 · N steps · N tools · ctx: x / y · out ~z（灰）`；ctx 为 provider 实报（响应结束才有），流式期间用输出预估 `out ~z`（text/thinking ≈4 字节/token、工具参数 ≈2）顶替——首个长 thinking 也能看到 token 走动
+  - 统计行：`⏱ 耗时 · N steps · N tools · ctx: x / y · out ~z（灰）`；ctx 为 provider 实报（响应结束才有），out 为本 run 累计输出预估（text/thinking ≈4 字节/token、工具参数 ≈2，单调增长）——首个长 thinking 也能看到 token 走动
   - `🔧 工具名 · 主参数摘要`（last tool，常驻）
   - `💬 灰色文本尾部`（whisper：chunk 累积、`Request` 清空、`End` 用完整文本自愈）
   - 动态文本行统一 ≤100 字符（含省略号，unicode 安全截断）
@@ -45,10 +45,10 @@ channel（Feishu/Telegram）中的 agent 原本是黑箱：用户 @ 机器人后
 |------|------|
 | `ToolEvent::Start` | tool_count+1；标题=🐹 工具名；last_tool 更新 |
 | `ToolEvent::End` | 标题回 Thinking；trace 标记工具完成/失败 |
-| `ModelEvent::Request` | 标题=Thinking；清 whisper；清零输出预估 |
+| `ModelEvent::Request` | 标题=Thinking；清 whisper；清零当前响应的输出计数（重试重发 Request，失败 attempt 不重复计） |
 | `ModelEvent::Chunk` | Text → 标题 Typing + whisper 累积；Thinking → 标题 Thinking；两者均计入输出预估 |
 | `ModelEvent::ToolCallDelta` | 不计卡面状态，仅参数字节计入输出预估 |
-| `ModelEvent::End` | whisper 用完整文本自愈；文本进回复缓冲（§5）；清零输出预估（交接给实报 ctx） |
+| `ModelEvent::End` | whisper 用完整文本自愈；文本进回复缓冲（§5）；当前响应预估折入 run 累计 |
 | `ModelEvent::TokenUsage` | 更新 token 统计（覆盖式） |
 | `Retrying` / `Error` / `Compacting` / `Fallback` / `GoalUpdated` | 更新阶段标题（Retrying 含 `in Ns` 等待时长） |
 

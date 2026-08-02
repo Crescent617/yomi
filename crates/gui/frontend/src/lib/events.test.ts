@@ -264,3 +264,153 @@ describe("tool event streaming", () => {
     expect(session.pending_ask_users).toHaveLength(0);
   });
 });
+
+describe("run output accumulation", () => {
+  const textChunk = (messageId: string, bytes: number) => ({
+    model: {
+      chunk: {
+        message_id: messageId,
+        content: { text: "y".repeat(bytes) },
+      },
+    },
+  });
+  const tokenUsage = (messageId: string, completionTokens: number) => ({
+    model: {
+      token_usage: {
+        message_id: messageId,
+        prompt_tokens: 10_000,
+        completion_tokens: completionTokens,
+        total_tokens: 10_000 + completionTokens,
+        context_window: 200_000,
+      },
+    },
+  });
+
+  const modelEnd = (messageId: string) => ({
+    model: { end: { message_id: messageId } },
+  });
+
+  test("accumulates bytes, folds last usage report at end, resets at Stopped", () => {
+    const sessionId = "run-output-accumulation";
+    const session = createSessionState({ id: sessionId });
+    sessionState.sessions.push(session);
+    streamingMessages[sessionId] = [];
+
+    // Run starts; streamed bytes count toward the in-flight estimate.
+    handleEvent(sessionId, "running-1", {
+      agent: { lifecycle: { state: "running" } },
+    });
+    handleEvent(sessionId, "request-1", {
+      model: { request: { message_id: "m1", message_count: 1 } },
+    });
+    handleEvent(sessionId, "chunk-1", textChunk("m1", 40));
+    handleEvent(sessionId, "delta-1", {
+      model: {
+        tool_call_delta: {
+          message_id: "m1",
+          tool_id: "t1",
+          tool_name: "bash",
+          arguments_delta: "a".repeat(200),
+        },
+      },
+    });
+    expect(session.out_stream).toMatchObject({ text: 40, json: 200, run: 0 });
+
+    // Usage is held as pending (last report wins); the end-fold moves it
+    // into the run total exactly once.
+    handleEvent(sessionId, "usage-1", tokenUsage("m1", 2_000));
+    handleEvent(sessionId, "usage-1-final", tokenUsage("m1", 2_345));
+    expect(session.out_stream).toMatchObject({
+      text: 0,
+      json: 0,
+      run: 0,
+      pending: 2_345,
+    });
+    handleEvent(sessionId, "end-1", modelEnd("m1"));
+    expect(session.out_stream).toMatchObject({ run: 2_345 });
+    expect(session.out_stream?.pending).toBeUndefined();
+
+    // Next request: in-flight counters reset, run total carries over.
+    handleEvent(sessionId, "request-2", {
+      model: { request: { message_id: "m2", message_count: 3 } },
+    });
+    handleEvent(sessionId, "chunk-2", textChunk("m2", 40));
+    expect(session.out_stream).toMatchObject({ run: 2_345, text: 40 });
+
+    // Per-turn Running does not reset mid-run; Stopped does.
+    handleEvent(sessionId, "running-2", {
+      agent: { lifecycle: { state: "running" } },
+    });
+    expect(session.out_stream?.run).toBe(2_345);
+    handleEvent(sessionId, "stopped", {
+      agent: {
+        lifecycle: {
+          state: { stopped: { reason: { completed: {} } } },
+        },
+      },
+    });
+    expect(session.out_stream).toBeUndefined();
+  });
+
+  test("a response without a usage report folds its estimate at end", () => {
+    const sessionId = "run-output-usageless";
+    const session = createSessionState({ id: sessionId });
+    sessionState.sessions.push(session);
+    streamingMessages[sessionId] = [];
+
+    handleEvent(sessionId, "running", {
+      agent: { lifecycle: { state: "running" } },
+    });
+    handleEvent(sessionId, "chunk-1", textChunk("m1", 400));
+    handleEvent(sessionId, "end-1", modelEnd("m1"));
+    expect(session.out_stream).toMatchObject({ run: 100, text: 0, json: 0 });
+  });
+
+  test("mid-run compaction (message_replaced, no Stopped) keeps the count", () => {
+    const sessionId = "run-output-compaction";
+    const session = createSessionState({ id: sessionId });
+    sessionState.sessions.push(session);
+    streamingMessages[sessionId] = [];
+
+    handleEvent(sessionId, "running", {
+      agent: { lifecycle: { state: "running" } },
+    });
+    handleEvent(sessionId, "chunk-1", textChunk("m1", 40));
+    handleEvent(sessionId, "usage-1", tokenUsage("m1", 2_345));
+    handleEvent(sessionId, "end-1", modelEnd("m1"));
+
+    // Auto-compaction replaces history mid-run: the run never stopped, so
+    // the accumulation survives; the next turn keeps adding on top.
+    handleEvent(sessionId, "replaced", {
+      agent: { message_replaced: null },
+    });
+    expect(session.out_stream?.run).toBe(2_345);
+    handleEvent(sessionId, "chunk-2", textChunk("m2", 40));
+    expect(session.out_stream?.text).toBe(40);
+  });
+
+  test("a retried request discards the failed attempt's bytes", () => {
+    const sessionId = "run-output-retry";
+    const session = createSessionState({ id: sessionId });
+    sessionState.sessions.push(session);
+    streamingMessages[sessionId] = [];
+
+    handleEvent(sessionId, "running", {
+      agent: { lifecycle: { state: "running" } },
+    });
+    handleEvent(sessionId, "request-1", {
+      model: { request: { message_id: "m1", message_count: 1 } },
+    });
+    handleEvent(sessionId, "chunk-1", textChunk("m1", 1_000));
+    handleEvent(sessionId, "usage-1", tokenUsage("m1", 500));
+    // Stream fails; the retry re-fires Request before re-streaming — the
+    // failed attempt's bytes AND pending usage are discarded.
+    handleEvent(sessionId, "request-1-retry", {
+      model: { request: { message_id: "m1b", message_count: 1 } },
+    });
+    expect(session.out_stream?.text).toBe(0);
+    expect(session.out_stream?.pending).toBeUndefined();
+    handleEvent(sessionId, "chunk-1-retry", textChunk("m1b", 40));
+    expect(session.out_stream?.text).toBe(40);
+  });
+});
