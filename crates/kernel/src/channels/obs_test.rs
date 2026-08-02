@@ -783,13 +783,7 @@ async fn token_usage_adds_footer() {
             &sid,
             "chat-1",
             None,
-            &Event::Model(ModelEvent::TokenUsage {
-                message_id: crate::types::MessageId::new(),
-                prompt_tokens: 10_000,
-                completion_tokens: 2_345,
-                total_tokens: 12_345,
-                context_window: 200_000,
-            }),
+            &token_usage_event(12_345, 200_000),
         )
         .await;
 
@@ -800,6 +794,155 @@ async fn token_usage_adds_footer() {
     let last = &patches.last().unwrap().1;
     assert!(last.contains("⏱"));
     assert!(last.contains("ctx: 12.3k / 200.0k"));
+}
+
+// ── Live output estimate ────────────────────────────────────────────
+
+fn tool_call_delta(args_delta: &str) -> Event {
+    Event::Model(ModelEvent::ToolCallDelta {
+        message_id: crate::types::MessageId::new(),
+        tool_id: "t1".to_string(),
+        tool_name: "bash".to_string(),
+        arguments_delta: args_delta.to_string(),
+    })
+}
+
+fn token_usage_event(total_tokens: u32, context_window: u32) -> Event {
+    Event::Model(ModelEvent::TokenUsage {
+        message_id: crate::types::MessageId::new(),
+        prompt_tokens: 10_000,
+        completion_tokens: 2_345,
+        total_tokens,
+        context_window,
+    })
+}
+
+#[test]
+fn out_estimate_ratios() {
+    let mut s = ObsCardState::new(adapter_ref(&MockAdapter::new()), "chat-1", None);
+    assert_eq!(s.out_estimate(), 0);
+    s.out_text_bytes = 400; // ≈4 bytes/token → 100
+    assert_eq!(s.out_estimate(), 100);
+    s.out_json_bytes = 200; // ≈2 bytes/token → +100
+    assert_eq!(s.out_estimate(), 200);
+}
+
+#[tokio::test]
+async fn thinking_only_stream_shows_estimate_on_placeholder_card() {
+    let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &request())
+        .await;
+
+    // Bare placeholder while nothing has streamed (no lone timer).
+    let patches = mock.patches.lock().await;
+    let last = patches.last().unwrap().1.clone();
+    assert!(!last.contains("⏱"), "bare placeholder: {last}");
+    assert!(!last.contains("out ~"), "no estimate yet: {last}");
+    drop(patches);
+
+    // Thinking-only stream: the placeholder card gains stats + estimate.
+    tracker
+        .handle_event(
+            &adapter,
+            &sid,
+            "chat-1",
+            None,
+            &thinking_chunk(&"x".repeat(400)),
+        )
+        .await;
+    let patches = mock.patches.lock().await;
+    let last = patches.last().unwrap().1.clone();
+    assert!(last.contains("⏱"), "stats joined the placeholder: {last}");
+    assert!(last.contains("out ~100"), "live estimate: {last}");
+    assert!(!last.contains("ctx:"), "no real usage yet: {last}");
+}
+
+#[tokio::test]
+async fn tool_call_deltas_count_toward_estimate() {
+    let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &request())
+        .await;
+    tracker
+        .handle_event(
+            &adapter,
+            &sid,
+            "chat-1",
+            None,
+            &tool_call_delta(&"a".repeat(200)),
+        )
+        .await;
+
+    let patches = mock.patches.lock().await;
+    let last = patches.last().unwrap().1.clone();
+    assert!(last.contains("out ~100"), "json estimate: {last}");
+}
+
+#[tokio::test]
+async fn estimate_resets_per_request_and_hands_off_to_real_usage() {
+    let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &request())
+        .await;
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &text_chunk(&"y".repeat(40)))
+        .await;
+    let patches = mock.patches.lock().await;
+    let last = patches.last().unwrap().1.clone();
+    assert!(last.contains("out ~10"), "estimate while streaming: {last}");
+    drop(patches);
+
+    // Response ends: the estimate hands off to real usage.
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &end_with_text("done"))
+        .await;
+    let patches = mock.patches.lock().await;
+    let last = patches.last().unwrap().1.clone();
+    assert!(!last.contains("out ~"), "handed off at end: {last}");
+    drop(patches);
+
+    // Next request: estimate restarts from zero, real ctx rides along.
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &request())
+        .await;
+    tracker
+        .handle_event(
+            &adapter,
+            &sid,
+            "chat-1",
+            None,
+            &token_usage_event(12_345, 200_000),
+        )
+        .await;
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &text_chunk(&"z".repeat(40)))
+        .await;
+    let patches = mock.patches.lock().await;
+    let last = patches.last().unwrap().1.clone();
+    assert!(last.contains("ctx: 12.3k / 200.0k"), "real usage: {last}");
+    assert!(last.contains("out ~10"), "estimate rides along: {last}");
 }
 
 // ── Last tool & whisper ─────────────────────────────────────────────

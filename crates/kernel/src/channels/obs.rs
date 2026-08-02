@@ -12,7 +12,9 @@
 //! While running, the card body shows the stats line, the live run trace
 //! (most recent tool entries), and a tail of the assistant's current text
 //! ("whisper"); a rotating placeholder fills the fresh card until the
-//! first tool or text arrives, and idle phase titles rotate for fun.
+//! first tool or text arrives, and idle phase titles rotate for fun. The
+//! stats line shows real usage once reported (providers only emit it at
+//! response end); a live output estimate (`out ~z`) stands in mid-stream.
 //! On settlement the card **morphs** into the final reply (last text +
 //! run-trace panel, no header; abnormal endings get a notice line in the
 //! content). With mid-run posts the card freezes as a terminal receipt
@@ -136,6 +138,10 @@ struct ObsCardState {
     /// placeholder so it can't reappear after a Request boundary cleared
     /// the whisper.
     seen_text: bool,
+    /// Live output estimate for the in-flight response: text/thinking
+    /// bytes (≈4/token) and tool-arg bytes (≈2/token), reset per request.
+    out_text_bytes: usize,
+    out_json_bytes: usize,
     token_footer: Option<String>,
     last_patch_at: Instant,
     /// Set when the materialize send failed — no more attempts this run
@@ -157,6 +163,8 @@ impl ObsCardState {
             trace: reply::RunReplyBuffer::new(),
             whisper: String::new(),
             seen_text: false,
+            out_text_bytes: 0,
+            out_json_bytes: 0,
             token_footer: None,
             last_patch_at: now,
             send_failed: false,
@@ -169,6 +177,17 @@ impl ObsCardState {
         if self.whisper.chars().count() > WHISPER_BUFFER_CHARS {
             self.whisper = tail_by_chars(&self.whisper, WHISPER_BUFFER_CHARS);
         }
+    }
+
+    /// Estimated output tokens of the in-flight response.
+    fn out_estimate(&self) -> u32 {
+        (self.out_text_bytes.div_ceil(4) + self.out_json_bytes.div_ceil(2)) as u32
+    }
+
+    /// Reset the output estimate (request boundary / response end).
+    fn reset_out_estimate(&mut self) {
+        self.out_text_bytes = 0;
+        self.out_json_bytes = 0;
     }
 }
 
@@ -412,23 +431,36 @@ impl ObsTracker {
                 self.update_running(session_id, |s| {
                     s.phase = Phase::Thinking;
                     s.whisper.clear();
+                    s.reset_out_estimate();
                 })
                 .await;
             }
             Event::Model(ModelEvent::Chunk { content, .. }) => {
-                let (phase, delta) = match content {
-                    crate::event::ContentChunk::Text(text) => (Phase::Typing, Some(text.clone())),
-                    crate::event::ContentChunk::Thinking { .. }
-                    | crate::event::ContentChunk::RedactedThinking => (Phase::Thinking, None),
+                let (phase, delta, text_bytes) = match content {
+                    crate::event::ContentChunk::Text(text) => {
+                        (Phase::Typing, Some(text.clone()), text.len())
+                    }
+                    crate::event::ContentChunk::Thinking { thinking, .. } => {
+                        (Phase::Thinking, None, thinking.len())
+                    }
+                    crate::event::ContentChunk::RedactedThinking => (Phase::Thinking, None, 0),
                 };
                 self.update_running(session_id, |s| {
                     s.phase = phase;
+                    s.out_text_bytes += text_bytes;
                     if let Some(delta) = delta {
                         s.seen_text = true;
                         s.push_whisper(&delta);
                     }
                 })
                 .await;
+            }
+            Event::Model(ModelEvent::ToolCallDelta {
+                arguments_delta, ..
+            }) => {
+                let bytes = arguments_delta.len();
+                self.update_running(session_id, |s| s.out_json_bytes += bytes)
+                    .await;
             }
             Event::Model(ModelEvent::End { content, .. }) => {
                 // One completed model response = one step, text or not
@@ -441,6 +473,7 @@ impl ObsTracker {
                 self.update_running(session_id, |s| {
                     s.trace.record_model_end(&text);
                     s.whisper.clear();
+                    s.reset_out_estimate();
                 })
                 .await;
             }
@@ -709,18 +742,19 @@ async fn send_card_patch(adapter: &dyn PlatformAdapter, message_id: &str, card_j
 fn render_running(s: &ObsCardState) -> String {
     let trace = s.trace.trace_preview_lines(STATUS_TRACE_MAX_ENTRIES);
     if trace.is_empty() && s.whisper.is_empty() && !s.seen_text {
-        // Brand-new card: a light random placeholder, no stats line yet
-        // (it would be a lone timer). Completed texts live in the trace and
-        // the current one lives in the whisper, so this can't reappear
-        // mid-run.
-        return card_json(
-            "blue",
-            &phase_title(s),
-            &format!(
-                "<font color='grey'>{}</font>",
-                random_title(IDLE_PLACEHOLDERS)
-            ),
+        // Brand-new card: a light random placeholder. Bare while the
+        // timer would be its only content; once any token data exists
+        // (live estimate or real usage) the stats line rides along.
+        let placeholder = format!(
+            "<font color='grey'>{}</font>",
+            random_title(IDLE_PLACEHOLDERS)
         );
+        let body = if s.token_footer.is_some() || s.out_estimate() > 0 {
+            format!("{}\n{placeholder}", stats_line(s))
+        } else {
+            placeholder
+        };
+        return card_json("blue", &phase_title(s), &body);
     }
     let whisper_line = || {
         (!s.whisper.is_empty()).then(|| {
@@ -819,6 +853,8 @@ fn card_json_elements(template: &str, title: &str, elements: &[serde_json::Value
 }
 
 /// One-line run stats: elapsed · steps · tool total · tokens (greyed).
+/// Real usage (`ctx: x / y`) only lands at response end; while streaming,
+/// the output estimate (`out ~z`) stands in.
 fn stats_line(s: &ObsCardState) -> String {
     use std::fmt::Write as _;
     let mut line = format!("⏱ {}", fmt_elapsed(s.started_at.elapsed()));
@@ -829,8 +865,22 @@ fn stats_line(s: &ObsCardState) -> String {
     if s.tool_count > 0 {
         let _ = write!(line, " · {} tools", s.tool_count);
     }
-    if let Some(footer) = &s.token_footer {
-        let _ = write!(line, " · <font color='grey'>{footer}</font>");
+    let out_est = s.out_estimate();
+    match (&s.token_footer, out_est) {
+        (Some(footer), 0) => {
+            let _ = write!(line, " · <font color='grey'>{footer}</font>");
+        }
+        (Some(footer), est) => {
+            let _ = write!(
+                line,
+                " · <font color='grey'>{footer} · out ~{}</font>",
+                fmt_k(est)
+            );
+        }
+        (None, 0) => {}
+        (None, est) => {
+            let _ = write!(line, " · <font color='grey'>out ~{}</font>", fmt_k(est));
+        }
     }
     line
 }
