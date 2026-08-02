@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.40] - 2026-08-02
+
+### Added
+- 新增频道命令 `/compact`：手动压缩当前会话的上下文；任务进行中时状态卡标题会显示压缩进度。
+
+### Changed
+- 飞书状态卡的输出 token 预估改为按整个任务累计增长，工具执行期间不再消失。
+- GUI 流式状态行的 token 计数同样按任务累计：文本输出阶段也开始显示，已完成的服务商响应按实报数计入，重试的失败输出不计。
+
 ## [0.7.39] - 2026-08-02
 
 ### Changed
