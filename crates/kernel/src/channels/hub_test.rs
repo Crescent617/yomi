@@ -252,6 +252,7 @@ async fn test_start_and_shutdown() {
             auto_approve_level: crate::permission::Level::Safe,
             observability: true,
             tool_trace: true,
+            mid_run_split: true,
             history_context: 0,
             approval_chat_id: None,
             admin_users: vec![],
@@ -271,6 +272,7 @@ async fn test_start_and_shutdown() {
             auto_approve_level: crate::permission::Level::Safe,
             observability: true,
             tool_trace: true,
+            mid_run_split: true,
             history_context: 0,
             approval_chat_id: None,
             admin_users: vec![],
@@ -371,6 +373,9 @@ pub struct CardMockAdapter {
     pub cards: tokio::sync::Mutex<Vec<(String, String)>>,
     pub patches: tokio::sync::Mutex<Vec<(String, String)>>,
     pub outgoing: tokio::sync::Mutex<Vec<String>>,
+    pub reactions: tokio::sync::Mutex<Vec<(String, String)>>,
+    /// When set, `send_card`/`send_message` fail (platform outage).
+    pub fail_sends: std::sync::atomic::AtomicBool,
 }
 
 impl CardMockAdapter {
@@ -379,6 +384,8 @@ impl CardMockAdapter {
             cards: tokio::sync::Mutex::new(Vec::new()),
             patches: tokio::sync::Mutex::new(Vec::new()),
             outgoing: tokio::sync::Mutex::new(Vec::new()),
+            reactions: tokio::sync::Mutex::new(Vec::new()),
+            fail_sends: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -400,6 +407,11 @@ impl PlatformAdapter for CardMockAdapter {
         _blocks: Vec<ContentBlock>,
         _reply_msg_id: Option<&str>,
     ) -> std::result::Result<Option<String>, crate::channels::ChannelError> {
+        if self.fail_sends.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(crate::channels::ChannelError::Platform(
+                "mock send_message failure".into(),
+            ));
+        }
         for block in &_blocks {
             if let ContentBlock::Text { text } = block {
                 self.outgoing.lock().await.push(text.clone());
@@ -414,6 +426,11 @@ impl PlatformAdapter for CardMockAdapter {
         card_json: &str,
         _reply_msg_id: Option<&str>,
     ) -> std::result::Result<Option<String>, crate::channels::ChannelError> {
+        if self.fail_sends.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(crate::channels::ChannelError::Platform(
+                "mock send_card failure".into(),
+            ));
+        }
         self.cards
             .lock()
             .await
@@ -431,6 +448,19 @@ impl PlatformAdapter for CardMockAdapter {
             .await
             .push((message_id.to_string(), card_json.to_string()));
         Ok(())
+    }
+
+    async fn send_reaction(
+        &self,
+        _external_chat_id: &str,
+        message_id: &str,
+        emoji: &str,
+    ) -> std::result::Result<Option<String>, crate::channels::ChannelError> {
+        self.reactions
+            .lock()
+            .await
+            .push((message_id.to_string(), emoji.to_string()));
+        Ok(Some("reaction-1".to_string()))
     }
 
     fn supports_status_card(&self) -> bool {
@@ -1465,6 +1495,7 @@ async fn deliver_reply_morphs_status_card_when_no_mid_run_posts() {
         Some(run_buffer().into_reply()),
         true,
         true,
+        true,
         &sid,
         SettleKind::Stopped(&completed()),
         // Attachment delivery is out of scope for these tests; a dangling
@@ -1503,6 +1534,7 @@ async fn deliver_reply_freezes_card_and_flushes_new_message_on_mid_run_posts() {
         Some(run_buffer().into_reply()),
         true,
         true,
+        true,
         &sid,
         SettleKind::Stopped(&completed()),
         // Attachment delivery is out of scope for these tests; a dangling
@@ -1511,23 +1543,270 @@ async fn deliver_reply_freezes_card_and_flushes_new_message_on_mid_run_posts() {
     )
     .await;
 
-    // The old card freezes as a terminal receipt, keeping the run trace as
-    // a collapsed panel …
+    // The old card freezes in place as a terminal receipt — stats only,
+    // no trace panel (the reply message carries it now) …
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1);
+    assert!(patches[0].1.contains("✅ Done"), "frozen terminal card");
+    assert!(
+        !patches[0].1.contains("collapsible_panel"),
+        "stats-only receipt: the trace rides the reply message"
+    );
+    drop(patches);
+    // … and the reply lands at the bottom as a NEW card message carrying
+    // the run trace.
+    let cards = mock.cards.lock().await;
+    assert_eq!(cards.len(), 2, "materialize + reply card");
+    assert!(cards[1].1.contains("final answer"));
+    assert!(
+        cards[1].1.contains("collapsible_panel") && cards[1].1.contains("Trace ·"),
+        "reply card carries the trace panel"
+    );
+    assert!(mock.outgoing.lock().await.is_empty(), "no bare-text flush");
+}
+
+#[tokio::test]
+async fn deliver_reply_mid_run_without_text_keeps_trace_on_frozen_card() {
+    let mock = Arc::new(CardMockAdapter::new());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(crate::channels::obs::ObsTracker::new());
+    let sid = SessionId::new();
+
+    obs.handle_event(&adapter, &sid, "chat-1", None, &running_event())
+        .await;
+    obs.handle_event(&adapter, &sid, "chat-1", None, &tool_start_event())
+        .await;
+    obs.record_receipt(&sid, "m1".to_string());
+
+    // A run that produced tool calls but no assistant text: nothing can
+    // be flushed, so the frozen card keeps the trace panel itself.
+    let mut buf = reply::RunReplyBuffer::new();
+    buf.record_tool_start("t1", "shell", Some(r#"{"command":"cargo test"}"#));
+    buf.record_tool_end("t1", 2000, false);
+
+    deliver_reply(
+        &obs,
+        &adapter,
+        &test_routing(),
+        Some(buf.into_reply()),
+        true,
+        true,
+        true,
+        &sid,
+        SettleKind::Stopped(&completed()),
+        &std::sync::Weak::new(),
+    )
+    .await;
+
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 1);
     assert!(patches[0].1.contains("✅ Done"), "frozen terminal card");
     assert!(
         patches[0].1.contains("collapsible_panel") && patches[0].1.contains("Trace ·"),
-        "frozen card keeps the trace panel"
+        "no reply to carry the trace — the card keeps it"
     );
-    // … and the reply lands at the bottom as a NEW bare-text message —
-    // no trace panel (it stays on the frozen card).
     let cards = mock.cards.lock().await;
-    assert_eq!(cards.len(), 1, "materialize only; reply is bare text");
+    assert_eq!(cards.len(), 1, "materialize only; no text to flush");
+    assert!(mock.outgoing.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn deliver_reply_mid_run_split_disabled_morphs_card() {
+    let mock = Arc::new(CardMockAdapter::new());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(crate::channels::obs::ObsTracker::new());
+    let sid = SessionId::new();
+
+    obs.handle_event(&adapter, &sid, "chat-1", None, &running_event())
+        .await;
+    obs.handle_event(&adapter, &sid, "chat-1", None, &tool_start_event())
+        .await;
+    obs.record_receipt(&sid, "m1".to_string());
+
+    // mid_run_split = false: always morph, one message per run.
+    deliver_reply(
+        &obs,
+        &adapter,
+        &test_routing(),
+        Some(run_buffer().into_reply()),
+        true,
+        true,
+        false,
+        &sid,
+        SettleKind::Stopped(&completed()),
+        &std::sync::Weak::new(),
+    )
+    .await;
+
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1, "morphed in place");
+    assert!(patches[0].1.contains("final answer"));
+    assert!(patches[0].1.contains("collapsible_panel"));
+    let cards = mock.cards.lock().await;
+    assert_eq!(cards.len(), 1, "materialize only; no new message");
+    assert!(mock.outgoing.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn deliver_reply_mid_run_split_disabled_reacts_on_morph() {
+    let mock = Arc::new(CardMockAdapter::new());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(crate::channels::obs::ObsTracker::new());
+    let sid = SessionId::new();
+
+    obs.record_user_msg(&sid, "user-msg-1".to_string());
+    obs.handle_event(&adapter, &sid, "chat-1", None, &running_event())
+        .await;
+    obs.handle_event(&adapter, &sid, "chat-1", None, &tool_start_event())
+        .await;
+    obs.record_receipt(&sid, "m1".to_string());
+
+    // mid_run_split = false: the morph is silent (in-place PATCH above
+    // the user's mid-run posts), so the receipts must not suppress the
+    // settle reaction — it is the only completion signal.
+    deliver_reply(
+        &obs,
+        &adapter,
+        &test_routing(),
+        Some(run_buffer().into_reply()),
+        true,
+        true,
+        false,
+        &sid,
+        SettleKind::Stopped(&completed()),
+        &std::sync::Weak::new(),
+    )
+    .await;
+
+    let reactions = mock.reactions.lock().await;
+    assert_eq!(
+        reactions.as_slice(),
+        &[("user-msg-1".to_string(), "DONE".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn deliver_reply_mid_run_trace_disabled_keeps_panel_on_card() {
+    let mock = Arc::new(CardMockAdapter::new());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(crate::channels::obs::ObsTracker::new());
+    let sid = SessionId::new();
+
+    obs.handle_event(&adapter, &sid, "chat-1", None, &running_event())
+        .await;
+    obs.handle_event(&adapter, &sid, "chat-1", None, &tool_start_event())
+        .await;
+    obs.record_receipt(&sid, "m1".to_string());
+
+    // tool_trace = false: the flush is bare text without the trace, so
+    // the frozen card keeps the trace panel itself.
+    deliver_reply(
+        &obs,
+        &adapter,
+        &test_routing(),
+        Some(run_buffer().into_reply()),
+        false,
+        true,
+        true,
+        &sid,
+        SettleKind::Stopped(&completed()),
+        &std::sync::Weak::new(),
+    )
+    .await;
+
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1);
+    assert!(patches[0].1.contains("✅ Done"));
+    assert!(
+        patches[0].1.contains("collapsible_panel"),
+        "trace stays on the card: {patches:?}"
+    );
+    drop(patches);
     let outgoing = mock.outgoing.lock().await;
-    assert_eq!(outgoing.len(), 1);
+    assert_eq!(outgoing.len(), 1, "bare-text flush");
     assert!(outgoing[0].contains("final answer"));
     assert!(!outgoing[0].contains("Trace ·"));
+}
+
+#[tokio::test]
+async fn deliver_reply_mid_run_without_reply_keeps_trace_on_card() {
+    let mock = Arc::new(CardMockAdapter::new());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(crate::channels::obs::ObsTracker::new());
+    let sid = SessionId::new();
+
+    obs.handle_event(&adapter, &sid, "chat-1", None, &running_event())
+        .await;
+    obs.handle_event(&adapter, &sid, "chat-1", None, &tool_start_event())
+        .await;
+    obs.record_receipt(&sid, "m1".to_string());
+
+    // No reply at all (crash / lost events): nothing to flush, the
+    // frozen card keeps the trace panel.
+    deliver_reply(
+        &obs,
+        &adapter,
+        &test_routing(),
+        None,
+        true,
+        true,
+        true,
+        &sid,
+        SettleKind::Stopped(&completed()),
+        &std::sync::Weak::new(),
+    )
+    .await;
+
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1);
+    assert!(patches[0].1.contains("collapsible_panel"));
+    let cards = mock.cards.lock().await;
+    assert_eq!(cards.len(), 1, "materialize only");
+    assert!(mock.outgoing.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn deliver_reply_mid_run_flush_failure_keeps_trace_on_card() {
+    let mock = Arc::new(CardMockAdapter::new());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(crate::channels::obs::ObsTracker::new());
+    let sid = SessionId::new();
+
+    obs.handle_event(&adapter, &sid, "chat-1", None, &running_event())
+        .await;
+    obs.handle_event(&adapter, &sid, "chat-1", None, &tool_start_event())
+        .await;
+    obs.record_receipt(&sid, "m1".to_string());
+
+    // Platform outage after materialization: the reply-card send and its
+    // plain-text fallback both fail — the frozen card must keep the
+    // trace panel (the reply never carried it).
+    mock.fail_sends
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    deliver_reply(
+        &obs,
+        &adapter,
+        &test_routing(),
+        Some(run_buffer().into_reply()),
+        true,
+        true,
+        true,
+        &sid,
+        SettleKind::Stopped(&completed()),
+        &std::sync::Weak::new(),
+    )
+    .await;
+
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1, "frozen in place");
+    assert!(patches[0].1.contains("✅ Done"));
+    assert!(
+        patches[0].1.contains("collapsible_panel") && patches[0].1.contains("Trace ·"),
+        "flush failed — trace stays on the card: {patches:?}"
+    );
+    let cards = mock.cards.lock().await;
+    assert_eq!(cards.len(), 1, "materialize only; flush failed");
+    assert!(mock.outgoing.lock().await.is_empty());
 }
 
 #[tokio::test]
@@ -1542,6 +1821,7 @@ async fn deliver_reply_plain_platform_flushes_without_morph() {
         &adapter,
         &test_routing(),
         Some(run_buffer().into_reply()),
+        true,
         true,
         true,
         &sid,
@@ -1575,6 +1855,7 @@ async fn deliver_reply_falls_back_to_flush_when_obs_state_missing() {
         &adapter,
         &test_routing(),
         Some(run_buffer().into_reply()),
+        true,
         true,
         true,
         &sid,

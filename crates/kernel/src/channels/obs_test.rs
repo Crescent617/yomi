@@ -1985,6 +1985,151 @@ async fn settle_with_mid_run_posts_sends_no_reaction() {
     assert!(mock.reactions_added.lock().await.is_empty());
 }
 
+// ── Mid-run split freeze ────────────────────────────────────────────
+
+#[tokio::test]
+async fn freeze_stopped_patches_terminal_receipt_without_trace() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+
+    tracker.record_receipt(&sid, "mid-run".into());
+    drive_materialized_run(&tracker, &mock, &sid).await;
+    // keep_trace = false: the reply message carries the trace, so the
+    // frozen card is a stats-only receipt.
+    tracker
+        .freeze_stopped(
+            &sid,
+            &StopReason::Completed {
+                finish_reason: None,
+            },
+            false,
+        )
+        .await;
+
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1, "frozen in place");
+    assert!(patches[0].1.contains("green"));
+    assert!(patches[0].1.contains("✅ Done"));
+    assert!(
+        !patches[0].1.contains("collapsible_panel"),
+        "stats-only receipt: {patches:?}"
+    );
+    drop(patches);
+    // Receipts cleared; the reply message notifies by itself — no reaction.
+    assert!(!tracker.has_mid_run_posts(&sid));
+    assert!(mock.reactions_added.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn freeze_stopped_keep_trace_true_keeps_panel() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+
+    drive_materialized_run(&tracker, &mock, &sid).await;
+    tracker
+        .freeze_stopped(
+            &sid,
+            &StopReason::Completed {
+                finish_reason: None,
+            },
+            true,
+        )
+        .await;
+
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1);
+    assert!(patches[0].1.contains("✅ Done"));
+    assert!(
+        patches[0].1.contains("collapsible_panel") && patches[0].1.contains("Trace ·"),
+        "no reply to carry the trace — the card keeps it: {patches:?}"
+    );
+}
+
+#[tokio::test]
+async fn freeze_stopped_failed_without_card_sends_terminal_card() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    // The status card never materialized (send failed).
+    mock.fail_send_cards.store(true, Ordering::Relaxed);
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    mock.fail_send_cards.store(false, Ordering::Relaxed);
+    // A tool ran during the run — the trace has an entry to show.
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &tool_start("bash"))
+        .await;
+
+    // A failure still gets its explanation as a NEW terminal card, trace
+    // included regardless of keep_trace.
+    tracker
+        .freeze_stopped(
+            &sid,
+            &StopReason::Failed {
+                error: "boom".to_string(),
+            },
+            false,
+        )
+        .await;
+
+    let cards = mock.cards.lock().await;
+    assert_eq!(cards.len(), 1, "terminal card sent as a new message");
+    assert!(cards[0].1.contains("red"));
+    assert!(cards[0].1.contains("❌ Failed"));
+    assert!(cards[0].1.contains("collapsible_panel"));
+    assert!(mock.patches.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn freeze_stopped_completed_without_card_sends_nothing() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    mock.fail_send_cards.store(true, Ordering::Relaxed);
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+
+    tracker
+        .freeze_stopped(
+            &sid,
+            &StopReason::Completed {
+                finish_reason: None,
+            },
+            false,
+        )
+        .await;
+
+    assert!(mock.cards.lock().await.is_empty());
+    assert!(mock.patches.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn freeze_timeout_patches_terminal_card_and_clears_receipts() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+
+    tracker.record_receipt(&sid, "mid-run".into());
+    drive_materialized_run(&tracker, &mock, &sid).await;
+    tracker.freeze_timeout(&sid, true).await;
+
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1);
+    assert!(patches[0].1.contains("⏰ Timed out"));
+    assert!(patches[0].1.contains("collapsible_panel"));
+    drop(patches);
+    assert!(!tracker.has_mid_run_posts(&sid));
+    assert!(mock.reactions_added.lock().await.is_empty());
+}
+
 #[tokio::test]
 async fn settle_without_recorded_user_msg_sends_no_reaction() {
     let tracker = ObsTracker::new();

@@ -59,7 +59,8 @@ channel（Feishu/Telegram）中的 agent 原本是黑箱：用户 @ 机器人后
 | 条件 | 行为 |
 |------|------|
 | 有卡平台 + observability + 无 mid-run 消息 | **morph**：卡原地 PATCH 为最终回复卡（无 header：异常提示行? + 正文 + 轨迹面板） |
-| 有卡平台 + observability + 有 mid-run 消息（receipts 条数 >1，见 §6） | **冻结 + 沉底**：卡 PATCH 为终态凭据（header ✅ Done / ❌ Failed / ⏹ Stopped / ⏰ Timed out + 统计行 + 折叠轨迹面板），回复作为新消息发出（锚定最新用户消息） |
+| 有卡平台 + observability + 有 mid-run 消息（见 §6）且 `mid_run_split: true` | **冻结 + 沉底**：卡原地 PATCH 为终态凭据（header ✅ Done / ❌ Failed / ⏹ Stopped / ⏰ Timed out + 统计行），回复卡（正文 + 轨迹面板）作为新消息发出（锚定 run 起点）。回复带不了轨迹时（无正文 / `tool_trace: false` / 无回复）冻结卡自己保留轨迹面板——轨迹不丢 |
+| 有卡平台 + observability + 有 mid-run 消息且 `mid_run_split: false` | **morph**（同上，一 run 一消息；答案停在 run 起点，用户 mid-run 消息之下不沉底） |
 | 无卡平台 或 `observability: false` | `flush_reply` 发新消息（无卡平台 obs 仅内存态结算） |
 | settle 未落地（无 run 状态 / `send_card` 失败） | 回复交还并回退 `flush_reply`——单点故障只降级展示形式，不丢内容 |
 
@@ -83,7 +84,7 @@ forwarder 维护 per-session `RunReplyBuffer`（cap 100 条防 goal 长 run 膨�
 ## 6. receipts 与门禁 reaction
 
 - 消息门禁（hub `gate_message`）统一发放 reaction（best-effort，失败仅 warn）：通过访问控制且被 @（或无需 @）的消息打 ack（Feishu `OneSecond` / Telegram 👀）；allowlist 未命中（`allowed_chats`/`allowed_users` 之外）且被 @ 的消息打 🙏 婉拒（Feishu `THANKS`）；blocklist 命中、通道禁用、未 @ 的群消息一律静默。**结算时不发送任何 reaction**。
-- receipts = 逐 run 记录的用户消息 ID（消息处理循环在 Steer/Queue/None 路由时记录，命令不记）；唯一用途是 **mid-run 判定**——条数 >1（含触发消息）即 run 期间用户发了消息；任何结算路径（Stopped/Timeout/sweep）结束时清空。
+- receipts = 逐 run 记录的用户消息 ID（消息处理循环在 Steer/Queue/None 路由时记录，命令不记）；唯一用途是 **mid-run 判定**——仅当 session 正在运行时到达的消息才记录（空闲时到达的是触发消息），故任何 receipt 即代表 run 期间用户发了消息；任何结算路径（Stopped/Timeout/sweep）结束时清空。
 
 ## 7. watchdog（超时兜底）
 
@@ -101,6 +102,7 @@ forwarder 每 60s 扫一次：对有回复缓冲的 session 查 `conductor.is_ru
 |------|------|------|
 | `observability` | `true` | 状态卡 + receipts；关闭后退回"ack reaction + 缓冲到 run 结束发一条气泡" |
 | `tool_trace` | `true` | 最终回复附运行轨迹（折叠面板 / 纯文本行） |
+| `mid_run_split` | `true` | run 期间用户发消息时：状态卡原地冻结为终态凭据，回复卡（含轨迹面板）沉底发新消息；关闭后总是原地 morph（一 run 一消息） |
 
 ## 10. 已知代价
 

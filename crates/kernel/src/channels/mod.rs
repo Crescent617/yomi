@@ -124,6 +124,14 @@ pub struct ChannelConfig {
     /// (Feishu, requires client V7.9+), plain-text lines elsewhere.
     #[serde(default = "default_tool_trace")]
     pub tool_trace: bool,
+    /// Mid-run split: when the user posts messages while a run is in
+    /// flight, freeze the status card in place as a terminal receipt and
+    /// deliver the final reply as a NEW message below them (carrying the
+    /// run trace). When disabled, the status card always morphs into the
+    /// final reply in place (one message per run), leaving the answer
+    /// above the user's mid-run messages.
+    #[serde(default = "default_mid_run_split")]
+    pub mid_run_split: bool,
     /// Recent-chat messages injected as context when the bot is triggered
     /// in a group (fetched since the last trigger in that thread/chat,
     /// newest cap). 0 disables.
@@ -146,6 +154,10 @@ fn default_history_context() -> usize {
 }
 
 fn default_tool_trace() -> bool {
+    true
+}
+
+fn default_mid_run_split() -> bool {
     true
 }
 
@@ -174,6 +186,7 @@ impl Default for ChannelConfig {
             auto_approve_level: Level::Safe,
             observability: true,
             tool_trace: true,
+            mid_run_split: true,
             history_context: default_history_context(),
             approval_chat_id: None,
             admin_users: Vec::new(),

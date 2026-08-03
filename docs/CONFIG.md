@@ -233,6 +233,7 @@ app_secret = "..."
 | `auto_approve_level` | string | 通道级别自动批准：`safe`/`caution`/`dangerous` | `safe` |
 | `observability` | boolean | 运行可观测性（状态卡片 + 运行回执记录）；关闭后退回"收到确认 + 最终回复"的旧行为 | `true` |
 | `tool_trace` | boolean | 最终回复气泡附带运行轨迹（工具调用 + 中间过程文本）：卡片平台（Feishu，需客户端 V7.9+）以可折叠面板呈现，其他平台以纯文本行附在正文后；关闭后最终回复仅为纯文本 | `true` |
+| `mid_run_split` | boolean | run 期间用户又发消息时：状态卡原地冻结为终态凭据（header + 统计行），回复卡（正文 + 轨迹面板）沉底发新消息；关闭后总是原地 morph（一 run 一消息，答案停在 run 起点） | `true` |
 | `history_context` | number | 群聊中触发时注入的最近聊天记录条数上限（拉取当前话题/频道自上次触发以来的消息作为上下文；0 关闭；平台单页上限 50） | `20` |
 | `approval_chat_id` | string | 飞书云文档权限申请的通知目标群 `chat_id`；未配置时改为私聊通知 `admin_users` 中的每位管理员；两者都未配置则该功能关闭（申请仅记录日志，可用 `/permits` 查询）。**注意**：云文档事件为两级订阅，除开发者后台添加 `drive.file.permission_member_applied_v1` 事件外，还需对每个文档调用一次文件级订阅 API（`POST /open-apis/drive/v1/files/{token}/subscribe?file_type=docx`，body `{"event_type":"drive.file.permission_member_applied_v1"}`），否则服务端不生成事件 | 无 |
 | `admin_users` | string[] | 有文档权限审批权的管理员 `open_id` 列表（卡片按钮与 `/permits` `/approve` `/deny` `/restart` 命令均校验）；未配置 `approval_chat_id` 时同时作为私聊通知的收件人 | `[]` |

@@ -18,10 +18,13 @@
 //! the whole run, stands in mid-stream.
 //! On settlement the card **morphs** into the final reply (last text +
 //! run-trace panel, no header; abnormal endings get a notice line in the
-//! content). With mid-run posts the card freezes as a terminal receipt
-//! (header + stats + the run trace as a collapsed panel) and the reply
-//! lands at the bottom as bare text. Runs without a reply (crash / lost
-//! events) freeze into a terminal header style instead. User messages
+//! content). With mid-run posts (and `mid_run_split` enabled) the reply
+//! lands at the bottom as a new message carrying the run trace, and the
+//! card freezes in place as a terminal receipt (header + stats); the card
+//! keeps the trace panel itself whenever the reply didn't carry it (no
+//! text, trace disabled, no reply, or the flush failed). Runs without a
+//! reply (crash / lost events) freeze into a terminal header style
+//! instead. User messages
 //! received during the run are recorded as receipts — used only for the
 //! mid-run post detection (morph vs. new-message settle).
 //!
@@ -219,6 +222,16 @@ enum Settle {
     Timeout,
 }
 
+/// Map a `Stopped` reason to its settlement kind.
+fn settle_from_reason(reason: &StopReason) -> Settle {
+    match reason {
+        StopReason::Completed { .. } => Settle::Completed,
+        StopReason::Cancelled { .. } => Settle::Cancelled,
+        StopReason::Failed { error } => Settle::Failed(error.clone()),
+        StopReason::MaxIterations { reached } => Settle::MaxIterations(*reached),
+    }
+}
+
 impl Settle {
     /// Body notice line for abnormal endings, shown in the morphed card
     /// content (the card has no header; errors go into the content).
@@ -331,13 +344,12 @@ impl ObsTracker {
         self.receipts.get(session_id).is_some_and(|r| !r.is_empty())
     }
 
-    /// Whether the run's status card never materialized (send failed or
-    /// never sent): the trace never went live, so the final delivery
-    /// should keep it.
-    pub(crate) fn card_missing(&self, session_id: &SessionId) -> bool {
-        self.states
-            .get(session_id)
-            .is_none_or(|s| s.status_msg_id.is_empty() || s.send_failed)
+    /// Drop the run's recorded receipts without settling. Receipts only
+    /// drive the mid-run split decision — when the split is disabled they
+    /// must not suppress the settle reaction of the in-place morph (see
+    /// `deliver_reply`); settlement clears them anyway.
+    pub(crate) fn clear_receipts(&self, session_id: &SessionId) {
+        self.receipts.remove(session_id);
     }
 
     /// Feed one session event. Cheap state updates happen on every event;
@@ -518,13 +530,8 @@ impl ObsTracker {
         reason: &StopReason,
         reply: Option<FinalReply>,
     ) -> Option<FinalReply> {
-        let settle = match reason {
-            StopReason::Completed { .. } => Settle::Completed,
-            StopReason::Cancelled { .. } => Settle::Cancelled,
-            StopReason::Failed { error } => Settle::Failed(error.clone()),
-            StopReason::MaxIterations { reached } => Settle::MaxIterations(*reached),
-        };
-        self.settle_card(session_id, &settle, reply).await
+        self.settle_card(session_id, &settle_from_reason(reason), reply)
+            .await
     }
 
     /// Watchdog settlement for a session whose agent died (crash / lost
@@ -536,6 +543,29 @@ impl ObsTracker {
         reply: Option<FinalReply>,
     ) -> Option<FinalReply> {
         self.settle_card(session_id, &Settle::Timeout, reply).await
+    }
+
+    /// Mid-run split settlement (`Stopped`): freeze the status card in
+    /// place as a terminal receipt — the reply lands as a NEW message
+    /// below the user's mid-run posts, so the card must not morph into
+    /// it. `keep_trace` = the card carries the run trace panel itself;
+    /// false when the reply message carries it instead. Never sends the
+    /// settle reaction: the reply message notifies by itself.
+    pub(crate) async fn freeze_stopped(
+        &self,
+        session_id: &SessionId,
+        reason: &StopReason,
+        keep_trace: bool,
+    ) {
+        self.freeze_card(session_id, &settle_from_reason(reason), keep_trace)
+            .await;
+    }
+
+    /// Mid-run split settlement for the watchdog path (see
+    /// [`ObsTracker::freeze_stopped`]).
+    pub(crate) async fn freeze_timeout(&self, session_id: &SessionId, keep_trace: bool) {
+        self.freeze_card(session_id, &Settle::Timeout, keep_trace)
+            .await;
     }
 
     /// Settle cards whose session no longer has a live, non-idle agent
@@ -661,7 +691,11 @@ impl ObsTracker {
             .and_then(|r| reply::render_card(r, notice.as_deref()));
         let (card, is_reply) = match morphed {
             Some(card) => (card, true),
-            None => (render_terminal(&state, settle), false),
+            // No reply to morph into (crash / lost events): freeze into
+            // the terminal header style, keeping the trace panel — with
+            // no reply message to carry it, this is the only place the
+            // trace survives settlement.
+            None => (render_terminal(&state, settle, true), false),
         };
 
         if state.status_msg_id.is_empty() {
@@ -689,6 +723,40 @@ impl ObsTracker {
             Ok(()) => {}
         }
         None
+    }
+
+    /// Freeze the status card in place as a terminal receipt and clear
+    /// the run's receipts (mid-run split: the reply lands as a separate
+    /// message below the user's mid-run posts, so the card must not
+    /// morph into it). `keep_trace` = the card carries the run trace
+    /// panel itself — false when the reply message carries it instead.
+    /// Never sends the settle reaction: the reply message notifies by
+    /// itself. A failure whose card never materialized still sends the
+    /// terminal card as a new message (failures always get an
+    /// explanation), trace panel included — the flushed reply may carry
+    /// it too; duplication in this rare edge is preferred over loss.
+    async fn freeze_card(&self, session_id: &SessionId, settle: &Settle, keep_trace: bool) {
+        self.receipts.remove(session_id);
+        let Some((_, state)) = self.states.remove(session_id) else {
+            return;
+        };
+        if state.status_msg_id.is_empty() {
+            if matches!(settle, Settle::Failed(_)) {
+                let card = render_terminal(&state, settle, true);
+                if let Err(e) = state
+                    .adapter
+                    .send_card(&state.chat_id, &card, state.reply_msg_id.as_deref())
+                    .await
+                {
+                    warn!(error = %e, "obs freeze card send failed");
+                }
+            }
+            return;
+        }
+        let card = render_terminal(&state, settle, keep_trace);
+        if let Err(e) = state.adapter.update_card(&state.status_msg_id, &card).await {
+            warn!(error = %e, "obs freeze card patch failed");
+        }
     }
 
     /// React on the session's latest user message as the completion
@@ -815,7 +883,7 @@ fn whisper_snippet(whisper: &str) -> String {
     }
 }
 
-fn render_terminal(s: &ObsCardState, settle: &Settle) -> String {
+fn render_terminal(s: &ObsCardState, settle: &Settle, keep_trace: bool) -> String {
     let elapsed = fmt_elapsed(s.started_at.elapsed());
     let (template, title) = match settle {
         Settle::Completed => (
@@ -833,12 +901,13 @@ fn render_terminal(s: &ObsCardState, settle: &Settle) -> String {
     }
     let mut elements =
         vec![json!({ "tag": "markdown", "text_size": "notation", "content": lines.join("\n") })];
-    // The trace that streamed live during the run stays on the frozen card
-    // as a collapsed panel — with mid-run posts the reply lands as a
-    // separate bare-text message, so this is the only place the trace
-    // survives settlement.
-    if let Some((trace_lines, trace_title)) = s.trace.full_trace_render() {
-        elements.push(reply::trace_panel_element(&trace_lines, &trace_title));
+    // The trace that streamed live during the run stays on the frozen
+    // card as a collapsed panel — unless the reply message carries it
+    // instead (mid-run split with a flushable reply).
+    if keep_trace {
+        if let Some((trace_lines, trace_title)) = s.trace.full_trace_render() {
+            elements.push(reply::trace_panel_element(&trace_lines, &trace_title));
+        }
     }
     card_json_elements(template, &title, &elements)
 }

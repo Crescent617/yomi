@@ -330,13 +330,14 @@ impl ChannelHub {
                                     // and retry next sweep.
                                     Err(_) => continue,
                                 };
-                                let Some((adapter, tool_trace, observability)) = instances
+                                let Some((adapter, tool_trace, observability, mid_run_split)) = instances
                                     .get(&routing.channel_name)
                                     .map(|i| {
                                         (
                                             Arc::clone(&i.adapter),
                                             i.config.tool_trace,
                                             i.config.observability,
+                                            i.config.mid_run_split,
                                         )
                                     })
                                 else {
@@ -352,6 +353,7 @@ impl ChannelHub {
                                     Some(buf.into_reply()),
                                     tool_trace,
                                     observability,
+                                    mid_run_split,
                                     &sid,
                                     SettleKind::Timeout,
                                     &kernel,
@@ -371,12 +373,13 @@ impl ChannelHub {
                             }
                         };
 
-                        let (adapter, observability, tool_trace) = {
+                        let (adapter, observability, tool_trace, mid_run_split) = {
                             let Some(instance) = instances.get(&routing.channel_name) else { continue };
                             (
                                 Arc::clone(&instance.adapter),
                                 instance.config.observability,
                                 instance.config.tool_trace,
+                                instance.config.mid_run_split,
                             )
                         };
                         let supports_cards = adapter.supports_status_card();
@@ -432,7 +435,7 @@ impl ChannelHub {
                         // Run end: deliver the buffered reply — morph the
                         // status card (single message), or freeze it as a
                         // terminal receipt and flush the reply at the bottom
-                        // when the user posted mid-run.
+                        // when the user posted mid-run (`mid_run_split`).
                         if let Event::Agent(AgentEvent::Lifecycle {
                             state: AgentStatus::Stopped { reason },
                         }) = &envelope.event
@@ -447,6 +450,7 @@ impl ChannelHub {
                                 reply,
                                 tool_trace,
                                 observability,
+                                mid_run_split,
                                 &session_id,
                                 SettleKind::Stopped(reason),
                                 &kernel,
@@ -536,27 +540,33 @@ impl ChannelHub {
 /// with the run trace attached (collapsible panel on card-capable
 /// platforms, plain-text lines otherwise). Runs without any text are
 /// skipped, matching the pre-buffering behavior.
+///
+/// Returns `true` when the reply was actually delivered — `false` when
+/// there was nothing to send or every send attempt failed (the caller
+/// relies on it to decide whether the trace still needs a home).
 async fn flush_reply(
     adapter: &Arc<dyn PlatformAdapter>,
     routing: &SessionRouting,
     reply: reply::FinalReply,
     tool_trace: bool,
-) {
+) -> bool {
     if reply.text().is_none() {
-        return;
+        return false;
     }
     if tool_trace && adapter.supports_status_card() && reply.has_trace() {
         match reply::render_card(&reply, None) {
             Some(card) => {
-                let sent = adapter
+                match adapter
                     .send_card(
                         &routing.external_chat_id,
                         &card,
                         routing.reply_msg_id.as_deref(),
                     )
-                    .await;
-                match sent {
-                    Ok(_) => return,
+                    .await
+                {
+                    Ok(Some(_)) => return true,
+                    // Platform skipped the card — fall through to text.
+                    Ok(None) => {}
                     // The card was rejected (oversize payload, API error) —
                     // fall through to a plain text send so the reply content
                     // is never dropped.
@@ -568,7 +578,7 @@ async fn flush_reply(
             // Unreachable in practice (a text reply always renders) — skip
             // rather than panic; the run's content was already delivered by
             // the settle path or is simply absent.
-            None => return,
+            None => return false,
         }
     }
     let text = if tool_trace {
@@ -576,15 +586,19 @@ async fn flush_reply(
     } else {
         reply.into_text().unwrap_or_default()
     };
-    let sent = adapter
+    match adapter
         .send_message(
             &routing.external_chat_id,
             vec![ContentBlock::Text { text }],
             routing.reply_msg_id.as_deref(),
         )
-        .await;
-    if let Err(e) = sent {
-        error!(error = %e, "failed to send reply to platform");
+        .await
+    {
+        Ok(_) => true,
+        Err(e) => {
+            error!(error = %e, "failed to send reply to platform");
+            false
+        }
     }
 }
 
@@ -607,16 +621,32 @@ async fn settle_with(
     }
 }
 
+/// Freeze the status card in place as a terminal receipt (mid-run split;
+/// see `deliver_reply`). `keep_trace` = the card itself carries the run
+/// trace panel — false when the reply message carries it instead.
+async fn freeze_with(
+    obs: &Arc<ObsTracker>,
+    session_id: &SessionId,
+    kind: SettleKind<'_>,
+    keep_trace: bool,
+) {
+    match kind {
+        SettleKind::Stopped(reason) => obs.freeze_stopped(session_id, reason, keep_trace).await,
+        SettleKind::Timeout => obs.freeze_timeout(session_id, keep_trace).await,
+    }
+}
+
 /// Deliver a run's final reply, then its attachment files. Declared
 /// attachments (`<yomi_attachments>` blocks, stripped at record time) are
 /// resolved up front — resolution notes ride with the reply text — while
 /// the files themselves go out AFTER the reply, landing at the bottom of
 /// the chat. The reply itself: card-capable platforms with observability
 /// morph the status card into it (one message per run) — or, when the user
-/// posted mid-run, freeze the card as a terminal receipt (the trace stays
-/// on it as a collapsed panel) and flush the reply as a new bare-text
-/// message at the bottom. All other cases flush as a new message and
-/// settle the obs state without a reply. When the rich
+/// posted mid-run and `mid_run_split` is enabled, flush the reply as a new
+/// message at the bottom carrying the run trace, then freeze the card in
+/// place as a terminal receipt (the card keeps the trace panel itself
+/// whenever the reply didn't carry it). All other cases flush as a new
+/// message and settle the obs state without a reply. When the rich
 /// settle comes back unsettled (no run state, or the settle send failed),
 /// the reply falls back to a plain flush so content is never silently lost.
 #[allow(clippy::too_many_arguments)]
@@ -627,6 +657,7 @@ async fn deliver_reply(
     reply: Option<reply::FinalReply>,
     tool_trace: bool,
     observability: bool,
+    mid_run_split: bool,
     session_id: &SessionId,
     kind: SettleKind<'_>,
     kernel: &std::sync::Weak<Kernel>,
@@ -647,22 +678,33 @@ async fn deliver_reply(
         _ => Vec::new(),
     };
     if observability && adapter.supports_status_card() {
-        if obs.has_mid_run_posts(session_id) {
-            // The frozen card keeps the trace as a collapsed panel — but
-            // only if it materialized; keep it in the flush when it never
-            // did (double-failure edge: mid-run post + card send failure).
-            let keep_trace = tool_trace && obs.card_missing(session_id);
-            let _ = settle_with(obs, session_id, kind, None).await;
-            if let Some(reply) = reply {
-                // The reply lands as a standalone message below the user's
-                // mid-run posts — bare final text (the trace is on the
-                // frozen card).
-                flush_reply(adapter, routing, reply, keep_trace).await;
+        if mid_run_split && obs.has_mid_run_posts(session_id) {
+            // The reply lands as a new message below the user's mid-run
+            // posts, carrying the run trace; the status card then freezes
+            // in place as a terminal receipt. Flush first and freeze with
+            // the outcome: the card keeps the trace panel itself whenever
+            // the reply didn't carry it (nothing delivered — no text or
+            // every send failed — or the trace is disabled), so the trace
+            // is never lost.
+            let delivered = match reply {
+                Some(reply) => flush_reply(adapter, routing, reply, tool_trace).await,
+                None => false,
+            };
+            let keep_trace = !tool_trace || !delivered;
+            freeze_with(obs, session_id, kind, keep_trace).await;
+        } else {
+            // Morph in place (no mid-run posts, or the split disabled).
+            // Receipts only drive the split decision — with the split
+            // disabled they must not suppress the settle reaction for
+            // this silent in-place morph.
+            if !mid_run_split {
+                obs.clear_receipts(session_id);
             }
-        } else if let Some(reply) = settle_with(obs, session_id, kind, reply).await {
-            // Nothing settled — fall back to a plain message instead of
-            // dropping the reply.
-            flush_reply(adapter, routing, reply, tool_trace).await;
+            if let Some(reply) = settle_with(obs, session_id, kind, reply).await {
+                // Nothing settled — fall back to a plain message instead of
+                // dropping the reply.
+                flush_reply(adapter, routing, reply, tool_trace).await;
+            }
         }
     } else {
         // Platforms without card support cannot morph — the reply goes out

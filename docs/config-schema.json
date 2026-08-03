@@ -261,6 +261,11 @@
             "type": "boolean",
             "default": true
           },
+          "mid_run_split": {
+            "description": "When the user posts messages mid-run, freeze the status card in place as a terminal receipt and deliver the final reply as a NEW message below them (carrying the run trace). When disabled, the status card always morphs into the final reply in place (one message per run).",
+            "type": "boolean",
+            "default": true
+          },
           "history_context": {
             "description": "Recent-chat messages injected as context when the bot is triggered in a group (fetched since the last trigger in that thread/chat, newest cap; 0 disables; capped at 50 per platform page).",
             "type": "integer",
