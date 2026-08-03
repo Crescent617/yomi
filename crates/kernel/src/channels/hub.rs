@@ -188,14 +188,30 @@ impl ChannelHub {
                                 continue;
                             }
                         };
-                        if !gate_message(&adapter_proc, &config_proc, &msg).await {
-                            continue;
-                        }
                         // Route to kernel
                         let Some(coord) = kernel.upgrade() else {
                             warn!("kernel gone, stopping processing loop");
                             break;
                         };
+                        match gate_message(&adapter_proc, &config_proc, &msg).await {
+                            Gate::Allow => {}
+                            Gate::Denied => continue,
+                            // Non-addressed chatter still counts as a
+                            // mid-run post when it lands in a running
+                            // session's conversation.
+                            Gate::NotAddressed => {
+                                record_passive_receipt(
+                                    &name_proc,
+                                    &config_proc,
+                                    &store,
+                                    &obs_proc,
+                                    &msg,
+                                    |sid| coord.is_session_running(sid),
+                                )
+                                .await;
+                                continue;
+                            }
+                        }
                         let handled = handle_incoming_message(
                             &name_proc,
                             &config_proc,
@@ -723,9 +739,21 @@ async fn deliver_reply(
     super::attachments::send_attachments(adapter, routing, files).await;
 }
 
+/// Outcome of gating one incoming message (see `gate_message`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Gate {
+    /// Accepted — process normally.
+    Allow,
+    /// Access denied (disabled / allowlist miss / blocklist hit).
+    Denied,
+    /// Access is fine but the message doesn't address the bot
+    /// (mention-missed group chatter): not processed, but it may still
+    /// count as a mid-run post (see `record_passive_receipt`).
+    NotAddressed,
+}
+
 /// Gate one incoming message: enforce access control and the mention
-/// requirement, emitting the platform's gate reactions. Returns true when
-/// the message should be processed.
+/// requirement, emitting the platform's gate reactions.
 ///
 /// Reaction policy: an accepted, addressed message gets the platform's ack
 /// reaction (when it has one); an allowlist miss gets the access-denied
@@ -736,7 +764,7 @@ async fn gate_message(
     adapter: &Arc<dyn PlatformAdapter>,
     config: &ChannelConfig,
     msg: &ChannelMessage,
-) -> bool {
+) -> Gate {
     let addressed = !config.require_mention || msg.is_mention;
     if let Err(e) = config.check_access(&msg.external_chat_id, &msg.external_user_id) {
         info!(channel = %config.name, error = %e, "access denied");
@@ -749,14 +777,14 @@ async fn gate_message(
             )
             .await;
         }
-        return false;
+        return Gate::Denied;
     }
     if !addressed {
         info!(channel = %config.name, chat_id = %msg.external_chat_id, "ignoring non-mention message");
-        return false;
+        return Gate::NotAddressed;
     }
     send_gate_reaction(adapter, config, msg, config.platform.ack_reaction()).await;
-    true
+    Gate::Allow
 }
 
 /// Best-effort gate reaction; needs a message to target and only logs on
@@ -1553,6 +1581,58 @@ fn record_receipt(
     if let Some(msg_id) = &msg.external_message_id {
         obs.record_receipt(session_id, msg_id.clone());
     }
+}
+
+/// Record a mid-run receipt for a message NOT addressed to the bot
+/// (mention-missed group chatter). The message itself stays unprocessed
+/// — no session is created, no reply, no reaction — but if it belongs to
+/// a session whose agent is running, it counts as a mid-run post: the
+/// user is still talking in that conversation, so the run's reply should
+/// sink below their message instead of morphing above it. The
+/// settle-reaction target is untouched (the bot never engaged with the
+/// message), and commands are skipped — consistent with addressed
+/// receipts, which record only on the Steer/Queue/plain-text routes.
+async fn record_passive_receipt(
+    channel_name: &str,
+    config: &ChannelConfig,
+    store: &Arc<dyn ChannelStore>,
+    obs: &ObsTracker,
+    msg: &ChannelMessage,
+    is_running: impl Fn(&SessionId) -> bool,
+) {
+    if !config.observability {
+        return;
+    }
+    let Some(msg_id) = msg.external_message_id.as_deref() else {
+        return;
+    };
+    if !matches!(
+        parse_channel_command(msg.raw_text.as_deref()),
+        ChannelCommand::None
+    ) {
+        return;
+    }
+    let Ok(mapping_key) = effective_mapping_key(
+        store,
+        channel_name,
+        msg,
+        &msg.external_chat_id,
+        config.reply_in_thread,
+    )
+    .await
+    else {
+        return;
+    };
+    // A top-level group message in reply_in_thread mode keys by its own
+    // id — never mapped, never a mid-run post (it doesn't interleave
+    // with any thread's run).
+    let Ok(Some(sid)) = store.find_mapping(channel_name, &mapping_key).await else {
+        return;
+    };
+    if !is_running(&sid) {
+        return;
+    }
+    obs.record_receipt(&sid, msg_id.to_string());
 }
 
 /// Compute the message ID a reply should be anchored to.

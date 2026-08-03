@@ -84,7 +84,7 @@ forwarder 维护 per-session `RunReplyBuffer`（cap 100 条防 goal 长 run 膨�
 ## 6. receipts 与门禁 reaction
 
 - 消息门禁（hub `gate_message`）统一发放 reaction（best-effort，失败仅 warn）：通过访问控制且被 @（或无需 @）的消息打 ack（Feishu `OneSecond` / Telegram 👀）；allowlist 未命中（`allowed_chats`/`allowed_users` 之外）且被 @ 的消息打 🙏 婉拒（Feishu `THANKS`）；blocklist 命中、通道禁用、未 @ 的群消息一律静默。**结算时不发送任何 reaction**。
-- receipts = 逐 run 记录的用户消息 ID（消息处理循环在 Steer/Queue/None 路由时记录，命令不记）；唯一用途是 **mid-run 判定**——仅当 session 正在运行时到达的消息才记录（空闲时到达的是触发消息），故任何 receipt 即代表 run 期间用户发了消息；任何结算路径（Stopped/Timeout/sweep）结束时清空。
+- receipts = 逐 run 记录的用户消息 ID；唯一用途是 **mid-run 判定**——仅当 session 正在运行时到达的消息才记录（空闲时到达的是触发消息），故任何 receipt 即代表 run 期间用户发了消息；任何结算路径（Stopped/Timeout/sweep）结束时清空。记录来源两路：① 被 @ 且通过门禁的消息（处理循环在 Steer/Queue/None 路由时记录，命令不记）；② **未 @ 的群消息**（门禁丢弃但仍落在运行中会话的聊天/话题里）——消息本身不处理、不建会话、不占 reaction 目标，仅记 receipt，因为用户还在该会话里说话，回复应当沉底被看见而不是 morph 到上方。顶层未 @ 群消息（reply_in_thread 下按自身 id 建 key）不落在任何运行中会话内，永远不算。
 
 ## 7. watchdog（超时兜底）
 

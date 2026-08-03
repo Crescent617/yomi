@@ -3246,7 +3246,10 @@ async fn gate_accepts_allowed_mention_with_ack_reaction() {
     let adapter: Arc<dyn PlatformAdapter> = mock.clone();
     let msg = channel_message(None, true, true);
 
-    assert!(gate_message(&adapter, &feishu_gate_config(), &msg).await);
+    assert_eq!(
+        gate_message(&adapter, &feishu_gate_config(), &msg).await,
+        Gate::Allow
+    );
     let reactions = mock.reactions.lock().await.clone();
     assert_eq!(reactions, [("msg-1".to_string(), "OneSecond".to_string())]);
 }
@@ -3258,7 +3261,10 @@ async fn gate_denies_unlisted_user_with_denied_reaction() {
     let mut msg = channel_message(None, true, true);
     msg.external_user_id = "stranger".to_string();
 
-    assert!(!gate_message(&adapter, &feishu_gate_config(), &msg).await);
+    assert_eq!(
+        gate_message(&adapter, &feishu_gate_config(), &msg).await,
+        Gate::Denied
+    );
     let reactions = mock.reactions.lock().await.clone();
     assert_eq!(reactions, [("msg-1".to_string(), "THANKS".to_string())]);
 }
@@ -3271,7 +3277,24 @@ async fn gate_stays_silent_for_unlisted_user_without_mention() {
     msg.external_user_id = "stranger".to_string();
     msg.is_mention = false;
 
-    assert!(!gate_message(&adapter, &feishu_gate_config(), &msg).await);
+    assert_eq!(
+        gate_message(&adapter, &feishu_gate_config(), &msg).await,
+        Gate::Denied
+    );
+    assert!(mock.reactions.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn gate_marks_allowed_mention_miss_not_addressed() {
+    let mock = Arc::new(MockAdapter::new("fs"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let mut msg = channel_message(None, true, true);
+    msg.is_mention = false;
+
+    assert_eq!(
+        gate_message(&adapter, &feishu_gate_config(), &msg).await,
+        Gate::NotAddressed
+    );
     assert!(mock.reactions.lock().await.is_empty());
 }
 
@@ -3287,7 +3310,7 @@ async fn gate_reacts_to_unlisted_user_when_mentions_not_required() {
     msg.external_user_id = "stranger".to_string();
     msg.is_mention = false;
 
-    assert!(!gate_message(&adapter, &config, &msg).await);
+    assert_eq!(gate_message(&adapter, &config, &msg).await, Gate::Denied);
     let reactions = mock.reactions.lock().await.clone();
     assert_eq!(reactions, [("msg-1".to_string(), "THANKS".to_string())]);
 }
@@ -3302,7 +3325,7 @@ async fn gate_stays_silent_for_blocked_user() {
     };
     let msg = channel_message(None, true, true);
 
-    assert!(!gate_message(&adapter, &config, &msg).await);
+    assert_eq!(gate_message(&adapter, &config, &msg).await, Gate::Denied);
     assert!(mock.reactions.lock().await.is_empty());
 }
 
@@ -3315,11 +3338,11 @@ async fn gate_telegram_acks_with_eyes_and_denies_with_folded_hands() {
     });
 
     let msg = channel_message(None, true, true);
-    assert!(gate_message(&adapter, &config, &msg).await);
+    assert_eq!(gate_message(&adapter, &config, &msg).await, Gate::Allow);
 
     let mut denied = channel_message(None, true, true);
     denied.external_user_id = "stranger".to_string();
-    assert!(!gate_message(&adapter, &config, &denied).await);
+    assert_eq!(gate_message(&adapter, &config, &denied).await, Gate::Denied);
 
     let reactions = mock.reactions.lock().await.clone();
     assert_eq!(
@@ -3342,7 +3365,7 @@ async fn gate_acks_every_allowed_message_when_mentions_not_required() {
     let mut msg = channel_message(None, true, true);
     msg.is_mention = false;
 
-    assert!(gate_message(&adapter, &config, &msg).await);
+    assert_eq!(gate_message(&adapter, &config, &msg).await, Gate::Allow);
     let reactions = mock.reactions.lock().await.clone();
     assert_eq!(reactions, [("msg-1".to_string(), "OneSecond".to_string())]);
 }
@@ -3354,8 +3377,139 @@ async fn gate_skips_reaction_without_message_id() {
     let mut msg = channel_message(None, true, false);
     msg.external_user_id = "stranger".to_string();
 
-    assert!(!gate_message(&adapter, &feishu_gate_config(), &msg).await);
+    assert_eq!(
+        gate_message(&adapter, &feishu_gate_config(), &msg).await,
+        Gate::Denied
+    );
     assert!(mock.reactions.lock().await.is_empty());
+}
+
+// ── Passive mid-run receipts (non-addressed messages) ───────────────
+
+/// A mention-missed message in a running session's conversation counts
+/// as a mid-run post, so the run's reply sinks below it.
+#[tokio::test]
+async fn passive_receipt_records_for_running_session() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let obs = ObsTracker::new();
+    let config = feishu_gate_config();
+    let sid = SessionId::new();
+    store
+        .save_mapping(&config.name, "chat-1", &sid, "chat-1", None)
+        .await
+        .unwrap();
+
+    let mut msg = channel_message(None, true, true);
+    msg.is_mention = false;
+    record_passive_receipt(&config.name, &config, &store, &obs, &msg, |_| true).await;
+
+    assert!(obs.has_mid_run_posts(&sid));
+}
+
+/// Idle session: a non-addressed message is not a mid-run post.
+#[tokio::test]
+async fn passive_receipt_skips_idle_session() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let obs = ObsTracker::new();
+    let config = feishu_gate_config();
+    let sid = SessionId::new();
+    store
+        .save_mapping(&config.name, "chat-1", &sid, "chat-1", None)
+        .await
+        .unwrap();
+
+    let mut msg = channel_message(None, true, true);
+    msg.is_mention = false;
+    record_passive_receipt(&config.name, &config, &store, &obs, &msg, |_| false).await;
+
+    assert!(!obs.has_mid_run_posts(&sid));
+}
+
+/// No session mapped for the message's conversation — nothing to record.
+#[tokio::test]
+async fn passive_receipt_skips_unmapped_conversation() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let obs = ObsTracker::new();
+    let config = feishu_gate_config();
+    let sid = SessionId::new();
+
+    let mut msg = channel_message(None, true, true);
+    msg.is_mention = false;
+    record_passive_receipt(&config.name, &config, &store, &obs, &msg, |_| true).await;
+
+    assert!(!obs.has_mid_run_posts(&sid));
+}
+
+/// Commands are not conversation — skipped like addressed commands.
+#[tokio::test]
+async fn passive_receipt_skips_commands() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let obs = ObsTracker::new();
+    let config = feishu_gate_config();
+    let sid = SessionId::new();
+    store
+        .save_mapping(&config.name, "chat-1", &sid, "chat-1", None)
+        .await
+        .unwrap();
+
+    let mut msg = channel_message(None, true, true);
+    msg.is_mention = false;
+    msg.raw_text = Some("/stop".to_string());
+    record_passive_receipt(&config.name, &config, &store, &obs, &msg, |_| true).await;
+
+    assert!(!obs.has_mid_run_posts(&sid));
+}
+
+/// In-thread message (reply_in_thread): the receipt lands on the
+/// thread's session via the root key.
+#[tokio::test]
+async fn passive_receipt_records_in_thread() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let obs = ObsTracker::new();
+    let config = ChannelConfig {
+        reply_in_thread: true,
+        ..feishu_gate_config()
+    };
+    let sid = SessionId::new();
+    store
+        .save_mapping(&config.name, "root-1", &sid, "chat-1", Some("root-1"))
+        .await
+        .unwrap();
+
+    let mut msg = channel_message(Some("t1"), true, true);
+    msg.is_mention = false;
+    msg.root_id = Some("root-1".to_string());
+    record_passive_receipt(&config.name, &config, &store, &obs, &msg, |_| true).await;
+
+    assert!(obs.has_mid_run_posts(&sid));
+}
+
+/// Observability off: no receipts at all.
+#[tokio::test]
+async fn passive_receipt_skips_when_observability_off() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let obs = ObsTracker::new();
+    let config = ChannelConfig {
+        observability: false,
+        ..feishu_gate_config()
+    };
+    let sid = SessionId::new();
+    store
+        .save_mapping(&config.name, "chat-1", &sid, "chat-1", None)
+        .await
+        .unwrap();
+
+    let mut msg = channel_message(None, true, true);
+    msg.is_mention = false;
+    record_passive_receipt(&config.name, &config, &store, &obs, &msg, |_| true).await;
+
+    assert!(!obs.has_mid_run_posts(&sid));
 }
 
 // ── Live Feishu E2E (manual) ─────────────────────────────────────────

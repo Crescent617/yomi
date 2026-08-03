@@ -24,9 +24,9 @@
 //! keeps the trace panel itself whenever the reply didn't carry it (no
 //! text, trace disabled, no reply, or the flush failed). Runs without a
 //! reply (crash / lost events) freeze into a terminal header style
-//! instead. User messages
-//! received during the run are recorded as receipts — used only for the
-//! mid-run post detection (morph vs. new-message settle).
+//! instead. User messages received during the run — addressed to the
+//! bot or not — are recorded as receipts, used only for the mid-run
+//! post detection (morph vs. new-message settle).
 //!
 //! Settle reaction: card patches never notify, so a run that settles
 //! silently (the morph above) additionally reacts on the session's
