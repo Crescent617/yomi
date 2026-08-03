@@ -696,6 +696,29 @@ fn test_parse_restart_command() {
     assert!(HELP_TEXT.contains("/restart"));
 }
 
+#[test]
+fn test_parse_thread_command() {
+    assert!(matches!(
+        parse_channel_command(Some("/thread 帮我看看这个问题")),
+        ChannelCommand::Thread(text) if text == "帮我看看这个问题"
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/thread@yomi_bot hi there")),
+        ChannelCommand::Thread(text) if text == "hi there"
+    ));
+    // Text is required — a bare command is a usage error, and prefix
+    // lookalikes are not commands.
+    assert!(matches!(
+        parse_channel_command(Some("/thread")),
+        ChannelCommand::InvalidThreadCommand
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/threads hi")),
+        ChannelCommand::None
+    ));
+    assert!(HELP_TEXT.contains("/thread"));
+}
+
 /// `/restart` (admin-only): the ack goes out inline via the adapter —
 /// never through the spawned reply path, which the shutdown could abort —
 /// and only then is the restart requested.
@@ -801,6 +824,274 @@ async fn test_restart_command_gate_and_trigger() {
         panic!("expected text ack");
     };
     assert!(text.contains("Restarting daemon"), "ack: {text}");
+}
+
+/// `/thread <text>` (one-shot): the trigger runs with a forced
+/// `reply_in_thread` — its session keys by the command's own message id
+/// — and follow-ups inside the opened thread adopt that session via
+/// the thread root instead of starting a thread-id-keyed one.
+#[tokio::test]
+async fn test_thread_command_one_shot_and_adoption() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "fake".into(),
+            app_secret: "fake".into(),
+        },
+        require_mention: false,
+        ..Default::default()
+    };
+    let base = |msg_id: &str, raw: &str| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: "ou_1".to_string(),
+        external_message_id: Some(msg_id.to_string()),
+        is_mention: true,
+        raw_text: Some(raw.to_string()),
+        content: vec![ContentBlock::Text {
+            text: raw.to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: true,
+        create_time: None,
+    };
+    let handle = |m: ChannelMessage| {
+        handle_incoming_message(
+            "mock",
+            &config,
+            &store,
+            Arc::clone(&kernel),
+            m,
+            &obs,
+            &adapter,
+        )
+    };
+
+    // Bare command → usage.
+    let reply = handle(base("m0", "/thread")).await.unwrap();
+    assert!(
+        reply
+            .as_deref()
+            .is_some_and(|r| r.contains("Usage: `/thread <text>`")),
+        "{reply:?}"
+    );
+
+    // One-shot trigger: the session keys by the command's own message
+    // id (the future thread root).
+    let reply = handle(base("m1", "/thread 看看这个")).await.unwrap();
+    assert_eq!(reply, None);
+    let sid = store
+        .find_mapping("mock", "m1")
+        .await
+        .unwrap()
+        .expect("thread session under the root key");
+
+    // A follow-up inside the opened thread adopts the root-keyed
+    // session — no fresh thread-id-keyed session appears.
+    let mut follow_up = base("m2", "继续");
+    follow_up.thread_id = Some("omt_1".to_string());
+    follow_up.root_id = Some("m1".to_string());
+    follow_up.parent_id = Some("om_bot".to_string());
+    let reply = handle(follow_up).await.unwrap();
+    assert_eq!(reply, None);
+    assert!(
+        store.find_mapping("mock", "omt_1").await.unwrap().is_none(),
+        "adoption must not spawn a thread-keyed session"
+    );
+    assert_eq!(
+        store.find_mapping("mock", "m1").await.unwrap(),
+        Some(sid),
+        "the follow-up kept the /thread session"
+    );
+}
+
+/// `/thread` inside an existing thread is an error — the command
+/// promises a new thread it can't create. Refusing (instead of
+/// degrading to a plain trigger) also removes any temptation to fork
+/// a parallel session into the same visible thread.
+#[tokio::test]
+async fn test_thread_command_inside_existing_thread_errors() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "fake".into(),
+            app_secret: "fake".into(),
+        },
+        require_mention: false,
+        ..Default::default()
+    };
+    let in_thread = |msg_id: &str, raw: &str| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: "ou_1".to_string(),
+        external_message_id: Some(msg_id.to_string()),
+        is_mention: true,
+        raw_text: Some(raw.to_string()),
+        content: vec![ContentBlock::Text {
+            text: raw.to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: Some("omt_1".to_string()),
+        root_id: Some("om_root".to_string()),
+        parent_id: Some("om_root".to_string()),
+        is_group: true,
+        create_time: None,
+    };
+    let handle = |m: ChannelMessage| {
+        handle_incoming_message(
+            "mock",
+            &config,
+            &store,
+            Arc::clone(&kernel),
+            m,
+            &obs,
+            &adapter,
+        )
+    };
+
+    // A plain in-thread trigger claims the thread (thread-id key).
+    let reply = handle(in_thread("m1", "hi")).await.unwrap();
+    assert_eq!(reply, None);
+    let sid = store
+        .find_mapping("mock", "omt_1")
+        .await
+        .unwrap()
+        .expect("thread session");
+
+    // `/thread` in the same thread: refused, no root-keyed fork, the
+    // thread session untouched.
+    let reply = handle(in_thread("m2", "/thread 继续")).await.unwrap();
+    assert!(
+        reply
+            .as_deref()
+            .is_some_and(|r| r.contains("Already in a thread")),
+        "{reply:?}"
+    );
+    assert!(
+        store
+            .find_mapping("mock", "om_root")
+            .await
+            .unwrap()
+            .is_none(),
+        "in-thread /thread must not fork a root-keyed session"
+    );
+    assert_eq!(
+        store.find_mapping("mock", "omt_1").await.unwrap(),
+        Some(sid)
+    );
+}
+
+/// `/thread` requires a thread-capable group chat: private chats and
+/// platforms without threads (Telegram) are refused.
+#[tokio::test]
+async fn test_thread_command_platform_and_group_gate() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let msg = |raw: &str, is_group: bool| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: "ou_1".to_string(),
+        external_message_id: Some("m1".to_string()),
+        is_mention: true,
+        raw_text: Some(raw.to_string()),
+        content: vec![ContentBlock::Text {
+            text: raw.to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group,
+        create_time: None,
+    };
+    let feishu = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "fake".into(),
+            app_secret: "fake".into(),
+        },
+        require_mention: false,
+        ..Default::default()
+    };
+
+    // Private chat: refused even on Feishu.
+    let reply = handle_incoming_message(
+        "mock",
+        &feishu,
+        &store,
+        Arc::clone(&kernel),
+        msg("/thread hi", false),
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert_eq!(reply.as_deref(), Some("Threads only apply to group chats."));
+    assert!(store.find_mapping("mock", "m1").await.unwrap().is_none());
+
+    // Telegram group: no thread support.
+    let telegram = ChannelConfig {
+        platform: PlatformConfig::Telegram {
+            token: "fake".into(),
+        },
+        ..feishu.clone()
+    };
+    let reply = handle_incoming_message(
+        "mock",
+        &telegram,
+        &store,
+        Arc::clone(&kernel),
+        msg("/thread hi", true),
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        reply.as_deref(),
+        Some("This platform does not support threads.")
+    );
+    assert!(store.find_mapping("mock", "m1").await.unwrap().is_none());
 }
 
 #[test]
@@ -1990,6 +2281,7 @@ fn consumes_history_gate() {
     assert!(consumes_history(&ChannelCommand::None));
     assert!(consumes_history(&ChannelCommand::Steer("x".into())));
     assert!(consumes_history(&ChannelCommand::Queue("x".into())));
+    assert!(consumes_history(&ChannelCommand::Thread("x".into())));
     assert!(consumes_history(&ChannelCommand::Clear));
     // Read-only/other commands never read history → never advance.
     for cmd in [

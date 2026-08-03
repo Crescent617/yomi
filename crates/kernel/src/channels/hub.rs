@@ -12,7 +12,8 @@ use tracing::{error, info, warn};
 
 use super::{
     obs::ObsTracker, reply, ChannelConfig, ChannelEvent, ChannelInfo, ChannelMessage,
-    ChannelStatus, ChannelStore, HistoryContainer, HistoryMessage, PlatformAdapter, SessionRouting,
+    ChannelStatus, ChannelStore, HistoryContainer, HistoryMessage, PlatformAdapter, PlatformConfig,
+    SessionRouting,
 };
 
 const STATUS_IDLE: u8 = 0;
@@ -746,7 +747,8 @@ async fn handle_incoming_message(
 ) -> Result<Option<String>> {
     let chat_id = msg.external_chat_id.clone();
     let reply_msg_id = reply_anchor(&msg, config.reply_in_thread);
-    let mapping_key = session_mapping_key(&msg, &chat_id, config.reply_in_thread);
+    let mapping_key =
+        effective_mapping_key(store, channel_name, &msg, &chat_id, config.reply_in_thread).await?;
     tracing::debug!(
         channel = %channel_name,
         chat_id = %chat_id,
@@ -820,6 +822,50 @@ async fn handle_incoming_message(
             kernel.send_steer(&sid, blocks).await;
             Ok(None)
         }
+        ChannelCommand::Thread(text) => {
+            // One-shot `reply_in_thread`: this trigger runs as if the
+            // flag were on — the reply anchors to the command message
+            // and opens a thread; follow-ups inside adopt the session
+            // via the thread root (see effective_mapping_key).
+            if msg.thread_id.is_some() {
+                // Already in a thread: the command's promise can't be
+                // kept — refuse rather than silently run a plain
+                // trigger (or worse, fork a parallel session).
+                return Ok(Some(
+                    "Already in a thread — just send your message directly.".to_string(),
+                ));
+            }
+            // Top level: threads need a group and platform support.
+            // Private chats never thread; Telegram has no threads at
+            // all — the message-id-keyed session would be an orphan
+            // there.
+            if !msg.is_group {
+                return Ok(Some("Threads only apply to group chats.".to_string()));
+            }
+            if !matches!(config.platform, PlatformConfig::Feishu { .. }) {
+                return Ok(Some("This platform does not support threads.".to_string()));
+            }
+            let mut forced = config.clone();
+            forced.reply_in_thread = true;
+            let (sid, mut blocks) =
+                prepare_trigger(channel_name, &forced, store, &kernel, adapter, obs, &msg).await?;
+            blocks.push(ContentBlock::Text { text });
+            // Deferred image download — as for a plain trigger, only
+            // now, after the gate, does an attached image cost
+            // bandwidth.
+            append_message_images(
+                adapter,
+                msg.external_message_id.as_deref().unwrap_or(""),
+                &msg.image_keys,
+                &mut blocks,
+            )
+            .await;
+            kernel.send_steer(&sid, blocks).await;
+            Ok(None)
+        }
+        ChannelCommand::InvalidThreadCommand => Ok(Some(
+            "Usage: `/thread <text>` — the reply opens a new thread.".to_string(),
+        )),
         ChannelCommand::Queue(text) => {
             let (sid, mut blocks) =
                 prepare_trigger(channel_name, config, store, &kernel, adapter, obs, &msg).await?;
@@ -1194,7 +1240,8 @@ async fn prepare_trigger(
     msg: &ChannelMessage,
 ) -> Result<(SessionId, Vec<ContentBlock>)> {
     let chat_id = msg.external_chat_id.clone();
-    let mapping_key = session_mapping_key(msg, &chat_id, config.reply_in_thread);
+    let mapping_key =
+        effective_mapping_key(store, channel_name, msg, &chat_id, config.reply_in_thread).await?;
     let reply_msg_id = reply_anchor(msg, config.reply_in_thread);
     let (sid, root_in_session) = get_or_create_session(
         channel_name,
@@ -1514,6 +1561,35 @@ fn session_mapping_key(msg: &ChannelMessage, chat_id: &str, reply_in_thread: boo
     }
 }
 
+/// The session mapping key with `/thread` adoption: a thread opened by
+/// the one-shot command keeps its session under the thread's root
+/// message id (the trigger's own key under the forced flag, see
+/// [`session_mapping_key`]); follow-ups in such a thread adopt that
+/// session instead of starting a fresh thread-id-keyed one. With
+/// `reply_in_thread` on, in-thread keying already roots at the same
+/// id — nothing to adopt.
+async fn effective_mapping_key(
+    store: &Arc<dyn ChannelStore>,
+    channel_name: &str,
+    msg: &ChannelMessage,
+    chat_id: &str,
+    reply_in_thread: bool,
+) -> Result<String> {
+    let key = session_mapping_key(msg, chat_id, reply_in_thread);
+    if reply_in_thread || msg.thread_id.is_none() {
+        return Ok(key);
+    }
+    let Some(root_id) = msg.root_id.as_deref() else {
+        return Ok(key);
+    };
+    if store.find_mapping(channel_name, &key).await?.is_none()
+        && store.find_mapping(channel_name, root_id).await?.is_some()
+    {
+        return Ok(root_id.to_string());
+    }
+    Ok(key)
+}
+
 /// Whether a message is a top-level group message in `reply_in_thread`
 /// mode (i.e. not inside any thread). Such messages address the chat as a
 /// whole — e.g. a top-level `/model` switches every thread session, and a
@@ -1628,6 +1704,7 @@ const CMD_PERMITS: &str = "/permits";
 const CMD_APPROVE: &str = "/approve";
 const CMD_DENY: &str = "/deny";
 const CMD_RESTART: &str = "/restart";
+const CMD_THREAD: &str = "/thread";
 
 /// All channel command prefixes, longest-first so `/models` is matched
 /// before `/model` (the latter is a prefix of the former).
@@ -1645,6 +1722,7 @@ const CMD_PREFIXES: &[&str] = &[
     CMD_APPROVE,
     CMD_DENY,
     CMD_RESTART,
+    CMD_THREAD,
 ];
 
 /// `/help` response: the channel command list.
@@ -1659,6 +1737,7 @@ const HELP_TEXT: &str = "\
 `/stop` — stop the current run
 `/steer <text>` — inject a message into the current run
 `/queue <text>` — queue a message for a later turn
+`/thread <text>` — ask in a new thread opened off this message (Feishu groups)
 `/permits` — list pending doc-permission requests (admin)
 `/approve <id> [perm]` — approve a doc-permission request (admin)
 `/deny <id>` — deny a doc-permission request (admin)
@@ -1700,6 +1779,11 @@ enum ChannelCommand {
     InvalidApprovalCommand,
     /// Restart the daemon (admin only).
     Restart,
+    /// One-shot: run this trigger with the reply anchored to the
+    /// command message, opening a new thread off it.
+    Thread(String),
+    /// A `/thread` command without text.
+    InvalidThreadCommand,
     /// Not a command.
     None,
 }
@@ -1712,6 +1796,7 @@ fn consumes_history(cmd: &ChannelCommand) -> bool {
         ChannelCommand::None
             | ChannelCommand::Steer(_)
             | ChannelCommand::Queue(_)
+            | ChannelCommand::Thread(_)
             | ChannelCommand::Clear
     )
 }
@@ -1772,6 +1857,14 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
             _ => ChannelCommand::InvalidApprovalCommand,
         },
         CMD_RESTART if parts.next().is_none() => ChannelCommand::Restart,
+        CMD_THREAD => {
+            let rest = parts.collect::<Vec<_>>().join(" ");
+            if rest.is_empty() {
+                ChannelCommand::InvalidThreadCommand
+            } else {
+                ChannelCommand::Thread(rest)
+            }
+        }
         _ => ChannelCommand::None,
     }
 }
