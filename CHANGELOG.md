@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.42] - 2026-08-03
+
+### Changed
+- 群里没有 @ 机器人的消息落在正在执行任务的会话（话题）中时，最终回复同样沉底发为新消息（此前这类消息被完全忽略，回复会被顶到其上方）。
+
 ## [0.7.41] - 2026-08-03
 
 ### Added
