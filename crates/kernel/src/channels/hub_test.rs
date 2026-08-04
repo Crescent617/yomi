@@ -2443,6 +2443,67 @@ async fn clear_does_not_rewind_history_cursor() {
     );
 }
 
+/// A refused `/thread` ran nothing: it must not advance the history
+/// cursor — otherwise the next real trigger silently loses the window
+/// the refusal skipped.
+#[tokio::test]
+async fn refused_thread_command_does_not_advance_history_cursor() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let feishu = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "fake".into(),
+            app_secret: "fake".into(),
+        },
+        ..Default::default()
+    };
+    let msg = |thread_id: Option<&str>, ts: i64| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: "ou_1".to_string(),
+        external_message_id: Some("m1".to_string()),
+        is_mention: true,
+        raw_text: Some("/thread hi".to_string()),
+        content: vec![ContentBlock::Text {
+            text: "/thread hi".to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: thread_id.map(str::to_string),
+        root_id: None,
+        parent_id: None,
+        is_group: true,
+        create_time: Some(ts),
+    };
+
+    // Refused in-thread: no cursor on the thread container.
+    advance_history_cursor(&feishu, &store, "mock", &msg(Some("omt_1"), 1000)).await;
+    assert_eq!(
+        store.get_history_cursor("mock", "omt_1").await.unwrap(),
+        None
+    );
+
+    // Refused on Telegram: no cursor on the chat container.
+    let telegram = ChannelConfig {
+        platform: PlatformConfig::Telegram {
+            token: "fake".into(),
+        },
+        ..feishu.clone()
+    };
+    advance_history_cursor(&telegram, &store, "mock", &msg(None, 1000)).await;
+    assert_eq!(
+        store.get_history_cursor("mock", "oc_1").await.unwrap(),
+        None
+    );
+
+    // A runnable /thread consumes as before: the chat cursor advances.
+    advance_history_cursor(&feishu, &store, "mock", &msg(None, 2000)).await;
+    assert_eq!(
+        store.get_history_cursor("mock", "oc_1").await.unwrap(),
+        Some(2000)
+    );
+}
+
 /// Model/info commands in a fresh thread must not claim it: thread
 /// mappings are conversation-only, so the first real trigger still
 /// treats the thread as fresh (and inherits the chat-level model).

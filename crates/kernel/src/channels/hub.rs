@@ -806,6 +806,28 @@ async fn send_gate_reaction(
     }
 }
 
+/// Why a `/thread` command cannot open a thread off this message (its
+/// refusal text), if it can't. Telegram has no threads at all — the
+/// message-id-keyed session would be an orphan there; without the
+/// message id there is nothing to anchor and key by, and the chat-level
+/// session must never be hijacked. Also gates the history-cursor
+/// advance: a refused command ran nothing and settles no prior context.
+fn thread_refusal(config: &ChannelConfig, msg: &ChannelMessage) -> Option<&'static str> {
+    // Already in a thread: the command's promise can't be kept —
+    // refuse rather than silently run a plain trigger (or worse, fork
+    // a parallel session into the same visible thread).
+    if msg.thread_id.is_some() {
+        return Some("Already in a thread — just send your message directly.");
+    }
+    if !matches!(config.platform, PlatformConfig::Feishu { .. }) {
+        return Some("This platform does not support threads.");
+    }
+    if msg.external_message_id.is_none() {
+        return Some("Cannot open a thread off this message.");
+    }
+    None
+}
+
 async fn handle_incoming_message(
     channel_name: &str,
     config: &ChannelConfig,
@@ -894,7 +916,7 @@ async fn handle_incoming_message(
                 adapter,
                 obs,
                 &msg,
-                false,
+                TriggerKind::Normal,
             )
             .await?;
             blocks.push(ContentBlock::Text { text });
@@ -906,18 +928,8 @@ async fn handle_incoming_message(
             // message itself, so the reply opens a thread off it (see
             // prepare_trigger); follow-ups inside adopt the session
             // via the thread root (see effective_mapping_key).
-            // Telegram has no threads at all — the message-id-keyed
-            // session would be an orphan there.
-            if msg.thread_id.is_some() {
-                // Already in a thread: the command's promise can't be
-                // kept — refuse rather than silently run a plain
-                // trigger (or worse, fork a parallel session).
-                return Ok(Some(
-                    "Already in a thread — just send your message directly.".to_string(),
-                ));
-            }
-            if !matches!(config.platform, PlatformConfig::Feishu { .. }) {
-                return Ok(Some("This platform does not support threads.".to_string()));
+            if let Some(refusal) = thread_refusal(config, &msg) {
+                return Ok(Some(refusal.to_string()));
             }
             let (sid, mut blocks) = prepare_trigger(
                 channel_name,
@@ -927,7 +939,7 @@ async fn handle_incoming_message(
                 adapter,
                 obs,
                 &msg,
-                true,
+                TriggerKind::OneShotThread,
             )
             .await?;
             blocks.push(ContentBlock::Text { text });
@@ -956,7 +968,7 @@ async fn handle_incoming_message(
                 adapter,
                 obs,
                 &msg,
-                false,
+                TriggerKind::Normal,
             )
             .await?;
             blocks.push(ContentBlock::Text { text });
@@ -1096,7 +1108,7 @@ async fn handle_incoming_message(
                 adapter,
                 obs,
                 &msg,
-                false,
+                TriggerKind::Normal,
             )
             .await?;
             content.extend(msg.content);
@@ -1136,7 +1148,11 @@ async fn advance_history_cursor(
     if config.history_context == 0 || !msg.is_group {
         return;
     }
-    if !consumes_history(&parse_channel_command(msg.raw_text.as_deref())) {
+    let cmd = parse_channel_command(msg.raw_text.as_deref());
+    // A refused `/thread` ran nothing — it settles no prior context.
+    if !consumes_history(&cmd)
+        || (matches!(cmd, ChannelCommand::Thread(_)) && thread_refusal(config, msg).is_some())
+    {
         return;
     }
     let Some(ts) = msg.create_time else {
@@ -1325,13 +1341,23 @@ async fn fetch_root_backstop(
 /// keeps the first ones and gets a note for the rest.
 const IMAGE_DOWNLOAD_MAX: usize = 5;
 
+/// How a run trigger picks its session key and reply anchor.
+enum TriggerKind {
+    /// The channel's `reply_in_thread` rules (see [`session_mapping_key`]
+    /// and [`reply_anchor`]), plus `/thread` adoption.
+    Normal,
+    /// `/thread`: key by and anchor to the trigger's own message id
+    /// regardless of the group-scoped `reply_in_thread` rules, so the
+    /// reply opens a thread in any chat. The command arm refuses
+    /// triggers without a message id, so the key fallback here is
+    /// defensive only.
+    OneShotThread,
+}
+
 /// Resolve a run trigger's session and assemble its context blocks.
 /// `root_in_session` = the mapping predates this trigger — mappings are
 /// conversation-only (model commands degrade or fall back to the chat
 /// session), so it means the thread's root is already in the session.
-/// `one_shot_thread` (`/thread`): key by and anchor to the trigger's
-/// own message id regardless of the group-scoped `reply_in_thread`
-/// rules, so the reply opens a thread in any chat.
 async fn prepare_trigger(
     channel_name: &str,
     config: &ChannelConfig,
@@ -1340,18 +1366,19 @@ async fn prepare_trigger(
     adapter: &Arc<dyn PlatformAdapter>,
     obs: &Arc<ObsTracker>,
     msg: &ChannelMessage,
-    one_shot_thread: bool,
+    kind: TriggerKind,
 ) -> Result<(SessionId, Vec<ContentBlock>)> {
     let chat_id = msg.external_chat_id.clone();
-    let (mapping_key, reply_msg_id) = if one_shot_thread {
-        let id = msg.external_message_id.clone();
-        (id.clone().unwrap_or_else(|| chat_id.clone()), id)
-    } else {
-        (
+    let (mapping_key, reply_msg_id) = match kind {
+        TriggerKind::OneShotThread => {
+            let id = msg.external_message_id.clone();
+            (id.clone().unwrap_or_else(|| chat_id.clone()), id)
+        }
+        TriggerKind::Normal => (
             effective_mapping_key(store, channel_name, msg, &chat_id, config.reply_in_thread)
                 .await?,
             reply_anchor(msg, config.reply_in_thread),
-        )
+        ),
     };
     let (sid, root_in_session) = get_or_create_session(
         channel_name,
