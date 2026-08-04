@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.45] - 2026-08-04
+
+### Added
+- 新增飞书频道命令 `/subscribe [chat_id] [-r|--recursive]` 与 `/unsubscribe`：订阅当前会话的任务完成通知（按用户、长期有效）；任务回复完成时私聊推送一张卡片，点「查看回复」直接跳转到该条回复；默认只覆盖当前会话（话题需单独订阅），`-r` 递归覆盖本群所有话题，加 `chat_id` 可把通知改发到指定群。
+
+### Changed
+- 桌面端状态栏的通知收件箱与宠物心情合并为「注意力盒」：宠物图标移到状态栏最右侧并兼任入口按钮，未读角标叠加在图标上。
+
 ## [0.7.44] - 2026-08-04
 
 ### Fixed
