@@ -17,8 +17,8 @@ import {
   addSessionCompletion,
   didSessionComplete,
   seedRunningSessionStatuses,
-  type SessionCompletionNotification,
-} from "./notification-center";
+  type AttentionItem,
+} from "./attention-box";
 import {
   captureSessionPhaseRevisions,
   reconcileRunningSessionPhases,
@@ -35,7 +35,7 @@ const subagentRefreshes = new Map<string, Promise<void>>();
 const dirtySubagentParents = new Set<string>();
 let runningSessionsRefresh: Promise<void> | null = null;
 let runningSessionsDirty = false;
-let sessionNotificationSequence = 0;
+let attentionItemSequence = 0;
 const lastKnownSessionStatus = new Map<string, string>();
 
 export const runningSessions = $state<RunningSessionInfo[]>([]);
@@ -138,15 +138,15 @@ async function recordSessionCompletion(
     }
   }
 
-  const next = addSessionCompletion(sessionNotifications, {
-    id: `${sessionId}:${completedAt}:${sessionNotificationSequence++}`,
+  const next = addSessionCompletion(attentionItems, {
+    id: `${sessionId}:${completedAt}:${attentionItemSequence++}`,
     sessionId,
     title: title || "Untitled session",
     projectId: projectId ?? null,
     completedAt,
     read: sessionState.activeSessionId === sessionId,
   });
-  sessionNotifications.splice(0, sessionNotifications.length, ...next);
+  attentionItems.splice(0, attentionItems.length, ...next);
 }
 
 export async function startNotificationListener(): Promise<() => void> {
@@ -573,35 +573,33 @@ export const sessionState = $state({
   activeSessionId: null as string | null,
 });
 
-export const sessionNotifications = $state<SessionCompletionNotification[]>([]);
+export const attentionItems = $state<AttentionItem[]>([]);
 export const unreadSessions = $state<Record<string, boolean>>({});
 
-export function markSessionNotificationRead(id: string): void {
-  const notification = sessionNotifications.find((item) => item.id === id);
-  if (notification) notification.read = true;
+export function markAttentionItemRead(id: string): void {
+  const item = attentionItems.find((entry) => entry.id === id);
+  if (item) item.read = true;
 }
 
-export function removeProjectNotifications(
+export function removeProjectAttentionItems(
   projectId: string,
   sessionIds: Set<string>,
 ): void {
-  const kept = sessionNotifications.filter(
-    (notification) =>
-      notification.projectId !== projectId &&
-      !sessionIds.has(notification.sessionId),
+  const kept = attentionItems.filter(
+    (item) => item.projectId !== projectId && !sessionIds.has(item.sessionId),
   );
-  sessionNotifications.splice(0, sessionNotifications.length, ...kept);
+  attentionItems.splice(0, attentionItems.length, ...kept);
 }
 
-export function removeSessionNotifications(sessionIds: Set<string>): void {
-  const kept = sessionNotifications.filter(
-    (notification) => !sessionIds.has(notification.sessionId),
+export function removeAttentionItems(sessionIds: Set<string>): void {
+  const kept = attentionItems.filter(
+    (item) => !sessionIds.has(item.sessionId),
   );
-  sessionNotifications.splice(0, sessionNotifications.length, ...kept);
+  attentionItems.splice(0, attentionItems.length, ...kept);
 }
 
-export function markAllSessionNotificationsRead(): void {
-  for (const notification of sessionNotifications) notification.read = true;
+export function markAllAttentionItemsRead(): void {
+  for (const item of attentionItems) item.read = true;
 }
 
 export const pinnedSessionMeta = $state(

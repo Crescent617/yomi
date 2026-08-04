@@ -36,8 +36,8 @@
   import SessionForkMenuItem from "./SessionForkMenuItem.svelte";
   import {
     sessionState,
-    removeProjectNotifications,
-    removeSessionNotifications,
+    removeProjectAttentionItems,
+    removeAttentionItems,
     unreadSessions,
     projectState,
     sessionCursors,
@@ -408,7 +408,7 @@
       await api.unsubscribe(id);
       await api.deleteSession(id);
       sessionState.sessions = sessionState.sessions.filter((s) => s.id !== id);
-      removeSessionNotifications(new Set([id]));
+      removeAttentionItems(new Set([id]));
       purgeSessionLocalState(id);
       loadPinnedSessions();
       if (sessionState.activeSessionId === id) setActiveSession(null);
@@ -453,7 +453,7 @@
       sessionState.sessions = sessionState.sessions.filter(
         (s) => s.project_id !== id,
       );
-      removeProjectNotifications(id, removedIds);
+      removeProjectAttentionItems(id, removedIds);
       for (const sid of removedIds) {
         purgeSessionLocalState(sid);
       }

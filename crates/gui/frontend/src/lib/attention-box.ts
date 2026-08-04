@@ -1,4 +1,4 @@
-export interface SessionCompletionNotification {
+export interface AttentionItem {
   id: string;
   sessionId: string;
   title: string;
@@ -7,7 +7,7 @@ export interface SessionCompletionNotification {
   read: boolean;
 }
 
-export const MAX_SESSION_NOTIFICATIONS = 100;
+export const MAX_ATTENTION_ITEMS = 100;
 
 export function seedRunningSessionStatuses(
   statuses: Map<string, string>,
@@ -28,18 +28,16 @@ export function didSessionComplete(
 }
 
 export function addSessionCompletion(
-  notifications: SessionCompletionNotification[],
-  notification: SessionCompletionNotification,
-): SessionCompletionNotification[] {
+  items: AttentionItem[],
+  item: AttentionItem,
+): AttentionItem[] {
   return [
-    notification,
-    ...notifications.filter(
-      (item) => item.sessionId !== notification.sessionId,
-    ),
-  ].slice(0, MAX_SESSION_NOTIFICATIONS);
+    item,
+    ...items.filter((existing) => existing.sessionId !== item.sessionId),
+  ].slice(0, MAX_ATTENTION_ITEMS);
 }
 
-export function relativeNotificationTime(iso: string, now: number): string {
+export function relativeTime(iso: string, now: number): string {
   const elapsed = Math.max(0, now - new Date(iso).getTime());
   const minutes = Math.floor(elapsed / 60_000);
   if (minutes < 1) return "now";

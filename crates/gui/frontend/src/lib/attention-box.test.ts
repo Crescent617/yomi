@@ -1,16 +1,16 @@
 import { describe, expect, test } from "vitest";
 import {
-  MAX_SESSION_NOTIFICATIONS,
+  MAX_ATTENTION_ITEMS,
   addSessionCompletion,
   didSessionComplete,
-  relativeNotificationTime,
+  relativeTime,
   seedRunningSessionStatuses,
-  type SessionCompletionNotification,
-} from "./notification-center";
+  type AttentionItem,
+} from "./attention-box";
 
-function notification(index: number): SessionCompletionNotification {
+function item(index: number): AttentionItem {
   return {
-    id: `notification-${index}`,
+    id: `attention-${index}`,
     sessionId: `session-${index}`,
     title: `Session ${index}`,
     projectId: null,
@@ -19,7 +19,7 @@ function notification(index: number): SessionCompletionNotification {
   };
 }
 
-describe("session completion notifications", () => {
+describe("attention box", () => {
   test("only records a transition into idle", () => {
     expect(didSessionComplete(undefined, "idle")).toBe(false);
     expect(didSessionComplete("idle", "idle")).toBe(false);
@@ -37,11 +37,11 @@ describe("session completion notifications", () => {
     expect(didSessionComplete(statuses.get("reconnected"), "idle")).toBe(true);
   });
 
-  test("keeps only the latest notification for each session", () => {
-    const older = notification(1);
-    const other = notification(2);
+  test("keeps only the latest item for each session", () => {
+    const older = item(1);
+    const other = item(2);
     const latest = {
-      ...notification(3),
+      ...item(3),
       sessionId: older.sessionId,
       title: "Latest completion",
       read: true,
@@ -52,21 +52,21 @@ describe("session completion notifications", () => {
     expect(items).toEqual([latest, other]);
   });
 
-  test("keeps newest notifications first and caps history", () => {
-    let items: SessionCompletionNotification[] = [];
-    for (let index = 0; index < MAX_SESSION_NOTIFICATIONS + 5; index += 1) {
-      items = addSessionCompletion(items, notification(index));
+  test("keeps newest items first and caps history", () => {
+    let items: AttentionItem[] = [];
+    for (let index = 0; index < MAX_ATTENTION_ITEMS + 5; index += 1) {
+      items = addSessionCompletion(items, item(index));
     }
-    expect(items).toHaveLength(MAX_SESSION_NOTIFICATIONS);
-    expect(items[0].id).toBe(`notification-${MAX_SESSION_NOTIFICATIONS + 4}`);
-    expect(items.at(-1)?.id).toBe("notification-5");
+    expect(items).toHaveLength(MAX_ATTENTION_ITEMS);
+    expect(items[0].id).toBe(`attention-${MAX_ATTENTION_ITEMS + 4}`);
+    expect(items.at(-1)?.id).toBe("attention-5");
   });
 
   test("formats compact relative time", () => {
     const now = Date.parse("2026-07-15T02:00:00Z");
-    expect(relativeNotificationTime("2026-07-15T01:59:40Z", now)).toBe("now");
-    expect(relativeNotificationTime("2026-07-15T01:45:00Z", now)).toBe("15m");
-    expect(relativeNotificationTime("2026-07-14T23:00:00Z", now)).toBe("3h");
-    expect(relativeNotificationTime("2026-07-13T02:00:00Z", now)).toBe("2d");
+    expect(relativeTime("2026-07-15T01:59:40Z", now)).toBe("now");
+    expect(relativeTime("2026-07-15T01:45:00Z", now)).toBe("15m");
+    expect(relativeTime("2026-07-14T23:00:00Z", now)).toBe("3h");
+    expect(relativeTime("2026-07-13T02:00:00Z", now)).toBe("2d");
   });
 });

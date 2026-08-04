@@ -15,7 +15,6 @@
     projectState,
     requestActivePanel,
     runningSessions,
-    sessionState,
     showNotification,
   } from "../../state.svelte";
   import { activateSession } from "../../session";
@@ -23,15 +22,9 @@
   import { errorMessage, openDefault } from "../../api";
   import * as api from "../../api";
   import { clock } from "../../clock.svelte";
-  import {
-    aggregateMood,
-    elapsedLabel,
-    moodTextClass,
-  } from "./status-activity";
-  import CodexPetSprite from "../CodexPetSprite.svelte";
+  import { elapsedLabel } from "./status-activity";
+  import AttentionBox from "./AttentionBox.svelte";
   import PopoverPanel from "../ui/PopoverPanel.svelte";
-  import { moodToCodexPetAnimation } from "../../codex-pet";
-  import NotificationCenter from "./NotificationCenter.svelte";
   import {
     guiPreferences,
     saveGuiPreferences,
@@ -159,42 +152,9 @@
       .then((v) => (version = v))
       .catch(() => {});
     startUpdateChecker();
-    let cancelledRef = { cancelled: false };
-    const loadPetSprite = async () => {
-      try {
-        // The layout restores the Rust-side pack selection after children
-        // mount, so fall back to the first pack when nothing is selected
-        // yet — the spritesheet only needs a pack id.
-        const pack =
-          (await api.getSelectedPetPack()) ??
-          (await api.listPetPacks())[0] ??
-          null;
-        if (!pack || cancelledRef.cancelled) return false;
-        const bytes = await api.readSelectedPetSpritesheet(
-          pack.id,
-          pack.sprite_version_number,
-        );
-        if (cancelledRef.cancelled) return true;
-        petSpriteUrl = URL.createObjectURL(new Blob([bytes]));
-        petSpriteVersion = pack.sprite_version_number;
-        return true;
-      } catch {
-        return false;
-      }
-    };
-    void (async () => {
-      // One retry covers the boot race where the pack selection is not
-      // restored yet; afterwards the chip degrades to text-only.
-      if (!(await loadPetSprite()) && !cancelledRef.cancelled) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-        if (!cancelledRef.cancelled) await loadPetSprite();
-      }
-    })();
     return () => {
-      cancelledRef.cancelled = true;
       stopUpdateChecker();
       if (copyResetTimer) clearTimeout(copyResetTimer);
-      if (petSpriteUrl) URL.revokeObjectURL(petSpriteUrl);
     };
   });
 
@@ -208,26 +168,6 @@
     runningSessions.filter((session) => isActiveSessionPhase(session.phase)),
   );
   const streamingCount = $derived(streamingSessions.length);
-
-  // ── Pet mood indicator ──────────────────────────────────────────────
-  // The pet window computes the full PetMood in Rust; here we approximate
-  // the same priority ladder from main-window state (permission > ask >
-  // working > idle) so the app feels alive even with the pet disabled.
-  let petSpriteUrl = $state<string | null>(null);
-  let petSpriteVersion = $state<1 | 2>(1);
-  const pendingPermission = $derived(
-    sessionState.sessions.some((s) => s.pending_permissions.length > 0),
-  );
-  const pendingAsk = $derived(
-    sessionState.sessions.some((s) => s.pending_ask_users.length > 0),
-  );
-  const petMood = $derived(
-    aggregateMood({
-      pendingPermission,
-      pendingAsk,
-      runningCount: streamingCount,
-    }),
-  );
 
   $effect(() => {
     if (shellCount === 0 && streamingCount === 0) open = false;
@@ -582,25 +522,6 @@
       <Coffee class="size-3.5" aria-hidden="true" />
     </button>
 
-    <!-- Pet mood: the app-wide agent heartbeat -->
-    <div
-      class="flex items-center gap-0.5"
-      title="Pet mood: {petMood}{streamingCount > 0
-        ? ` · ${streamingCount} running`
-        : ''}"
-    >
-      {#if petSpriteUrl}
-        <CodexPetSprite
-          src={petSpriteUrl}
-          animation={moodToCodexPetAnimation(petMood)}
-          scale={0.1}
-          sprite_version_number={petSpriteVersion}
-          label="Pet mood indicator"
-        />
-      {/if}
-      <span class="micro-label {moodTextClass(petMood)}">{petMood}</span>
-    </div>
-
     {#if showUpdate && updateVersion}
       <div bind:this={updateRef} class="relative flex items-center">
         <button
@@ -667,7 +588,7 @@
     {#if version}
       <a
         href="https://github.com/Crescent617/yomi"
-        class="text-muted-foreground/70 hover:text-foreground flex items-center gap-0.5 text-[10px] transition-colors"
+        class="micro-label [font-family:var(--font-sans)] text-muted-foreground/70 hover:text-foreground flex items-center gap-0.5 transition-colors"
         title="Open Yomi on GitHub"
         onclick={(event) => {
           event.preventDefault();
@@ -683,6 +604,6 @@
         <span>v{version}</span>
       </a>
     {/if}
-    <NotificationCenter />
+    <AttentionBox />
   </div>
 </div>

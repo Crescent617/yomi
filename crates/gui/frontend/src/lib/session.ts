@@ -7,7 +7,7 @@ import {
   refreshSubagents,
   requestActivePanel,
   sessionState,
-  sessionNotifications,
+  attentionItems,
   showNotification,
   streamingMessages,
   unreadSessions,
@@ -182,8 +182,8 @@ export function setActiveSession(id: string | null) {
   sessionState.activeSessionId = id;
   if (id) {
     delete unreadSessions[id];
-    for (const notification of sessionNotifications) {
-      if (notification.sessionId === id) notification.read = true;
+    for (const item of attentionItems) {
+      if (item.sessionId === id) item.read = true;
     }
   }
 }
