@@ -35,7 +35,7 @@
   const pendingAsk = $derived(
     sessionState.sessions.some((s) => s.pending_ask_users.length > 0),
   );
-  const streamingCount = $derived(streamingSessions.length);
+  const streamingCount = $derived(streamingSessions().length);
   const petMood = $derived(
     aggregateMood({
       pendingPermission,

@@ -41,10 +41,14 @@ const lastKnownSessionStatus = new Map<string, string>();
 
 export const runningSessions = $state<RunningSessionInfo[]>([]);
 
-/** Running sessions in an active phase (streaming / executing_tool / compacting). */
-export const streamingSessions = $derived(
+const streamingSessionsState = $derived(
   runningSessions.filter((session) => isActiveSessionPhase(session.phase)),
 );
+
+/** Running sessions in an active phase (streaming / executing_tool / compacting). */
+export function streamingSessions(): RunningSessionInfo[] {
+  return streamingSessionsState;
+}
 
 export function refreshRunningSessions(): Promise<void> {
   runningSessionsDirty = true;

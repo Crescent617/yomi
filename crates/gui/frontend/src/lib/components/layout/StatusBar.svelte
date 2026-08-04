@@ -164,7 +164,7 @@
     ),
   );
   const shellCount = $derived(runningShells.length);
-  const streamingCount = $derived(streamingSessions.length);
+  const streamingCount = $derived(streamingSessions().length);
 
   $effect(() => {
     if (shellCount === 0 && streamingCount === 0) open = false;
@@ -423,7 +423,7 @@
         title="Running activity"
         class="absolute bottom-full left-0 z-30 mb-1 w-96 max-w-[calc(100vw-1.5rem)]"
       >
-        {#each streamingSessions as session (session.id)}
+        {#each streamingSessions() as session (session.id)}
           {@const project = projectName(session.project_id)}
           <button
             type="button"
