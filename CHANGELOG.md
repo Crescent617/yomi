@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.43] - 2026-08-04
+
+### Changed
+- 频道命令 `/thread <内容>` 现在支持在飞书私聊中开话题（此前仅群聊可用）。
+
+### Fixed
+- 修复被拒绝的 `/thread`（在话题中重复使用，或在 Telegram 等不支持话题的平台上使用）会错误推进群聊历史进度、导致后续触发丢失其间消息的问题。
+
 ## [0.7.42] - 2026-08-03
 
 ### Changed
