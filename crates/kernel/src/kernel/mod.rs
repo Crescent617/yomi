@@ -1029,7 +1029,7 @@ impl Kernel {
         self.send_message_inner(session_id, blocks, true).await
     }
 
-    async fn send_message_inner(
+    pub(crate) async fn send_message_inner(
         &self,
         session_id: &SessionId,
         mut blocks: Vec<crate::types::ContentBlock>,
@@ -1143,6 +1143,18 @@ impl Kernel {
             .publish(session_id.clone(), AgentInput::Steer(content))
         {
             tracing::warn!("Failed to publish steer input: {}", e);
+        }
+    }
+
+    /// Feed the session-title path with a user message's own text.
+    /// Channel triggers merge context blocks (history, quoted message)
+    /// ahead of the user's text before handing content to the agent,
+    /// so the title input must come from the user message alone —
+    /// extracting it from the merged content would title the session
+    /// after someone else's chat history.
+    pub(crate) fn note_title_input(&self, session_id: &SessionId, text: &str) {
+        if let Some(query) = tasks::session_title::input_from_text(text) {
+            self.update_session_title_after_message(session_id.clone(), query);
         }
     }
 

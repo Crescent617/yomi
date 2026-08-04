@@ -919,6 +919,7 @@ async fn handle_incoming_message(
                 TriggerKind::Normal,
             )
             .await?;
+            kernel.note_title_input(&sid, &text);
             blocks.push(ContentBlock::Text { text });
             kernel.send_steer(&sid, blocks).await;
             Ok(None)
@@ -942,6 +943,7 @@ async fn handle_incoming_message(
                 TriggerKind::OneShotThread,
             )
             .await?;
+            kernel.note_title_input(&sid, &text);
             blocks.push(ContentBlock::Text { text });
             // Deferred image download — as for a plain trigger, only
             // now, after the gate, does an attached image cost
@@ -971,8 +973,11 @@ async fn handle_incoming_message(
                 TriggerKind::Normal,
             )
             .await?;
+            kernel.note_title_input(&sid, &text);
             blocks.push(ContentBlock::Text { text });
-            kernel.send_message(&sid, blocks).await?;
+            // The title was just fed from the user's own text — don't
+            // let send_message re-extract it from the merged blocks.
+            kernel.send_message_inner(&sid, blocks, false).await?;
             Ok(None)
         }
         ChannelCommand::ListModels => {
@@ -1111,6 +1116,12 @@ async fn handle_incoming_message(
                 TriggerKind::Normal,
             )
             .await?;
+            // Title from the user's bare text: msg.content carries the
+            // adapter's metadata header ([ts][from_user_id:…]), and
+            // context blocks merge ahead of it (see note_title_input).
+            if let Some(raw) = msg.raw_text.as_deref() {
+                kernel.note_title_input(&sid, raw);
+            }
             content.extend(msg.content);
             // Deferred image download — only now, after the gate, does
             // an attached image cost bandwidth.

@@ -14,6 +14,10 @@ pub(in crate::kernel) fn input_from_blocks(blocks: &[ContentBlock]) -> Option<St
         .iter()
         .filter_map(ContentBlock::as_text)
         .collect::<String>();
+    input_from_text(&text)
+}
+
+pub(in crate::kernel) fn input_from_text(text: &str) -> Option<String> {
     let text = text
         .trim()
         .chars()

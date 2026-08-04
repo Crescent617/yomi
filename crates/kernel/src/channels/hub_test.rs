@@ -1040,6 +1040,225 @@ async fn test_thread_command_inside_existing_thread_errors() {
     );
 }
 
+/// Poll until the (async) session-title fallback lands, or time out.
+async fn wait_for_title(
+    kernel: &Arc<crate::kernel::Kernel>,
+    sid: &crate::types::SessionId,
+) -> String {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let session = kernel.get_session(sid).await.unwrap();
+        if let Some(title) = session.title {
+            return title;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "title not set in time"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// A channel trigger titles the session from the user's bare text —
+/// not from the adapter's metadata header on msg.content, and not
+/// from injected chat history merged ahead of it (the bugs behind
+/// all-Untitled / garbage-titled channel sessions).
+#[tokio::test]
+async fn channel_trigger_titles_session_from_user_text_not_history() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    // History noise ("earlier"/"latest") must not leak into the title.
+    let mock = Arc::new(HistoryMockAdapter::default());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram {
+            token: "fake".into(),
+        },
+        require_mention: false,
+        ..Default::default()
+    };
+    let reply = handle_incoming_message(
+        "mock",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        ChannelMessage {
+            external_chat_id: "oc_1".to_string(),
+            external_user_id: "ou_1".to_string(),
+            external_message_id: Some("trigger".to_string()),
+            is_mention: true,
+            raw_text: Some("标题应该是这句话".to_string()),
+            // Production shape: the agent-facing content carries the
+            // adapter's metadata header ahead of the user's text.
+            content: vec![ContentBlock::Text {
+                text: "[2026-08-04 10:00:00][from_user_id: ou_1][chat_id: oc_1][platform: feishu]\n标题应该是这句话".to_string(),
+            }],
+            image_keys: vec![],
+            thread_id: None,
+            root_id: None,
+            parent_id: None,
+            is_group: true,
+            create_time: Some(300),
+        },
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert_eq!(reply, None);
+    let sid = store
+        .find_mapping("mock", "oc_1")
+        .await
+        .unwrap()
+        .expect("session created");
+    let title = wait_for_title(&kernel, &sid).await;
+    assert_eq!(title, "标题应该是这句话");
+    kernel.stop();
+}
+
+/// An image-only first message (no raw text) gets no title input at
+/// all — a header-only content block must not become the title.
+#[tokio::test]
+async fn image_only_trigger_leaves_session_untitled() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "fake".into(),
+            app_secret: "fake".into(),
+        },
+        require_mention: false,
+        ..Default::default()
+    };
+    let reply = handle_incoming_message(
+        "mock",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        ChannelMessage {
+            external_chat_id: "oc_1".to_string(),
+            external_user_id: "ou_1".to_string(),
+            external_message_id: Some("m1".to_string()),
+            is_mention: true,
+            raw_text: None,
+            content: vec![ContentBlock::Text {
+                text:
+                    "[2026-08-04 10:00:00][from_user_id: ou_1][chat_id: oc_1][platform: feishu]\n"
+                        .to_string(),
+            }],
+            image_keys: vec!["img_1".to_string()],
+            thread_id: None,
+            root_id: None,
+            parent_id: None,
+            is_group: false,
+            create_time: None,
+        },
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert_eq!(reply, None);
+    let sid = store
+        .find_mapping("mock", "oc_1")
+        .await
+        .unwrap()
+        .expect("session created");
+
+    // Give any (misguided) title task a chance to run; none should fire.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert!(kernel.get_session(&sid).await.unwrap().title.is_none());
+    kernel.stop();
+}
+
+/// `/thread <text>` titles the session by the payload text, without
+/// the command token.
+#[tokio::test]
+async fn thread_command_titles_session_from_payload_text() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "fake".into(),
+            app_secret: "fake".into(),
+        },
+        require_mention: false,
+        ..Default::default()
+    };
+    let reply = handle_incoming_message(
+        "mock",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        ChannelMessage {
+            external_chat_id: "oc_1".to_string(),
+            external_user_id: "ou_1".to_string(),
+            external_message_id: Some("m1".to_string()),
+            is_mention: true,
+            raw_text: Some("/thread 看看这个".to_string()),
+            content: vec![ContentBlock::Text {
+                text: "/thread 看看这个".to_string(),
+            }],
+            image_keys: vec![],
+            thread_id: None,
+            root_id: None,
+            parent_id: None,
+            is_group: true,
+            create_time: None,
+        },
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert_eq!(reply, None);
+    let sid = store
+        .find_mapping("mock", "m1")
+        .await
+        .unwrap()
+        .expect("session created");
+    let title = wait_for_title(&kernel, &sid).await;
+    assert_eq!(title, "看看这个");
+    kernel.stop();
+}
+
 /// `/thread` works in private chats too (Feishu threads exist there):
 /// the session keys by the command's message id — never hijacking the
 /// chat-level session — and in-thread follow-ups adopt it. Telegram
