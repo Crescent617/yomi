@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.44] - 2026-08-04
+
+### Fixed
+- 修复频道（飞书/Telegram）触发的会话标题一直显示 Untitled 的问题：现在按首条用户消息生成会话标题，纯图片消息保持无标题。
+
 ## [0.7.43] - 2026-08-04
 
 ### Changed
