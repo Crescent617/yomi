@@ -4413,7 +4413,7 @@ async fn test_notify_run_subscribers() {
     let dm_card = &dms[0].1;
     assert!(dm_card.contains("link://om_reply"), "{dm_card}");
     assert!(dm_card.contains("任务完成"), "{dm_card}");
-    assert!(dm_card.contains("open_url"), "{dm_card}");
+    assert!(dm_card.contains("card_link"), "{dm_card}");
     drop(dms);
     let cards = mock.cards.lock().await;
     assert_eq!(cards.len(), 1);

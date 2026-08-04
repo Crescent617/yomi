@@ -646,10 +646,11 @@ async fn notify_run_subscribers(
     }
 }
 
-/// The run-completion subscription card: a markdown status line
-/// (mentioning subscribers when posted to a group) plus a
-/// jump-to-the-reply button. Card markdown strips applink URLs (not
-/// clickable), so the jump rides the button's `open_url` behavior.
+/// The run-completion subscription card: a single notation-sized line
+/// (mentioning subscribers when posted to a group) in a compact-width
+/// card, the whole card clickable via `card_link` — no button, minimal
+/// by design. Card markdown strips applink URLs, so the jump rides
+/// `card_link` instead; without a link it degrades to a text-only ping.
 fn subscription_notify_card(status: &str, link: Option<&str>, mentions: &[String]) -> String {
     let mention = mentions
         .iter()
@@ -661,17 +662,25 @@ fn subscription_notify_card(status: &str, link: Option<&str>, mentions: &[String
     } else {
         format!("{mention} ✅ 你订阅的会话{status}")
     };
-    let mut elements = vec![serde_json::json!({ "tag": "markdown", "content": text })];
-    if let Some(link) = link {
-        elements.push(serde_json::json!({
-            "tag": "button",
-            "text": { "tag": "plain_text", "content": "查看回复" },
-            "type": "primary_filled",
-            "width": "fill",
-            "behaviors": [{ "type": "open_url", "default_url": link }],
-        }));
-    }
-    serde_json::json!({ "schema": "2.0", "body": { "elements": elements } }).to_string()
+    let card = match link {
+        Some(link) => serde_json::json!({
+            "schema": "2.0",
+            "config": { "width_mode": "compact" },
+            "card_link": { "url": link },
+            "body": { "elements": [
+                { "tag": "markdown", "text_size": "notation",
+                  "content": format!("{text} · **go to**") }
+            ] }
+        }),
+        None => serde_json::json!({
+            "schema": "2.0",
+            "config": { "width_mode": "compact" },
+            "body": { "elements": [
+                { "tag": "markdown", "text_size": "notation", "content": text }
+            ] }
+        }),
+    };
+    card.to_string()
 }
 
 /// Flush a run's final reply as a new message (observability off, platforms
