@@ -668,6 +668,12 @@ pub trait PlatformAdapter: Send + Sync {
         None
     }
 
+    /// Fetch a chat's display name (for human-friendly notification
+    /// text). Best-effort; default: unsupported — `None`.
+    async fn fetch_chat_name(&self, _chat_id: &str) -> Option<String> {
+        None
+    }
+
     /// Download one image attached to a message as an `ImageUrl` content
     /// block. `image_key` is opaque and platform-specific: from
     /// [`ChannelMessage::image_keys`] (deferred receive-path download,

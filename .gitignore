@@ -69,3 +69,4 @@ venv/
 node_modules
 .direnv
 /result
+.agents/tasks

@@ -383,7 +383,7 @@ impl ChannelHub {
                                     &adapter,
                                     &routing,
                                     reply_msg_id.as_deref(),
-                                    "任务异常结束",
+                                    RunEndStatus::Failed,
                                 )
                                 .await;
                             }
@@ -488,7 +488,7 @@ impl ChannelHub {
                                 &adapter,
                                 &routing,
                                 reply_msg_id.as_deref(),
-                                stop_status_text(reason),
+                                RunEndStatus::from_stop_reason(reason),
                             )
                             .await;
                             continue;
@@ -569,13 +569,38 @@ impl ChannelHub {
     }
 }
 
-/// The subscription card's status word for a run's stop reason.
-fn stop_status_text(reason: &crate::event::StopReason) -> &'static str {
-    match reason {
-        crate::event::StopReason::Completed { .. } => "任务完成",
-        crate::event::StopReason::Cancelled { .. } => "任务已停止",
-        crate::event::StopReason::Failed { .. }
-        | crate::event::StopReason::MaxIterations { .. } => "任务异常结束",
+/// How a run ended, for the subscription card's emoji and status word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunEndStatus {
+    Completed,
+    Cancelled,
+    Failed,
+}
+
+impl RunEndStatus {
+    fn from_stop_reason(reason: &crate::event::StopReason) -> Self {
+        match reason {
+            crate::event::StopReason::Completed { .. } => Self::Completed,
+            crate::event::StopReason::Cancelled { .. } => Self::Cancelled,
+            crate::event::StopReason::Failed { .. }
+            | crate::event::StopReason::MaxIterations { .. } => Self::Failed,
+        }
+    }
+
+    fn emoji(self) -> &'static str {
+        match self {
+            Self::Completed => "✅",
+            Self::Cancelled => "⏹",
+            Self::Failed => "❌",
+        }
+    }
+
+    fn word(self) -> &'static str {
+        match self {
+            Self::Completed => "任务完成",
+            Self::Cancelled => "任务已停止",
+            Self::Failed => "任务异常结束",
+        }
     }
 }
 
@@ -585,15 +610,19 @@ fn stop_status_text(reason: &crate::event::StopReason) -> &'static str {
 /// several matching subscriptions still means a single DM), or posted to
 /// their chosen target chat (one card per target, mentioning all
 /// subscribers routed to it). Skipped entirely when the run delivered no
-/// message to point at (crash without a card); per-target failures only
-/// affect their target.
+/// message to point at (crash without a card), and for cancelled runs —
+/// the initiator stopped it themselves, they know (mirrors the settle
+/// reaction policy). Per-target failures only affect their target.
 async fn notify_run_subscribers(
     store: &Arc<dyn ChannelStore>,
     adapter: &Arc<dyn PlatformAdapter>,
     routing: &SessionRouting,
     reply_msg_id: Option<&str>,
-    status: &str,
+    status: RunEndStatus,
 ) {
+    if status == RunEndStatus::Cancelled {
+        return;
+    }
     let Some(reply_msg_id) = reply_msg_id else {
         return;
     };
@@ -614,9 +643,10 @@ async fn notify_run_subscribers(
     if subs.is_empty() {
         return;
     }
-    let link = adapter
-        .message_link(&routing.external_chat_id, reply_msg_id)
-        .await;
+    let (link, chat_name) = tokio::join!(
+        adapter.message_link(&routing.external_chat_id, reply_msg_id),
+        adapter.fetch_chat_name(&routing.external_chat_id),
+    );
     let mut dm_users: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut chat_targets: HashMap<String, Vec<String>> = HashMap::new();
     for sub in subs {
@@ -633,13 +663,13 @@ async fn notify_run_subscribers(
         }
     }
     for user in dm_users {
-        let card = subscription_notify_card(status, link.as_deref(), &[]);
+        let card = subscription_notify_card(status, link.as_deref(), chat_name.as_deref(), &[]);
         if let Err(e) = adapter.send_direct_card(&user, &card).await {
             warn!(error = %e, "run subscription DM failed");
         }
     }
     for (chat_id, users) in chat_targets {
-        let card = subscription_notify_card(status, link.as_deref(), &users);
+        let card = subscription_notify_card(status, link.as_deref(), chat_name.as_deref(), &users);
         if let Err(e) = adapter.send_card(&chat_id, &card, None).await {
             warn!(error = %e, "run subscription notify failed");
         }
@@ -649,19 +679,37 @@ async fn notify_run_subscribers(
 /// The run-completion subscription card: a single notation-sized line
 /// (mentioning subscribers when posted to a group) in a compact-width
 /// card, the whole card clickable via `card_link` — no button, minimal
-/// by design. Card markdown strips applink URLs, so the jump rides
-/// `card_link` instead; without a link it degrades to a text-only ping.
-fn subscription_notify_card(status: &str, link: Option<&str>, mentions: &[String]) -> String {
+/// by design. The line names the source chat when known (threads have no
+/// name of their own — the group name stands in). The emoji mirrors the
+/// run's end status (✅/⏹/❌). Card markdown strips applink URLs, so the
+/// jump rides `card_link` instead; without a link it degrades to a
+/// text-only ping.
+fn subscription_notify_card(
+    status: RunEndStatus,
+    link: Option<&str>,
+    chat_name: Option<&str>,
+    mentions: &[String],
+) -> String {
     let mention = mentions
         .iter()
         .map(|u| format!("<at id={u}></at>"))
         .collect::<Vec<_>>()
         .join(" ");
-    let text = if mention.is_empty() {
-        format!("✅ 你订阅的会话{status}")
-    } else {
-        format!("{mention} ✅ 你订阅的会话{status}")
+    let scope = match chat_name {
+        Some(name) => format!("的「{name}」"),
+        None => "的会话".to_string(),
     };
+    let text = format!(
+        "{}{} 你订阅{}{}",
+        if mention.is_empty() {
+            String::new()
+        } else {
+            format!("{mention} ")
+        },
+        status.emoji(),
+        scope,
+        status.word(),
+    );
     let card = match link {
         Some(link) => serde_json::json!({
             "schema": "2.0",
@@ -669,7 +717,7 @@ fn subscription_notify_card(status: &str, link: Option<&str>, mentions: &[String
             "card_link": { "url": link },
             "body": { "elements": [
                 { "tag": "markdown", "text_size": "notation",
-                  "content": format!("{text} · **go to**") }
+                  "content": format!("{text} · **查看回复 →**") }
             ] }
         }),
         None => serde_json::json!({

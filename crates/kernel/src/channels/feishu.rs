@@ -1097,6 +1097,30 @@ impl PlatformAdapter for FeishuAdapter {
         None
     }
 
+    /// The chat's display name for notification text; p2p chats have no
+    /// name (the caller falls back to a generic wording).
+    async fn fetch_chat_name(&self, chat_id: &str) -> Option<String> {
+        let token = self.get_token().await.ok()?;
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.api_get(
+                &token,
+                &format!("{}/open-apis/im/v1/chats/{chat_id}", self.base_url),
+                &[],
+            ),
+        )
+        .await
+        .map_err(|_| warn!(chat_id, "chat name fetch timed out"))
+        .ok()?
+        .map_err(|e| warn!(error = %e, chat_id, "chat name fetch failed"))
+        .ok()?;
+        resp["data"]["name"]
+            .as_str()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .map(str::to_string)
+    }
+
     async fn download_message_image(
         &self,
         message_id: &str,

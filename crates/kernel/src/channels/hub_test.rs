@@ -4359,6 +4359,10 @@ impl PlatformAdapter for NotifyMockAdapter {
     async fn message_link(&self, _chat_id: &str, message_id: &str) -> Option<String> {
         Some(format!("link://{message_id}"))
     }
+
+    async fn fetch_chat_name(&self, _chat_id: &str) -> Option<String> {
+        Some("测试群".to_string())
+    }
 }
 
 /// Run-completion notification: DMs per subscriber (deduplicated across
@@ -4401,11 +4405,18 @@ async fn test_notify_run_subscribers() {
     };
 
     // No delivered reply → nothing to link to, no notification.
-    notify_run_subscribers(&store, &adapter, &routing, None, "任务完成").await;
+    notify_run_subscribers(&store, &adapter, &routing, None, RunEndStatus::Completed).await;
     assert!(mock.dms.lock().await.is_empty());
     assert!(mock.cards.lock().await.is_empty());
 
-    notify_run_subscribers(&store, &adapter, &routing, Some("om_reply"), "任务完成").await;
+    // Cancelled runs are never notified (the initiator stopped it).
+    notify_run_subscribers(&store, &adapter, &routing, Some("om_reply"), RunEndStatus::Cancelled)
+        .await;
+    assert!(mock.dms.lock().await.is_empty());
+    assert!(mock.cards.lock().await.is_empty());
+
+    notify_run_subscribers(&store, &adapter, &routing, Some("om_reply"), RunEndStatus::Completed)
+        .await;
     let dms = mock.dms.lock().await;
     let mut dm_users: Vec<_> = dms.iter().map(|(u, _)| u.as_str()).collect();
     dm_users.sort_unstable();
@@ -4413,6 +4424,7 @@ async fn test_notify_run_subscribers() {
     let dm_card = &dms[0].1;
     assert!(dm_card.contains("link://om_reply"), "{dm_card}");
     assert!(dm_card.contains("任务完成"), "{dm_card}");
+    assert!(dm_card.contains("「测试群」"), "{dm_card}");
     assert!(dm_card.contains("card_link"), "{dm_card}");
     drop(dms);
     let cards = mock.cards.lock().await;
@@ -4422,7 +4434,9 @@ async fn test_notify_run_subscribers() {
     drop(cards);
 
     // Failed runs say so.
-    notify_run_subscribers(&store, &adapter, &routing, Some("om_x"), "任务异常结束").await;
+    notify_run_subscribers(&store, &adapter, &routing, Some("om_x"), RunEndStatus::Failed).await;
     let dms = mock.dms.lock().await;
-    assert!(dms.last().unwrap().1.contains("任务异常结束"));
+    let failed_card = &dms.last().unwrap().1;
+    assert!(failed_card.contains("任务异常结束"), "{failed_card}");
+    assert!(failed_card.contains("❌"), "{failed_card}");
 }
