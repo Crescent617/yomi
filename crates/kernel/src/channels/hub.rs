@@ -1369,6 +1369,7 @@ enum TriggerKind {
 /// `root_in_session` = the mapping predates this trigger — mappings are
 /// conversation-only (model commands degrade or fall back to the chat
 /// session), so it means the thread's root is already in the session.
+#[allow(clippy::too_many_arguments)]
 async fn prepare_trigger(
     channel_name: &str,
     config: &ChannelConfig,
