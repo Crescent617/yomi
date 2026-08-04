@@ -1040,10 +1040,12 @@ async fn test_thread_command_inside_existing_thread_errors() {
     );
 }
 
-/// `/thread` requires a thread-capable group chat: private chats and
-/// platforms without threads (Telegram) are refused.
+/// `/thread` works in private chats too (Feishu threads exist there):
+/// the session keys by the command's message id — never hijacking the
+/// chat-level session — and in-thread follow-ups adopt it. Telegram
+/// has no threads and is refused.
 #[tokio::test]
-async fn test_thread_command_platform_and_group_gate() {
+async fn test_thread_command_private_chat_and_platform_gate() {
     let (_pool, store) = create_test_pool().await;
     let store: Arc<dyn ChannelStore> = store;
     let tmp = tempfile::TempDir::new().unwrap();
@@ -1057,10 +1059,10 @@ async fn test_thread_command_platform_and_group_gate() {
     let mock = Arc::new(MockAdapter::new("mock"));
     let adapter: Arc<dyn PlatformAdapter> = mock.clone();
     let obs = Arc::new(ObsTracker::new());
-    let msg = |raw: &str, is_group: bool| ChannelMessage {
+    let msg = |msg_id: &str, raw: &str, is_group: bool| ChannelMessage {
         external_chat_id: "oc_1".to_string(),
         external_user_id: "ou_1".to_string(),
-        external_message_id: Some("m1".to_string()),
+        external_message_id: Some(msg_id.to_string()),
         is_mention: true,
         raw_text: Some(raw.to_string()),
         content: vec![ContentBlock::Text {
@@ -1083,21 +1085,46 @@ async fn test_thread_command_platform_and_group_gate() {
         require_mention: false,
         ..Default::default()
     };
-
-    // Private chat: refused even on Feishu.
+    // Private chat: the one-shot thread keys by the command's message
+    // id, leaving the chat-level session key alone.
     let reply = handle_incoming_message(
         "mock",
         &feishu,
         &store,
         Arc::clone(&kernel),
-        msg("/thread hi", false),
+        msg("m1", "/thread hi", false),
         &obs,
         &adapter,
     )
     .await
     .unwrap();
-    assert_eq!(reply.as_deref(), Some("Threads only apply to group chats."));
-    assert!(store.find_mapping("mock", "m1").await.unwrap().is_none());
+    assert_eq!(reply, None);
+    let sid = store
+        .find_mapping("mock", "m1")
+        .await
+        .unwrap()
+        .expect("private /thread session under the message id");
+    assert!(store.find_mapping("mock", "oc_1").await.unwrap().is_none());
+
+    // A private in-thread follow-up adopts it.
+    let mut follow_up = msg("m2", "继续", false);
+    follow_up.thread_id = Some("omt_1".to_string());
+    follow_up.root_id = Some("m1".to_string());
+    follow_up.parent_id = Some("om_bot".to_string());
+    let reply = handle_incoming_message(
+        "mock",
+        &feishu,
+        &store,
+        Arc::clone(&kernel),
+        follow_up,
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert_eq!(reply, None);
+    assert!(store.find_mapping("mock", "omt_1").await.unwrap().is_none());
+    assert_eq!(store.find_mapping("mock", "m1").await.unwrap(), Some(sid));
 
     // Telegram group: no thread support.
     let telegram = ChannelConfig {
@@ -1111,7 +1138,7 @@ async fn test_thread_command_platform_and_group_gate() {
         &telegram,
         &store,
         Arc::clone(&kernel),
-        msg("/thread hi", true),
+        msg("m3", "/thread hi", true),
         &obs,
         &adapter,
     )
@@ -1121,7 +1148,7 @@ async fn test_thread_command_platform_and_group_gate() {
         reply.as_deref(),
         Some("This platform does not support threads.")
     );
-    assert!(store.find_mapping("mock", "m1").await.unwrap().is_none());
+    assert!(store.find_mapping("mock", "m3").await.unwrap().is_none());
 }
 
 #[test]

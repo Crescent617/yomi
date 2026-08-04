@@ -886,17 +886,28 @@ async fn handle_incoming_message(
             Ok(None)
         }
         ChannelCommand::Steer(text) => {
-            let (sid, mut blocks) =
-                prepare_trigger(channel_name, config, store, &kernel, adapter, obs, &msg).await?;
+            let (sid, mut blocks) = prepare_trigger(
+                channel_name,
+                config,
+                store,
+                &kernel,
+                adapter,
+                obs,
+                &msg,
+                false,
+            )
+            .await?;
             blocks.push(ContentBlock::Text { text });
             kernel.send_steer(&sid, blocks).await;
             Ok(None)
         }
         ChannelCommand::Thread(text) => {
-            // One-shot `reply_in_thread`: this trigger runs as if the
-            // flag were on — the reply anchors to the command message
-            // and opens a thread; follow-ups inside adopt the session
+            // One-shot thread: key by and anchor to the command
+            // message itself, so the reply opens a thread off it (see
+            // prepare_trigger); follow-ups inside adopt the session
             // via the thread root (see effective_mapping_key).
+            // Telegram has no threads at all — the message-id-keyed
+            // session would be an orphan there.
             if msg.thread_id.is_some() {
                 // Already in a thread: the command's promise can't be
                 // kept — refuse rather than silently run a plain
@@ -905,20 +916,20 @@ async fn handle_incoming_message(
                     "Already in a thread — just send your message directly.".to_string(),
                 ));
             }
-            // Top level: threads need a group and platform support.
-            // Private chats never thread; Telegram has no threads at
-            // all — the message-id-keyed session would be an orphan
-            // there.
-            if !msg.is_group {
-                return Ok(Some("Threads only apply to group chats.".to_string()));
-            }
             if !matches!(config.platform, PlatformConfig::Feishu { .. }) {
                 return Ok(Some("This platform does not support threads.".to_string()));
             }
-            let mut forced = config.clone();
-            forced.reply_in_thread = true;
-            let (sid, mut blocks) =
-                prepare_trigger(channel_name, &forced, store, &kernel, adapter, obs, &msg).await?;
+            let (sid, mut blocks) = prepare_trigger(
+                channel_name,
+                config,
+                store,
+                &kernel,
+                adapter,
+                obs,
+                &msg,
+                true,
+            )
+            .await?;
             blocks.push(ContentBlock::Text { text });
             // Deferred image download — as for a plain trigger, only
             // now, after the gate, does an attached image cost
@@ -937,8 +948,17 @@ async fn handle_incoming_message(
             "Usage: `/thread <text>` — the reply opens a new thread.".to_string(),
         )),
         ChannelCommand::Queue(text) => {
-            let (sid, mut blocks) =
-                prepare_trigger(channel_name, config, store, &kernel, adapter, obs, &msg).await?;
+            let (sid, mut blocks) = prepare_trigger(
+                channel_name,
+                config,
+                store,
+                &kernel,
+                adapter,
+                obs,
+                &msg,
+                false,
+            )
+            .await?;
             blocks.push(ContentBlock::Text { text });
             kernel.send_message(&sid, blocks).await?;
             Ok(None)
@@ -1068,8 +1088,17 @@ async fn handle_incoming_message(
         }
         ChannelCommand::InvalidApprovalCommand => Ok(Some(super::approval::usage())),
         ChannelCommand::None => {
-            let (sid, mut content) =
-                prepare_trigger(channel_name, config, store, &kernel, adapter, obs, &msg).await?;
+            let (sid, mut content) = prepare_trigger(
+                channel_name,
+                config,
+                store,
+                &kernel,
+                adapter,
+                obs,
+                &msg,
+                false,
+            )
+            .await?;
             content.extend(msg.content);
             // Deferred image download — only now, after the gate, does
             // an attached image cost bandwidth.
@@ -1300,6 +1329,9 @@ const IMAGE_DOWNLOAD_MAX: usize = 5;
 /// `root_in_session` = the mapping predates this trigger — mappings are
 /// conversation-only (model commands degrade or fall back to the chat
 /// session), so it means the thread's root is already in the session.
+/// `one_shot_thread` (`/thread`): key by and anchor to the trigger's
+/// own message id regardless of the group-scoped `reply_in_thread`
+/// rules, so the reply opens a thread in any chat.
 async fn prepare_trigger(
     channel_name: &str,
     config: &ChannelConfig,
@@ -1308,11 +1340,19 @@ async fn prepare_trigger(
     adapter: &Arc<dyn PlatformAdapter>,
     obs: &Arc<ObsTracker>,
     msg: &ChannelMessage,
+    one_shot_thread: bool,
 ) -> Result<(SessionId, Vec<ContentBlock>)> {
     let chat_id = msg.external_chat_id.clone();
-    let mapping_key =
-        effective_mapping_key(store, channel_name, msg, &chat_id, config.reply_in_thread).await?;
-    let reply_msg_id = reply_anchor(msg, config.reply_in_thread);
+    let (mapping_key, reply_msg_id) = if one_shot_thread {
+        let id = msg.external_message_id.clone();
+        (id.clone().unwrap_or_else(|| chat_id.clone()), id)
+    } else {
+        (
+            effective_mapping_key(store, channel_name, msg, &chat_id, config.reply_in_thread)
+                .await?,
+            reply_anchor(msg, config.reply_in_thread),
+        )
+    };
     let (sid, root_in_session) = get_or_create_session(
         channel_name,
         store,
@@ -1859,7 +1899,7 @@ const HELP_TEXT: &str = "\
 `/stop` — stop the current run
 `/steer <text>` — inject a message into the current run
 `/queue <text>` — queue a message for a later turn
-`/thread <text>` — ask in a new thread opened off this message (Feishu groups)
+`/thread <text>` — ask in a new thread opened off this message (Feishu)
 `/permits` — list pending doc-permission requests (admin)
 `/approve <id> [perm]` — approve a doc-permission request (admin)
 `/deny <id>` — deny a doc-permission request (admin)
