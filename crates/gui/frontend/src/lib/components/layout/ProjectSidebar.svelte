@@ -37,7 +37,7 @@
   import {
     sessionState,
     removeProjectAttentionItems,
-    removeAttentionItems,
+    removeSessionAttentionItems,
     unreadSessions,
     projectState,
     sessionCursors,
@@ -408,7 +408,7 @@
       await api.unsubscribe(id);
       await api.deleteSession(id);
       sessionState.sessions = sessionState.sessions.filter((s) => s.id !== id);
-      removeAttentionItems(new Set([id]));
+      removeSessionAttentionItems(new Set([id]));
       purgeSessionLocalState(id);
       loadPinnedSessions();
       if (sessionState.activeSessionId === id) setActiveSession(null);

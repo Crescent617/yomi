@@ -16,9 +16,9 @@
     requestActivePanel,
     runningSessions,
     showNotification,
+    streamingSessions,
   } from "../../state.svelte";
   import { activateSession } from "../../session";
-  import { isActiveSessionPhase } from "../../session-phase";
   import { errorMessage, openDefault } from "../../api";
   import * as api from "../../api";
   import { clock } from "../../clock.svelte";
@@ -164,9 +164,6 @@
     ),
   );
   const shellCount = $derived(runningShells.length);
-  const streamingSessions = $derived(
-    runningSessions.filter((session) => isActiveSessionPhase(session.phase)),
-  );
   const streamingCount = $derived(streamingSessions.length);
 
   $effect(() => {

@@ -21,6 +21,7 @@ import {
 } from "./attention-box";
 import {
   captureSessionPhaseRevisions,
+  isActiveSessionPhase,
   reconcileRunningSessionPhases,
   setSessionPhase,
 } from "./session-phase";
@@ -39,6 +40,11 @@ let attentionItemSequence = 0;
 const lastKnownSessionStatus = new Map<string, string>();
 
 export const runningSessions = $state<RunningSessionInfo[]>([]);
+
+/** Running sessions in an active phase (streaming / executing_tool / compacting). */
+export const streamingSessions = $derived(
+  runningSessions.filter((session) => isActiveSessionPhase(session.phase)),
+);
 
 export function refreshRunningSessions(): Promise<void> {
   runningSessionsDirty = true;
@@ -591,7 +597,7 @@ export function removeProjectAttentionItems(
   attentionItems.splice(0, attentionItems.length, ...kept);
 }
 
-export function removeAttentionItems(sessionIds: Set<string>): void {
+export function removeSessionAttentionItems(sessionIds: Set<string>): void {
   const kept = attentionItems.filter(
     (item) => !sessionIds.has(item.sessionId),
   );

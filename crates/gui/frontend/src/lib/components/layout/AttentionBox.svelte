@@ -7,11 +7,10 @@
     markAttentionItemRead,
     projectState,
     requestActivePanel,
-    runningSessions,
     sessionState,
+    streamingSessions,
   } from "../../state.svelte";
   import { activateSession } from "../../session";
-  import { isActiveSessionPhase } from "../../session-phase";
   import * as api from "../../api";
   import { clock } from "../../clock.svelte";
   import { relativeTime } from "../../attention-box";
@@ -36,10 +35,7 @@
   const pendingAsk = $derived(
     sessionState.sessions.some((s) => s.pending_ask_users.length > 0),
   );
-  const streamingCount = $derived(
-    runningSessions.filter((session) => isActiveSessionPhase(session.phase))
-      .length,
-  );
+  const streamingCount = $derived(streamingSessions.length);
   const petMood = $derived(
     aggregateMood({
       pendingPermission,
