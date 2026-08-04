@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.46] - 2026-08-04
+
+### Changed
+- 订阅完成通知卡片改为 400px 紧凑窄卡：一行小字，整卡点击即可跳转回复，不再使用实心大按钮。
+
 ## [0.7.45] - 2026-08-04
 
 ### Added
