@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.47] - 2026-08-04
+
+### Added
+- 订阅完成通知会带上来源群名（话题显示其所在群名，如「xx 群」），找不到群名时保持原样。
+
+### Changed
+- 订阅完成通知卡片：结尾跳转文案改为「查看回复 →」；异常结束的通知用 ❌ 区分（完成为 ✅）。
+- 主动停止的任务不再发送订阅通知。
+
 ## [0.7.46] - 2026-08-04
 
 ### Changed
