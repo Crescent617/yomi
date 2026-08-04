@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 16;
+pub const CURRENT_SCHEMA_VERSION: i64 = 17;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -221,6 +221,25 @@ const MIGRATIONS: &[Migration] = &[
             );",
             r"CREATE INDEX idx_channel_perm_requests_status
                ON channel_doc_permission_requests(channel_name, status);",
+        ],
+    },
+    Migration {
+        version: 17,
+        name: "add_channel_run_subscriptions",
+        sqls: &[
+            r"CREATE TABLE channel_run_subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_name TEXT NOT NULL,
+                scope_key TEXT NOT NULL,
+                chat_id TEXT NOT NULL,
+                recursive INTEGER NOT NULL DEFAULT 0,
+                subscriber_open_id TEXT NOT NULL,
+                target_chat_id TEXT,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(channel_name, scope_key, subscriber_open_id)
+            );",
+            r"CREATE INDEX idx_channel_run_subs_match
+               ON channel_run_subscriptions(channel_name, chat_id);",
         ],
     },
 ];

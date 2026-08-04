@@ -94,6 +94,7 @@ async fn test_find_routing_by_session_id() {
             channel_name: "tg_bot".to_string(),
             external_chat_id: "chat123".to_string(),
             reply_msg_id: Some("root_msg".to_string()),
+            mapping_key: "12345".to_string(),
         })
     );
 
@@ -305,4 +306,96 @@ async fn perm_request_list_pending_and_notify_msgs() {
     let rows = store.list_pending_perm_requests("feishu").await.unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, id2);
+}
+
+/// Run subscriptions: upsert on (channel, scope, subscriber), exact +
+/// recursive matching, and removal.
+#[tokio::test]
+async fn test_run_subscription_round_trip_and_matching() {
+    let pool = create_test_pool().await;
+    let store = SqliteChannelStore::new(pool);
+
+    // DM subscription on the chat scope.
+    store
+        .save_run_subscription("feishu", "oc_1", "oc_1", false, "ou_a", None)
+        .await
+        .unwrap();
+    // Recursive chat subscription.
+    store
+        .save_run_subscription("feishu", "oc_1", "oc_1", true, "ou_b", None)
+        .await
+        .unwrap();
+    // Thread subscription (scope = thread key) with a target chat.
+    store
+        .save_run_subscription("feishu", "omt_1", "oc_1", false, "ou_c", Some("oc_2"))
+        .await
+        .unwrap();
+    // Another channel — never matches.
+    store
+        .save_run_subscription("other", "oc_1", "oc_1", false, "ou_d", None)
+        .await
+        .unwrap();
+
+    // Chat-level run: exact + recursive match.
+    let subs = store
+        .list_matching_run_subscriptions("feishu", "oc_1", "oc_1")
+        .await
+        .unwrap();
+    let mut ids: Vec<_> = subs.iter().map(|s| s.subscriber_open_id.as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, ["ou_a", "ou_b"]);
+
+    // Thread run in the same chat: exact thread sub + recursive chat sub;
+    // the non-recursive chat sub stays out.
+    let subs = store
+        .list_matching_run_subscriptions("feishu", "omt_1", "oc_1")
+        .await
+        .unwrap();
+    let mut ids: Vec<_> = subs.iter().map(|s| s.subscriber_open_id.as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, ["ou_b", "ou_c"]);
+    let thread_sub = subs
+        .iter()
+        .find(|s| s.subscriber_open_id == "ou_c")
+        .unwrap();
+    assert_eq!(thread_sub.target_chat_id.as_deref(), Some("oc_2"));
+    assert!(!thread_sub.created_at.is_empty());
+
+    // A run in a different chat matches nothing.
+    assert!(store
+        .list_matching_run_subscriptions("feishu", "oc_9", "oc_9")
+        .await
+        .unwrap()
+        .is_empty());
+
+    // Upsert: re-subscribing flips recursive/target, no duplicate row.
+    store
+        .save_run_subscription("feishu", "oc_1", "oc_1", false, "ou_b", Some("oc_3"))
+        .await
+        .unwrap();
+    let subs = store
+        .list_matching_run_subscriptions("feishu", "omt_9", "oc_1")
+        .await
+        .unwrap();
+    assert!(
+        subs.iter().all(|s| s.subscriber_open_id != "ou_b"),
+        "no longer recursive"
+    );
+    let subs = store
+        .list_matching_run_subscriptions("feishu", "oc_1", "oc_1")
+        .await
+        .unwrap();
+    assert_eq!(subs.len(), 2);
+
+    // Removal.
+    let removed = store
+        .remove_run_subscription("feishu", "oc_1", "ou_a")
+        .await
+        .unwrap();
+    assert_eq!(removed, 1);
+    let removed = store
+        .remove_run_subscription("feishu", "oc_1", "ou_a")
+        .await
+        .unwrap();
+    assert_eq!(removed, 0);
 }

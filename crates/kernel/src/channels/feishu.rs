@@ -1049,6 +1049,54 @@ impl PlatformAdapter for FeishuAdapter {
         }))
     }
 
+    /// Build a click-to-jump applink for a message (no official
+    /// get-message-link API; the client-copied link is an opaque token).
+    /// Same construction as Feishu's own lark-cli: the jump targets a
+    /// message by its **position** — `message_position` at chat level,
+    /// `thread_message_position` inside a thread — fetched with one extra
+    /// get-message call.
+    async fn message_link(&self, chat_id: &str, message_id: &str) -> Option<String> {
+        let token = self.get_token().await.ok()?;
+        // Bounded like the history/message fetches: this runs on the hub's
+        // single event-forwarding loop — a hung API must not stall it.
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.api_get(
+                &token,
+                &format!("{}/open-apis/im/v1/messages/{message_id}", self.base_url),
+                &[],
+            ),
+        )
+        .await
+        .map_err(|_| warn!(message_id, "message_link fetch timed out"))
+        .ok()?
+        .map_err(|e| warn!(error = %e, message_id, "message_link fetch failed"))
+        .ok()?;
+        let item = resp["data"]["items"].as_array()?.first()?;
+        // A thread's root message shows up in the main chat flow with a
+        // normal (non-negative) position — the verified chat link applies.
+        // Messages inside a thread have a negative chat position; there
+        // the thread link (positioned within the thread) must be used.
+        let chat_pos = item["message_position"]
+            .as_str()
+            .and_then(|p| p.parse::<i64>().ok());
+        if let Some(pos) = chat_pos {
+            if pos >= 0 {
+                return Some(format!(
+                    "https://applink.feishu.cn/client/chat/open?openChatId={chat_id}&position={pos}"
+                ));
+            }
+        }
+        if let Some(thread_id) = item["thread_id"].as_str() {
+            // thread_position: the root is -1, replies count from 0.
+            let pos = item["thread_message_position"].as_str().unwrap_or("0");
+            return Some(format!(
+                "https://applink.feishu.cn/client/thread/open?open_chat_id={chat_id}&open_thread_id={thread_id}&openchatid={chat_id}&openthreadid={thread_id}&thread_position={pos}"
+            ));
+        }
+        None
+    }
+
     async fn download_message_image(
         &self,
         message_id: &str,

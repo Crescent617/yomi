@@ -473,6 +473,7 @@ fn test_routing() -> SessionRouting {
         channel_name: "feishu".to_string(),
         external_chat_id: "chat-1".to_string(),
         reply_msg_id: None,
+        mapping_key: "chat-1".to_string(),
     }
 }
 
@@ -3952,4 +3953,476 @@ async fn e2e_feishu_quoted_root_chain() {
         .filter(|b| matches!(b, ContentBlock::ImageUrl { .. }))
         .count();
     assert_eq!(images, 1, "ancestor image downloaded once: {blocks:?}");
+}
+
+// ── /subscribe & /unsubscribe ─────────────────────────────────────
+
+#[test]
+fn test_parse_subscribe_commands() {
+    assert!(matches!(
+        parse_channel_command(Some("/subscribe")),
+        ChannelCommand::Subscribe {
+            recursive: false,
+            target_chat_id: None
+        }
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/subscribe -r")),
+        ChannelCommand::Subscribe {
+            recursive: true,
+            target_chat_id: None
+        }
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/subscribe --recursive")),
+        ChannelCommand::Subscribe {
+            recursive: true,
+            target_chat_id: None
+        }
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/subscribe oc_abc -r")),
+        ChannelCommand::Subscribe {
+            recursive: true,
+            target_chat_id: Some(ref t)
+        } if t == "oc_abc"
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/subscribe@yomi_bot oc_abc")),
+        ChannelCommand::Subscribe {
+            recursive: false,
+            target_chat_id: Some(ref t)
+        } if t == "oc_abc"
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/subscribe foo")),
+        ChannelCommand::InvalidSubscribeCommand
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/subscribe oc_a oc_b")),
+        ChannelCommand::InvalidSubscribeCommand
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/unsubscribe")),
+        ChannelCommand::Unsubscribe
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/unsubscribe now")),
+        ChannelCommand::InvalidSubscribeCommand
+    ));
+    // Prefix lookalikes are not commands.
+    assert!(matches!(
+        parse_channel_command(Some("/subscribed")),
+        ChannelCommand::None
+    ));
+    assert!(HELP_TEXT.contains("/subscribe"));
+    assert!(HELP_TEXT.contains("/unsubscribe"));
+}
+
+/// `/subscribe` scope resolution: chat level binds the chat id (never the
+/// per-message RIT key), in-thread binds the thread's mapping key;
+/// recursion is chat-level only. `/unsubscribe` removes by scope+user.
+#[tokio::test]
+async fn test_subscribe_command_scopes() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "feishu".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "a".into(),
+            app_secret: "s".into(),
+        },
+        require_mention: false,
+        ..Default::default()
+    };
+    let msg = |raw: &str, thread: Option<(&str, &str)>| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: "ou_a".to_string(),
+        external_message_id: Some("m1".to_string()),
+        is_mention: true,
+        raw_text: Some(raw.to_string()),
+        content: vec![],
+        image_keys: vec![],
+        thread_id: thread.map(|(t, _)| t.to_string()),
+        root_id: thread.map(|(_, r)| r.to_string()),
+        parent_id: None,
+        is_group: true,
+        create_time: None,
+    };
+
+    // Chat level: binds the chat id; recursive recorded.
+    let reply = handle_incoming_message(
+        "feishu",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        msg("/subscribe -r", None),
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert!(
+        reply
+            .as_deref()
+            .unwrap()
+            .contains("including all its threads"),
+        "{reply:?}"
+    );
+    let subs = store
+        .list_matching_run_subscriptions("feishu", "oc_1", "oc_1")
+        .await
+        .unwrap();
+    assert_eq!(subs.len(), 1);
+    assert!(subs[0].recursive);
+    assert_eq!(subs[0].scope_key, "oc_1");
+
+    // In-thread: recursion refused; plain subscribe binds the thread key.
+    let reply = handle_incoming_message(
+        "feishu",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        msg("/subscribe -r", Some(("omt_1", "om_root"))),
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert!(
+        reply
+            .as_deref()
+            .unwrap()
+            .contains("only meaningful at chat level"),
+        "{reply:?}"
+    );
+    let reply = handle_incoming_message(
+        "feishu",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        msg("/subscribe", Some(("omt_1", "om_root"))),
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert!(
+        reply.as_deref().unwrap().contains("this thread"),
+        "{reply:?}"
+    );
+    // The thread run matches the thread sub AND the recursive chat sub.
+    let subs = store
+        .list_matching_run_subscriptions("feishu", "omt_1", "oc_1")
+        .await
+        .unwrap();
+    assert_eq!(subs.len(), 2);
+    let thread_sub = subs
+        .iter()
+        .find(|s| s.scope_key == "omt_1")
+        .expect("thread subscription present");
+    assert!(!thread_sub.recursive);
+
+    // A target chat is persisted.
+    let reply = handle_incoming_message(
+        "feishu",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        msg("/subscribe oc_2", None),
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert!(reply.as_deref().unwrap().contains("oc_2"), "{reply:?}");
+    let subs = store
+        .list_matching_run_subscriptions("feishu", "oc_1", "oc_1")
+        .await
+        .unwrap();
+    assert_eq!(subs[0].target_chat_id.as_deref(), Some("oc_2"));
+
+    // Unsubscribe removes by scope+user.
+    let reply = handle_incoming_message(
+        "feishu",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        msg("/unsubscribe", None),
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert_eq!(reply.as_deref(), Some("Unsubscribed."));
+    let reply = handle_incoming_message(
+        "feishu",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        msg("/unsubscribe", None),
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert_eq!(reply.as_deref(), Some("You have no subscription here."));
+}
+
+/// Non-Feishu platforms refuse subscriptions (no message links / DMs).
+#[tokio::test]
+async fn test_subscribe_refused_on_telegram() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "tg".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram { token: "t".into() },
+        require_mention: false,
+        ..Default::default()
+    };
+    let msg = ChannelMessage {
+        external_chat_id: "chat1".to_string(),
+        external_user_id: "u1".to_string(),
+        external_message_id: Some("m1".to_string()),
+        is_mention: true,
+        raw_text: Some("/subscribe".to_string()),
+        content: vec![],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: false,
+        create_time: None,
+    };
+    let reply = handle_incoming_message("tg", &config, &store, kernel, msg, &obs, &adapter)
+        .await
+        .unwrap();
+    assert_eq!(
+        reply.as_deref(),
+        Some("This platform does not support subscriptions yet.")
+    );
+}
+
+/// In `reply_in_thread` group chats a non-recursive chat subscription can
+/// never match a run (every trigger opens a new thread) — the ack says so.
+#[tokio::test]
+async fn test_subscribe_ack_warns_in_rit_groups() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "feishu".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "a".into(),
+            app_secret: "s".into(),
+        },
+        require_mention: false,
+        reply_in_thread: true,
+        ..Default::default()
+    };
+    let msg = |raw: &str| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: "ou_a".to_string(),
+        external_message_id: Some("m1".to_string()),
+        is_mention: true,
+        raw_text: Some(raw.to_string()),
+        content: vec![],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: true,
+        create_time: None,
+    };
+
+    let reply = handle_incoming_message(
+        "feishu",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        msg("/subscribe"),
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert!(
+        reply.as_deref().unwrap().contains("does NOT cover"),
+        "{reply:?}"
+    );
+
+    // Recursive gets no warning — it covers everything.
+    let reply = handle_incoming_message(
+        "feishu",
+        &config,
+        &store,
+        kernel,
+        msg("/subscribe -r"),
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert!(
+        !reply.as_deref().unwrap().contains("does NOT cover"),
+        "{reply:?}"
+    );
+}
+
+/// Adapter capturing subscription notifications (DMs and chat cards).
+#[derive(Default)]
+struct NotifyMockAdapter {
+    dms: tokio::sync::Mutex<Vec<(String, String)>>,
+    cards: tokio::sync::Mutex<Vec<(String, String)>>,
+}
+
+#[async_trait::async_trait]
+impl PlatformAdapter for NotifyMockAdapter {
+    async fn run_receiver(
+        &self,
+        _incoming: mpsc::Sender<ChannelEvent>,
+        cancel: CancellationToken,
+    ) -> std::result::Result<(), crate::channels::ChannelError> {
+        cancel.cancelled().await;
+        Ok(())
+    }
+
+    async fn send_message(
+        &self,
+        _external_chat_id: &str,
+        _blocks: Vec<ContentBlock>,
+        _reply_msg_id: Option<&str>,
+    ) -> std::result::Result<Option<String>, crate::channels::ChannelError> {
+        Ok(None)
+    }
+
+    async fn send_card(
+        &self,
+        external_chat_id: &str,
+        card_json: &str,
+        _reply_msg_id: Option<&str>,
+    ) -> std::result::Result<Option<String>, crate::channels::ChannelError> {
+        self.cards
+            .lock()
+            .await
+            .push((external_chat_id.to_string(), card_json.to_string()));
+        Ok(Some("card1".to_string()))
+    }
+
+    async fn send_direct_card(
+        &self,
+        user_id: &str,
+        card_json: &str,
+    ) -> std::result::Result<Option<String>, crate::channels::ChannelError> {
+        self.dms
+            .lock()
+            .await
+            .push((user_id.to_string(), card_json.to_string()));
+        Ok(Some("dm1".to_string()))
+    }
+
+    async fn message_link(&self, _chat_id: &str, message_id: &str) -> Option<String> {
+        Some(format!("link://{message_id}"))
+    }
+}
+
+/// Run-completion notification: DMs per subscriber (deduplicated across
+/// overlapping subscriptions), one mentioned card per target chat; exact +
+/// recursive matching; nothing without a reply id.
+#[tokio::test]
+async fn test_notify_run_subscribers() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    store
+        .save_run_subscription("feishu", "omt_1", "oc_1", false, "ou_dm", None)
+        .await
+        .unwrap();
+    store
+        .save_run_subscription("feishu", "oc_1", "oc_1", true, "ou_rec", None)
+        .await
+        .unwrap();
+    store
+        .save_run_subscription("feishu", "omt_1", "oc_1", false, "ou_grp", Some("oc_2"))
+        .await
+        .unwrap();
+    // Overlapping subscriptions (exact thread + recursive chat) for one
+    // user — must still produce a single DM.
+    store
+        .save_run_subscription("feishu", "omt_1", "oc_1", false, "ou_dup", None)
+        .await
+        .unwrap();
+    store
+        .save_run_subscription("feishu", "oc_1", "oc_1", true, "ou_dup", None)
+        .await
+        .unwrap();
+
+    let mock = Arc::new(NotifyMockAdapter::default());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let routing = SessionRouting {
+        channel_name: "feishu".to_string(),
+        external_chat_id: "oc_1".to_string(),
+        reply_msg_id: None,
+        mapping_key: "omt_1".to_string(),
+    };
+
+    // No delivered reply → nothing to link to, no notification.
+    notify_run_subscribers(&store, &adapter, &routing, None, "任务完成").await;
+    assert!(mock.dms.lock().await.is_empty());
+    assert!(mock.cards.lock().await.is_empty());
+
+    notify_run_subscribers(&store, &adapter, &routing, Some("om_reply"), "任务完成").await;
+    let dms = mock.dms.lock().await;
+    let mut dm_users: Vec<_> = dms.iter().map(|(u, _)| u.as_str()).collect();
+    dm_users.sort_unstable();
+    assert_eq!(dm_users, ["ou_dm", "ou_dup", "ou_rec"]);
+    let dm_card = &dms[0].1;
+    assert!(dm_card.contains("link://om_reply"), "{dm_card}");
+    assert!(dm_card.contains("任务完成"), "{dm_card}");
+    assert!(dm_card.contains("open_url"), "{dm_card}");
+    drop(dms);
+    let cards = mock.cards.lock().await;
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].0, "oc_2");
+    assert!(cards[0].1.contains("<at id=ou_grp></at>"), "{}", cards[0].1);
+    drop(cards);
+
+    // Failed runs say so.
+    notify_run_subscribers(&store, &adapter, &routing, Some("om_x"), "任务异常结束").await;
+    let dms = mock.dms.lock().await;
+    assert!(dms.last().unwrap().1.contains("任务异常结束"));
 }

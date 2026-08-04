@@ -1,4 +1,6 @@
-use crate::channels::{ChannelStore, DocPermissionRequest, PermRequestRow, SessionRouting};
+use crate::channels::{
+    ChannelStore, DocPermissionRequest, PermRequestRow, RunSubscriptionRow, SessionRouting,
+};
 use crate::storage::storage_err;
 use crate::types::{Result, SessionId};
 use async_trait::async_trait;
@@ -54,6 +56,33 @@ impl PermRequestDbRow {
             notify_msg_ids: parse_list(&self.notify_msg_ids),
             resolved_by: self.resolved_by,
             resolved_perm: self.resolved_perm,
+            created_at: self.created_at,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct RunSubscriptionDbRow {
+    id: i64,
+    channel_name: String,
+    scope_key: String,
+    chat_id: String,
+    recursive: bool,
+    subscriber_open_id: String,
+    target_chat_id: Option<String>,
+    created_at: String,
+}
+
+impl RunSubscriptionDbRow {
+    fn into_row(self) -> RunSubscriptionRow {
+        RunSubscriptionRow {
+            id: self.id,
+            channel_name: self.channel_name,
+            scope_key: self.scope_key,
+            chat_id: self.chat_id,
+            recursive: self.recursive,
+            subscriber_open_id: self.subscriber_open_id,
+            target_chat_id: self.target_chat_id,
             created_at: self.created_at,
         }
     }
@@ -129,8 +158,8 @@ impl ChannelStore for SqliteChannelStore {
         &self,
         session_id: &SessionId,
     ) -> Result<Option<SessionRouting>> {
-        let row: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
-            "SELECT channel_name, COALESCE(actual_chat_id, external_chat_id) AS actual_chat_id, reply_msg_id
+        let row: Option<(String, Option<String>, Option<String>, String)> = sqlx::query_as(
+            "SELECT channel_name, COALESCE(actual_chat_id, external_chat_id) AS actual_chat_id, reply_msg_id, external_chat_id
              FROM channel_session_mappings
              WHERE session_id = ?",
         )
@@ -140,10 +169,11 @@ impl ChannelStore for SqliteChannelStore {
         .map_err(|e| storage_err(format!("Failed to find routing by session: {e}")))?;
 
         Ok(row.map(
-            |(channel_name, actual_chat_id, reply_msg_id)| SessionRouting {
+            |(channel_name, actual_chat_id, reply_msg_id, mapping_key)| SessionRouting {
                 channel_name,
                 external_chat_id: actual_chat_id.unwrap_or_default(),
                 reply_msg_id,
+                mapping_key,
             },
         ))
     }
@@ -349,6 +379,79 @@ impl ChannelStore for SqliteChannelStore {
             tracing::warn!(id, "reopen_perm_request matched no approved row");
         }
         Ok(())
+    }
+
+    async fn save_run_subscription(
+        &self,
+        channel_name: &str,
+        scope_key: &str,
+        chat_id: &str,
+        recursive: bool,
+        subscriber_open_id: &str,
+        target_chat_id: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            r"INSERT INTO channel_run_subscriptions
+               (channel_name, scope_key, chat_id, recursive, subscriber_open_id, target_chat_id)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(channel_name, scope_key, subscriber_open_id) DO UPDATE SET
+               recursive = excluded.recursive,
+               target_chat_id = excluded.target_chat_id",
+        )
+        .bind(channel_name)
+        .bind(scope_key)
+        .bind(chat_id)
+        .bind(recursive)
+        .bind(subscriber_open_id)
+        .bind(target_chat_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("Failed to save run subscription: {e}")))?;
+        Ok(())
+    }
+
+    async fn remove_run_subscription(
+        &self,
+        channel_name: &str,
+        scope_key: &str,
+        subscriber_open_id: &str,
+    ) -> Result<u64> {
+        let result = sqlx::query(
+            r"DELETE FROM channel_run_subscriptions
+             WHERE channel_name = ? AND scope_key = ? AND subscriber_open_id = ?",
+        )
+        .bind(channel_name)
+        .bind(scope_key)
+        .bind(subscriber_open_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("Failed to remove run subscription: {e}")))?;
+        Ok(result.rows_affected())
+    }
+
+    async fn list_matching_run_subscriptions(
+        &self,
+        channel_name: &str,
+        scope_key: &str,
+        chat_id: &str,
+    ) -> Result<Vec<RunSubscriptionRow>> {
+        let rows = sqlx::query_as::<_, RunSubscriptionDbRow>(
+            r"SELECT id, channel_name, scope_key, chat_id, recursive, subscriber_open_id,
+                     target_chat_id, created_at
+              FROM channel_run_subscriptions
+              WHERE channel_name = ?
+                AND (scope_key = ? OR (recursive != 0 AND chat_id = ?))",
+        )
+        .bind(channel_name)
+        .bind(scope_key)
+        .bind(chat_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("Failed to list run subscriptions: {e}")))?;
+        Ok(rows
+            .into_iter()
+            .map(RunSubscriptionDbRow::into_row)
+            .collect())
     }
 }
 

@@ -1714,7 +1714,7 @@ async fn settle_returns_reply_when_no_run_state() {
             Some(reply_with("the answer")),
         )
         .await;
-    assert!(returned.is_some(), "no state → reply handed back");
+    assert!(returned.unsettled.is_some(), "no state → reply handed back");
     assert!(mock.cards.lock().await.is_empty());
     assert!(mock.patches.lock().await.is_empty());
 }
@@ -1740,7 +1740,10 @@ async fn settle_returns_reply_when_settle_send_fails() {
             Some(reply_with("the answer")),
         )
         .await;
-    assert!(returned.is_some(), "settle send failed → reply handed back");
+    assert!(
+        returned.unsettled.is_some(),
+        "settle send failed → reply handed back"
+    );
 }
 
 #[tokio::test]

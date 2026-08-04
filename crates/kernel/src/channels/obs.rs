@@ -222,6 +222,34 @@ enum Settle {
     Timeout,
 }
 
+/// What a card settlement produced. Exactly one of the two fields is
+/// meaningful: an `unsettled` reply (nothing was settled — the caller
+/// falls back to a plain send) or the settled card's message id.
+pub(crate) struct SettleOutcome {
+    /// The reply handed back when nothing was settled (no run state, or
+    /// the settle send failed).
+    pub(crate) unsettled: Option<FinalReply>,
+    /// Platform message id of the settled card (the reply's own id, for
+    /// jump links); `None` when settlement sent nothing.
+    pub(crate) message_id: Option<String>,
+}
+
+impl SettleOutcome {
+    fn unsettled(reply: Option<FinalReply>) -> Self {
+        Self {
+            unsettled: reply,
+            message_id: None,
+        }
+    }
+
+    fn settled(message_id: Option<String>) -> Self {
+        Self {
+            unsettled: None,
+            message_id,
+        }
+    }
+}
+
 /// Map a `Stopped` reason to its settlement kind.
 fn settle_from_reason(reason: &StopReason) -> Settle {
     match reason {
@@ -385,7 +413,7 @@ impl ObsTracker {
                 // Degenerate path: settle without a reply (crash/lost
                 // events). The hub forwarder calls `handle_stopped` with
                 // the buffered reply instead.
-                self.handle_stopped(session_id, reason, None).await;
+                let _ = self.handle_stopped(session_id, reason, None).await;
             }
             Event::Tool(ToolEvent::Start {
                 tool_id,
@@ -521,27 +549,27 @@ impl ObsTracker {
     }
 
     /// Settle a run on `Lifecycle(Stopped)`: morph the status card into the
-    /// final reply (one message per run). Returns the reply back when
-    /// nothing was settled (no run state, or the settle send failed), so
-    /// the caller can fall back to a plain send.
+    /// final reply (one message per run). The outcome hands the reply back
+    /// when nothing was settled (no run state, or the settle send failed),
+    /// so the caller can fall back to a plain send; on success it carries
+    /// the settled card's message id (the reply's own id, for jump links).
     pub(crate) async fn handle_stopped(
         &self,
         session_id: &SessionId,
         reason: &StopReason,
         reply: Option<FinalReply>,
-    ) -> Option<FinalReply> {
+    ) -> SettleOutcome {
         self.settle_card(session_id, &settle_from_reason(reason), reply)
             .await
     }
 
     /// Watchdog settlement for a session whose agent died (crash / lost
     /// `Stopped`): settle the card with whatever reply state remains.
-    /// Returns the reply back when nothing was settled.
     pub(crate) async fn handle_timeout(
         &self,
         session_id: &SessionId,
         reply: Option<FinalReply>,
-    ) -> Option<FinalReply> {
+    ) -> SettleOutcome {
         self.settle_card(session_id, &Settle::Timeout, reply).await
     }
 
@@ -584,7 +612,7 @@ impl ObsTracker {
             .map(|e| e.key().clone())
             .collect();
         for sid in dead {
-            self.settle_card(&sid, &Settle::Timeout, None).await;
+            let _ = self.settle_card(&sid, &Settle::Timeout, None).await;
         }
     }
 
@@ -674,7 +702,7 @@ impl ObsTracker {
         session_id: &SessionId,
         settle: &Settle,
         reply: Option<FinalReply>,
-    ) -> Option<FinalReply> {
+    ) -> SettleOutcome {
         // Evaluate the mid-run detection BEFORE clearing receipts: when
         // the reply lands as a new message it notifies by itself, making
         // the settle reaction redundant. Receipts are always dropped at
@@ -683,7 +711,7 @@ impl ObsTracker {
         let mid_run_posts = self.has_mid_run_posts(session_id);
         self.receipts.remove(session_id);
         let Some((_, state)) = self.states.remove(session_id) else {
-            return reply;
+            return SettleOutcome::unsettled(reply);
         };
         let notice = settle.notice();
         let morphed = reply
@@ -700,29 +728,37 @@ impl ObsTracker {
 
         if state.status_msg_id.is_empty() {
             if is_reply || matches!(settle, Settle::Failed(_)) {
-                if let Err(e) = state
+                return match state
                     .adapter
                     .send_card(&state.chat_id, &card, state.reply_msg_id.as_deref())
                     .await
                 {
-                    warn!(error = %e, "obs settle card send failed");
+                    Ok(msg_id) => SettleOutcome::settled(msg_id),
                     // The rich send failed (API error, card rejected) — the
                     // caller can still deliver the reply as a plain message.
-                    return reply;
-                }
+                    Err(e) => {
+                        warn!(error = %e, "obs settle card send failed");
+                        SettleOutcome::unsettled(reply)
+                    }
+                };
             }
-            return None;
+            return SettleOutcome::settled(None);
         }
         match state.adapter.update_card(&state.status_msg_id, &card).await {
-            Err(e) => warn!(error = %e, "obs settle card patch failed"),
-            // A silent in-place settle carries no notification — react on
-            // the latest user message as the completion signal instead.
-            Ok(()) if !mid_run_posts => {
-                self.send_settle_reaction(session_id, &state, settle).await;
+            Err(e) => {
+                warn!(error = %e, "obs settle card patch failed");
+                SettleOutcome::settled(None)
             }
-            Ok(()) => {}
+            Ok(()) => {
+                // A silent in-place settle carries no notification — react
+                // on the latest user message as the completion signal
+                // instead (skipped when the reply lands as a new message).
+                if !mid_run_posts {
+                    self.send_settle_reaction(session_id, &state, settle).await;
+                }
+                SettleOutcome::settled(Some(state.status_msg_id.clone()))
+            }
         }
-        None
     }
 
     /// Freeze the status card in place as a terminal receipt and clear

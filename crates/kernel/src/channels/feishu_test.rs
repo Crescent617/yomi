@@ -171,6 +171,26 @@ fn response_for(method: &str, path: &str) -> Vec<u8> {
                  "body":{"content":"{\"title\":null,\"elements\":[[{\"tag\":\"text\",\"text\":\"请升级至最新版本客户端，以查看内容\"}]]}"}}
             ]}}"#
             .into(),
+            // message_link fixtures: chat-level (plain position), in-thread
+            // (negative chat position + thread position), and a thread root
+            // (positive chat position AND a thread id).
+            "/open-apis/im/v1/messages/om_pos" => r#"{"code":0,"msg":"ok","data":{"items":[
+                {"message_id":"om_pos","create_time":"1700000000000","msg_type":"interactive","deleted":false,
+                 "message_position":"573","sender":{"id":"cli_bot","sender_type":"app"},"body":{"content":"{}"}}
+            ]}}"#
+            .into(),
+            "/open-apis/im/v1/messages/om_threaded" => r#"{"code":0,"msg":"ok","data":{"items":[
+                {"message_id":"om_threaded","create_time":"1700000000000","msg_type":"interactive","deleted":false,
+                 "message_position":"-3","thread_id":"omt_9","thread_message_position":"2",
+                 "sender":{"id":"cli_bot","sender_type":"app"},"body":{"content":"{}"}}
+            ]}}"#
+            .into(),
+            "/open-apis/im/v1/messages/om_root" => r#"{"code":0,"msg":"ok","data":{"items":[
+                {"message_id":"om_root","create_time":"1700000000000","msg_type":"text","deleted":false,
+                 "message_position":"574","thread_id":"omt_9","thread_message_position":"-1",
+                 "sender":{"id":"ou_q","sender_type":"user"},"body":{"content":"{}"}}
+            ]}}"#
+            .into(),
             _ => r#"{"code":0,"msg":"ok","data":{"items":[]}}"#.into(),
         };
     }
@@ -1020,7 +1040,6 @@ async fn direct_card_sent_to_open_id() {
         .await
         .unwrap();
     assert_eq!(mid.as_deref(), Some("om_new"));
-
     let requests = stub.requests.lock().unwrap();
     let (_, path, body) = requests
         .iter()
@@ -1030,6 +1049,36 @@ async fn direct_card_sent_to_open_id() {
     let body: serde_json::Value = serde_json::from_str(body).unwrap();
     assert_eq!(body["receive_id"], "ou_admin");
     assert_eq!(body["msg_type"], "interactive");
+}
+
+/// `message_link`: chat messages link by chat position; in-thread
+/// messages (negative chat position) link by thread position; a thread
+/// root (positive chat position despite having a thread id) keeps the
+/// chat link.
+#[tokio::test]
+async fn message_link_builds_applink() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+
+    let link = adapter.message_link("oc_1", "om_pos").await.unwrap();
+    assert_eq!(
+        link,
+        "https://applink.feishu.cn/client/chat/open?openChatId=oc_1&position=573"
+    );
+
+    let link = adapter.message_link("oc_1", "om_threaded").await.unwrap();
+    assert_eq!(
+        link,
+        "https://applink.feishu.cn/client/thread/open?open_chat_id=oc_1&open_thread_id=omt_9&openchatid=oc_1&openthreadid=omt_9&thread_position=2"
+    );
+
+    let link = adapter.message_link("oc_1", "om_root").await.unwrap();
+    assert_eq!(
+        link,
+        "https://applink.feishu.cn/client/chat/open?openChatId=oc_1&position=574"
+    );
+
+    assert!(adapter.message_link("oc_1", "om_unknown").await.is_none());
 }
 
 #[tokio::test]

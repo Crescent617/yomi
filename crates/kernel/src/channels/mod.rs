@@ -318,6 +318,10 @@ pub struct SessionRouting {
     pub channel_name: String,
     pub external_chat_id: String,
     pub reply_msg_id: Option<String>,
+    /// The session's mapping key (the conversation-scope key the mapping is
+    /// stored under): the chat id for chat-level sessions, the thread
+    /// root/thread id for thread sessions. Used to match run subscriptions.
+    pub mapping_key: String,
 }
 
 // ── Store trait ──────────────────────────────────────────────────────
@@ -413,6 +417,38 @@ pub trait ChannelStore: Send + Sync {
     /// Reopen a request whose grant API call failed after winning the
     /// resolve race: back to pending, resolution fields cleared.
     async fn reopen_perm_request(&self, id: i64) -> KernelResult<()>;
+
+    /// Subscribe a user to run-completion notifications for a conversation
+    /// scope (`scope_key` = mapping key: chat id for chat level, thread
+    /// key for threads). `target_chat_id = None` notifies the subscriber
+    /// by DM. Upserts on (channel, scope, subscriber).
+    async fn save_run_subscription(
+        &self,
+        channel_name: &str,
+        scope_key: &str,
+        chat_id: &str,
+        recursive: bool,
+        subscriber_open_id: &str,
+        target_chat_id: Option<&str>,
+    ) -> KernelResult<()>;
+
+    /// Remove a user's subscription for a scope; returns rows deleted.
+    async fn remove_run_subscription(
+        &self,
+        channel_name: &str,
+        scope_key: &str,
+        subscriber_open_id: &str,
+    ) -> KernelResult<u64>;
+
+    /// Subscriptions matching a finished run: exact scope match
+    /// (`scope_key` = the run's mapping key) plus recursive chat-level
+    /// subscriptions (`chat_id` = the run's actual chat).
+    async fn list_matching_run_subscriptions(
+        &self,
+        channel_name: &str,
+        scope_key: &str,
+        chat_id: &str,
+    ) -> KernelResult<Vec<RunSubscriptionRow>>;
 }
 
 /// A persisted doc-permission application row.
@@ -431,6 +467,25 @@ pub struct PermRequestRow {
     pub notify_msg_ids: Vec<String>,
     pub resolved_by: Option<String>,
     pub resolved_perm: Option<String>,
+    pub created_at: String,
+}
+
+/// A persisted run-completion subscription row.
+#[derive(Debug, Clone)]
+pub struct RunSubscriptionRow {
+    pub id: i64,
+    pub channel_name: String,
+    /// The subscribed conversation scope (mapping key: chat id at chat
+    /// level, thread key in threads).
+    pub scope_key: String,
+    /// The chat the scope belongs to (for recursive matching).
+    pub chat_id: String,
+    /// Chat-level subscriptions only: also match runs in this chat's
+    /// threads.
+    pub recursive: bool,
+    pub subscriber_open_id: String,
+    /// Where to send the notification; `None` = DM the subscriber.
+    pub target_chat_id: Option<String>,
     pub created_at: String,
 }
 
@@ -604,6 +659,13 @@ pub trait PlatformAdapter: Send + Sync {
         _message_id: &str,
     ) -> Result<Option<HistoryMessage>, ChannelError> {
         Ok(None)
+    }
+
+    /// Build a user-clickable link that jumps to a message in the client
+    /// (Feishu applink). May cost one platform API call (the jump link
+    /// needs the message's position). Default: unsupported — `None`.
+    async fn message_link(&self, _chat_id: &str, _message_id: &str) -> Option<String> {
+        None
     }
 
     /// Download one image attached to a message as an `ImageUrl` content

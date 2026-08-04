@@ -11,9 +11,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use super::{
-    obs::ObsTracker, reply, ChannelConfig, ChannelEvent, ChannelInfo, ChannelMessage,
-    ChannelStatus, ChannelStore, HistoryContainer, HistoryMessage, PlatformAdapter, PlatformConfig,
-    SessionRouting,
+    obs::{ObsTracker, SettleOutcome},
+    reply, ChannelConfig, ChannelEvent, ChannelInfo, ChannelMessage, ChannelStatus, ChannelStore,
+    HistoryContainer, HistoryMessage, PlatformAdapter, PlatformConfig, SessionRouting,
 };
 
 const STATUS_IDLE: u8 = 0;
@@ -362,7 +362,7 @@ impl ChannelHub {
                                     continue;
                                 };
                                 let Some(buf) = reply_buffers.remove(&sid) else { continue };
-                                deliver_reply(
+                                let reply_msg_id = deliver_reply(
                                     &obs,
                                     &adapter,
                                     &routing,
@@ -373,6 +373,17 @@ impl ChannelHub {
                                     &sid,
                                     SettleKind::Timeout,
                                     &kernel,
+                                )
+                                .await;
+                                // The reply was still delivered — subscribers
+                                // get their card (agent died mid-run, so the
+                                // status says so).
+                                notify_run_subscribers(
+                                    &store,
+                                    &adapter,
+                                    &routing,
+                                    reply_msg_id.as_deref(),
+                                    "任务异常结束",
                                 )
                                 .await;
                             }
@@ -459,7 +470,7 @@ impl ChannelHub {
                             let reply = reply_buffers
                                 .remove(&session_id)
                                 .map(reply::RunReplyBuffer::into_reply);
-                            deliver_reply(
+                            let reply_msg_id = deliver_reply(
                                 &obs,
                                 &adapter,
                                 &routing,
@@ -470,6 +481,14 @@ impl ChannelHub {
                                 &session_id,
                                 SettleKind::Stopped(reason),
                                 &kernel,
+                            )
+                            .await;
+                            notify_run_subscribers(
+                                &store,
+                                &adapter,
+                                &routing,
+                                reply_msg_id.as_deref(),
+                                stop_status_text(reason),
                             )
                             .await;
                             continue;
@@ -550,6 +569,111 @@ impl ChannelHub {
     }
 }
 
+/// The subscription card's status word for a run's stop reason.
+fn stop_status_text(reason: &crate::event::StopReason) -> &'static str {
+    match reason {
+        crate::event::StopReason::Completed { .. } => "任务完成",
+        crate::event::StopReason::Cancelled { .. } => "任务已停止",
+        crate::event::StopReason::Failed { .. }
+        | crate::event::StopReason::MaxIterations { .. } => "任务异常结束",
+    }
+}
+
+/// Notify `/subscribe` subscribers that a run in `routing`'s scope has
+/// delivered its reply. Each subscriber gets ONE card with a
+/// jump-to-the-reply button — DM'd by default (deduplicated: holding
+/// several matching subscriptions still means a single DM), or posted to
+/// their chosen target chat (one card per target, mentioning all
+/// subscribers routed to it). Skipped entirely when the run delivered no
+/// message to point at (crash without a card); per-target failures only
+/// affect their target.
+async fn notify_run_subscribers(
+    store: &Arc<dyn ChannelStore>,
+    adapter: &Arc<dyn PlatformAdapter>,
+    routing: &SessionRouting,
+    reply_msg_id: Option<&str>,
+    status: &str,
+) {
+    let Some(reply_msg_id) = reply_msg_id else {
+        return;
+    };
+    let subs = match store
+        .list_matching_run_subscriptions(
+            &routing.channel_name,
+            &routing.mapping_key,
+            &routing.external_chat_id,
+        )
+        .await
+    {
+        Ok(subs) => subs,
+        Err(e) => {
+            warn!(error = %e, "failed to list run subscriptions");
+            return;
+        }
+    };
+    if subs.is_empty() {
+        return;
+    }
+    let link = adapter
+        .message_link(&routing.external_chat_id, reply_msg_id)
+        .await;
+    let mut dm_users: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut chat_targets: HashMap<String, Vec<String>> = HashMap::new();
+    for sub in subs {
+        match sub.target_chat_id {
+            Some(chat_id) => {
+                let users = chat_targets.entry(chat_id).or_default();
+                if !users.contains(&sub.subscriber_open_id) {
+                    users.push(sub.subscriber_open_id);
+                }
+            }
+            None => {
+                dm_users.insert(sub.subscriber_open_id);
+            }
+        }
+    }
+    for user in dm_users {
+        let card = subscription_notify_card(status, link.as_deref(), &[]);
+        if let Err(e) = adapter.send_direct_card(&user, &card).await {
+            warn!(error = %e, "run subscription DM failed");
+        }
+    }
+    for (chat_id, users) in chat_targets {
+        let card = subscription_notify_card(status, link.as_deref(), &users);
+        if let Err(e) = adapter.send_card(&chat_id, &card, None).await {
+            warn!(error = %e, "run subscription notify failed");
+        }
+    }
+}
+
+/// The run-completion subscription card: a markdown status line
+/// (mentioning subscribers when posted to a group) plus a
+/// jump-to-the-reply button. Card markdown strips applink URLs (not
+/// clickable), so the jump rides the button's `open_url` behavior.
+fn subscription_notify_card(status: &str, link: Option<&str>, mentions: &[String]) -> String {
+    let mention = mentions
+        .iter()
+        .map(|u| format!("<at id={u}></at>"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let text = if mention.is_empty() {
+        format!("✅ 你订阅的会话{status}")
+    } else {
+        format!("{mention} ✅ 你订阅的会话{status}")
+    };
+    let mut elements = vec![serde_json::json!({ "tag": "markdown", "content": text })];
+    if let Some(link) = link {
+        elements.push(serde_json::json!({
+            "tag": "button",
+            "text": { "tag": "plain_text", "content": "查看回复" },
+            "type": "primary_filled",
+            "width": "fill",
+            "behaviors": [{ "type": "open_url", "default_url": link }],
+        }));
+    }
+    serde_json::json!({ "schema": "2.0", "body": { "elements": elements } }).to_string()
+}
+
 /// Flush a run's final reply as a new message (observability off, platforms
 /// without card support, or the mid-run split where the status card freezes
 /// as a terminal receipt): send the final text as a single message bubble,
@@ -557,18 +681,17 @@ impl ChannelHub {
 /// platforms, plain-text lines otherwise). Runs without any text are
 /// skipped, matching the pre-buffering behavior.
 ///
-/// Returns `true` when the reply was actually delivered — `false` when
+/// Returns the platform message id of the delivered reply — `None` when
 /// there was nothing to send or every send attempt failed (the caller
-/// relies on it to decide whether the trace still needs a home).
+/// relies on it to decide whether the trace still needs a home, and for
+/// jump-link notifications).
 async fn flush_reply(
     adapter: &Arc<dyn PlatformAdapter>,
     routing: &SessionRouting,
     reply: reply::FinalReply,
     tool_trace: bool,
-) -> bool {
-    if reply.text().is_none() {
-        return false;
-    }
+) -> Option<String> {
+    reply.text()?;
     if tool_trace && adapter.supports_status_card() && reply.has_trace() {
         match reply::render_card(&reply, None) {
             Some(card) => {
@@ -580,8 +703,9 @@ async fn flush_reply(
                     )
                     .await
                 {
-                    Ok(Some(_)) => return true,
-                    // Platform skipped the card — fall through to text.
+                    // Platform skipped the card (Ok(None)) — fall through
+                    // to text.
+                    Ok(Some(msg_id)) => return Some(msg_id),
                     Ok(None) => {}
                     // The card was rejected (oversize payload, API error) —
                     // fall through to a plain text send so the reply content
@@ -594,7 +718,7 @@ async fn flush_reply(
             // Unreachable in practice (a text reply always renders) — skip
             // rather than panic; the run's content was already delivered by
             // the settle path or is simply absent.
-            None => return false,
+            None => return None,
         }
     }
     let text = if tool_trace {
@@ -610,10 +734,10 @@ async fn flush_reply(
         )
         .await
     {
-        Ok(_) => true,
+        Ok(msg_id) => msg_id,
         Err(e) => {
             error!(error = %e, "failed to send reply to platform");
-            false
+            None
         }
     }
 }
@@ -630,10 +754,24 @@ async fn settle_with(
     session_id: &SessionId,
     kind: SettleKind<'_>,
     reply: Option<reply::FinalReply>,
-) -> Option<reply::FinalReply> {
+) -> SettleOutcome {
     match kind {
         SettleKind::Stopped(reason) => obs.handle_stopped(session_id, reason, reply).await,
         SettleKind::Timeout => obs.handle_timeout(session_id, reply).await,
+    }
+}
+
+/// Flush an optional reply — shared by the mid-run-split and plain-platform
+/// branches of `deliver_reply`.
+async fn flush_optional_reply(
+    adapter: &Arc<dyn PlatformAdapter>,
+    routing: &SessionRouting,
+    reply: Option<reply::FinalReply>,
+    tool_trace: bool,
+) -> Option<String> {
+    match reply {
+        Some(reply) => flush_reply(adapter, routing, reply, tool_trace).await,
+        None => None,
     }
 }
 
@@ -665,6 +803,10 @@ async fn freeze_with(
 /// message and settle the obs state without a reply. When the rich
 /// settle comes back unsettled (no run state, or the settle send failed),
 /// the reply falls back to a plain flush so content is never silently lost.
+///
+/// Returns the platform message id of the delivered reply (the morphed
+/// status card or the flushed message) for jump-link notifications —
+/// `None` when nothing was delivered.
 #[allow(clippy::too_many_arguments)]
 async fn deliver_reply(
     obs: &Arc<ObsTracker>,
@@ -677,7 +819,7 @@ async fn deliver_reply(
     session_id: &SessionId,
     kind: SettleKind<'_>,
     kernel: &std::sync::Weak<Kernel>,
-) {
+) -> Option<String> {
     let mut reply = reply;
     // Split files off the reply up front: resolution failures become notes
     // on the reply text; the files are sent after the reply below.
@@ -693,7 +835,7 @@ async fn deliver_reply(
         }
         _ => Vec::new(),
     };
-    if observability && adapter.supports_status_card() {
+    let reply_msg_id = if observability && adapter.supports_status_card() {
         if mid_run_split && obs.has_mid_run_posts(session_id) {
             // The reply lands as a new message below the user's mid-run
             // posts, carrying the run trace; the status card then freezes
@@ -702,12 +844,10 @@ async fn deliver_reply(
             // the reply didn't carry it (nothing delivered — no text or
             // every send failed — or the trace is disabled), so the trace
             // is never lost.
-            let delivered = match reply {
-                Some(reply) => flush_reply(adapter, routing, reply, tool_trace).await,
-                None => false,
-            };
-            let keep_trace = !tool_trace || !delivered;
+            let delivered = flush_optional_reply(adapter, routing, reply, tool_trace).await;
+            let keep_trace = !tool_trace || delivered.is_none();
             freeze_with(obs, session_id, kind, keep_trace).await;
+            delivered
         } else {
             // Morph in place (no mid-run posts, or the split disabled).
             // Receipts only drive the split decision — with the split
@@ -716,27 +856,29 @@ async fn deliver_reply(
             if !mid_run_split {
                 obs.clear_receipts(session_id);
             }
-            if let Some(reply) = settle_with(obs, session_id, kind, reply).await {
+            let outcome = settle_with(obs, session_id, kind, reply).await;
+            match outcome.unsettled {
                 // Nothing settled — fall back to a plain message instead of
                 // dropping the reply.
-                flush_reply(adapter, routing, reply, tool_trace).await;
+                Some(reply) => flush_reply(adapter, routing, reply, tool_trace).await,
+                None => outcome.message_id,
             }
         }
     } else {
         // Platforms without card support cannot morph — the reply goes out
         // as a plain message; obs still settles its memory-only state
         // (typing fallback).
-        if let Some(reply) = reply {
-            flush_reply(adapter, routing, reply, tool_trace).await;
-        }
+        let flushed = flush_optional_reply(adapter, routing, reply, tool_trace).await;
         if observability {
             let _ = settle_with(obs, session_id, kind, None).await;
         }
-    }
+        flushed
+    };
 
     // Attachments last: files land at the bottom of the chat, below the
     // reply text/card.
     super::attachments::send_attachments(adapter, routing, files).await;
+    reply_msg_id
 }
 
 /// Outcome of gating one incoming message (see `gate_message`).
@@ -1104,6 +1246,74 @@ async fn handle_incoming_message(
             .await
         }
         ChannelCommand::InvalidApprovalCommand => Ok(Some(super::approval::usage())),
+        ChannelCommand::Subscribe {
+            recursive,
+            target_chat_id,
+        } => {
+            // Jump-link notifications rely on platform message links (and
+            // DM cards for the default target) — Feishu only for now.
+            if !matches!(config.platform, PlatformConfig::Feishu { .. }) {
+                return Ok(Some(
+                    "This platform does not support subscriptions yet.".to_string(),
+                ));
+            }
+            let in_thread = msg.thread_id.is_some();
+            if in_thread && recursive {
+                return Ok(Some(
+                    "Recursive subscription is only meaningful at chat level — a thread subscription already covers exactly this thread. Use `/subscribe -r` outside the thread to cover the whole chat."
+                        .to_string(),
+                ));
+            }
+            let scope_key =
+                subscription_scope_key(store, channel_name, &msg, &chat_id, config.reply_in_thread)
+                    .await?;
+            store
+                .save_run_subscription(
+                    channel_name,
+                    &scope_key,
+                    &chat_id,
+                    recursive,
+                    &msg.external_user_id,
+                    target_chat_id.as_deref(),
+                )
+                .await?;
+            let scope_text = match (in_thread, recursive) {
+                (true, _) => "this thread",
+                (false, true) => "this chat (including all its threads)",
+                (false, false) => "this chat",
+            };
+            let target_text = match &target_chat_id {
+                Some(t) => format!("; notifications will be posted to `{t}`"),
+                None => String::new(),
+            };
+            // In reply_in_thread group chats every top-level trigger opens
+            // its own thread, so a non-recursive chat subscription can
+            // never match a run — say so instead of silently no-oping.
+            let rit_hint = if !in_thread && !recursive && config.reply_in_thread && msg.is_group {
+                " Note: this chat replies in threads — every new question starts its own thread, which this subscription does NOT cover; use `/subscribe -r` to get notified here."
+            } else {
+                ""
+            };
+            Ok(Some(format!(
+                "✅ Subscribed to {scope_text}{target_text} — I'll DM you when runs here complete.{rit_hint} `/unsubscribe` to cancel."
+            )))
+        }
+        ChannelCommand::Unsubscribe => {
+            let scope_key =
+                subscription_scope_key(store, channel_name, &msg, &chat_id, config.reply_in_thread)
+                    .await?;
+            let removed = store
+                .remove_run_subscription(channel_name, &scope_key, &msg.external_user_id)
+                .await?;
+            Ok(Some(if removed > 0 {
+                "Unsubscribed.".to_string()
+            } else {
+                "You have no subscription here.".to_string()
+            }))
+        }
+        ChannelCommand::InvalidSubscribeCommand => Ok(Some(
+            "Usage: `/subscribe [chat_id] [-r|--recursive]` or `/unsubscribe`.".to_string(),
+        )),
         ChannelCommand::None => {
             let (sid, mut content) = prepare_trigger(
                 channel_name,
@@ -1799,6 +2009,24 @@ fn is_chat_level_message(msg: &ChannelMessage, reply_in_thread: bool) -> bool {
     reply_in_thread && msg.is_group && msg.thread_id.is_none() && msg.root_id.is_none()
 }
 
+/// The subscription scope key for a `/subscribe`/`/unsubscribe` command:
+/// the chat id at chat level (never the per-message `reply_in_thread`
+/// key — subscriptions bind the conversation, not the command message's
+/// own session), the thread's mapping key inside a thread.
+async fn subscription_scope_key(
+    store: &Arc<dyn ChannelStore>,
+    channel_name: &str,
+    msg: &ChannelMessage,
+    chat_id: &str,
+    reply_in_thread: bool,
+) -> Result<String> {
+    if msg.thread_id.is_some() {
+        effective_mapping_key(store, channel_name, msg, chat_id, reply_in_thread).await
+    } else {
+        Ok(chat_id.to_string())
+    }
+}
+
 /// Get an existing session or create a new one, updating routing info.
 /// The bool reports whether an existing mapping was reused — context-
 /// injecting callers read it as "the thread's root is already consumed"
@@ -1906,6 +2134,8 @@ const CMD_APPROVE: &str = "/approve";
 const CMD_DENY: &str = "/deny";
 const CMD_RESTART: &str = "/restart";
 const CMD_THREAD: &str = "/thread";
+const CMD_SUBSCRIBE: &str = "/subscribe";
+const CMD_UNSUBSCRIBE: &str = "/unsubscribe";
 
 /// All channel command prefixes, longest-first so `/models` is matched
 /// before `/model` (the latter is a prefix of the former).
@@ -1924,6 +2154,10 @@ const CMD_PREFIXES: &[&str] = &[
     CMD_DENY,
     CMD_RESTART,
     CMD_THREAD,
+    // `/unsubscribe` before `/subscribe` is unnecessary (neither prefixes
+    // the other) but keeps the list alphabetical-ish.
+    CMD_UNSUBSCRIBE,
+    CMD_SUBSCRIBE,
 ];
 
 /// `/help` response: the channel command list.
@@ -1939,6 +2173,8 @@ const HELP_TEXT: &str = "\
 `/steer <text>` — inject a message into the current run
 `/queue <text>` — queue a message for a later turn
 `/thread <text>` — ask in a new thread opened off this message (Feishu)
+`/subscribe [chat_id] [-r]` — DM you when runs here complete; `-r` covers this chat's threads (Feishu)
+`/unsubscribe` — cancel the subscription here
 `/permits` — list pending doc-permission requests (admin)
 `/approve <id> [perm]` — approve a doc-permission request (admin)
 `/deny <id>` — deny a doc-permission request (admin)
@@ -1985,6 +2221,18 @@ enum ChannelCommand {
     Thread(String),
     /// A `/thread` command without text.
     InvalidThreadCommand,
+    /// Subscribe the user to run-completion notifications for this
+    /// conversation scope (chat or thread), optionally redirecting the
+    /// notification to another chat; `recursive` (chat level only) also
+    /// covers runs in this chat's threads.
+    Subscribe {
+        recursive: bool,
+        target_chat_id: Option<String>,
+    },
+    /// Cancel the user's subscription for this conversation scope.
+    Unsubscribe,
+    /// A malformed `/subscribe` or `/unsubscribe` command.
+    InvalidSubscribeCommand,
     /// Not a command.
     None,
 }
@@ -2064,6 +2312,38 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
                 ChannelCommand::InvalidThreadCommand
             } else {
                 ChannelCommand::Thread(rest)
+            }
+        }
+        CMD_SUBSCRIBE => {
+            let mut recursive = false;
+            let mut target_chat_id = None;
+            let mut invalid = false;
+            for arg in parts {
+                match arg {
+                    "-r" | "--recursive" => recursive = true,
+                    _ if arg.starts_with("oc_") && target_chat_id.is_none() => {
+                        target_chat_id = Some(arg.to_string());
+                    }
+                    _ => {
+                        invalid = true;
+                        break;
+                    }
+                }
+            }
+            if invalid {
+                ChannelCommand::InvalidSubscribeCommand
+            } else {
+                ChannelCommand::Subscribe {
+                    recursive,
+                    target_chat_id,
+                }
+            }
+        }
+        CMD_UNSUBSCRIBE => {
+            if parts.next().is_none() {
+                ChannelCommand::Unsubscribe
+            } else {
+                ChannelCommand::InvalidSubscribeCommand
             }
         }
         _ => ChannelCommand::None,
