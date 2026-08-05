@@ -324,10 +324,10 @@ async fn tool_events_patch_card_with_stats() {
         super::THINKING_TITLES.iter().any(|t| last.contains(t)),
         "title: {last}"
     );
-    // The live card shows only the current step — the failed tool is the
-    // latest entry; the earlier finished one stays out of the live card.
-    assert!(last.contains("❌ **read**"), "current step: {last}");
-    assert!(!last.contains("✅ **bash**"), "history stays off: {last}");
+    // The live trace shows the finished tool with elapsed and the failed
+    // one with the error icon.
+    assert!(last.contains("✅ **bash** · 2s"), "trace: {last}");
+    assert!(last.contains("❌ **read**"), "trace: {last}");
     // …and the moment it finished, bash WAS the current step.
     assert!(
         patches[1].1.contains("✅ **bash** · 2s"),
@@ -1187,7 +1187,7 @@ async fn stats_line_omits_model_when_unknown() {
 }
 
 #[tokio::test]
-async fn running_card_shows_only_latest_step() {
+async fn running_card_trace_caps_at_ten_entries() {
     let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
     let mock = MockAdapter::new();
     let sid = sid();
@@ -1212,14 +1212,12 @@ async fn running_card_shows_only_latest_step() {
     let last = patches.last().unwrap();
     let body: serde_json::Value = serde_json::from_str(&last.1).unwrap();
     let elements = body["body"]["elements"].as_array().unwrap();
-    // Layout: stats, a divider, then the current-step element.
+    // Layout: stats, a divider, then the trace element.
     assert_eq!(elements[1]["tag"], "hr");
     let content = elements[2]["content"].as_str().unwrap();
-    // Only the latest entry: no history, no "earlier entries" marker —
-    // the full trace lands on the settled card's collapsed panel.
-    assert!(content.contains("cmd-11"), "current step kept: {content}");
-    assert!(!content.contains("cmd-10"), "history stays off: {content}");
-    assert!(!content.contains("earlier entries"), "no marker: {content}");
+    assert!(content.contains("··· and 2 earlier entries"));
+    assert!(content.contains("cmd-11"), "most recent kept");
+    assert!(!content.contains("cmd-1`"), "oldest dropped");
 }
 
 #[tokio::test]

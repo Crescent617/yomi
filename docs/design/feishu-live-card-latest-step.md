@@ -53,6 +53,8 @@
 
 历史平铺的诉求已由结算卡的折叠面板覆盖（run 结束后随时展开）。实施时留一个 5 分钟人工验证点：若实测客户端在 PATCH 后保留面板展开态，可作为后续增强把历史面板加回活卡（默认收起）。
 
+> **后续变更（已实施又回退）**：活卡曾加回折叠历史面板（最近 20 条），但"展开态被下一帧 PATCH 收回"的取舍实测不可接受，已回退为平铺最近 10 条（`STATUS_TRACE_MAX_ENTRIES`，§2 旧布局）。模型名显示（§3.3）保留。
+
 ### 3.3 模型名显示
 
 **渲染**：stats 行灰色技术区段的首位（模型是相对静态的元数据，与时钟/计数同属一行）：
@@ -78,8 +80,8 @@
 
 | 文件 | 改动 |
 |------|------|
-| `channels/reply.rs` | 新增 `RunReplyBuffer::latest_entry_line()`；视调用情况删除 `trace_preview_lines` |
-| `channels/obs.rs` | `render_running` 改为 stats + 最新 entry + whisper；`ObsCardState.model` 字段；`ObsTracker::set_model` + `pending_models`；`stats_line` 渲染模型段；删 `STATUS_TRACE_MAX_ENTRIES` |
+| `channels/reply.rs` | 新增 `RunReplyBuffer::latest_entry_line()`（后随布局回退移除，恢复 `trace_preview_lines` 平铺最近 10 条） |
+| `channels/obs.rs` | `render_running` 保持 stats + 平铺最近 10 条 trace + whisper（"只显最新一步"已回退）；`ObsCardState.model` 字段；`ObsTracker::set_model` + `pending_models`；`stats_line` 渲染模型段 |
 | `channels/hub.rs` | forwarder `Running` 分支：首个 Running 查模型并 `set_model` |
 
 ## 5. 测试（obs_test.rs / reply 单测）

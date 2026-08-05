@@ -9,9 +9,8 @@
 //! settlement, every run is exactly one message (two when the user posted
 //! mid-run: the card freezes as a terminal receipt and the reply lands at
 //! the bottom).
-//! While running, the card body shows the stats line, the current step
-//! (the latest trace entry; the full history lands on the settled card's
-//! collapsed trace panel), and a tail of the assistant's current text
+//! While running, the card body shows the stats line, the live run trace
+//! (most recent tool entries), and a tail of the assistant's current text
 //! ("whisper"); a rotating placeholder fills the fresh card until the
 //! first tool or text arrives, and idle phase titles rotate for fun. The
 //! stats line shows real usage once reported (providers only emit it at
@@ -55,6 +54,8 @@ use super::PlatformAdapter;
 
 /// Minimum interval between two in-place card updates (low-frequency updates).
 const PATCH_MIN_INTERVAL: Duration = Duration::from_secs(3);
+/// Trace entries shown live on the status card (most recent kept).
+const STATUS_TRACE_MAX_ENTRIES: usize = 10;
 /// Error summary truncation on terminal cards.
 const ERROR_MAX_CHARS: usize = 200;
 /// Whisper buffer cap (tail kept); bounds memory for long streamed answers.
@@ -131,8 +132,7 @@ struct ObsCardState {
     phase: Phase,
     /// Total tool executions (per-tool breakdown is not kept).
     tool_count: u32,
-    /// The run trace; the live card shows only its latest entry (the
-    /// settled card's collapsed panel carries it in full).
+    /// The full run trace shown live on the status card.
     trace: reply::RunReplyBuffer,
     /// The session's model key, shown in the stats line; set by the hub
     /// forwarder at the run's first `Running` (absent when unknown).
@@ -888,8 +888,8 @@ async fn send_card_patch(adapter: &dyn PlatformAdapter, message_id: &str, card_j
 }
 
 fn render_running(s: &ObsCardState) -> String {
-    let latest = s.trace.latest_entry_line();
-    if latest.is_none() && s.whisper.is_empty() && !s.seen_text {
+    let trace = s.trace.trace_preview_lines(STATUS_TRACE_MAX_ENTRIES);
+    if trace.is_empty() && s.whisper.is_empty() && !s.seen_text {
         // Brand-new card: a light random placeholder. Bare while the
         // timer would be its only content; once any token data exists
         // (live estimate or real usage) the stats line rides along.
@@ -912,7 +912,7 @@ fn render_running(s: &ObsCardState) -> String {
             )
         })
     };
-    let elements = if latest.is_none() {
+    let elements = if trace.is_empty() {
         // No tools yet but text is flowing: stats + whisper in one block.
         let mut body = stats_line(s);
         if let Some(w) = whisper_line() {
@@ -921,10 +921,8 @@ fn render_running(s: &ObsCardState) -> String {
         }
         vec![json!({ "tag": "markdown", "text_size": "notation", "content": body })]
     } else {
-        // Stats line, a divider, then the current step only (+ whisper
-        // tail) — the run's history stays out of the live card; the
-        // settled card's collapsed trace panel carries it in full.
-        let mut body = latest.unwrap_or_default();
+        // Stats line, a divider, then the live trace (+ whisper tail).
+        let mut body = trace.join("\n");
         if let Some(w) = whisper_line() {
             body.push('\n');
             body.push_str(&w);

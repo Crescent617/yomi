@@ -47,20 +47,18 @@ fn attachments_block_never_renders_anywhere() {
     // the XML must not leak into the trace panel, the card, or the body.
     let mut buf = RunReplyBuffer::new();
     buf.record_model_end("generated the file");
-    buf.record_model_end("here you go");
-    // Keep the attachment-carrying text last so the live card's current
-    // step renders it (the live card shows only the latest entry).
     buf.record_model_end("mid-run note\n<yomi_attachments>\nout.pdf\n</yomi_attachments>");
-    // The live card's current step renders from the buffer.
-    let current_step = buf.latest_entry_line().unwrap_or_default();
+    buf.record_model_end("here you go");
+    // The live card preview renders from the buffer.
+    let preview = buf.trace_preview_lines(10).join("\n");
     let reply = buf.into_reply();
 
-    assert_eq!(reply.text(), Some("mid-run note"));
+    assert_eq!(reply.text(), Some("here you go"));
     assert_eq!(reply.attachments(), &["out.pdf"]);
     for rendered in [
         render_card(&reply, None).unwrap(),
         render_plain(&reply),
-        current_step,
+        preview,
     ] {
         assert!(
             !rendered.contains("<yomi_attachments>"),
