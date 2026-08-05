@@ -168,6 +168,7 @@ For long-running commands (e.g. start a server, run a script with unknown durati
                 timeout_secs,
                 &ctx.working_dir,
                 cancel_token,
+                &ctx.session_id,
                 ctx.max_tool_output_length,
             )
             .await
@@ -194,8 +195,10 @@ impl ShellTool {
     ///   no controlling terminal — programs that prompt via `/dev/tty`
     ///   (sudo, ssh, gpg, ...) fail fast instead of blocking on a hidden
     ///   prompt or garbling the TUI;
-    /// - env vars disable the remaining interactive prompters (git, ssh).
-    fn build_command(command: &str, working_dir: &std::path::Path) -> Command {
+    /// - env vars disable the remaining interactive prompters (git, ssh);
+    /// - `YOMI_SESSION_ID` exposes the owning session, so scripts can steer
+    ///   back into it (e.g. `yomi session send --steer -s "$YOMI_SESSION_ID"`).
+    fn build_command(command: &str, working_dir: &std::path::Path, session_id: &str) -> Command {
         let (shell, arg) = Self::shell_command();
         let mut cmd = Command::new(shell);
         cmd.arg(arg)
@@ -211,6 +214,7 @@ impl ShellTool {
             .env("SSH_ASKPASS_REQUIRE", "never")
             .env("PAGER", "cat")
             .env("EDITOR", "true")
+            .env(format!("{}SESSION_ID", crate::ENV_PREFIX), session_id)
             .kill_on_drop(true);
 
         // BatchMode makes ssh fail instead of prompting (host-key confirm,
@@ -242,9 +246,10 @@ impl ShellTool {
         timeout_secs: Option<u64>,
         working_dir: &std::path::Path,
         cancel_token: Option<tokio_util::sync::CancellationToken>,
+        session_id: &str,
         max_tool_output_length: usize,
     ) -> Result<ToolOutput> {
-        let output_fut = Self::build_command(command, working_dir).output();
+        let output_fut = Self::build_command(command, working_dir, session_id).output();
 
         let timeout_duration = Duration::from_secs(timeout_secs.unwrap_or(300));
         let output_result = match cancel_token {
@@ -327,7 +332,7 @@ impl ShellTool {
         let output_path_str = output_path.to_string_lossy().to_string();
 
         // Start the process and get PID immediately
-        let child = Self::build_command(command, working_dir).spawn()?;
+        let child = Self::build_command(command, working_dir, session_id).spawn()?;
 
         let pid = child.id().unwrap_or(0);
         let tracker_guard = ctx
