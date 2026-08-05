@@ -450,3 +450,25 @@ async fn test_stale_removal_preserves_concurrent_requeue() {
     );
     assert!(rx.try_recv().is_err(), "nothing fired");
 }
+
+#[tokio::test]
+async fn job_finished_wakes_scheduler_loop() {
+    // Regression: a requeued job must wake the run loop. Without the notify,
+    // the loop parks on an empty queue (sleep branch disabled) and recurring
+    // jobs stall after their first fire until an unrelated reload.
+    let job = make_job("j1", "0 0 9 * * *", None, None, None, 0);
+    let mut jobs = HashMap::new();
+    jobs.insert(job.id.0.to_string(), job.clone());
+    let store = Arc::new(MockStore::new(jobs));
+    let (tx, _rx) = mpsc::channel(1);
+    let scheduler = CronScheduler::new(store, tx);
+
+    scheduler.job_finished(&job.id).await;
+
+    tokio::time::timeout(
+        std::time::Duration::from_millis(50),
+        scheduler.queue_wake.notified(),
+    )
+    .await
+    .expect("job_finished must wake the scheduler loop");
+}

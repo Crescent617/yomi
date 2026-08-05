@@ -9,7 +9,9 @@ use tokio_util::sync::CancellationToken;
 /// 轻量级 cron 调度引擎
 ///
 /// 维护一个按 `next_run_at` 排序的调度队列（`BTreeMap`），精确 sleep 到触发点。
-/// 新任务加入/更新/删除时通过 watch channel 打断 sleep 重新加载。
+/// 两类唤醒：任务增删改走 watch channel 全量 reload；`job_finished` /
+/// `complete_job` 改队列后通过 `queue_wake` 唤醒循环重新评估（队列空时
+/// 循环只等信号，没有这条路，重入队的任务会停摆）。
 pub struct CronScheduler {
     store: Arc<dyn CronStore>,
     task_tx: mpsc::Sender<CronJob>,
@@ -21,6 +23,9 @@ pub struct CronScheduler {
     running: Arc<RwLock<HashSet<CronJobId>>>,
     /// 有新任务变更时通知调度循环重新加载（watch channel 保证不丢信号）
     reload_tx: tokio::sync::watch::Sender<u64>,
+    /// `job_finished` / `complete_job` 直接改了队列后唤醒调度循环重新评估。
+    /// 没有它，循环在队列空转时只等 reload，重入队的任务会停摆到下次外部变更。
+    queue_wake: tokio::sync::Notify,
 }
 
 impl CronScheduler {
@@ -33,6 +38,7 @@ impl CronScheduler {
             jobs: Arc::new(RwLock::new(HashMap::new())),
             running: Arc::new(RwLock::new(HashSet::new())),
             reload_tx,
+            queue_wake: tokio::sync::Notify::new(),
         }
     }
 
@@ -83,6 +89,9 @@ impl CronScheduler {
                         tracing::error!("Failed to reload cron jobs: {e}");
                     }
                 }
+                // job_finished/complete_job 重入队或移除了任务——立即重新评估
+                // 队列（否则队列由空转非空时循环会一直睡在 reload 上）。
+                () = self.queue_wake.notified() => {}
             }
         }
     }
@@ -181,6 +190,9 @@ impl CronScheduler {
                 );
             }
         }
+
+        // 队列已变化：唤醒调度循环重新评估（循环可能正睡在空队列上）。
+        self.queue_wake.notify_one();
     }
 
     /// 从数据库加载所有 active 任务，计算 `next_run_at`
@@ -331,7 +343,7 @@ impl CronScheduler {
     }
 
     /// 将任务标记为完成，从队列和缓存中移除并更新数据库
-    async fn complete_job(&self, job_id: &CronJobId) {
+    pub(crate) async fn complete_job(&self, job_id: &CronJobId) {
         self.remove_job(job_id).await;
         if let Err(e) = self
             .store
@@ -348,6 +360,8 @@ impl CronScheduler {
         }
         let mut jobs = self.jobs.write().await;
         jobs.remove(job_id);
+        drop(jobs);
+        self.queue_wake.notify_one();
     }
 
     /// 从队列中移除指定任务（扫描所有 key，避免缓存的 `next_run_at`
