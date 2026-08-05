@@ -727,7 +727,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cli"
-version = "0.7.51"
+version = "0.7.52"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3229,7 +3229,7 @@ dependencies = [
 
 [[package]]
 name = "kernel"
-version = "0.7.51"
+version = "0.7.52"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -7289,7 +7289,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "tui"
-version = "0.7.51"
+version = "0.7.52"
 dependencies = [
  "anyhow",
  "arboard",
@@ -8863,7 +8863,7 @@ dependencies = [
 
 [[package]]
 name = "yomi-gui"
-version = "0.7.51"
+version = "0.7.52"
 dependencies = [
  "anyhow",
  "async-trait",

@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.52] - 2026-08-05
+
+### Added
+- 飞书群新增 `/mention` 命令：运行时查看或切换"需要 @ 机器人才触发"——`/mention` 查询当前生效值与来源，`/mention on|off|reset` 变更（变更限频道管理员），话题与群两级覆盖频道配置 `require_mention`，立即生效并跨重启保留。
+- 飞书运行状态卡的统计行新增当前会话使用的模型名。
+
+### Changed
+- GUI 调试、配置标签页的面板标题样式与其余标签页统一。
+
 ## [0.7.51] - 2026-08-05
 
 ### Added
