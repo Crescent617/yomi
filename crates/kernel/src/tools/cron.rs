@@ -358,8 +358,11 @@ impl CronTool {
 /// Run a shell command via the shared cron runner (same hardening as the
 /// worker), with the worker's execution timeout. Returns captured stdout
 /// (truncated to 4KB).
+///
+/// A self-complete request (exit 42) is only honored by the scheduler on
+/// scheduled runs; this manual path just reports it.
 async fn execute_shell(command: &str, working_dir: Option<&str>) -> Result<String> {
-    let stdout = tokio::time::timeout(
+    let output = tokio::time::timeout(
         Duration::from_secs(TRIGGER_TIMEOUT_SECS),
         crate::cron::run_shell_command(command, working_dir),
     )
@@ -371,9 +374,15 @@ async fn execute_shell(command: &str, working_dir: Option<&str>) -> Result<Strin
     })?
     .map_err(|e| KernelError::tool(e.to_string()))?;
 
-    let stdout = stdout.trim();
+    let mut stdout = output.stdout.trim().to_string();
+    if output.self_complete {
+        if !stdout.is_empty() {
+            stdout.push('\n');
+        }
+        stdout.push_str("[job asked to self-complete (exit 42); honored on scheduled runs]");
+    }
     Ok(crate::utils::strs::truncate_with_suffix(
-        stdout,
+        &stdout,
         MAX_STDOUT,
         "... [truncated]",
     ))

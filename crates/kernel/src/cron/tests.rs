@@ -123,4 +123,44 @@ mod tests {
         assert_eq!(job.schedule, decoded.schedule);
         assert_eq!(job.status, decoded.status);
     }
+
+    // The exit code is a public contract — external scripts hardcode it.
+    #[test]
+    fn self_complete_exit_code_is_42() {
+        assert_eq!(super::super::SHELL_COMPLETE_EXIT_CODE, 42);
+    }
+
+    #[tokio::test]
+    async fn shell_runner_success_captures_stdout() {
+        let out = super::super::run_shell_command("echo hello", None)
+            .await
+            .unwrap();
+        assert_eq!(out.stdout.trim(), "hello");
+        assert!(!out.self_complete);
+    }
+
+    #[tokio::test]
+    async fn shell_runner_complete_exit_code_marks_self_complete() {
+        let cmd = format!("echo done; exit {}", super::super::SHELL_COMPLETE_EXIT_CODE);
+        let out = super::super::run_shell_command(&cmd, None).await.unwrap();
+        assert_eq!(out.stdout.trim(), "done");
+        assert!(out.self_complete);
+    }
+
+    #[tokio::test]
+    async fn shell_runner_other_nonzero_is_shell_failed() {
+        let err = super::super::run_shell_command("echo boom >&2; exit 1", None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CronError::ShellFailed(e) if e.contains("boom")));
+    }
+
+    #[tokio::test]
+    async fn shell_runner_signal_death_is_failure_not_self_complete() {
+        // Killed by a signal → no exit code → failure, never self-complete.
+        let err = super::super::run_shell_command("kill -9 $$", None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CronError::ShellFailed(_)));
+    }
 }

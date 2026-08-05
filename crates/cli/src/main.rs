@@ -244,7 +244,7 @@ enum CronCommands {
         /// Action: send a message to a session (the agent responds)
         #[arg(long, conflicts_with = "command", required_unless_present = "command")]
         message: Option<String>,
-        /// Action: run a shell command
+        /// Action: run a shell command (exit 42 marks the job completed)
         #[arg(long)]
         command: Option<String>,
         /// Target session for --message (default: a dedicated session)
@@ -273,7 +273,7 @@ enum CronCommands {
         /// Replace the action with a session message
         #[arg(long, conflicts_with = "command")]
         message: Option<String>,
-        /// Replace the action with a shell command
+        /// Replace the action with a shell command (exit 42 marks the job completed)
         #[arg(long)]
         command: Option<String>,
         /// Target session for --message (omit for a dedicated session)

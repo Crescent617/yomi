@@ -1717,7 +1717,11 @@ impl Kernel {
             )),
         };
 
-        result.map_err(|e| crate::types::KernelError::storage(e.to_string()))
+        // 手动触发只跑一遍：SelfComplete（exit 42）约定只由调度路径兑现，
+        // 这里丢弃 outcome、只透传成败。
+        result
+            .map(|_| ())
+            .map_err(|e| crate::types::KernelError::storage(e.to_string()))
     }
 }
 
@@ -1726,8 +1730,9 @@ impl crate::cron::CronExecutor for Kernel {
     async fn execute_cron_action(
         &self,
         action: &crate::cron::CronAction,
-    ) -> std::result::Result<(), crate::cron::CronError> {
+    ) -> std::result::Result<crate::cron::CronActionOutcome, crate::cron::CronError> {
         use crate::cron::types::{render_template, CronAction, CronError};
+        use crate::cron::CronActionOutcome;
         use crate::types::{ContentBlock, SessionId};
 
         match action {
@@ -1746,18 +1751,23 @@ impl crate::cron::CronExecutor for Kernel {
                 self.send_message_inner(&sid, blocks, false)
                     .await
                     .map_err(CronError::Session)?;
+                Ok(CronActionOutcome::Done)
             }
             CronAction::Shell {
                 command,
                 working_dir,
             } => {
-                crate::cron::run_shell_command(command, working_dir.as_deref()).await?;
+                let out = crate::cron::run_shell_command(command, working_dir.as_deref()).await?;
+                Ok(if out.self_complete {
+                    CronActionOutcome::SelfComplete
+                } else {
+                    CronActionOutcome::Done
+                })
             }
             CronAction::Internal { .. } => {
-                return Err(CronError::UnsupportedAction("Internal".to_string()));
+                Err(CronError::UnsupportedAction("Internal".to_string()))
             }
         }
-        Ok(())
     }
 }
 

@@ -23,7 +23,25 @@ use std::sync::Arc;
 /// - `CronWorker` 只负责调度、超时、结果记录
 #[async_trait]
 pub trait CronExecutor: Send + Sync {
-    async fn execute_cron_action(&self, action: &CronAction) -> Result<(), CronError>;
+    async fn execute_cron_action(
+        &self,
+        action: &CronAction,
+    ) -> Result<CronActionOutcome, CronError>;
+}
+
+/// Exit code a cron shell job uses to retire itself: the scheduler marks the
+/// job `Completed` instead of scheduling the next run. Picked clear of
+/// sysexits (64–78), common failures (1/2), and signal deaths (≥128).
+pub const SHELL_COMPLETE_EXIT_CODE: i32 = 42;
+
+/// 单次 cron action 的执行结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CronActionOutcome {
+    /// 正常成功——继续调度。
+    #[default]
+    Done,
+    /// Shell job 以 `SHELL_COMPLETE_EXIT_CODE` 退出——任务自我完成，不再调度。
+    SelfComplete,
 }
 
 /// 确保 `SendMessage` action 绑定了具体 session。
@@ -165,12 +183,21 @@ pub async fn create_cron_job(
     Ok(job)
 }
 
+/// 成功执行的 shell 命令输出。
+#[derive(Debug)]
+pub struct ShellOutput {
+    pub stdout: String,
+    /// 命令以 `SHELL_COMPLETE_EXIT_CODE` 退出（任务请求自我完成）。
+    pub self_complete: bool,
+}
+
 /// 以与 cron worker 一致的加固环境执行 shell 命令。
-/// 成功返回 stdout；非零退出返回 `CronError::ShellFailed`（含 stderr）。
+/// 退出码 0 与 `SHELL_COMPLETE_EXIT_CODE` 都视为成功返回输出；
+/// 其他非零退出返回 `CronError::ShellFailed`（含 stderr）。
 pub async fn run_shell_command(
     command: &str,
     working_dir: Option<&str>,
-) -> Result<String, CronError> {
+) -> Result<ShellOutput, CronError> {
     let output = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(command)
@@ -189,10 +216,18 @@ pub async fn run_shell_command(
         .await
         .map_err(CronError::Io)?;
 
-    if !output.status.success() {
-        return Err(CronError::ShellFailed(
+    let stdout = || String::from_utf8_lossy(&output.stdout).to_string();
+    match output.status.code() {
+        Some(0) => Ok(ShellOutput {
+            stdout: stdout(),
+            self_complete: false,
+        }),
+        Some(SHELL_COMPLETE_EXIT_CODE) => Ok(ShellOutput {
+            stdout: stdout(),
+            self_complete: true,
+        }),
+        _ => Err(CronError::ShellFailed(
             String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
+        )),
     }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }

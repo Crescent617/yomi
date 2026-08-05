@@ -1,7 +1,7 @@
 use crate::cron::scheduler::CronScheduler;
 use crate::cron::store::CronStore;
 use crate::cron::types::{CronError, CronJob};
-use crate::cron::CronExecutor;
+use crate::cron::{CronActionOutcome, CronExecutor};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -49,32 +49,8 @@ impl CronWorker {
                         let start = std::time::Instant::now();
                         let result = Self::execute(&*executor, &job).await;
                         let elapsed = start.elapsed();
-
-                        let error = match &result {
-                            Ok(()) => None,
-                            Err(e) => {
-                                tracing::error!("Cron job {} failed: {}", job.id.0, e);
-                                Some(e.to_string())
-                            }
-                        };
-
-                        // 记录执行结果（只更新 run_count / last_run_at / last_error，
-                        // next_run_at 由 scheduler 的 job_finished 统一管理）
-                        if let Err(e) = store.record_execution(&job.id, error).await {
-                            tracing::error!("Failed to record cron execution: {}", e);
-                        }
-
-                        // 通知 scheduler 任务已完成，可以重新调度
-                        if let Some(ref sched) = scheduler {
-                            sched.job_finished(&job.id).await;
-                        }
-
-                        tracing::info!(
-                            "Cron job {} executed in {:?}: {:?}",
-                            job.id.0,
-                            elapsed,
-                            result
-                        );
+                        Self::finalize(store, scheduler, &job, result).await;
+                        tracing::info!("Cron job {} executed in {:?}", job.id.0, elapsed);
                     });
                 }
                 else => {
@@ -87,7 +63,10 @@ impl CronWorker {
         tracing::info!("Cron worker shut down");
     }
 
-    async fn execute(executor: &dyn CronExecutor, job: &CronJob) -> Result<(), CronError> {
+    async fn execute(
+        executor: &dyn CronExecutor,
+        job: &CronJob,
+    ) -> Result<CronActionOutcome, CronError> {
         let timeout = Duration::from_secs(EXECUTION_TIMEOUT_SECS);
 
         let result = tokio::time::timeout(timeout, executor.execute_cron_action(&job.action)).await;
@@ -97,4 +76,39 @@ impl CronWorker {
             Err(_) => Err(CronError::Timeout(EXECUTION_TIMEOUT_SECS)),
         }
     }
+
+    /// 记录执行结果并把任务交还调度器。`SelfComplete` 直接完成任务
+    /// （不再入队），其余结果走 `job_finished` 按既有规则重新调度。
+    async fn finalize(
+        store: Arc<dyn CronStore>,
+        scheduler: Option<Arc<CronScheduler>>,
+        job: &CronJob,
+        result: Result<CronActionOutcome, CronError>,
+    ) {
+        let (error, self_complete) = match &result {
+            Ok(outcome) => (None, matches!(outcome, CronActionOutcome::SelfComplete)),
+            Err(e) => {
+                tracing::error!("Cron job {} failed: {}", job.id.0, e);
+                (Some(e.to_string()), false)
+            }
+        };
+
+        // 记录执行结果（只更新 run_count / last_run_at / last_error，
+        // next_run_at 由 scheduler 统一管理）
+        if let Err(e) = store.record_execution(&job.id, error).await {
+            tracing::error!("Failed to record cron execution: {}", e);
+        }
+
+        if let Some(ref sched) = scheduler {
+            if self_complete {
+                sched.complete_job(&job.id).await;
+            } else {
+                sched.job_finished(&job.id).await;
+            }
+        }
+    }
 }
+
+#[cfg(test)]
+#[path = "worker_test.rs"]
+mod tests;
