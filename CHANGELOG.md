@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.49] - 2026-08-05
+
+### Added
+- 新增命令 `yomi session send [-s session_id] <消息>`：通过 daemon 向会话发消息（需 daemon 运行），`-s` 缺省取当前目录最近会话，消息也可从标准输入管道传入。
+- `yomi session send` 在会话忙碌时默认排队等待，加 `--steer` 可优先插队、在当前运行的轮次间注入。
+- `yomi session send` 在目标会话不存在时直接报错，不会因 ID 笔误误起一个空会话。
+
 ## [0.7.48] - 2026-08-05
 
 ### Fixed
