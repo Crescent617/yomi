@@ -4712,6 +4712,8 @@ struct NotifyMockAdapter {
     cards: tokio::sync::Mutex<Vec<(String, String)>>,
     /// Returned by `fetch_message` (the thread root / trigger message).
     message: tokio::sync::Mutex<Option<HistoryMessage>>,
+    /// Message ids `fetch_message` was called with, in order.
+    fetch_calls: tokio::sync::Mutex<Vec<String>>,
     fetch_fail: std::sync::atomic::AtomicBool,
     /// Returned by `fetch_user_name` (None = no contact permission).
     user_name: Option<String>,
@@ -4772,8 +4774,9 @@ impl PlatformAdapter for NotifyMockAdapter {
 
     async fn fetch_message(
         &self,
-        _message_id: &str,
+        message_id: &str,
     ) -> std::result::Result<Option<HistoryMessage>, crate::channels::ChannelError> {
+        self.fetch_calls.lock().await.push(message_id.to_string());
         if self.fetch_fail.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(crate::channels::ChannelError::Platform(
                 "mock fetch failure".into(),
@@ -4835,6 +4838,7 @@ async fn test_notify_run_subscribers() {
         RunEndStatus::Completed,
         &SessionId::new(),
         &std::sync::Weak::new(),
+        &ObsTracker::new(),
     )
     .await;
     assert!(mock.dms.lock().await.is_empty());
@@ -4849,6 +4853,7 @@ async fn test_notify_run_subscribers() {
         RunEndStatus::Cancelled,
         &SessionId::new(),
         &std::sync::Weak::new(),
+        &ObsTracker::new(),
     )
     .await;
     assert!(mock.dms.lock().await.is_empty());
@@ -4862,6 +4867,7 @@ async fn test_notify_run_subscribers() {
         RunEndStatus::Completed,
         &SessionId::new(),
         &std::sync::Weak::new(),
+        &ObsTracker::new(),
     )
     .await;
     let dms = mock.dms.lock().await;
@@ -4889,6 +4895,7 @@ async fn test_notify_run_subscribers() {
         RunEndStatus::Failed,
         &SessionId::new(),
         &std::sync::Weak::new(),
+        &ObsTracker::new(),
     )
     .await;
     let dms = mock.dms.lock().await;
@@ -4950,6 +4957,7 @@ async fn notify_card_quotes_trigger_message_with_author() {
         RunEndStatus::Completed,
         &SessionId::new(),
         &std::sync::Weak::new(),
+        &ObsTracker::new(),
     )
     .await;
     let dms = mock.dms.lock().await;
@@ -4976,6 +4984,7 @@ async fn notify_card_quote_omits_author_when_name_unresolved() {
         RunEndStatus::Completed,
         &SessionId::new(),
         &std::sync::Weak::new(),
+        &ObsTracker::new(),
     )
     .await;
     let dms = mock.dms.lock().await;
@@ -5001,6 +5010,7 @@ async fn notify_card_without_quote_when_context_unavailable() {
         RunEndStatus::Completed,
         &SessionId::new(),
         &std::sync::Weak::new(),
+        &ObsTracker::new(),
     )
     .await;
     let dms = mock.dms.lock().await;
@@ -5030,10 +5040,46 @@ async fn notify_card_chat_level_session_skips_message_fetch() {
         RunEndStatus::Completed,
         &SessionId::new(),
         &std::sync::Weak::new(),
+        &ObsTracker::new(),
     )
     .await;
     let dms = mock.dms.lock().await;
     assert!(!dms[0].1.contains("> "), "no quote line: {}", dms[0].1);
+}
+
+/// The quote prefers the session's latest user message — the very
+/// message the settle ✅ lands on — over the thread root.
+#[tokio::test]
+async fn notify_card_quotes_reaction_target_over_root() {
+    let (store, mock, routing) = notify_quote_setup().await;
+    *mock.message.lock().await = Some(notify_trigger_message());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = ObsTracker::new();
+    let sid = SessionId::new();
+    obs.record_user_msg(&sid, "om_exact".to_string());
+
+    notify_run_subscribers(
+        &store,
+        &adapter,
+        &routing,
+        Some("om_r"),
+        RunEndStatus::Completed,
+        &sid,
+        &std::sync::Weak::new(),
+        &obs,
+    )
+    .await;
+    assert_eq!(
+        mock.fetch_calls.lock().await.as_slice(),
+        ["om_exact"],
+        "fetched the reaction target, not the root omt_1"
+    );
+    let dms = mock.dms.lock().await;
+    assert!(
+        dms[0].1.contains("> 帮我看下 这个 run 怎么样"),
+        "{}",
+        dms[0].1
+    );
 }
 
 #[test]

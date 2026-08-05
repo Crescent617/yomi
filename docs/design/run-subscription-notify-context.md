@@ -28,18 +28,21 @@
 ### 3.1 引用来源回退链
 
 ```
-thread 会话（mapping_key ≠ external_chat_id）:
-    fetch_message(mapping_key) 成功且有文本 → 用根/触发消息原文；
+obs.last_user_msg(sid)（settle ✅ 反应踩的同一条——session 最近一条用户消息）
+    → fetch_message 成功且有文本 → 用该消息原文；
         作者名 = fetch_user_name(sender_id)（best-effort，None 则省略）
+否则 thread 会话（mapping_key ≠ external_chat_id）:
+    fetch_message(mapping_key) → 用根消息原文（hub 重启后 obs 为空时兜底）
 否则:
     kernel.get_session(sid).title 非空 → 用会话标题（无作者）
 否则:
     不加引用行（保持现状）
 ```
 
-- 仅在 `subs` 非空后才取上下文：每次有订阅的 run 结束最多一次平台 API 调用 + 一次 sqlite 点查，量可忽略。
+- 与 settle 反应同源：引用行和 ✅ 永远指向同一条消息——典型 RIT 流程下就是触发消息本身；手动话题里是 @bot 那条（而非他人根消息）；mid-run 追问时是追问那条（也是最终回复所应答的消息）。
+- `last_user_msg` 跨 run 粘滞：无新触发的 run（goal 续跑、cron 触发、API steer）会引用上一条用户消息——与 ✅ 反应的目标语义完全一致，接受。
+- 仅在 `subs` 非空后才取上下文：每次有订阅的 run 结束最多两次平台 API 调用（消息 + 用户名）+ 一次 sqlite 点查，量可忽略。
 - DM 与群目标卡共用同一段引用文本（取一次，传入渲染）。
-- 手动话题场景 `mapping_key` 指向他人的话题根消息而非 @bot 那条——引用根消息同样表达"这个话题在聊什么"，可接受，不为精确触发消息引入额外状态（obs 的 `last_user_msg` 耦合面更大，弃用）。
 - `fetch_message` 失败（消息被删、权限、平台不支持）静默落到下一级，不打 warn 以外的副作用。
 
 ### 3.2 文本规范化
@@ -81,10 +84,11 @@ thread 会话（mapping_key ≠ external_chat_id）:
 |------|------|
 | `channels/mod.rs` | `PlatformAdapter` 新增 `fetch_user_name(open_id) -> Option<String>`（默认 `None`） |
 | `channels/feishu.rs` | 实现 `fetch_user_name`（`contact/v3/users`，无 `name` 字段或报错即 `None`，静默） |
-| `channels/hub.rs` | `notify_run_subscribers` 加 `session_id` / `kernel` 参数（两调用点就地传入），subs 非空后按 §3.1 取 quote 与作者名；`subscription_notify_card` 加 `quote: Option<&str>` 参数与第二个 markdown 元素；新增规范化辅助函数 |
+| `channels/hub.rs` | `notify_run_subscribers` 加 `session_id` / `kernel` / `obs` 参数（两调用点就地传入），subs 非空后按 §3.1 取 quote 与作者名；`subscription_notify_card` 加 `quote: Option<&str>` 参数与第二个 markdown 元素；新增规范化辅助函数 |
+| `channels/obs.rs` | `ObsTracker::last_user_msg_id` getter（复用 settle 反应目标） |
 
 ## 5. 测试
 
 - `subscription_notify_card`：有/无 quote、有/无作者名的结构差异；截断与 `…`；`@_user_N` 剥离；换行压平。
-- `notify_run_subscribers`（沿用 hub_test 的 mock store/adapter）：thread 会话引用根消息文本；作者名解析成功带前缀、`None` 省略；fetch 失败回退到会话标题（无作者前缀）；两级都失败则无引用行（现状回归）；chat 级会话直接走标题。
+- `notify_run_subscribers`（沿用 hub_test 的 mock store/adapter）：引用 settle 反应目标消息（优先于根消息）；作者名解析成功带前缀、`None` 省略；fetch 失败回退根消息/会话标题；全失败则无引用行（现状回归）；chat 级会话跳过消息 fetch 走标题。
 - 取消的 run 仍不通知（回归保护）。

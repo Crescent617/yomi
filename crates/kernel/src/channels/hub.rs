@@ -386,6 +386,7 @@ impl ChannelHub {
                                     RunEndStatus::Failed,
                                     &sid,
                                     &kernel,
+                                    &obs,
                                 )
                                 .await;
                             }
@@ -504,6 +505,7 @@ impl ChannelHub {
                                 RunEndStatus::from_stop_reason(reason),
                                 &session_id,
                                 &kernel,
+                                &obs,
                             )
                             .await;
                             continue;
@@ -636,6 +638,7 @@ async fn notify_run_subscribers(
     status: RunEndStatus,
     session_id: &SessionId,
     kernel: &std::sync::Weak<Kernel>,
+    obs: &ObsTracker,
 ) {
     if status == RunEndStatus::Cancelled {
         return;
@@ -663,7 +666,7 @@ async fn notify_run_subscribers(
     let (link, chat_name, quote) = tokio::join!(
         adapter.message_link(&routing.external_chat_id, reply_msg_id),
         adapter.fetch_chat_name(&routing.external_chat_id),
-        resolve_notify_quote(adapter, kernel, session_id, routing),
+        resolve_notify_quote(adapter, obs, kernel, session_id, routing),
     );
     let mut dm_users: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut chat_targets: HashMap<String, Vec<String>> = HashMap::new();
@@ -707,20 +710,26 @@ async fn notify_run_subscribers(
 }
 
 /// Quote context for the notify card (design:
-/// run-subscription-notify-context): the thread's root/trigger message
-/// text, attributed when the author's name resolves (`fetch_user_name`
-/// needs contact permission); falls back to the session title. `None`
-/// keeps the card one-line.
+/// run-subscription-notify-context): the session's latest user message
+/// (the very message the settle ✅ lands on), attributed when the
+/// author's name resolves (`fetch_user_name` needs contact permission);
+/// falls back to the thread's root message, then the session title.
+/// `None` keeps the card one-line.
 async fn resolve_notify_quote(
     adapter: &Arc<dyn PlatformAdapter>,
+    obs: &ObsTracker,
     kernel: &std::sync::Weak<Kernel>,
     session_id: &SessionId,
     routing: &SessionRouting,
 ) -> Option<String> {
-    // Thread sessions key their mapping on the root message — a chat-level
-    // key (mapping == chat id) is not fetchable as a message.
-    if routing.mapping_key != routing.external_chat_id {
-        if let Ok(Some(msg)) = adapter.fetch_message(&routing.mapping_key).await {
+    // The reaction target first (sticky across runs; empty only after a
+    // hub restart), then the thread root for thread sessions — a
+    // chat-level key (mapping == chat id) is not fetchable as a message.
+    let message_id = obs.last_user_msg_id(session_id).or_else(|| {
+        (routing.mapping_key != routing.external_chat_id).then(|| routing.mapping_key.clone())
+    });
+    if let Some(message_id) = message_id {
+        if let Ok(Some(msg)) = adapter.fetch_message(&message_id).await {
             let snippet = notify_quote_snippet(&msg.text);
             if !snippet.is_empty() {
                 return Some(match adapter.fetch_user_name(&msg.sender_id).await {

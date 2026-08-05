@@ -391,6 +391,13 @@ impl ObsTracker {
         );
     }
 
+    /// The session's latest user message id — the settle reaction's
+    /// target; the subscription notify quotes the same message so the
+    /// card's context line and the ✅ always point at one message.
+    pub(crate) fn last_user_msg_id(&self, session_id: &SessionId) -> Option<String> {
+        self.last_user_msg.get(session_id).map(|t| t.msg_id.clone())
+    }
+
     /// Whether the user posted messages mid-run — receipts hold only
     /// messages recorded while the agent was running (run triggers are never
     /// recorded, and commands never record receipts), so any receipt means
