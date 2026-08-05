@@ -1466,9 +1466,11 @@ enum RootDelivery {
 /// Assemble recent-chat history since the last trigger as a
 /// `<recent_chat_history>` block plus images; best-effort. The cursor
 /// advances at fetch time, so a later send failure can leave a small
-/// gap (accepted). `root`: the thread root's delivery state — non-
-/// `Pending` dedups it; a `Pending` root missing from the page gets a
-/// direct-fetch backstop.
+/// gap (accepted). Channel commands in the page are dropped (control-
+/// plane — see [`is_command_text`]; the thread root is exempt).
+/// `root`: the thread root's delivery state — non-`Pending` dedups
+/// it; a `Pending` root missing from the page gets a direct-fetch
+/// backstop.
 async fn maybe_history_prefix(
     adapter: &Arc<dyn PlatformAdapter>,
     config: &ChannelConfig,
@@ -1525,7 +1527,13 @@ async fn maybe_history_prefix(
             messages
                 .iter()
                 .filter(|m| Some(m.message_id.as_str()) != trigger_id)
-                .filter(|m| !drop_root || msg.root_id.as_deref() != Some(m.message_id.as_str())),
+                .filter(|m| !drop_root || msg.root_id.as_deref() != Some(m.message_id.as_str()))
+                // Commands are control-plane: their replies bypass
+                // sessions, so a command line here would show an
+                // exchange the bot cannot see. The root is exempt: it
+                // has exactly-once delivery semantics, and history[0]
+                // must stay the root for the image ordering below.
+                .filter(|m| !is_command_text(&m.text)),
         )
         .collect();
     if history.is_empty() {
@@ -2422,6 +2430,22 @@ pub(super) fn has_channel_command_prefix(raw_text: &str) -> bool {
     CMD_PREFIXES
         .iter()
         .any(|prefix| cmd_matches(command, prefix))
+}
+
+/// Whether a fetched history message is a channel command (`/info`,
+/// `@bot /clear`). Commands are control-plane: they and their replies
+/// bypass sessions, so echoing them in chat history presents an exchange
+/// the bot cannot see. Leading `@mention` tokens are stripped for
+/// detection only (a group command fetches back as `@_user_1 /info`) —
+/// anything not command-shaped stays, rendered verbatim.
+fn is_command_text(text: &str) -> bool {
+    let mut rest = text.trim_start();
+    while let Some(t) = rest.strip_prefix('@') {
+        rest = t
+            .split_once(char::is_whitespace)
+            .map_or("", |(_, r)| r.trim_start());
+    }
+    has_channel_command_prefix(rest)
 }
 
 fn format_model_list(models: &[crate::kernel::ModelInfo], current: &str) -> String {

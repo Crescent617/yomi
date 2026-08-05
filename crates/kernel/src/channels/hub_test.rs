@@ -2161,6 +2161,8 @@ struct HistoryMockAdapter {
     empty: std::sync::atomic::AtomicBool,
     with_root: std::sync::atomic::AtomicBool,
     with_images: std::sync::atomic::AtomicBool,
+    /// When set, history includes command messages (control-plane noise).
+    with_commands: std::sync::atomic::AtomicBool,
     /// When set, history message m0 quote-replies the thread root.
     quote_m0: std::sync::atomic::AtomicBool,
     /// When set, `fetch_message` fails.
@@ -2256,15 +2258,38 @@ impl PlatformAdapter for HistoryMockAdapter {
                 },
                 parent_id: None,
             },
-            HistoryMessage {
-                message_id: "trigger".into(),
-                create_time: 300,
-                sender_id: "ou_b".into(),
-                text: "trigger msg".into(),
-                image_keys: vec![],
-                parent_id: None,
-            },
         ]);
+        if self
+            .with_commands
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            messages.extend([
+                HistoryMessage {
+                    message_id: "cmd1".into(),
+                    create_time: 250,
+                    sender_id: "ou_a".into(),
+                    text: "/info".into(),
+                    image_keys: vec![],
+                    parent_id: None,
+                },
+                HistoryMessage {
+                    message_id: "cmd2".into(),
+                    create_time: 260,
+                    sender_id: "ou_a".into(),
+                    text: "@_user_1 /clear@yomi_bot".into(),
+                    image_keys: vec![],
+                    parent_id: None,
+                },
+            ]);
+        }
+        messages.push(HistoryMessage {
+            message_id: "trigger".into(),
+            create_time: 300,
+            sender_id: "ou_b".into(),
+            text: "trigger msg".into(),
+            image_keys: vec![],
+            parent_id: None,
+        });
         Ok(messages)
     }
 
@@ -3141,6 +3166,109 @@ async fn history_prefix_assembles_drops_trigger_and_advances_cursor() {
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[0], (None, 20));
     assert_eq!(calls[1], (Some(300), 20));
+}
+
+#[test]
+fn test_is_command_text() {
+    // Bare commands, with @bot suffix, with leading mention(s), and
+    // arg-less command tokens are all control-plane.
+    assert!(is_command_text("/info"));
+    assert!(is_command_text("/clear@yomi_bot"));
+    assert!(is_command_text("@_user_1 /info"));
+    assert!(is_command_text("@_user_1 @_user_2 /clear"));
+    assert!(is_command_text("  /steer"));
+    // Longer words, mid-sentence commands, plain mentions, and empty /
+    // mention-only texts stay.
+    assert!(!is_command_text("/clearance 大甩卖"));
+    assert!(!is_command_text("记得跑一下 /info"));
+    assert!(!is_command_text("@alice 你好"));
+    assert!(!is_command_text(""));
+    assert!(!is_command_text("@"));
+}
+
+#[tokio::test]
+async fn history_prefix_drops_command_messages() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let mock = Arc::new(HistoryMockAdapter::default());
+    mock.with_commands
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig::default();
+    let msg = group_msg(None);
+
+    let blocks = maybe_history_prefix(
+        &adapter,
+        &config,
+        &store,
+        "feishu",
+        &msg,
+        RootDelivery::Pending,
+    )
+    .await
+    .expect("history prefix");
+    let prefix = blocks_text(&blocks);
+    assert!(prefix.contains("earlier"));
+    assert!(prefix.contains("latest"));
+    assert!(!prefix.contains("/info"), "bare command dropped: {prefix}");
+    assert!(
+        !prefix.contains("/clear@yomi_bot"),
+        "mentioned command dropped: {prefix}"
+    );
+
+    // Cursor still advances past the dropped commands — no refetch.
+    let cursor = store.get_history_cursor("feishu", "oc_1").await.unwrap();
+    assert_eq!(cursor, Some(300));
+}
+
+#[tokio::test]
+async fn history_prefix_keeps_command_shaped_root() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let mock = Arc::new(HistoryMockAdapter::default());
+    mock.with_images
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    // No with_root: the root comes from the backstop — with command-
+    // shaped text. It is EXEMPT from the command filter: history[0] must
+    // stay the root or the image priority slicing below misfires.
+    *mock.quoted.lock().await = Some(HistoryMessage {
+        message_id: "root-msg".into(),
+        create_time: 50,
+        sender_id: "ou_a".into(),
+        text: "/info".into(),
+        image_keys: vec!["img_root".into()],
+        parent_id: None,
+    });
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig::default();
+    let mut msg = group_msg(Some("omt_1".into()));
+    msg.root_id = Some("root-msg".into());
+    msg.parent_id = Some("m0".into());
+
+    let blocks = maybe_history_prefix(
+        &adapter,
+        &config,
+        &store,
+        "feishu",
+        &msg,
+        RootDelivery::Pending,
+    )
+    .await
+    .expect("history");
+    let text = blocks_text(&blocks);
+    assert!(text.contains("/info"), "command-shaped root kept: {text}");
+    // The root's image keeps its last-position (survive-the-cap)
+    // priority — proof the positional invariant held.
+    let images: Vec<&str> = blocks
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::ImageUrl { image_url } => Some(image_url.url.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(images.len(), 2, "{images:?}");
+    assert!(images[0].contains("mock-m1-img_x"), "{images:?}");
+    assert!(images[1].contains("mock-root-msg-img_root"), "{images:?}");
 }
 
 #[tokio::test]
