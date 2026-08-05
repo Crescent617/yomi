@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.54] - 2026-08-05
+
+### Changed
+- `/subscribe` 通知卡的引用行改为展示完成 ✅ 所标记的那条用户消息：手动话题中引用实际的触发消息（不再是话题根），运行中追问时引用追问那条。
+
 ## [0.7.53] - 2026-08-05
 
 ### Added
