@@ -154,13 +154,13 @@
 
 <div class="flex h-full min-w-0 flex-1 flex-col bg-background">
   <header
-    class="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3"
+    class="flex h-14 shrink-0 items-center gap-2 border-b border-border px-4 lg:px-6"
   >
     {#if onToggleLeftPanel}
       <SidebarToggle class="lg:hidden" onclick={onToggleLeftPanel} />
     {/if}
-    <Bug class="h-4 w-4 text-primary" />
-    <h1 class="text-sm font-medium">Debug</h1>
+    <Bug class="size-5 shrink-0 text-primary" />
+    <h1 class="truncate text-lg font-semibold">Debug</h1>
     <div class="ml-3 flex rounded-md bg-secondary/60 p-0.5">
       <button
         type="button"
