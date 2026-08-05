@@ -76,6 +76,17 @@ enum SessionsCommands {
         #[arg(short, long)]
         session: Option<String>,
     },
+    /// Send a message to a session (requires the daemon; queues if the agent is busy)
+    Send {
+        /// Message text (reads from stdin when omitted)
+        message: Vec<String>,
+        /// Session ID (defaults to current directory's last session)
+        #[arg(short, long)]
+        session: Option<String>,
+        /// Inject into the current run (takes effect between turns) instead of queueing
+        #[arg(long)]
+        steer: bool,
+    },
     /// Manage checkpoints for a session
     Checkpoint(SessionCheckpointArgs),
 }
@@ -338,6 +349,11 @@ async fn run_session(args: SessionArgs) -> Result<()> {
         SessionsCommands::Stop { session } => {
             commands::session::stop::run(&args.global, session).await
         }
+        SessionsCommands::Send {
+            message,
+            session,
+            steer,
+        } => commands::session::send::run(&args.global, message, session, steer).await,
         SessionsCommands::Checkpoint(cp_args) => run_session_checkpoint(cp_args).await,
     }
 }
