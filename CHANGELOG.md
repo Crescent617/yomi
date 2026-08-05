@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.48] - 2026-08-05
+
+### Fixed
+- 群聊注入的最近聊天记录不再包含命令消息（如 `/info`、`/clear`）：避免机器人看到命令却看不到对应回答而误解上下文。
+
 ## [0.7.47] - 2026-08-04
 
 ### Added
