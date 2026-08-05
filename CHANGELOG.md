@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.51] - 2026-08-05
+
+### Added
+- cron shell 命令以退出码 42 结束时，该任务标记为已完成（completed）并停止后续调度：轮询类任务可在目的达成后自我终止（`yomi cron create` / `update --command` 已注明该约定）；手动 `cron trigger` 只提示不生效。
+
+### Fixed
+- 修复周期性 cron 任务首次触发后不再执行的问题：任务跑完重新入队时调度循环不会被唤醒，导致任务停摆，直到任意任务增删改或重启 daemon 才恢复。
+
 ## [0.7.50] - 2026-08-05
 
 ### Added
