@@ -9,8 +9,9 @@
 //! settlement, every run is exactly one message (two when the user posted
 //! mid-run: the card freezes as a terminal receipt and the reply lands at
 //! the bottom).
-//! While running, the card body shows the stats line, the live run trace
-//! (most recent tool entries), and a tail of the assistant's current text
+//! While running, the card body shows the stats line, the current step
+//! (the latest trace entry; the full history lands on the settled card's
+//! collapsed trace panel), and a tail of the assistant's current text
 //! ("whisper"); a rotating placeholder fills the fresh card until the
 //! first tool or text arrives, and idle phase titles rotate for fun. The
 //! stats line shows real usage once reported (providers only emit it at
@@ -61,8 +62,6 @@ const WHISPER_BUFFER_CHARS: usize = 200;
 /// Max length (chars, ellipsis included) for dynamic text lines on the
 /// status card body (whisper).
 const STATUS_TEXT_MAX_CHARS: usize = 100;
-/// Trace entries shown live on the status card (most recent kept).
-const STATUS_TRACE_MAX_ENTRIES: usize = 10;
 /// Fresh-card placeholder lines (no tools or text yet): a random -ing
 /// verb, plain text (the title already carries the fun/emoji).
 const IDLE_PLACEHOLDERS: &[&str] = &[
@@ -132,8 +131,12 @@ struct ObsCardState {
     phase: Phase,
     /// Total tool executions (per-tool breakdown is not kept).
     tool_count: u32,
-    /// The full run trace shown live on the status card.
+    /// The run trace; the live card shows only its latest entry (the
+    /// settled card's collapsed panel carries it in full).
     trace: reply::RunReplyBuffer,
+    /// The session's model key, shown in the stats line; set by the hub
+    /// forwarder at the run's first `Running` (absent when unknown).
+    model: Option<String>,
     /// Live tail of the assistant's in-progress text output ("whisper") —
     /// the one piece of not-yet-finished content on the card. Completed
     /// texts move into `trace` as narrations at `ModelEvent::End`.
@@ -169,6 +172,7 @@ impl ObsCardState {
             phase: Phase::Thinking,
             tool_count: 0,
             trace: reply::RunReplyBuffer::new(),
+            model: None,
             whisper: String::new(),
             seen_text: false,
             out_text_bytes: 0,
@@ -311,6 +315,10 @@ struct ReactionTarget {
 /// Tracks per-session observability state and drives the platform adapter.
 pub(crate) struct ObsTracker {
     states: DashMap<SessionId, ObsCardState>,
+    /// Model names stashed before their run state exists (the forwarder
+    /// learns the model at the same `Running` that later materializes the
+    /// state); consumed at materialization.
+    pending_models: DashMap<SessionId, String>,
     /// IDs of user messages received during each run (drives the mid-run
     /// post detection); cleared at settlement.
     receipts: DashMap<SessionId, Vec<String>>,
@@ -326,6 +334,7 @@ impl ObsTracker {
     pub(crate) fn new() -> Self {
         Self {
             states: DashMap::new(),
+            pending_models: DashMap::new(),
             receipts: DashMap::new(),
             last_user_msg: DashMap::new(),
             patch_interval: PATCH_MIN_INTERVAL,
@@ -347,6 +356,25 @@ impl ObsTracker {
             .entry(session_id.clone())
             .or_default()
             .push(message_id);
+    }
+
+    /// Whether a live run state exists for the session — the forwarder
+    /// uses it to do one-shot setup (the model lookup) only at a run's
+    /// first `Running`.
+    pub(crate) fn has_state(&self, session_id: &SessionId) -> bool {
+        self.states.contains_key(session_id)
+    }
+
+    /// Set the model name shown in the status card's stats line. With a
+    /// live state the field updates in place (the next PATCH picks it
+    /// up); before materialization the name is stashed and consumed when
+    /// the first `Running` materializes the state.
+    pub(crate) fn set_model(&self, session_id: &SessionId, model: String) {
+        if let Some(mut entry) = self.states.get_mut(session_id) {
+            entry.value_mut().model = Some(model);
+        } else {
+            self.pending_models.insert(session_id.clone(), model);
+        }
     }
 
     /// Record the session's latest user message as the settle-reaction
@@ -401,10 +429,9 @@ impl ObsTracker {
                 if self.states.contains_key(session_id) {
                     return;
                 }
-                self.states.insert(
-                    session_id.clone(),
-                    ObsCardState::new(Arc::clone(adapter), chat_id, reply_msg_id),
-                );
+                let mut state = ObsCardState::new(Arc::clone(adapter), chat_id, reply_msg_id);
+                state.model = self.pending_models.remove(session_id).map(|(_, m)| m);
+                self.states.insert(session_id.clone(), state);
                 self.materialize_card(session_id).await;
             }
             Event::Agent(AgentEvent::Lifecycle {
@@ -861,8 +888,8 @@ async fn send_card_patch(adapter: &dyn PlatformAdapter, message_id: &str, card_j
 }
 
 fn render_running(s: &ObsCardState) -> String {
-    let trace = s.trace.trace_preview_lines(STATUS_TRACE_MAX_ENTRIES);
-    if trace.is_empty() && s.whisper.is_empty() && !s.seen_text {
+    let latest = s.trace.latest_entry_line();
+    if latest.is_none() && s.whisper.is_empty() && !s.seen_text {
         // Brand-new card: a light random placeholder. Bare while the
         // timer would be its only content; once any token data exists
         // (live estimate or real usage) the stats line rides along.
@@ -885,7 +912,7 @@ fn render_running(s: &ObsCardState) -> String {
             )
         })
     };
-    let elements = if trace.is_empty() {
+    let elements = if latest.is_none() {
         // No tools yet but text is flowing: stats + whisper in one block.
         let mut body = stats_line(s);
         if let Some(w) = whisper_line() {
@@ -894,8 +921,10 @@ fn render_running(s: &ObsCardState) -> String {
         }
         vec![json!({ "tag": "markdown", "text_size": "notation", "content": body })]
     } else {
-        // Stats line, a divider, then the live trace (+ whisper tail).
-        let mut body = trace.join("\n");
+        // Stats line, a divider, then the current step only (+ whisper
+        // tail) — the run's history stays out of the live card; the
+        // settled card's collapsed trace panel carries it in full.
+        let mut body = latest.unwrap_or_default();
         if let Some(w) = whisper_line() {
             body.push('\n');
             body.push_str(&w);
@@ -974,8 +1003,9 @@ fn card_json_elements(template: &str, title: &str, elements: &[serde_json::Value
     .to_string()
 }
 
-/// One-line run stats: elapsed · steps · tool total · tokens (greyed).
-/// Real usage (`ctx: x / y`) only lands at response end; `out ~z` is the
+/// One-line run stats: elapsed · steps · tool total, then a greyed
+/// technical tail (model · ctx · live out estimate). Real usage
+/// (`ctx: x / y`) only lands at response end; `out ~z` is the
 /// run-cumulative output estimate.
 fn stats_line(s: &ObsCardState) -> String {
     use std::fmt::Write as _;
@@ -987,22 +1017,19 @@ fn stats_line(s: &ObsCardState) -> String {
     if s.tool_count > 0 {
         let _ = write!(line, " · {} tools", s.tool_count);
     }
+    let mut grey: Vec<String> = Vec::new();
+    if let Some(model) = &s.model {
+        grey.push(model.clone());
+    }
+    if let Some(footer) = &s.token_footer {
+        grey.push(footer.clone());
+    }
     let out_est = s.out_estimate();
-    match (&s.token_footer, out_est) {
-        (Some(footer), 0) => {
-            let _ = write!(line, " · <font color='grey'>{footer}</font>");
-        }
-        (Some(footer), est) => {
-            let _ = write!(
-                line,
-                " · <font color='grey'>{footer} · out ~{}</font>",
-                fmt_k(est)
-            );
-        }
-        (None, 0) => {}
-        (None, est) => {
-            let _ = write!(line, " · <font color='grey'>out ~{}</font>", fmt_k(est));
-        }
+    if out_est > 0 {
+        grey.push(format!("out ~{}", fmt_k(out_est)));
+    }
+    if !grey.is_empty() {
+        let _ = write!(line, " · <font color='grey'>{}</font>", grey.join(" · "));
     }
     line
 }

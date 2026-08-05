@@ -193,16 +193,15 @@ impl RunReplyBuffer {
         }
     }
 
-    /// Render the most recent `max` trace entries as markdown lines — the
-    /// live status-card preview of the run trace.
-    pub(crate) fn trace_preview_lines(&self, max: usize) -> Vec<String> {
-        let capped = self.entries.len().saturating_sub(max);
-        let mut lines = trace_lines(&self.entries[capped..], true);
-        let dropped = self.dropped + capped;
-        if dropped > 0 {
-            lines.insert(0, dropped_marker(dropped));
+    /// Render the most recent trace entry as a single markdown line — the
+    /// live status-card's "current step" (a running tool shows ⏳).
+    pub(crate) fn latest_entry_line(&self) -> Option<String> {
+        if self.entries.is_empty() {
+            return None;
         }
-        lines
+        trace_lines(&self.entries[self.entries.len() - 1..], true)
+            .into_iter()
+            .next()
     }
 
     /// The full trace (title + all entry lines) as rendered on the reply

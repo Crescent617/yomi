@@ -425,6 +425,17 @@ impl ChannelHub {
                                 // may blend the old run's trace in;
                                 // cosmetic, self-heals on the next run.)
                                 reply_buffers.entry(session_id.clone()).or_default();
+                                // First Running of the run: put the session's
+                                // model on the status card (one store read
+                                // per run; a gone kernel just skips it).
+                                if observability && !obs.has_state(&session_id) {
+                                    if let Some(k) = kernel.upgrade() {
+                                        obs.set_model(
+                                            &session_id,
+                                            k.get_session_model(&session_id).await,
+                                        );
+                                    }
+                                }
                             }
                             Event::Model(ModelEvent::End { content, .. }) => {
                                 // One step per completed model response —
