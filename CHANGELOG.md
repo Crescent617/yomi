@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.53] - 2026-08-05
+
+### Added
+- `/subscribe` 的完成通知卡新增一行引用，展示触发该任务的消息摘要及其发送者名字，多个订阅或同一话题多次运行的通知不再混淆；发送者名字需应用具备 `contact:user.base:readonly` 权限，无权限时仅显示摘要。
+
 ## [0.7.52] - 2026-08-05
 
 ### Added
