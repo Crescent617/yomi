@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.50] - 2026-08-05
+
+### Added
+- shell 工具执行的命令环境新增 `YOMI_SESSION_ID` 环境变量（当前会话 ID，同步与后台命令都注入）：脚本可直接用它配合 `yomi session send --steer -s "$YOMI_SESSION_ID"` 向本会话回发消息。
+
 ## [0.7.49] - 2026-08-05
 
 ### Added
