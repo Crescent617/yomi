@@ -170,6 +170,67 @@ async fn test_history_cursor_round_trip() {
     );
 }
 
+#[tokio::test]
+async fn test_mention_override_round_trip() {
+    let pool = create_test_pool().await;
+    let store = SqliteChannelStore::new(pool);
+
+    assert_eq!(
+        store.get_mention_override("feishu", "oc_1").await.unwrap(),
+        None
+    );
+
+    store
+        .set_mention_override("feishu", "oc_1", false)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_mention_override("feishu", "oc_1").await.unwrap(),
+        Some(false)
+    );
+
+    // Upsert replaces; containers and channels are independent keys.
+    store
+        .set_mention_override("feishu", "oc_1", true)
+        .await
+        .unwrap();
+    store
+        .set_mention_override("feishu", "omt_1", false)
+        .await
+        .unwrap();
+    store
+        .set_mention_override("telegram", "oc_1", false)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_mention_override("feishu", "oc_1").await.unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        store.get_mention_override("feishu", "omt_1").await.unwrap(),
+        Some(false)
+    );
+
+    // Clear removes the row; other keys are untouched.
+    store
+        .clear_mention_override("feishu", "oc_1")
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_mention_override("feishu", "oc_1").await.unwrap(),
+        None
+    );
+    assert_eq!(
+        store.get_mention_override("feishu", "omt_1").await.unwrap(),
+        Some(false)
+    );
+    // Clearing a missing key is a no-op.
+    store
+        .clear_mention_override("feishu", "oc_1")
+        .await
+        .unwrap();
+}
+
 // ── Doc permission requests ────────────────────────────────────────
 
 fn perm_req() -> DocPermissionRequest {

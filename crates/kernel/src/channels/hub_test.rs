@@ -3676,6 +3676,12 @@ fn feishu_gate_config() -> ChannelConfig {
     })
 }
 
+/// A throwaway store for gate tests (mention overrides default to none).
+async fn gate_store() -> Arc<dyn ChannelStore> {
+    let (_pool, store) = create_test_pool().await;
+    store
+}
+
 #[tokio::test]
 async fn gate_accepts_allowed_mention_with_ack_reaction() {
     let mock = Arc::new(MockAdapter::new("fs"));
@@ -3683,7 +3689,7 @@ async fn gate_accepts_allowed_mention_with_ack_reaction() {
     let msg = channel_message(None, true, true);
 
     assert_eq!(
-        gate_message(&adapter, &feishu_gate_config(), &msg).await,
+        gate_message(&adapter, &feishu_gate_config(), &gate_store().await, &msg).await,
         Gate::Allow
     );
     let reactions = mock.reactions.lock().await.clone();
@@ -3698,7 +3704,7 @@ async fn gate_denies_unlisted_user_with_denied_reaction() {
     msg.external_user_id = "stranger".to_string();
 
     assert_eq!(
-        gate_message(&adapter, &feishu_gate_config(), &msg).await,
+        gate_message(&adapter, &feishu_gate_config(), &gate_store().await, &msg).await,
         Gate::Denied
     );
     let reactions = mock.reactions.lock().await.clone();
@@ -3714,7 +3720,7 @@ async fn gate_stays_silent_for_unlisted_user_without_mention() {
     msg.is_mention = false;
 
     assert_eq!(
-        gate_message(&adapter, &feishu_gate_config(), &msg).await,
+        gate_message(&adapter, &feishu_gate_config(), &gate_store().await, &msg).await,
         Gate::Denied
     );
     assert!(mock.reactions.lock().await.is_empty());
@@ -3728,7 +3734,7 @@ async fn gate_marks_allowed_mention_miss_not_addressed() {
     msg.is_mention = false;
 
     assert_eq!(
-        gate_message(&adapter, &feishu_gate_config(), &msg).await,
+        gate_message(&adapter, &feishu_gate_config(), &gate_store().await, &msg).await,
         Gate::NotAddressed
     );
     assert!(mock.reactions.lock().await.is_empty());
@@ -3746,7 +3752,10 @@ async fn gate_reacts_to_unlisted_user_when_mentions_not_required() {
     msg.external_user_id = "stranger".to_string();
     msg.is_mention = false;
 
-    assert_eq!(gate_message(&adapter, &config, &msg).await, Gate::Denied);
+    assert_eq!(
+        gate_message(&adapter, &config, &gate_store().await, &msg).await,
+        Gate::Denied
+    );
     let reactions = mock.reactions.lock().await.clone();
     assert_eq!(reactions, [("msg-1".to_string(), "THANKS".to_string())]);
 }
@@ -3761,7 +3770,10 @@ async fn gate_stays_silent_for_blocked_user() {
     };
     let msg = channel_message(None, true, true);
 
-    assert_eq!(gate_message(&adapter, &config, &msg).await, Gate::Denied);
+    assert_eq!(
+        gate_message(&adapter, &config, &gate_store().await, &msg).await,
+        Gate::Denied
+    );
     assert!(mock.reactions.lock().await.is_empty());
 }
 
@@ -3774,11 +3786,17 @@ async fn gate_telegram_acks_with_eyes_and_denies_with_folded_hands() {
     });
 
     let msg = channel_message(None, true, true);
-    assert_eq!(gate_message(&adapter, &config, &msg).await, Gate::Allow);
+    assert_eq!(
+        gate_message(&adapter, &config, &gate_store().await, &msg).await,
+        Gate::Allow
+    );
 
     let mut denied = channel_message(None, true, true);
     denied.external_user_id = "stranger".to_string();
-    assert_eq!(gate_message(&adapter, &config, &denied).await, Gate::Denied);
+    assert_eq!(
+        gate_message(&adapter, &config, &gate_store().await, &denied).await,
+        Gate::Denied
+    );
 
     let reactions = mock.reactions.lock().await.clone();
     assert_eq!(
@@ -3801,7 +3819,10 @@ async fn gate_acks_every_allowed_message_when_mentions_not_required() {
     let mut msg = channel_message(None, true, true);
     msg.is_mention = false;
 
-    assert_eq!(gate_message(&adapter, &config, &msg).await, Gate::Allow);
+    assert_eq!(
+        gate_message(&adapter, &config, &gate_store().await, &msg).await,
+        Gate::Allow
+    );
     let reactions = mock.reactions.lock().await.clone();
     assert_eq!(reactions, [("msg-1".to_string(), "OneSecond".to_string())]);
 }
@@ -3814,10 +3835,262 @@ async fn gate_skips_reaction_without_message_id() {
     msg.external_user_id = "stranger".to_string();
 
     assert_eq!(
-        gate_message(&adapter, &feishu_gate_config(), &msg).await,
+        gate_message(&adapter, &feishu_gate_config(), &gate_store().await, &msg).await,
         Gate::Denied
     );
     assert!(mock.reactions.lock().await.is_empty());
+}
+
+// ── Mention overrides (/mention) ────────────────────────────────────
+
+#[tokio::test]
+async fn gate_chat_override_off_allows_non_mention() {
+    let mock = Arc::new(MockAdapter::new("fs"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let store = gate_store().await;
+    // Config requires mentions; the chat override turns it off.
+    store
+        .set_mention_override("gate", "chat-1", false)
+        .await
+        .unwrap();
+    let mut msg = channel_message(None, true, true);
+    msg.is_mention = false;
+
+    assert_eq!(
+        gate_message(&adapter, &feishu_gate_config(), &store, &msg).await,
+        Gate::Allow
+    );
+}
+
+#[tokio::test]
+async fn gate_chat_override_on_tightens_permissive_config() {
+    let mock = Arc::new(MockAdapter::new("fs"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let store = gate_store().await;
+    store
+        .set_mention_override("gate", "chat-1", true)
+        .await
+        .unwrap();
+    let config = ChannelConfig {
+        require_mention: false,
+        ..feishu_gate_config()
+    };
+    let mut msg = channel_message(None, true, true);
+    msg.is_mention = false;
+
+    assert_eq!(
+        gate_message(&adapter, &config, &store, &msg).await,
+        Gate::NotAddressed
+    );
+    // …while a mention still passes.
+    let mention = channel_message(None, true, true);
+    assert_eq!(
+        gate_message(&adapter, &config, &store, &mention).await,
+        Gate::Allow
+    );
+}
+
+#[tokio::test]
+async fn gate_thread_override_wins_then_falls_back_to_chat() {
+    let mock = Arc::new(MockAdapter::new("fs"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let store = gate_store().await;
+    // Chat requires mentions (override); the thread opts out.
+    store
+        .set_mention_override("gate", "chat-1", true)
+        .await
+        .unwrap();
+    store
+        .set_mention_override("gate", "thread-1", false)
+        .await
+        .unwrap();
+    let mut msg = channel_message(Some("thread-1"), true, true);
+    msg.is_mention = false;
+
+    assert_eq!(
+        gate_message(&adapter, &feishu_gate_config(), &store, &msg).await,
+        Gate::Allow
+    );
+
+    // Thread override cleared: the chat override applies.
+    store
+        .clear_mention_override("gate", "thread-1")
+        .await
+        .unwrap();
+    assert_eq!(
+        gate_message(&adapter, &feishu_gate_config(), &store, &msg).await,
+        Gate::NotAddressed
+    );
+}
+
+#[test]
+fn mention_command_parse() {
+    assert!(matches!(
+        parse_channel_command(Some("/mention")),
+        ChannelCommand::Mention(None)
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/mention on")),
+        ChannelCommand::Mention(Some(MentionMode::On))
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/mention off")),
+        ChannelCommand::Mention(Some(MentionMode::Off))
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/mention reset")),
+        ChannelCommand::Mention(Some(MentionMode::Reset))
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/mention loudly")),
+        ChannelCommand::InvalidMentionCommand
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/mention off now")),
+        ChannelCommand::InvalidMentionCommand
+    ));
+    // `/mentions` is not a command.
+    assert!(matches!(
+        parse_channel_command(Some("/mentions")),
+        ChannelCommand::None
+    ));
+    assert!(HELP_TEXT.contains("/mention"));
+}
+
+/// `/mention` end to end: admin gate, container scoping, query/reset
+/// texts, DM no-op — and the command never advances the history cursor.
+#[tokio::test]
+async fn mention_command_query_set_reset() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "app".to_string(),
+            app_secret: "secret".to_string(),
+        },
+        require_mention: true,
+        admin_users: vec!["ou_admin".to_string()],
+        ..Default::default()
+    };
+    let msg = |user: &str, text: &str, thread: Option<&str>, group: bool| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: user.to_string(),
+        external_message_id: Some("m1".to_string()),
+        is_mention: true,
+        raw_text: Some(text.to_string()),
+        content: vec![ContentBlock::Text {
+            text: text.to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: thread.map(str::to_string),
+        root_id: None,
+        parent_id: None,
+        is_group: group,
+        create_time: Some(1000),
+    };
+    let handle = |m: ChannelMessage| {
+        handle_incoming_message(
+            "mock",
+            &config,
+            &store,
+            Arc::clone(&kernel),
+            m,
+            &obs,
+            &adapter,
+        )
+    };
+
+    // Non-admin mutation: denied, nothing persisted.
+    let reply = handle(msg("ou_random", "/mention off", None, true))
+        .await
+        .unwrap();
+    assert_eq!(
+        reply.as_deref(),
+        Some("permission denied：你不在 admin_users 中。")
+    );
+    assert_eq!(
+        store.get_mention_override("mock", "oc_1").await.unwrap(),
+        None
+    );
+
+    // Admin sets the chat override off.
+    let reply = handle(msg("ou_admin", "/mention off", None, true))
+        .await
+        .unwrap();
+    let text = reply.unwrap();
+    assert!(text.contains("`off`"), "ack: {text}");
+    assert!(text.contains("chat"), "scope: {text}");
+    assert_eq!(
+        store.get_mention_override("mock", "oc_1").await.unwrap(),
+        Some(false)
+    );
+
+    // Query reports the override and its source.
+    let reply = handle(msg("ou_random", "/mention", None, true))
+        .await
+        .unwrap();
+    let text = reply.unwrap();
+    assert!(text.contains("`off`"), "query: {text}");
+    assert!(text.contains("chat override"), "source: {text}");
+
+    // A thread message falls back to the chat override in the query…
+    let reply = handle(msg("ou_random", "/mention", Some("omt_1"), true))
+        .await
+        .unwrap();
+    let text = reply.unwrap();
+    assert!(text.contains("chat override"), "thread fallback: {text}");
+
+    // …but mutates its own thread container.
+    let reply = handle(msg("ou_admin", "/mention on", Some("omt_1"), true))
+        .await
+        .unwrap();
+    assert!(reply.unwrap().contains("thread"));
+    assert_eq!(
+        store.get_mention_override("mock", "omt_1").await.unwrap(),
+        Some(true)
+    );
+
+    // Reset the thread override: back to the chat override.
+    let reply = handle(msg("ou_admin", "/mention reset", Some("omt_1"), true))
+        .await
+        .unwrap();
+    let text = reply.unwrap();
+    assert!(text.contains("chat override"), "reset ack: {text}");
+    assert_eq!(
+        store.get_mention_override("mock", "omt_1").await.unwrap(),
+        None
+    );
+
+    // DMs need no override and persist nothing.
+    let reply = handle(msg("ou_admin", "/mention off", None, false))
+        .await
+        .unwrap();
+    assert!(reply.unwrap().contains("DM"));
+
+    // The command is control-plane: no history-cursor advance.
+    let (_pool2, store2) = create_test_pool().await;
+    let store2: Arc<dyn ChannelStore> = store2;
+    let mut cursor_msg = channel_message(None, true, true);
+    cursor_msg.raw_text = Some("/mention off".to_string());
+    cursor_msg.create_time = Some(1000);
+    advance_history_cursor(&config, &store2, "mock", &cursor_msg).await;
+    assert_eq!(
+        store2.get_history_cursor("mock", "chat-1").await.unwrap(),
+        None
+    );
 }
 
 // ── Passive mid-run receipts (non-addressed messages) ───────────────
@@ -4538,13 +4811,25 @@ async fn test_notify_run_subscribers() {
     assert!(mock.cards.lock().await.is_empty());
 
     // Cancelled runs are never notified (the initiator stopped it).
-    notify_run_subscribers(&store, &adapter, &routing, Some("om_reply"), RunEndStatus::Cancelled)
-        .await;
+    notify_run_subscribers(
+        &store,
+        &adapter,
+        &routing,
+        Some("om_reply"),
+        RunEndStatus::Cancelled,
+    )
+    .await;
     assert!(mock.dms.lock().await.is_empty());
     assert!(mock.cards.lock().await.is_empty());
 
-    notify_run_subscribers(&store, &adapter, &routing, Some("om_reply"), RunEndStatus::Completed)
-        .await;
+    notify_run_subscribers(
+        &store,
+        &adapter,
+        &routing,
+        Some("om_reply"),
+        RunEndStatus::Completed,
+    )
+    .await;
     let dms = mock.dms.lock().await;
     let mut dm_users: Vec<_> = dms.iter().map(|(u, _)| u.as_str()).collect();
     dm_users.sort_unstable();
@@ -4562,7 +4847,14 @@ async fn test_notify_run_subscribers() {
     drop(cards);
 
     // Failed runs say so.
-    notify_run_subscribers(&store, &adapter, &routing, Some("om_x"), RunEndStatus::Failed).await;
+    notify_run_subscribers(
+        &store,
+        &adapter,
+        &routing,
+        Some("om_x"),
+        RunEndStatus::Failed,
+    )
+    .await;
     let dms = mock.dms.lock().await;
     let failed_card = &dms.last().unwrap().1;
     assert!(failed_card.contains("任务异常结束"), "{failed_card}");

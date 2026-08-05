@@ -193,7 +193,7 @@ impl ChannelHub {
                             warn!("kernel gone, stopping processing loop");
                             break;
                         };
-                        match gate_message(&adapter_proc, &config_proc, &msg).await {
+                        match gate_message(&adapter_proc, &config_proc, &store, &msg).await {
                             Gate::Allow => {}
                             Gate::Denied => continue,
                             // Non-addressed chatter still counts as a
@@ -973,22 +973,31 @@ enum Gate {
 async fn gate_message(
     adapter: &Arc<dyn PlatformAdapter>,
     config: &ChannelConfig,
+    store: &Arc<dyn ChannelStore>,
     msg: &ChannelMessage,
 ) -> Gate {
-    let addressed = !config.require_mention || msg.is_mention;
+    // Access control first: denied messages (blocked users, disabled
+    // channels) never cost a store read. The mention requirement only
+    // decides the denied reaction for an allowlist miss — resolved
+    // lazily on that rare path.
     if let Err(e) = config.check_access(&msg.external_chat_id, &msg.external_user_id) {
         info!(channel = %config.name, error = %e, "access denied");
-        if addressed && e.is_allowlist_miss() {
-            send_gate_reaction(
-                adapter,
-                config,
-                msg,
-                config.platform.access_denied_reaction(),
-            )
-            .await;
+        if e.is_allowlist_miss() {
+            let (require_mention, _) = resolve_require_mention(store, config, msg).await;
+            if !require_mention || msg.is_mention {
+                send_gate_reaction(
+                    adapter,
+                    config,
+                    msg,
+                    config.platform.access_denied_reaction(),
+                )
+                .await;
+            }
         }
         return Gate::Denied;
     }
+    let (require_mention, _) = resolve_require_mention(store, config, msg).await;
+    let addressed = !require_mention || msg.is_mention;
     if !addressed {
         info!(channel = %config.name, chat_id = %msg.external_chat_id, "ignoring non-mention message");
         return Gate::NotAddressed;
@@ -1256,6 +1265,13 @@ async fn handle_incoming_message(
         ChannelCommand::InvalidModelCommand => Ok(Some(
             "Usage: `/model` or `/model <model_key>`. Use `/models` to list models.".to_string(),
         )),
+        ChannelCommand::Mention(mode) => {
+            handle_mention_command(config, store, &msg, mode).await.map(Some)
+        }
+        ChannelCommand::InvalidMentionCommand => Ok(Some(
+            "Usage: `/mention` to show the current setting; `/mention on|off|reset` to change it (admin)."
+                .to_string(),
+        )),
         ChannelCommand::Info => {
             // Chat-level messages show the chat session, in-thread ones
             // the thread's. Read-only: never creates a session or mapping.
@@ -1422,6 +1438,124 @@ fn history_container(msg: &ChannelMessage) -> HistoryContainer {
     match &msg.thread_id {
         Some(tid) => HistoryContainer::Thread(tid.clone()),
         None => HistoryContainer::Chat(msg.external_chat_id.clone()),
+    }
+}
+
+/// Where a message's effective mention requirement comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MentionSource {
+    ThreadOverride,
+    ChatOverride,
+    Default,
+}
+
+impl std::fmt::Display for MentionSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            Self::ThreadOverride => "thread override",
+            Self::ChatOverride => "chat override",
+            Self::Default => "channel default",
+        };
+        f.write_str(label)
+    }
+}
+
+/// Read one container's mention override; a store error falls back to
+/// no override (i.e. the configured behavior) with a warning rather than
+/// silently flipping the gate.
+async fn read_mention_override(
+    store: &Arc<dyn ChannelStore>,
+    channel_name: &str,
+    container_id: &str,
+) -> Option<bool> {
+    match store.get_mention_override(channel_name, container_id).await {
+        Ok(value) => value,
+        Err(e) => {
+            warn!(error = %e, "mention override read failed, falling back to default");
+            None
+        }
+    }
+}
+
+/// The mention requirement applying to a message: the container's own
+/// override (thread when inside one, else the chat), then — for threads —
+/// the chat's override, then the channel config. DMs never consult the
+/// store (the adapter marks them all as mentions anyway).
+async fn resolve_require_mention(
+    store: &Arc<dyn ChannelStore>,
+    config: &ChannelConfig,
+    msg: &ChannelMessage,
+) -> (bool, MentionSource) {
+    if !msg.is_group {
+        return (config.require_mention, MentionSource::Default);
+    }
+    let container = history_container(msg);
+    let own = read_mention_override(store, &config.name, container.id()).await;
+    if let Some(value) = own {
+        let source = if matches!(container, HistoryContainer::Thread(_)) {
+            MentionSource::ThreadOverride
+        } else {
+            MentionSource::ChatOverride
+        };
+        return (value, source);
+    }
+    if matches!(container, HistoryContainer::Thread(_)) {
+        let chat = read_mention_override(store, &config.name, &msg.external_chat_id).await;
+        if let Some(value) = chat {
+            return (value, MentionSource::ChatOverride);
+        }
+    }
+    (config.require_mention, MentionSource::Default)
+}
+
+/// `/mention` query or mutation. The override lives on the message's
+/// container; mutations are admin-only — turning the requirement off
+/// makes the bot answer every group message, a cost amplifier.
+async fn handle_mention_command(
+    config: &ChannelConfig,
+    store: &Arc<dyn ChannelStore>,
+    msg: &ChannelMessage,
+    mode: Option<MentionMode>,
+) -> Result<String> {
+    if !msg.is_group {
+        return Ok("No need for this in DMs — every message is answered.".to_string());
+    }
+    let on_off = |v: bool| if v { "on" } else { "off" };
+    let container = history_container(msg);
+    let scope = container.label();
+    let Some(mode) = mode else {
+        let (effective, source) = resolve_require_mention(store, config, msg).await;
+        return Ok(format!(
+            "Mention requirement in this {scope}: `{}` ({source}); channel default: `{}`.",
+            on_off(effective),
+            on_off(config.require_mention),
+        ));
+    };
+    if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
+        return Ok(deny);
+    }
+    match mode {
+        MentionMode::On | MentionMode::Off => {
+            let value = matches!(mode, MentionMode::On);
+            store
+                .set_mention_override(&config.name, container.id(), value)
+                .await?;
+            Ok(format!(
+                "Mention requirement set to `{}` for this {scope} (channel default: `{}`).",
+                on_off(value),
+                on_off(config.require_mention),
+            ))
+        }
+        MentionMode::Reset => {
+            store
+                .clear_mention_override(&config.name, container.id())
+                .await?;
+            let (effective, source) = resolve_require_mention(store, config, msg).await;
+            Ok(format!(
+                "Override cleared for this {scope}; now following {source}: `{}`.",
+                on_off(effective),
+            ))
+        }
     }
 }
 
@@ -2212,6 +2346,7 @@ const CMD_RESTART: &str = "/restart";
 const CMD_THREAD: &str = "/thread";
 const CMD_SUBSCRIBE: &str = "/subscribe";
 const CMD_UNSUBSCRIBE: &str = "/unsubscribe";
+const CMD_MENTION: &str = "/mention";
 
 /// All channel command prefixes, longest-first so `/models` is matched
 /// before `/model` (the latter is a prefix of the former).
@@ -2234,6 +2369,7 @@ const CMD_PREFIXES: &[&str] = &[
     // the other) but keeps the list alphabetical-ish.
     CMD_UNSUBSCRIBE,
     CMD_SUBSCRIBE,
+    CMD_MENTION,
 ];
 
 /// `/help` response: the channel command list.
@@ -2251,6 +2387,7 @@ const HELP_TEXT: &str = "\
 `/thread <text>` — ask in a new thread opened off this message (Feishu)
 `/subscribe [chat_id] [-r]` — DM you when runs here complete; `-r` covers this chat's threads (Feishu)
 `/unsubscribe` — cancel the subscription here
+`/mention` — show the @-requirement here; `/mention on|off|reset` to override it (admin)
 `/permits` — list pending doc-permission requests (admin)
 `/approve <id> [perm]` — approve a doc-permission request (admin)
 `/deny <id>` — deny a doc-permission request (admin)
@@ -2309,8 +2446,22 @@ enum ChannelCommand {
     Unsubscribe,
     /// A malformed `/subscribe` or `/unsubscribe` command.
     InvalidSubscribeCommand,
+    /// Query (`None`) or mutate this conversation's require-mention
+    /// override (admin only for mutations).
+    Mention(Option<MentionMode>),
+    /// A malformed `/mention` command.
+    InvalidMentionCommand,
     /// Not a command.
     None,
+}
+
+/// A `/mention` mutation: set the container's override, or clear it to
+/// fall back to the parent scope (thread → chat → channel config).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MentionMode {
+    On,
+    Off,
+    Reset,
 }
 
 /// Whether a command settles everything before it — run triggers by
@@ -2422,6 +2573,13 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
                 ChannelCommand::InvalidSubscribeCommand
             }
         }
+        CMD_MENTION => match (parts.next(), parts.next()) {
+            (None, None) => ChannelCommand::Mention(None),
+            (Some("on"), None) => ChannelCommand::Mention(Some(MentionMode::On)),
+            (Some("off"), None) => ChannelCommand::Mention(Some(MentionMode::Off)),
+            (Some("reset"), None) => ChannelCommand::Mention(Some(MentionMode::Reset)),
+            _ => ChannelCommand::InvalidMentionCommand,
+        },
         _ => ChannelCommand::None,
     }
 }

@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 17;
+pub const CURRENT_SCHEMA_VERSION: i64 = 18;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -241,6 +241,17 @@ const MIGRATIONS: &[Migration] = &[
             r"CREATE INDEX idx_channel_run_subs_match
                ON channel_run_subscriptions(channel_name, chat_id);",
         ],
+    },
+    Migration {
+        version: 18,
+        name: "add_channel_mention_overrides",
+        sqls: &[r"CREATE TABLE channel_mention_overrides (
+                channel_name TEXT NOT NULL,
+                container_id TEXT NOT NULL,
+                require_mention INTEGER NOT NULL,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (channel_name, container_id)
+            );"],
     },
 ];
 

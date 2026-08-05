@@ -382,6 +382,40 @@ pub trait ChannelStore: Send + Sync {
         Ok(())
     }
 
+    /// The conversation-level `require_mention` override for a container
+    /// (thread or chat), set at runtime via `/mention on|off`. `None` =
+    /// no override (the parent scope or channel config applies).
+    async fn get_mention_override(
+        &self,
+        channel_name: &str,
+        container_id: &str,
+    ) -> KernelResult<Option<bool>> {
+        let _ = (channel_name, container_id);
+        Ok(None)
+    }
+
+    /// Set or replace the container's `require_mention` override.
+    async fn set_mention_override(
+        &self,
+        channel_name: &str,
+        container_id: &str,
+        require_mention: bool,
+    ) -> KernelResult<()> {
+        let _ = (channel_name, container_id, require_mention);
+        Ok(())
+    }
+
+    /// Remove the container's override, falling back to the parent scope
+    /// (thread → chat → channel config).
+    async fn clear_mention_override(
+        &self,
+        channel_name: &str,
+        container_id: &str,
+    ) -> KernelResult<()> {
+        let _ = (channel_name, container_id);
+        Ok(())
+    }
+
     /// Persist a doc-permission application as a pending approval row.
     /// Deduplicates on (channel, file, permission, applicant sets) while a
     /// pending row exists — ws redelivery carries no unique event id, so
@@ -702,6 +736,14 @@ impl HistoryContainer {
     pub fn id(&self) -> &str {
         match self {
             Self::Chat(id) | Self::Thread(id) => id,
+        }
+    }
+
+    /// Human-readable scope label for command replies.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Chat(_) => "chat",
+            Self::Thread(_) => "thread",
         }
     }
 }

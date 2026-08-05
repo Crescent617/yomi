@@ -255,6 +255,61 @@ impl ChannelStore for SqliteChannelStore {
         Ok(())
     }
 
+    async fn get_mention_override(
+        &self,
+        channel_name: &str,
+        container_id: &str,
+    ) -> Result<Option<bool>> {
+        let row: Option<(bool,)> = sqlx::query_as(
+            "SELECT require_mention FROM channel_mention_overrides
+             WHERE channel_name = ? AND container_id = ?",
+        )
+        .bind(channel_name)
+        .bind(container_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("Failed to get mention override: {e}")))?;
+
+        Ok(row.map(|r| r.0))
+    }
+
+    async fn set_mention_override(
+        &self,
+        channel_name: &str,
+        container_id: &str,
+        require_mention: bool,
+    ) -> Result<()> {
+        sqlx::query(
+            r"INSERT INTO channel_mention_overrides (channel_name, container_id, require_mention, updated_at)
+               VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(channel_name, container_id) DO UPDATE SET
+               require_mention = excluded.require_mention,
+               updated_at = CURRENT_TIMESTAMP",
+        )
+        .bind(channel_name)
+        .bind(container_id)
+        .bind(require_mention)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("Failed to set mention override: {e}")))?;
+
+        Ok(())
+    }
+
+    async fn clear_mention_override(&self, channel_name: &str, container_id: &str) -> Result<()> {
+        sqlx::query(
+            "DELETE FROM channel_mention_overrides
+             WHERE channel_name = ? AND container_id = ?",
+        )
+        .bind(channel_name)
+        .bind(container_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("Failed to clear mention override: {e}")))?;
+
+        Ok(())
+    }
+
     async fn save_perm_request(
         &self,
         channel_name: &str,
