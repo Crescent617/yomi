@@ -4710,6 +4710,11 @@ async fn test_subscribe_ack_warns_in_rit_groups() {
 struct NotifyMockAdapter {
     dms: tokio::sync::Mutex<Vec<(String, String)>>,
     cards: tokio::sync::Mutex<Vec<(String, String)>>,
+    /// Returned by `fetch_message` (the thread root / trigger message).
+    message: tokio::sync::Mutex<Option<HistoryMessage>>,
+    fetch_fail: std::sync::atomic::AtomicBool,
+    /// Returned by `fetch_user_name` (None = no contact permission).
+    user_name: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -4764,6 +4769,22 @@ impl PlatformAdapter for NotifyMockAdapter {
     async fn fetch_chat_name(&self, _chat_id: &str) -> Option<String> {
         Some("测试群".to_string())
     }
+
+    async fn fetch_message(
+        &self,
+        _message_id: &str,
+    ) -> std::result::Result<Option<HistoryMessage>, crate::channels::ChannelError> {
+        if self.fetch_fail.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(crate::channels::ChannelError::Platform(
+                "mock fetch failure".into(),
+            ));
+        }
+        Ok(self.message.lock().await.clone())
+    }
+
+    async fn fetch_user_name(&self, _open_id: &str) -> Option<String> {
+        self.user_name.clone()
+    }
 }
 
 /// Run-completion notification: DMs per subscriber (deduplicated across
@@ -4806,7 +4827,16 @@ async fn test_notify_run_subscribers() {
     };
 
     // No delivered reply → nothing to link to, no notification.
-    notify_run_subscribers(&store, &adapter, &routing, None, RunEndStatus::Completed).await;
+    notify_run_subscribers(
+        &store,
+        &adapter,
+        &routing,
+        None,
+        RunEndStatus::Completed,
+        &SessionId::new(),
+        &std::sync::Weak::new(),
+    )
+    .await;
     assert!(mock.dms.lock().await.is_empty());
     assert!(mock.cards.lock().await.is_empty());
 
@@ -4817,6 +4847,8 @@ async fn test_notify_run_subscribers() {
         &routing,
         Some("om_reply"),
         RunEndStatus::Cancelled,
+        &SessionId::new(),
+        &std::sync::Weak::new(),
     )
     .await;
     assert!(mock.dms.lock().await.is_empty());
@@ -4828,6 +4860,8 @@ async fn test_notify_run_subscribers() {
         &routing,
         Some("om_reply"),
         RunEndStatus::Completed,
+        &SessionId::new(),
+        &std::sync::Weak::new(),
     )
     .await;
     let dms = mock.dms.lock().await;
@@ -4853,10 +4887,168 @@ async fn test_notify_run_subscribers() {
         &routing,
         Some("om_x"),
         RunEndStatus::Failed,
+        &SessionId::new(),
+        &std::sync::Weak::new(),
     )
     .await;
     let dms = mock.dms.lock().await;
     let failed_card = &dms.last().unwrap().1;
     assert!(failed_card.contains("任务异常结束"), "{failed_card}");
     assert!(failed_card.contains("❌"), "{failed_card}");
+}
+
+fn notify_trigger_message() -> HistoryMessage {
+    HistoryMessage {
+        message_id: "omt_1".into(),
+        create_time: 1,
+        sender_id: "ou_author".into(),
+        text: "@_user_1 帮我看下\n这个 run   怎么样".into(),
+        image_keys: vec![],
+        parent_id: None,
+    }
+}
+
+async fn notify_quote_setup() -> (
+    Arc<dyn ChannelStore>,
+    Arc<NotifyMockAdapter>,
+    SessionRouting,
+) {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    store
+        .save_run_subscription("feishu", "omt_1", "oc_1", false, "ou_dm", None)
+        .await
+        .unwrap();
+    let mock = Arc::new(NotifyMockAdapter::default());
+    let routing = SessionRouting {
+        channel_name: "feishu".to_string(),
+        external_chat_id: "oc_1".to_string(),
+        reply_msg_id: None,
+        mapping_key: "omt_1".to_string(),
+    };
+    (store, mock, routing)
+}
+
+/// The notify card quotes the thread root/trigger message, attributed
+/// when the author's name resolves; mentions stripped, whitespace flat.
+#[tokio::test]
+async fn notify_card_quotes_trigger_message_with_author() {
+    let (store, _unused, routing) = notify_quote_setup().await;
+    let mut mock = NotifyMockAdapter {
+        user_name: Some("李华儒".to_string()),
+        ..Default::default()
+    };
+    *mock.message.get_mut() = Some(notify_trigger_message());
+    let mock = Arc::new(mock);
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+
+    notify_run_subscribers(
+        &store,
+        &adapter,
+        &routing,
+        Some("om_r"),
+        RunEndStatus::Completed,
+        &SessionId::new(),
+        &std::sync::Weak::new(),
+    )
+    .await;
+    let dms = mock.dms.lock().await;
+    let card = &dms[0].1;
+    assert!(
+        card.contains("> 李华儒：帮我看下 这个 run 怎么样"),
+        "{card}"
+    );
+    assert!(!card.contains("@_user_1"), "{card}");
+}
+
+/// Without contact permission the quote line carries no author prefix.
+#[tokio::test]
+async fn notify_card_quote_omits_author_when_name_unresolved() {
+    let (store, mock, routing) = notify_quote_setup().await;
+    *mock.message.lock().await = Some(notify_trigger_message());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+
+    notify_run_subscribers(
+        &store,
+        &adapter,
+        &routing,
+        Some("om_r"),
+        RunEndStatus::Completed,
+        &SessionId::new(),
+        &std::sync::Weak::new(),
+    )
+    .await;
+    let dms = mock.dms.lock().await;
+    let card = &dms[0].1;
+    assert!(card.contains("> 帮我看下 这个 run 怎么样"), "{card}");
+    assert!(!card.contains("：帮我看下"), "{card}");
+}
+
+/// Trigger fetch failing (and no session title available — dead kernel
+/// weak ref) degrades to the one-line card, notification still sent.
+#[tokio::test]
+async fn notify_card_without_quote_when_context_unavailable() {
+    let (store, mock, routing) = notify_quote_setup().await;
+    mock.fetch_fail
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+
+    notify_run_subscribers(
+        &store,
+        &adapter,
+        &routing,
+        Some("om_r"),
+        RunEndStatus::Completed,
+        &SessionId::new(),
+        &std::sync::Weak::new(),
+    )
+    .await;
+    let dms = mock.dms.lock().await;
+    assert_eq!(dms.len(), 1);
+    assert!(!dms[0].1.contains("> "), "no quote line: {}", dms[0].1);
+}
+
+/// Chat-level sessions key their mapping on the chat id — not fetchable
+/// as a message, so no quote (the title fallback needs a live kernel).
+#[tokio::test]
+async fn notify_card_chat_level_session_skips_message_fetch() {
+    let (store, mock, mut routing) = notify_quote_setup().await;
+    // Chat-level subscription matching the chat-level routing below.
+    store
+        .save_run_subscription("feishu", "oc_1", "oc_1", false, "ou_chat", None)
+        .await
+        .unwrap();
+    *mock.message.lock().await = Some(notify_trigger_message());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    routing.mapping_key = "oc_1".to_string();
+
+    notify_run_subscribers(
+        &store,
+        &adapter,
+        &routing,
+        Some("om_r"),
+        RunEndStatus::Completed,
+        &SessionId::new(),
+        &std::sync::Weak::new(),
+    )
+    .await;
+    let dms = mock.dms.lock().await;
+    assert!(!dms[0].1.contains("> "), "no quote line: {}", dms[0].1);
+}
+
+#[test]
+fn notify_quote_snippet_normalizes_and_caps() {
+    // Leading mentions stripped, whitespace flattened.
+    assert_eq!(
+        notify_quote_snippet("  @_user_1 @_user_22 你好\n 世界 "),
+        "你好 世界"
+    );
+    // Capped at 50 content chars plus an ellipsis.
+    let long = "字".repeat(60);
+    let out = notify_quote_snippet(&long);
+    assert_eq!(out.chars().count(), 51);
+    assert!(out.ends_with('…'));
+    // Non-message text passes through; empty stays empty.
+    assert_eq!(notify_quote_snippet("[图片]"), "[图片]");
+    assert_eq!(notify_quote_snippet("  "), "");
 }

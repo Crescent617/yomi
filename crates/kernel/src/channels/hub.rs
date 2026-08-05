@@ -384,6 +384,8 @@ impl ChannelHub {
                                     &routing,
                                     reply_msg_id.as_deref(),
                                     RunEndStatus::Failed,
+                                    &sid,
+                                    &kernel,
                                 )
                                 .await;
                             }
@@ -500,6 +502,8 @@ impl ChannelHub {
                                 &routing,
                                 reply_msg_id.as_deref(),
                                 RunEndStatus::from_stop_reason(reason),
+                                &session_id,
+                                &kernel,
                             )
                             .await;
                             continue;
@@ -630,6 +634,8 @@ async fn notify_run_subscribers(
     routing: &SessionRouting,
     reply_msg_id: Option<&str>,
     status: RunEndStatus,
+    session_id: &SessionId,
+    kernel: &std::sync::Weak<Kernel>,
 ) {
     if status == RunEndStatus::Cancelled {
         return;
@@ -654,9 +660,10 @@ async fn notify_run_subscribers(
     if subs.is_empty() {
         return;
     }
-    let (link, chat_name) = tokio::join!(
+    let (link, chat_name, quote) = tokio::join!(
         adapter.message_link(&routing.external_chat_id, reply_msg_id),
         adapter.fetch_chat_name(&routing.external_chat_id),
+        resolve_notify_quote(adapter, kernel, session_id, routing),
     );
     let mut dm_users: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut chat_targets: HashMap<String, Vec<String>> = HashMap::new();
@@ -674,17 +681,77 @@ async fn notify_run_subscribers(
         }
     }
     for user in dm_users {
-        let card = subscription_notify_card(status, link.as_deref(), chat_name.as_deref(), &[]);
+        let card = subscription_notify_card(
+            status,
+            link.as_deref(),
+            chat_name.as_deref(),
+            &[],
+            quote.as_deref(),
+        );
         if let Err(e) = adapter.send_direct_card(&user, &card).await {
             warn!(error = %e, "run subscription DM failed");
         }
     }
     for (chat_id, users) in chat_targets {
-        let card = subscription_notify_card(status, link.as_deref(), chat_name.as_deref(), &users);
+        let card = subscription_notify_card(
+            status,
+            link.as_deref(),
+            chat_name.as_deref(),
+            &users,
+            quote.as_deref(),
+        );
         if let Err(e) = adapter.send_card(&chat_id, &card, None).await {
             warn!(error = %e, "run subscription notify failed");
         }
     }
+}
+
+/// Quote context for the notify card (design:
+/// run-subscription-notify-context): the thread's root/trigger message
+/// text, attributed when the author's name resolves (`fetch_user_name`
+/// needs contact permission); falls back to the session title. `None`
+/// keeps the card one-line.
+async fn resolve_notify_quote(
+    adapter: &Arc<dyn PlatformAdapter>,
+    kernel: &std::sync::Weak<Kernel>,
+    session_id: &SessionId,
+    routing: &SessionRouting,
+) -> Option<String> {
+    // Thread sessions key their mapping on the root message — a chat-level
+    // key (mapping == chat id) is not fetchable as a message.
+    if routing.mapping_key != routing.external_chat_id {
+        if let Ok(Some(msg)) = adapter.fetch_message(&routing.mapping_key).await {
+            let snippet = notify_quote_snippet(&msg.text);
+            if !snippet.is_empty() {
+                return Some(match adapter.fetch_user_name(&msg.sender_id).await {
+                    Some(name) => format!("{name}：{snippet}"),
+                    None => snippet,
+                });
+            }
+        }
+    }
+    let title = kernel
+        .upgrade()?
+        .get_session(session_id)
+        .await
+        .ok()?
+        .title?;
+    let snippet = notify_quote_snippet(&title);
+    (!snippet.is_empty()).then_some(snippet)
+}
+
+/// One-line snippet for the notify card's quote line: leading mention
+/// placeholders (`@_user_N`) stripped, whitespace flattened, capped at 50
+/// chars with an ellipsis.
+fn notify_quote_snippet(text: &str) -> String {
+    let mut rest = text.trim_start();
+    while let Some(after) = rest.strip_prefix("@_user_") {
+        // Placeholder form is `@_user_<digits>`; skip past it.
+        let end = after.find(char::is_whitespace).unwrap_or(after.len());
+        rest = after[end..].trim_start();
+    }
+    let flat = reply::flatten_ws(rest);
+    crate::utils::strs::truncate_by_chars(&flat, NOTIFY_QUOTE_MAX_CHARS, "…")
 }
 
 /// The run-completion subscription card: a single notation-sized line
@@ -694,12 +761,15 @@ async fn notify_run_subscribers(
 /// name of their own — the group name stands in). The emoji mirrors the
 /// run's end status (✅/⏹/❌). Card markdown strips applink URLs, so the
 /// jump rides `card_link` instead; without a link it degrades to a
-/// text-only ping.
+/// text-only ping. An optional `quote` (trigger-message snippet, or the
+/// session title) rides as a second markdown-quote line so overlapping
+/// subscriptions stay distinguishable.
 fn subscription_notify_card(
     status: RunEndStatus,
     link: Option<&str>,
     chat_name: Option<&str>,
     mentions: &[String],
+    quote: Option<&str>,
 ) -> String {
     let mention = mentions
         .iter()
@@ -721,22 +791,29 @@ fn subscription_notify_card(
         scope,
         status.word(),
     );
+    let line = match link {
+        Some(_) => format!("{text} · **查看回复 →**"),
+        None => text,
+    };
+    let mut elements =
+        vec![serde_json::json!({ "tag": "markdown", "text_size": "notation", "content": line })];
+    if let Some(q) = quote {
+        elements.push(
+            serde_json::json!({ "tag": "markdown", "text_size": "notation",
+            "content": format!("> {q}") }),
+        );
+    }
     let card = match link {
         Some(link) => serde_json::json!({
             "schema": "2.0",
             "config": { "width_mode": "compact" },
             "card_link": { "url": link },
-            "body": { "elements": [
-                { "tag": "markdown", "text_size": "notation",
-                  "content": format!("{text} · **查看回复 →**") }
-            ] }
+            "body": { "elements": elements }
         }),
         None => serde_json::json!({
             "schema": "2.0",
             "config": { "width_mode": "compact" },
-            "body": { "elements": [
-                { "tag": "markdown", "text_size": "notation", "content": text }
-            ] }
+            "body": { "elements": elements }
         }),
     };
     card.to_string()
@@ -2347,6 +2424,9 @@ const CMD_THREAD: &str = "/thread";
 const CMD_SUBSCRIBE: &str = "/subscribe";
 const CMD_UNSUBSCRIBE: &str = "/unsubscribe";
 const CMD_MENTION: &str = "/mention";
+/// Max chars for the subscription notify card's quote line (ellipsis
+/// included — see `notify_quote_snippet`).
+const NOTIFY_QUOTE_MAX_CHARS: usize = 50;
 
 /// All channel command prefixes, longest-first so `/models` is matched
 /// before `/model` (the latter is a prefix of the former).

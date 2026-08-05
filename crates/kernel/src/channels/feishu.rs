@@ -1049,6 +1049,31 @@ impl PlatformAdapter for FeishuAdapter {
         }))
     }
 
+    /// refer: <https://open.feishu.cn/document/server-docs/contact-v3/user/get>
+    async fn fetch_user_name(&self, open_id: &str) -> Option<String> {
+        if open_id.is_empty() {
+            return None;
+        }
+        let token = self.get_token().await.ok()?;
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.api_get(
+                &token,
+                &format!("{}/open-apis/contact/v3/users/{open_id}", self.base_url),
+                &[("user_id_type", "open_id".to_string())],
+            ),
+        )
+        .await
+        .map_err(|_| ChannelError::Platform("user fetch timed out".into()))
+        .ok()?
+        .ok()?;
+        // Deployments without contact permission get code 0 but no name.
+        resp["data"]["user"]["name"]
+            .as_str()
+            .filter(|n| !n.is_empty())
+            .map(str::to_string)
+    }
+
     /// Build a click-to-jump applink for a message (no official
     /// get-message-link API; the client-copied link is an opaque token).
     /// Same construction as Feishu's own lark-cli: the jump targets a
