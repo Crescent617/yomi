@@ -14,7 +14,7 @@ struct CommentMockAdapter {
     /// `fetch_doc_comment` call count — the disabled-toggle test asserts
     /// the feature costs zero platform API calls when off.
     fetch_calls: tokio::sync::Mutex<usize>,
-    /// Reactions fired: (reply_id, emoji).
+    /// Reactions fired: (`reply_id`, emoji).
     reactions: tokio::sync::Mutex<Vec<(String, String)>>,
     title: Option<String>,
 }
