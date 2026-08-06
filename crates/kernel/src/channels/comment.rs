@@ -128,6 +128,12 @@ pub(super) async fn handle_doc_comment_added(
     let reply_text = detail
         .as_ref()
         .map(|d| pick_triggering_reply(d, notice.reply_id.as_deref()));
+    // The bare comment text (@bot stripped): session title input, and the
+    // command check below.
+    let bare_text = reply_text
+        .as_deref()
+        .map(|t| t.replace("@bot", "").trim().to_string())
+        .filter(|t| !t.is_empty());
     let text = assemble_message(
         &notice,
         detail.as_ref().and_then(|d| d.quote.as_deref()),
@@ -136,11 +142,18 @@ pub(super) async fn handle_doc_comment_added(
         title.as_deref(),
     );
     // The comment thread's prior replies ride as a leading context block
-    // (history first, trigger last — the chat convention).
+    // (history first, trigger last — the chat convention). Skipped for
+    // commands: they bypass the session, so building (and cursor-advancing)
+    // history would swallow never-injected replies.
     let mut content = Vec::new();
-    if let Some(d) = &detail {
-        if let Some(history) = build_thread_history(store, channel_name, &notice, d).await {
-            content.push(history);
+    let is_command = bare_text
+        .as_deref()
+        .is_some_and(super::hub::has_channel_command_prefix);
+    if !is_command {
+        if let Some(d) = &detail {
+            if let Some(history) = build_thread_history(store, channel_name, &notice, d).await {
+                content.push(history);
+            }
         }
     }
     content.push(ContentBlock::Text { text });
@@ -156,12 +169,8 @@ pub(super) async fn handle_doc_comment_added(
         external_user_id: notice.commenter_open_id.clone(),
         external_message_id: None,
         is_mention: true,
-        // The bare comment text with the @bot marker stripped: feeds the
-        // session title (mirrors chat messages' `strip_bot_mention`).
-        // Slash-leading comments are NOT commands (see `hub::message_command`).
-        raw_text: reply_text
-            .map(|t| t.replace("@bot", "").trim().to_string())
-            .filter(|t| !t.is_empty()),
+        // Feeds the session title; also what commands parse from.
+        raw_text: bare_text,
         content,
         image_keys: Vec::new(),
         thread_id: None,
@@ -315,6 +324,8 @@ async fn build_thread_history(
         .filter(|r| !r.is_from_bot)
         .filter(|r| Some(r.reply_id.as_str()) != notice.reply_id.as_deref())
         .filter(|r| !r.text.trim().is_empty())
+        // Commands are control-plane (same rule as chat history).
+        .filter(|r| !super::hub::is_command_text(r.text.trim()))
         .filter(|r| cursor.is_none_or(|c| r.create_time * 1000 > c))
         .map(|r| {
             let ts = chrono::DateTime::from_timestamp(r.create_time, 0)

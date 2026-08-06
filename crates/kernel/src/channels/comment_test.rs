@@ -360,6 +360,55 @@ async fn thread_history_cursor_dedups_across_triggers() {
     assert_eq!(msg.content.len(), 1, "second trigger injects no history");
 }
 
+#[tokio::test]
+async fn command_trigger_skips_history_and_leaves_cursor_alone() {
+    let config = feishu_config();
+    let store = test_store().await;
+    let adapter = Arc::new(CommentMockAdapter::new(None));
+    // Command trigger: r_2 ("/info @bot"), with an older human reply r_0.
+    // Normal trigger: r_3 later.
+    {
+        let mut q = adapter.fetch_queue.lock().await;
+        q.push_back(Some(DocCommentDetail {
+            is_whole: false,
+            quote: None,
+            replies: vec![
+                lite("r_0", "ou_alice", 1_700_000_000, "早期讨论", false),
+                lite("r_2", "ou_commenter", 1_700_000_002, "/info @bot", false),
+            ],
+        }));
+        q.push_back(Some(DocCommentDetail {
+            is_whole: false,
+            quote: None,
+            replies: vec![
+                lite("r_0", "ou_alice", 1_700_000_000, "早期讨论", false),
+                lite("r_2", "ou_commenter", 1_700_000_002, "/info @bot", false),
+                lite("r_3", "ou_commenter", 1_700_000_003, "@bot 继续", false),
+            ],
+        }));
+    }
+    let mut rx = handle_with_store(&config, &store, &adapter, notice()).await;
+    let (msg, _) = rx.try_recv().unwrap();
+    assert_eq!(msg.content.len(), 1, "command trigger injects no history");
+
+    // The cursor was not advanced by the command: a following normal
+    // trigger still sees the pre-command human discussion. Command texts
+    // themselves are control-plane and excluded from history (chat rule).
+    let mut n = notice();
+    n.reply_id = Some("r_3".to_string());
+    let mut rx = handle_with_store(&config, &store, &adapter, n).await;
+    let (msg, _) = rx.try_recv().unwrap();
+    assert_eq!(msg.content.len(), 2, "history injected again");
+    let ContentBlock::Text { text: history } = &msg.content[0] else {
+        panic!("expected history block");
+    };
+    assert!(history.contains("早期讨论"), "{history}");
+    assert!(
+        !history.contains("/info"),
+        "command lines excluded: {history}"
+    );
+}
+
 // ── Accepted trigger ───────────────────────────────────────────────
 
 #[tokio::test]

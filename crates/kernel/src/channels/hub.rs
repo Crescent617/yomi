@@ -2895,12 +2895,13 @@ pub(super) fn has_channel_command_prefix(raw_text: &str) -> bool {
 }
 
 /// Whether a fetched history message is a channel command (`/info`,
-/// `@bot /clear`). Commands are control-plane: they and their replies
-/// bypass sessions, so echoing them in chat history presents an exchange
-/// the bot cannot see. Leading `@mention` tokens are stripped for
+/// `@bot /clear`). Commands are control-plane: their replies bypass
+/// sessions, so echoing them in chat history presents an exchange the bot
+/// cannot see. Leading `@mention` tokens are stripped for
 /// detection only (a group command fetches back as `@_user_1 /info`) —
 /// anything not command-shaped stays, rendered verbatim.
-fn is_command_text(text: &str) -> bool {
+/// `pub(super)` for the doc-comment thread history (same filter).
+pub(super) fn is_command_text(text: &str) -> bool {
     let mut rest = text.trim_start();
     while let Some(t) = rest.strip_prefix('@') {
         rest = t

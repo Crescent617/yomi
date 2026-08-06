@@ -45,11 +45,8 @@ pub fn cleanup_old_logs(log_dir: &Path, prefix: &str, days: u64) {
     }
 }
 
-/// Initialize daily-rotating file logging and optional console output.
-///
 /// Chain a panic hook that logs panic payload + location at ERROR level
-/// before delegating to the default hook (stderr). Idempotent-safe: the
-/// hook wraps whatever was installed before.
+/// before delegating to the previous hook. Installed by [`init_logging`].
 fn install_panic_log_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -70,6 +67,8 @@ fn install_panic_log_hook() {
     }));
 }
 
+/// Initialize daily-rotating file logging and optional console output.
+///
 /// - `config`: used to resolve `log_dir`
 /// - `prefix`: log file name prefix (e.g. `"gui"` or `"daemon"`)
 /// - `console`: when `true` also log to **stderr**, otherwise file-only
