@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.55] - 2026-08-06
+
+### Fixed
+- 修复连发消息、或前一条消息处理较慢（如带图片、需回填历史）时，bot 的"收到"确认表情迟迟不出现的问题：表情不再排队等待前一条消息处理完，消息到达即打出。
+
 ## [0.7.54] - 2026-08-05
 
 ### Changed
