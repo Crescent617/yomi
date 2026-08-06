@@ -47,6 +47,29 @@ pub fn cleanup_old_logs(log_dir: &Path, prefix: &str, days: u64) {
 
 /// Initialize daily-rotating file logging and optional console output.
 ///
+/// Chain a panic hook that logs panic payload + location at ERROR level
+/// before delegating to the default hook (stderr). Idempotent-safe: the
+/// hook wraps whatever was installed before.
+fn install_panic_log_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("<non-string payload>");
+        let location = info.location().map_or_else(
+            || "<unknown>".to_string(),
+            |l| format!("{}:{}:{}", l.file(), l.line(), l.column()),
+        );
+        // May fire before tracing init — eprintln as a floor, tracing when up.
+        tracing::error!(panic = payload, location = %location, "task panicked");
+        eprintln!("panic at {location}: {payload}");
+        previous(info);
+    }));
+}
+
 /// - `config`: used to resolve `log_dir`
 /// - `prefix`: log file name prefix (e.g. `"gui"` or `"daemon"`)
 /// - `console`: when `true` also log to **stderr**, otherwise file-only
@@ -68,6 +91,11 @@ pub fn init_logging(
             log_dir.display()
         ))
     })?;
+
+    // Route panics into the log: long-running daemons spawn tasks whose
+    // stderr is /dev/null, so a task panic would otherwise vanish without
+    // a trace (observed: a dead channel forwarder with zero evidence).
+    install_panic_log_hook();
 
     // Clean up old logs *before* opening the new appender so we don't
     // delete the file we just started writing to.

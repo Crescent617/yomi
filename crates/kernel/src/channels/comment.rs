@@ -97,7 +97,7 @@ pub(super) async fn handle_doc_comment_added(
     }
 
     let (detail, title) = tokio::join!(
-        adapter.fetch_doc_comment(&notice.file_token, &notice.file_type, &notice.comment_id),
+        fetch_detail_with_trigger(adapter.as_ref(), &notice),
         adapter.fetch_doc_title(&notice.file_token, &notice.file_type),
     );
     let (detail, fetch_error) = match detail {
@@ -238,6 +238,43 @@ fn assemble_message(
         let _ = write!(body, "[评论内容拉取失败: {error}]");
     }
     format!("{header}\n{body}")
+}
+
+/// Fetch the comment, retrying briefly until the **triggering reply**
+/// shows up: `batch_query` reads lag the event by up to a few seconds
+/// (E2E-verified — without the retry we once injected the *previous*
+/// reply's text). Degrading to the thread's latest reply after the
+/// retries is better than dropping the trigger.
+async fn fetch_detail_with_trigger(
+    adapter: &dyn PlatformAdapter,
+    notice: &DocCommentNotice,
+) -> Result<Option<DocCommentDetail>, ChannelError> {
+    const RETRY_DELAYS: &[std::time::Duration] = &[
+        std::time::Duration::from_millis(500),
+        std::time::Duration::from_secs(1),
+        std::time::Duration::from_secs(2),
+    ];
+    let mut attempt = 0;
+    loop {
+        let detail = adapter
+            .fetch_doc_comment(&notice.file_token, &notice.file_type, &notice.comment_id)
+            .await;
+        let found = notice.reply_id.as_deref().is_none_or(
+            |rid| matches!(&detail, Ok(Some(d)) if d.replies.iter().any(|r| r.reply_id == rid)),
+        );
+        if found || attempt >= RETRY_DELAYS.len() {
+            if !found {
+                warn!(
+                    comment_id = %notice.comment_id,
+                    reply_id = notice.reply_id.as_deref().unwrap_or(""),
+                    "triggering reply still not readable after retries, using latest"
+                );
+            }
+            return detail;
+        }
+        tokio::time::sleep(RETRY_DELAYS[attempt]).await;
+        attempt += 1;
+    }
 }
 
 /// The comment thread's prior replies as a `<comment_thread_history>`

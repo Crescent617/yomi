@@ -256,24 +256,26 @@ fn response_for(method: &str, path: &str) -> Vec<u8> {
         "POST" if p.starts_with("/open-apis/drive/v1/permissions/") => {
             r#"{"code":0,"msg":"ok","data":{}}"#.into()
         }
-        // Doc comment APIs: batch_query serves one fixture comment;
-        // replies succeed except for the whole-comment id (platform
-        // error 1069302), which must fall back to a new whole comment.
+        // Doc comment APIs: the replies LIST serves the (fresh) timeline;
+        // batch_query serves quote/is_whole (its own reply_list lags and
+        // is intentionally not parsed).
+        "GET" if p.starts_with("/open-apis/drive/v1/files/") && p.ends_with("/replies") => {
+            r#"{"code":0,"msg":"ok","data":{"has_more":false,"page_token":"","items":[
+                {"reply_id":"r_1","user_id":"ou_commenter","create_time":1700000000,
+                 "content":{"elements":[
+                    {"type":"text_run","text_run":{"text":"这段"}},
+                    {"type":"person","person":{"user_id":"ou_bot"}},
+                    {"type":"text_run","text_run":{"text":" 改写一下，参考 "}},
+                    {"type":"docs_link","docs_link":{"url":"https://feishu.cn/docx/other"}}
+                 ]}},
+                {"reply_id":"r_2","user_id":"ou_bot","create_time":1700000006,
+                 "content":{"elements":[{"type":"text_run","text_run":{"text":"bot 的回复"}}]}}
+            ]}}"#.into()
+        }
         "POST" if p.starts_with("/open-apis/drive/v1/files/") && p.ends_with("/comments/batch_query") => {
             r#"{"code":0,"msg":"ok","data":{"items":[{
                 "comment_id":"c_1","user_id":"ou_commenter","create_time":1700000000,"is_whole":false,
-                "quote":"引用原文段落",
-                "reply_list":{"replies":[
-                    {"reply_id":"r_1","user_id":"ou_commenter","create_time":1700000000,
-                     "content":{"elements":[
-                        {"type":"text_run","text_run":{"text":"这段"}},
-                        {"type":"person","person":{"user_id":"ou_bot"}},
-                        {"type":"text_run","text_run":{"text":" 改写一下，参考 "}},
-                        {"type":"docs_link","docs_link":{"url":"https://feishu.cn/docx/other"}}
-                     ]}},
-                    {"reply_id":"r_2","user_id":"ou_bot","create_time":1700000006,
-                     "content":{"elements":[{"type":"text_run","text_run":{"text":"bot 的回复"}}]}}
-                ]}
+                "quote":"引用原文段落","reply_list":{"replies":[]}
             }]}}"#.into()
         }
         "POST" if p.starts_with("/open-apis/drive/v1/files/") && p.ends_with("/replies") => {

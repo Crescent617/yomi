@@ -7,6 +7,9 @@ use tokio_util::sync::CancellationToken;
 
 struct CommentMockAdapter {
     detail: tokio::sync::Mutex<Option<DocCommentDetail>>,
+    /// Scripted fetch outcomes consumed in order (the plain `detail`
+    /// once drained) — exercises the read-lag retry.
+    fetch_queue: tokio::sync::Mutex<std::collections::VecDeque<Option<DocCommentDetail>>>,
     fetch_error: tokio::sync::Mutex<bool>,
     /// `fetch_doc_comment` call count — the disabled-toggle test asserts
     /// the feature costs zero platform API calls when off.
@@ -20,6 +23,7 @@ impl CommentMockAdapter {
     fn new(detail: Option<DocCommentDetail>) -> Self {
         Self {
             detail: tokio::sync::Mutex::new(detail),
+            fetch_queue: tokio::sync::Mutex::new(std::collections::VecDeque::new()),
             fetch_error: tokio::sync::Mutex::new(false),
             fetch_calls: tokio::sync::Mutex::new(0),
             reactions: tokio::sync::Mutex::new(Vec::new()),
@@ -62,6 +66,9 @@ impl PlatformAdapter for CommentMockAdapter {
             return Err(ChannelError::Platform("mock: comment fetch failed".into()));
         }
         *self.fetch_calls.lock().await += 1;
+        if let Some(scripted) = self.fetch_queue.lock().await.pop_front() {
+            return Ok(scripted);
+        }
         Ok(self.detail.lock().await.clone())
     }
 
@@ -244,6 +251,28 @@ async fn deleted_comment_triggers_nothing() {
     let adapter = Arc::new(CommentMockAdapter::new(None));
     let mut rx = handle(&config, &adapter, notice()).await;
     assert!(rx.try_recv().is_err(), "deleted comment must be dropped");
+}
+
+#[tokio::test]
+async fn retries_fetch_until_triggering_reply_is_visible() {
+    let config = feishu_config();
+    // First read lags (triggering r_2 absent), the retry sees it.
+    let stale = detail_with_replies(vec![("r_1", "旧内容")]);
+    let fresh = detail_with_replies(vec![("r_1", "旧内容"), ("r_2", "@bot 新内容")]);
+    let adapter = Arc::new(CommentMockAdapter::new(None));
+    {
+        let mut q = adapter.fetch_queue.lock().await;
+        q.push_back(Some(stale));
+        q.push_back(Some(fresh));
+    }
+    let mut rx = handle(&config, &adapter, notice()).await;
+    let (msg, _gate) = rx.try_recv().expect("trigger dispatched");
+
+    let ContentBlock::Text { text } = msg.content.last().expect("meta block") else {
+        panic!("expected text block");
+    };
+    assert!(text.ends_with("@bot 新内容"), "{text}");
+    assert_eq!(*adapter.fetch_calls.lock().await, 2, "one retry");
 }
 
 // ── Ack reaction ───────────────────────────────────────────────────

@@ -834,11 +834,13 @@ impl PlatformAdapter for FeishuAdapter {
             .map(str::to_string)
     }
 
-    /// refer: <https://open.feishu.cn/document/server-docs/docs/CommentAPI/batch_query>
-    /// `batch_query` (not the single-comment GET — that one serves whole
-    /// comments only) so partial/anchored comments fetch too. Bounded
-    /// like the other receive-side fetches: a hung API must not stall
-    /// the hub's dispatch machinery.
+    /// refer: replies list <https://open.feishu.cn/document/server-docs/docs/CommentAPI/list>;
+    /// `batch_query` <https://open.feishu.cn/document/server-docs/docs/CommentAPI/batch_query>
+    /// The replies timeline comes from the list endpoint (fresh reads),
+    /// while `quote`/`is_whole` ride `batch_query` (the only source for
+    /// them). E2E-verified: `batch_query`'s `reply_list` lags the event by
+    /// seconds to minutes — fetching the timeline from it injected STALE
+    /// text. Bounded at 5s overall: this runs on the hub's dispatch path.
     async fn fetch_doc_comment(
         &self,
         file_token: &str,
@@ -846,56 +848,12 @@ impl PlatformAdapter for FeishuAdapter {
         comment_id: &str,
     ) -> Result<Option<super::DocCommentDetail>, ChannelError> {
         let token = self.get_token().await?;
-        let resp = tokio::time::timeout(
+        tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            self.api_post(
-                &token,
-                &format!(
-                    "{}/open-apis/drive/v1/files/{file_token}/comments/batch_query?file_type={file_type}&user_id_type=open_id",
-                    self.base_url
-                ),
-                json!({ "comment_ids": [comment_id] }),
-            ),
+            self.fetch_doc_comment_inner(&token, file_token, file_type, comment_id),
         )
         .await
-        .map_err(|_| ChannelError::Platform("comment fetch timed out".into()))??;
-        let Some(item) = resp["data"]["items"].as_array().and_then(|a| a.first()) else {
-            return Ok(None);
-        };
-        let bot_open_id = self.ensure_bot_open_id(&token).await;
-        let replies = item["reply_list"]["replies"]
-            .as_array()
-            .map(|replies| {
-                replies
-                    .iter()
-                    .map(|r| {
-                        let user_id = r["user_id"].as_str().unwrap_or_default().to_string();
-                        super::DocCommentReplyLite {
-                            is_from_bot: bot_open_id.as_deref() == Some(user_id.as_str())
-                                && !user_id.is_empty(),
-                            user_id,
-                            reply_id: r["reply_id"].as_str().unwrap_or_default().to_string(),
-                            create_time: r["create_time"]
-                                .as_i64()
-                                .or_else(|| r["create_time"].as_str()?.parse().ok())
-                                .unwrap_or_default(),
-                            text: Self::extract_reply_text(
-                                r["content"]["elements"].as_array(),
-                                bot_open_id.as_deref(),
-                            ),
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        Ok(Some(super::DocCommentDetail {
-            is_whole: item["is_whole"].as_bool().unwrap_or(false),
-            quote: item["quote"]
-                .as_str()
-                .filter(|q| !q.is_empty())
-                .map(str::to_string),
-            replies,
-        }))
+        .map_err(|_| ChannelError::Platform("comment fetch timed out".into()))?
     }
 
     /// refer: <https://open.feishu.cn/document/server-docs/docs/CommentAPI/reply>
@@ -1554,6 +1512,98 @@ impl FeishuAdapter {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// The working body of `fetch_doc_comment` (split out so the caller
+    /// can wrap the whole thing in one 5s timeout).
+    async fn fetch_doc_comment_inner(
+        &self,
+        token: &str,
+        file_token: &str,
+        file_type: &str,
+        comment_id: &str,
+    ) -> Result<Option<super::DocCommentDetail>, ChannelError> {
+        let replies_url = format!(
+            "{}/open-apis/drive/v1/files/{file_token}/comments/{comment_id}/replies",
+            self.base_url
+        );
+        let batch_url = format!(
+            "{}/open-apis/drive/v1/files/{file_token}/comments/batch_query?file_type={file_type}&user_id_type=open_id",
+            self.base_url
+        );
+        let mut query = vec![
+            ("file_type", file_type.to_string()),
+            ("user_id_type", "open_id".to_string()),
+            ("page_size", "50".to_string()),
+        ];
+        // The timeline (list endpoint) is required; quote/is_whole
+        // (batch_query) are best-effort — they are static once the comment
+        // exists, so its read lag is harmless.
+        let (first_page, batch_resp) = tokio::join!(
+            self.api_get(token, &replies_url, &query),
+            self.api_post(token, &batch_url, json!({ "comment_ids": [comment_id] })),
+        );
+        let batch_item = batch_resp.ok().and_then(|resp| {
+            resp["data"]["items"]
+                .as_array()
+                .and_then(|a| a.first().cloned())
+        });
+        // Pages are chronological; long threads need the later pages (the
+        // triggering reply is the newest). Bounded at 5 pages.
+        let mut page = first_page?;
+        let mut reply_items = Vec::new();
+        for _ in 0..5 {
+            let Some(items) = page["data"]["items"].as_array() else {
+                break;
+            };
+            reply_items.extend(items.iter().cloned());
+            if !page["data"]["has_more"].as_bool().unwrap_or(false) {
+                break;
+            }
+            let Some(page_token) = page["data"]["page_token"].as_str().map(str::to_string) else {
+                break;
+            };
+            query.retain(|(k, _)| *k != "page_token");
+            query.push(("page_token", page_token));
+            page = self.api_get(token, &replies_url, &query).await?;
+        }
+        if reply_items.is_empty() {
+            return Ok(None);
+        }
+        let bot_open_id = self.ensure_bot_open_id(token).await;
+        let replies = reply_items
+            .iter()
+            .map(|r| {
+                let user_id = r["user_id"].as_str().unwrap_or_default().to_string();
+                super::DocCommentReplyLite {
+                    is_from_bot: bot_open_id.as_deref() == Some(user_id.as_str())
+                        && !user_id.is_empty(),
+                    user_id,
+                    reply_id: r["reply_id"].as_str().unwrap_or_default().to_string(),
+                    create_time: r["create_time"]
+                        .as_i64()
+                        .or_else(|| r["create_time"].as_str()?.parse().ok())
+                        .unwrap_or_default(),
+                    text: Self::extract_reply_text(
+                        r["content"]["elements"].as_array(),
+                        bot_open_id.as_deref(),
+                    ),
+                }
+            })
+            .collect();
+        Ok(Some(super::DocCommentDetail {
+            is_whole: batch_item
+                .as_ref()
+                .and_then(|item| item["is_whole"].as_bool())
+                .unwrap_or_default(),
+            quote: batch_item.as_ref().and_then(|item| {
+                item["quote"]
+                    .as_str()
+                    .filter(|q| !q.is_empty())
+                    .map(str::to_string)
+            }),
+            replies,
+        }))
     }
 
     /// Extract display text from a comment reply's content elements:

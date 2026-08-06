@@ -86,18 +86,15 @@ yomi 需要：接收该事件 → 拉取评论内容 → 作为 user 消息注�
 - `notice_type` 过滤到 `add_comment` / `add_reply`（新建评论 / 评论内回复），其余（编辑、解决、删除等可能取值）忽略；
 - 去重键：`{comment_id}:{reply_id}`（事件无 message_id 概念；ws 重投场景复用 `seen_messages` LRU，加前缀防撞 `om_` 系列）。
 
-### 4.2 拉取评论内容（batch_query，**不能用单条 GET**）
+### 4.2 拉取评论内容（时间线走 list 端点，**不能用 batch_query**）
 
 ```
-POST /open-apis/drive/v1/files/{file_token}/comments/batch_query?file_type={file_type}&user_id_type=open_id
-body: { "comment_ids": ["7123456789"] }
+GET  /open-apis/drive/v1/files/{file_token}/comments/{comment_id}/replies?file_type=…&user_id_type=open_id&page_size=50
+POST /open-apis/drive/v1/files/{file_token}/comments/batch_query?file_type=…&user_id_type=open_id
+body: { "comment_ids": ["7123456789"] }   // 仅取 quote / is_whole
 ```
 
-单条 `GET .../comments/{comment_id}` **只支持全文评论**；局部评论（划词评论，@bot 的典型形态）必须走 batch_query。返回 `FileComment`：
-
-- `is_whole`：全文评论 / 局部评论；
-- `quote`：局部评论引用的原文（行内锚点，关键上下文）；
-- `reply_list.replies[]`：`{reply_id, user_id(open_id), create_time, content: {elements: [...]}}`；元素类型 `text_run`（`text`）/ `docs_link`（`url`）/ `person`（@ 用户，`user_id`）。用事件的 `reply_id` 定位触发那条回复。
+**E2E 实测**：`batch_query` 的 `reply_list` 有秒~分钟级读延迟，事件到达即拉时会看不到触发那条回复（曾把上一条评论当触发内容注入）。因此：回复时间线（reply_id/user_id/create_time/content）走 **list replies 端点**（读新鲜、按时间分页，上限 5 页）；`quote`/`is_whole` 只能由 batch_query 提供（静态数据，滞后无害）。单条 `GET .../comments/{comment_id}` 只支持全文评论，不可用。若触发 reply_id 仍不在时间线里，hub 侧重试 3 次（0.5s/1s/2s）后降级用最新一条。
 
 ### 4.3 回复评论（投递出口）
 
@@ -245,7 +242,7 @@ pub struct DocCommentRef {
 - `get_or_create_session` 的 `actual_chat_id` 存空串；**不加 DB 列、无 migration** —— `find_routing_by_session` 从 mapping_key 的 `doc:` 前缀解析出 `DocCommentRef` 填进 `SessionRouting.doc_comment`（reply_id 持久化意义不大，路由只需三元组）；
 - 效果：同一评论组内的追问（`add_reply`，同 comment_id 新 reply_id）进同一 session，多轮连续；同一文档的不同评论组互不串味；
 - 模型继承：`model_key_for_new_channel_session` 对非 chat key 会找父 chat session，此处 `mapping_key != chat_id` 且父键（空串）无 mapping → 自然回落到默认模型，无需特判；
-- 斜杠命令：`raw_text = None` → `parse_channel_command` 得 `None`，全部评论内容直通 agent。`/stop` 等控制能力在评论通道缺失（可接受，见 §10）。
+- 斜杠命令：**与聊天一致可用**（2026-08-06 修订；初版禁用）——命令回复经 `send_command_reply` 投递回评论串（无 chat 可发）；`/thread` 因无消息锚点自然拒绝，`/subscribe`/`/unsubscribe` 对评论会话显式拒绝（订阅绑定 chat 域，写了也是孤儿行）。
 
 ### 5.6 投递：deliver_reply 的 doc-comment 分支
 
@@ -336,7 +333,6 @@ GC 关联：评论会话是普通 session，`channel_session_mappings` 行随 `d
 - **bot 已参与评论组的免 @ 跟进**：评论组已有 session 时，后续 `add_reply` 免 `is_mentioned`（对齐 IM thread 内体验，需防误触发设计）；
 - `comment_require_mention` 配置（放开全部评论触发）与功能总开关；
 - 评论串时间线注入（`<comment_thread>` 块，需解决与 session 已有轮次的去重）；
-- run 完成后自动「解决评论」（`PATCH .../comments/{comment_id}` solve）或表情回执（comment reaction API）；
+- run 完成后自动「解决评论」（`PATCH .../comments/{comment_id}` solve）；
 - wiki 文档 token 解析（`GET /wiki/v2/spaces/get_node`）；
-- `/stop` 等命令的评论通道等价物（如评论回复特定关键词）；
 - 附件投递（评论不支持附件——可降级为上传云空间后回链接）。

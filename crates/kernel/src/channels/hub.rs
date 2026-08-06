@@ -328,16 +328,18 @@ impl ChannelHub {
                         }
                         match handled {
                             Ok(Some(reply_text)) => {
-                                let chat_id = msg.external_chat_id.clone();
                                 let reply_msg_id =
                                     reply_anchor(&msg, config_dispatch.reply_in_thread);
                                 let adapter = Arc::clone(&adapter_dispatch);
                                 tokio::spawn(async move {
-                                    if let Err(e) = adapter.send_message(
-                                        &chat_id,
-                                        vec![ContentBlock::Text { text: reply_text }],
-                                        reply_msg_id.as_deref(),
-                                    ).await {
+                                    if let Err(e) = send_command_reply(
+                                        &adapter,
+                                        &msg,
+                                        reply_msg_id,
+                                        reply_text,
+                                    )
+                                    .await
+                                    {
                                         error!(error = %e, "failed to send command reply");
                                     }
                                 });
@@ -494,6 +496,15 @@ impl ChannelHub {
                         }
                     }
                     Some((session_id, envelope)) = rx.recv() => {
+                        // Forwarder liveness breadcrumb (trace level): the
+                        // task processes every event on one loop — if it
+                        // ever hangs/panics, all channel replies silently
+                        // stop, and this is the only tell.
+                        tracing::trace!(
+                            session_id = %session_id.0,
+                            event = ?std::mem::discriminant(&envelope.event),
+                            "channel forwarder event"
+                        );
                         let routing = match store.find_routing_by_session(&session_id).await {
                             Ok(Some(r)) => r,
                             Ok(None) => continue,
@@ -1001,6 +1012,33 @@ async fn flush_reply(
     }
 }
 
+/// Deliver a command reply: into the doc's comment thread for
+/// doc-comment sessions (there is no chat), the platform message path
+/// otherwise.
+async fn send_command_reply(
+    adapter: &Arc<dyn PlatformAdapter>,
+    msg: &ChannelMessage,
+    reply_msg_id: Option<String>,
+    text: String,
+) -> Result<()> {
+    if let Some(dc) = &msg.doc_comment {
+        for chunk in super::comment::chunk_text(&text, super::comment::COMMENT_REPLY_CHUNK_CHARS) {
+            adapter
+                .reply_doc_comment(&dc.file_token, &dc.file_type, &dc.comment_id, &chunk)
+                .await?;
+        }
+        return Ok(());
+    }
+    adapter
+        .send_message(
+            &msg.external_chat_id,
+            vec![ContentBlock::Text { text }],
+            reply_msg_id.as_deref(),
+        )
+        .await?;
+    Ok(())
+}
+
 /// How a run ends, for reply-delivery purposes.
 #[derive(Clone, Copy)]
 enum SettleKind<'a> {
@@ -1043,6 +1081,11 @@ async fn deliver_doc_comment_reply(
                 warn!(error = %e, comment_id = %dc.comment_id, "doc comment reply chunk failed");
             }
         }
+    }
+    if last_id.is_some() {
+        // Doc-bound replies are otherwise invisible (no chat surface) —
+        // this is the only delivery breadcrumb.
+        info!(comment_id = %dc.comment_id, "doc comment reply delivered");
     }
     last_id
 }
@@ -1300,7 +1343,7 @@ async fn handle_incoming_message(
         "session mapping"
     );
 
-    let cmd = message_command(&msg);
+    let cmd = parse_channel_command(msg.raw_text.as_deref());
     match cmd {
         ChannelCommand::Help => Ok(Some(HELP_TEXT.to_string())),
         ChannelCommand::Clear => {
@@ -1564,6 +1607,13 @@ async fn handle_incoming_message(
             recursive,
             target_chat_id,
         } => {
+            // Subscriptions bind a chat conversation scope — meaningless
+            // for a doc comment thread (and would write orphan rows).
+            if msg.doc_comment.is_some() {
+                return Ok(Some(
+                    "Subscriptions are not available for doc comment sessions.".to_string(),
+                ));
+            }
             // Jump-link notifications rely on platform message links (and
             // DM cards for the default target) — Feishu only for now.
             if !matches!(config.platform, PlatformConfig::Feishu { .. }) {
@@ -1613,6 +1663,11 @@ async fn handle_incoming_message(
             )))
         }
         ChannelCommand::Unsubscribe => {
+            if msg.doc_comment.is_some() {
+                return Ok(Some(
+                    "Subscriptions are not available for doc comment sessions.".to_string(),
+                ));
+            }
             let scope_key =
                 subscription_scope_key(store, channel_name, &msg, &chat_id, config.reply_in_thread)
                     .await?;
@@ -2632,18 +2687,6 @@ const HELP_TEXT: &str = "\
 `/restart` — restart the daemon (admin)
 
 Anything else is sent to the agent as a message.";
-
-/// The command an incoming message resolves to. Doc comments never parse
-/// as commands — a slash-leading comment goes to the agent verbatim (the
-/// comment surface has no control plane; their `raw_text` only feeds the
-/// session title).
-fn message_command(msg: &ChannelMessage) -> ChannelCommand {
-    if msg.doc_comment.is_some() {
-        ChannelCommand::None
-    } else {
-        parse_channel_command(msg.raw_text.as_deref())
-    }
-}
 
 /// Parsed channel command from an incoming message.
 enum ChannelCommand {

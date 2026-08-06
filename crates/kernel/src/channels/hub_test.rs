@@ -1608,14 +1608,54 @@ fn mapping_key_doc_comment_keys_by_comment_thread() {
 }
 
 #[test]
-fn doc_comment_messages_never_parse_as_commands() {
+fn doc_comment_messages_parse_commands() {
+    // Commands work in doc comments; the reply routes into the comment
+    // thread (see send_command_reply), not any chat.
     let mut msg = doc_comment_msg();
     msg.raw_text = Some("/clear".to_string());
-    assert!(matches!(message_command(&msg), ChannelCommand::None));
-    // The same text on a chat message IS a command.
-    let mut chat_msg = channel_message(None, false, true);
-    chat_msg.raw_text = Some("/clear".to_string());
-    assert!(matches!(message_command(&chat_msg), ChannelCommand::Clear));
+    assert!(matches!(
+        parse_channel_command(msg.raw_text.as_deref()),
+        ChannelCommand::Clear
+    ));
+    // Plain comment text is not a command.
+    msg.raw_text = Some("这句话怎么样".to_string());
+    assert!(matches!(
+        parse_channel_command(msg.raw_text.as_deref()),
+        ChannelCommand::None
+    ));
+}
+
+#[tokio::test]
+async fn command_reply_for_doc_comment_goes_to_comment_thread() {
+    let mock = Arc::new(MockAdapter::new("feishu"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let msg = doc_comment_msg();
+
+    send_command_reply(&adapter, &msg, None, "Context cleared.".to_string())
+        .await
+        .unwrap();
+
+    let replies = mock.comment_replies.lock().await;
+    assert_eq!(replies.len(), 1);
+    assert_eq!(replies[0].0, "c_1");
+    assert_eq!(replies[0].1, "Context cleared.");
+    assert!(mock.outgoing.lock().await.is_empty(), "no chat message");
+}
+
+#[tokio::test]
+async fn command_reply_for_chat_message_goes_to_chat() {
+    let mock = Arc::new(MockAdapter::new("feishu"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let msg = channel_message(None, false, true);
+
+    send_command_reply(&adapter, &msg, None, "Context cleared.".to_string())
+        .await
+        .unwrap();
+
+    let outgoing = mock.outgoing.lock().await;
+    assert_eq!(outgoing.len(), 1);
+    assert_eq!(outgoing[0].0, "chat-1");
+    assert!(mock.comment_replies.lock().await.is_empty());
 }
 
 #[tokio::test]
