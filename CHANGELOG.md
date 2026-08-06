@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.57] - 2026-08-06
+
+### Changed
+- 飞书文档评论注入消息的 meta 头精简为仅保留不可推导的字段（文档、评论组、触发回复、标题等），不再附带来源标记与文档链接（可由文档标识直接推导）。
+
 ## [0.7.56] - 2026-08-06
 
 ### Added
