@@ -15,6 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.58] - 2026-08-06
+
+### Added
+- 飞书文档评论受理后立即在触发评论上打"收到"表情（OneSecond），与聊天消息的确认语义一致。
+- 触发文档评论时，bot 现在能看到该评论组里 @ 它之前的人类讨论内容（按评论组去重，不会重复注入；bot 自己的回复与命令文本不计入）。
+- 文档评论支持斜杠命令：`/info` `/clear` `/stop` `/models` 等命令回复直接落在评论串中；`/subscribe` 系命令在评论中不可用（会明确提示）。
+
+### Fixed
+- 修复文档评论触发内容可能读到旧数据的问题：事件到达后立即拉取时，新发的评论可能还不可见，导致把上一条评论当成触发内容（例如把 `/info` 误当提问执行）。
+- daemon 内异步任务的 panic 现在会写入日志文件：此前进程 stderr 被丢弃，panic 无任何痕迹。
+
 ## [0.7.57] - 2026-08-06
 
 ### Changed
