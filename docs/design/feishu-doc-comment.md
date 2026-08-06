@@ -40,10 +40,11 @@ yomi 需要：接收该事件 → 拉取评论内容 → 作为 user 消息注�
 **非目标**
 
 - 不处理非 @bot 的评论（应用作为文档 owner 收到的全部评论通知一律忽略）；
-- 不在任何群聊投递状态卡/回执（评论会话是"无头"的，观测只靠 daemon 日志）；
-- 不做评论串历史时间线注入（多轮连续性由 per-comment-thread session 提供；完整评论串 agent 可自行用工具拉取）；
-- 不支持附件投递到评论（run 产出的 `<yomi_attachments>` 文件无法作为评论附件，仅记日志）；
-- 不做"解决评论"（resolve）、评论表情回应等增强（见 §10 未来项）。
+- 不在任何群聊投递状态卡/回执（评论会话是"无头"的，观测靠 ack reaction + daemon 日志）；
+- 不支持附件投递到评论（run 产出的 `<yomi_attachments>` 文件无法作为评论附件，回复中附说明）；
+- 不做"解决评论"（resolve）等增强（见 §10 未来项）。
+
+> 2026-08-06 修订：初版非目标中的「评论串时间线注入」「表情回应」已落地——受理即在触发回复上打 ack 表情（OneSecond，`drive/v2` reaction API，按 reply_id 定向）；评论组内触发点之前的人类讨论以 `<comment_thread_history>` 块注入（复用聊天历史游标存储按评论组去重，bot 自己的回复与触发条除外）。
 
 ## 3. 前置条件（运维侧）
 
@@ -109,6 +110,15 @@ body: { "content": { "elements": [{ "type": "text_run", "text_run": { "text": ".
 - **全文评论**：replies API 报错（E2E 实测错误码 1069302），需降级为 `POST .../comments` 新加一条全文评论作为回复——注意其 body 为 `{"reply_list": {"replies": [{"content": ...}]}}` 包装形态（实测裸 `{content}` 报 9499）；
 - 评论为纯文本（markdown 不渲染）；单条长度有限，参考实现按 4000 字符分片，本设计同样分片多条回复；
 - 文档标题复用现有 `fetch_doc_title`（`drive/v1/metas/batch_query`）。
+
+### 4.4 评论表情（ack 回执）
+
+```
+POST /open-apis/drive/v2/files/{file_token}/comments/reaction?file_type={file_type}
+body: { "action": "add", "reply_id": "...", "reaction_type": "OneSecond" }
+```
+
+E2E 实测：按 **reply_id** 定向（误传 comment_id 报 1061001）；IM 的 emoji 词表通用。受理触发即在触发回复上打 ack（对齐聊天消息的 OneSecond 确认语义）。
 
 ## 5. 核心设计
 

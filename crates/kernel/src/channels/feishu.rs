@@ -868,17 +868,22 @@ impl PlatformAdapter for FeishuAdapter {
             .map(|replies| {
                 replies
                     .iter()
-                    .map(|r| super::DocCommentReplyLite {
-                        reply_id: r["reply_id"].as_str().unwrap_or_default().to_string(),
-                        user_id: r["user_id"].as_str().unwrap_or_default().to_string(),
-                        create_time: r["create_time"]
-                            .as_i64()
-                            .or_else(|| r["create_time"].as_str()?.parse().ok())
-                            .unwrap_or_default(),
-                        text: Self::extract_reply_text(
-                            r["content"]["elements"].as_array(),
-                            bot_open_id.as_deref(),
-                        ),
+                    .map(|r| {
+                        let user_id = r["user_id"].as_str().unwrap_or_default().to_string();
+                        super::DocCommentReplyLite {
+                            is_from_bot: bot_open_id.as_deref() == Some(user_id.as_str())
+                                && !user_id.is_empty(),
+                            user_id,
+                            reply_id: r["reply_id"].as_str().unwrap_or_default().to_string(),
+                            create_time: r["create_time"]
+                                .as_i64()
+                                .or_else(|| r["create_time"].as_str()?.parse().ok())
+                                .unwrap_or_default(),
+                            text: Self::extract_reply_text(
+                                r["content"]["elements"].as_array(),
+                                bot_open_id.as_deref(),
+                            ),
+                        }
                     })
                     .collect()
             })
@@ -942,6 +947,29 @@ impl PlatformAdapter for FeishuAdapter {
         }
         let resp = check_api_resp(resp)?;
         Ok(resp_data_str(&resp, "reply_id").or_else(|| resp_data_str(&resp, "comment_id")))
+    }
+
+    /// refer: <https://open.feishu.cn/document/server-docs/docs/CommentAPI/reaction>
+    /// E2E-verified: keyed by **reply** id (a comment id is rejected with
+    /// 1061001), and the IM emoji vocabulary applies (`OneSecond`/…).
+    async fn react_doc_comment(
+        &self,
+        file_token: &str,
+        file_type: &str,
+        reply_id: &str,
+        emoji: &str,
+    ) -> Result<(), ChannelError> {
+        let token = self.get_token().await?;
+        self.api_post(
+            &token,
+            &format!(
+                "{}/open-apis/drive/v2/files/{file_token}/comments/reaction?file_type={file_type}",
+                self.base_url
+            ),
+            json!({ "action": "add", "reply_id": reply_id, "reaction_type": emoji }),
+        )
+        .await?;
+        Ok(())
     }
 
     /// refer: <https://open.feishu.cn/document/server-docs/im-v1/message-card/patch>

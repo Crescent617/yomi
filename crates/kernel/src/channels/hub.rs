@@ -222,15 +222,16 @@ impl ChannelHub {
                             // enters the serial dispatch path like any
                             // chat message.
                             ChannelEvent::DocCommentAdded(notice) => {
-                                let (name, config, adapter, dispatch) = (
+                                let (name, config, store, adapter, dispatch) = (
                                     name_gate.clone(),
                                     config_gate.clone(),
+                                    Arc::clone(&store),
                                     Arc::clone(&adapter_gate),
                                     dispatch_tx.clone(),
                                 );
                                 tokio::spawn(async move {
                                     super::comment::handle_doc_comment_added(
-                                        &name, &config, &adapter, &dispatch, notice,
+                                        &name, &config, &store, &adapter, &dispatch, notice,
                                     ).await;
                                 });
                                 continue;

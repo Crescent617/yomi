@@ -11,6 +11,8 @@ struct CommentMockAdapter {
     /// `fetch_doc_comment` call count — the disabled-toggle test asserts
     /// the feature costs zero platform API calls when off.
     fetch_calls: tokio::sync::Mutex<usize>,
+    /// Ack reactions fired: reply ids.
+    reactions: tokio::sync::Mutex<Vec<String>>,
     title: Option<String>,
 }
 
@@ -20,6 +22,7 @@ impl CommentMockAdapter {
             detail: tokio::sync::Mutex::new(detail),
             fetch_error: tokio::sync::Mutex::new(false),
             fetch_calls: tokio::sync::Mutex::new(0),
+            reactions: tokio::sync::Mutex::new(Vec::new()),
             title: Some("2026 产品方案".to_string()),
         }
     }
@@ -61,6 +64,33 @@ impl PlatformAdapter for CommentMockAdapter {
         *self.fetch_calls.lock().await += 1;
         Ok(self.detail.lock().await.clone())
     }
+
+    async fn react_doc_comment(
+        &self,
+        _file_token: &str,
+        _file_type: &str,
+        reply_id: &str,
+        _emoji: &str,
+    ) -> Result<(), ChannelError> {
+        self.reactions.lock().await.push(reply_id.to_string());
+        Ok(())
+    }
+}
+
+fn lite(
+    reply_id: &str,
+    user_id: &str,
+    create_time: i64,
+    text: &str,
+    is_from_bot: bool,
+) -> DocCommentReplyLite {
+    DocCommentReplyLite {
+        reply_id: reply_id.to_string(),
+        user_id: user_id.to_string(),
+        create_time,
+        text: text.to_string(),
+        is_from_bot,
+    }
 }
 
 fn detail_with_replies(replies: Vec<(&str, &str)>) -> DocCommentDetail {
@@ -70,11 +100,14 @@ fn detail_with_replies(replies: Vec<(&str, &str)>) -> DocCommentDetail {
         replies: replies
             .into_iter()
             .enumerate()
-            .map(|(i, (reply_id, text))| DocCommentReplyLite {
-                reply_id: reply_id.to_string(),
-                user_id: "ou_commenter".to_string(),
-                create_time: 1_700_000_000 + i as i64,
-                text: text.to_string(),
+            .map(|(i, (reply_id, text))| {
+                lite(
+                    reply_id,
+                    "ou_commenter",
+                    1_700_000_000 + i as i64,
+                    text,
+                    false,
+                )
             })
             .collect(),
     }
@@ -105,15 +138,36 @@ fn feishu_config() -> ChannelConfig {
     }
 }
 
-async fn handle(
+async fn test_store() -> Arc<dyn crate::channels::ChannelStore> {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    crate::storage::migrations::run_migrations(&pool)
+        .await
+        .unwrap();
+    Arc::new(crate::channels::store::SqliteChannelStore::new(pool))
+}
+
+async fn handle_with_store(
     config: &ChannelConfig,
+    store: &Arc<dyn crate::channels::ChannelStore>,
     adapter: &Arc<CommentMockAdapter>,
     notice: DocCommentNotice,
 ) -> mpsc::Receiver<(ChannelMessage, super::super::hub::Gate)> {
     let (tx, rx) = mpsc::channel(1);
     let adapter: Arc<dyn PlatformAdapter> = adapter.clone();
-    handle_doc_comment_added("feishu", config, &adapter, &tx, notice).await;
+    handle_doc_comment_added("feishu", config, store, &adapter, &tx, notice).await;
     rx
+}
+
+async fn handle(
+    config: &ChannelConfig,
+    adapter: &Arc<CommentMockAdapter>,
+    notice: DocCommentNotice,
+) -> mpsc::Receiver<(ChannelMessage, super::super::hub::Gate)> {
+    handle_with_store(config, &test_store().await, adapter, notice).await
 }
 
 // ── Policy ─────────────────────────────────────────────────────────
@@ -192,6 +246,91 @@ async fn deleted_comment_triggers_nothing() {
     assert!(rx.try_recv().is_err(), "deleted comment must be dropped");
 }
 
+// ── Ack reaction ───────────────────────────────────────────────────
+
+#[tokio::test]
+async fn accepted_comment_fires_ack_reaction_on_triggering_reply() {
+    let config = feishu_config();
+    let adapter = Arc::new(CommentMockAdapter::new(Some(detail_with_replies(vec![(
+        "r_2",
+        "@bot 看看",
+    )]))));
+    let _rx = handle(&config, &adapter, notice()).await;
+    // The ack is fired off a spawned task — yield briefly.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(*adapter.reactions.lock().await, vec!["r_2".to_string()]);
+}
+
+#[tokio::test]
+async fn filtered_comment_fires_no_reaction() {
+    let config = feishu_config();
+    let adapter = Arc::new(CommentMockAdapter::new(Some(detail_with_replies(vec![(
+        "r_2", "hi",
+    )]))));
+    let mut n = notice();
+    n.is_mentioned = false;
+    let _rx = handle(&config, &adapter, n).await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(adapter.reactions.lock().await.is_empty());
+}
+
+// ── Thread history ─────────────────────────────────────────────────
+
+#[tokio::test]
+async fn thread_history_excludes_bot_and_triggering_reply() {
+    let config = feishu_config();
+    let detail = DocCommentDetail {
+        is_whole: false,
+        quote: None,
+        replies: vec![
+            lite("r_0", "ou_alice", 1_700_000_000, "早期讨论", false),
+            lite("r_1", "ou_bot", 1_700_000_001, "bot 之前的回答", true),
+            lite("r_2", "ou_commenter", 1_700_000_002, "@bot 看看", false),
+        ],
+    };
+    let adapter = Arc::new(CommentMockAdapter::new(Some(detail)));
+    let mut rx = handle(&config, &adapter, notice()).await;
+    let (msg, _gate) = rx.try_recv().expect("trigger dispatched");
+
+    assert_eq!(msg.content.len(), 2, "history block + meta block");
+    let ContentBlock::Text { text: history } = &msg.content[0] else {
+        panic!("expected history block");
+    };
+    assert!(history.starts_with("<comment_thread_history>"), "{history}");
+    assert!(history.contains("ou_alice: 早期讨论"), "{history}");
+    assert!(!history.contains("bot 之前的回答"), "bot replies excluded");
+    assert!(!history.contains("看看"), "triggering reply excluded");
+    // The meta block stays last.
+    let ContentBlock::Text { text: meta } = &msg.content[1] else {
+        panic!("expected meta block");
+    };
+    assert!(meta.contains("[doc: docx:doxcnABC123]"), "{meta}");
+}
+
+#[tokio::test]
+async fn thread_history_cursor_dedups_across_triggers() {
+    let config = feishu_config();
+    let store = test_store().await;
+    let detail = || DocCommentDetail {
+        is_whole: false,
+        quote: None,
+        replies: vec![
+            lite("r_0", "ou_alice", 1_700_000_000, "早期讨论", false),
+            lite("r_2", "ou_commenter", 1_700_000_002, "@bot 看看", false),
+        ],
+    };
+    let adapter = Arc::new(CommentMockAdapter::new(Some(detail())));
+    let mut rx = handle_with_store(&config, &store, &adapter, notice()).await;
+    let (msg, _) = rx.try_recv().unwrap();
+    assert_eq!(msg.content.len(), 2, "first trigger injects history");
+
+    // Second trigger (same thread, nothing new): cursor covers r_0.
+    *adapter.detail.lock().await = Some(detail());
+    let mut rx = handle_with_store(&config, &store, &adapter, notice()).await;
+    let (msg, _) = rx.try_recv().unwrap();
+    assert_eq!(msg.content.len(), 1, "second trigger injects no history");
+}
+
 // ── Accepted trigger ───────────────────────────────────────────────
 
 #[tokio::test]
@@ -214,7 +353,7 @@ async fn accepted_comment_builds_meta_message() {
     assert_eq!(dc.file_token, "doxcnABC123");
     assert_eq!(dc.comment_id, "7123456789");
 
-    let ContentBlock::Text { text } = &msg.content[0] else {
+    let ContentBlock::Text { text } = msg.content.last().expect("meta block") else {
         panic!("expected text block");
     };
     assert!(text.contains("[platform: feishu]"), "{text}");

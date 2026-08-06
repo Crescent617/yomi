@@ -361,6 +361,9 @@ pub struct DocCommentReplyLite {
     /// Unix seconds (the comment API's native precision).
     pub create_time: i64,
     pub text: String,
+    /// Authored by the bot itself — excluded from injected thread history
+    /// (those turns are already in the session as assistant messages).
+    pub is_from_bot: bool,
 }
 
 /// The session mapping key for a doc-comment session:
@@ -764,6 +767,19 @@ pub trait PlatformAdapter: Send + Sync {
         Err(ChannelError::Platform(
             "doc comment reply not supported for this platform".into(),
         ))
+    }
+
+    /// Add a reaction to a doc comment reply (the ack for an accepted
+    /// comment trigger; keyed by the reply's id). Best-effort — default:
+    /// silent no-op for platforms without the concept.
+    async fn react_doc_comment(
+        &self,
+        _file_token: &str,
+        _file_type: &str,
+        _reply_id: &str,
+        _emoji: &str,
+    ) -> Result<(), ChannelError> {
+        Ok(())
     }
 
     /// Update a previously sent card message in place.

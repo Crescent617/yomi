@@ -286,6 +286,9 @@ fn response_for(method: &str, path: &str) -> Vec<u8> {
         "POST" if p.starts_with("/open-apis/drive/v1/files/") && p.ends_with("/comments") => {
             r#"{"code":0,"msg":"ok","data":{"comment_id":"c_new"}}"#.into()
         }
+        "POST" if p.starts_with("/open-apis/drive/v2/files/") && p.ends_with("/comments/reaction") => {
+            r#"{"code":0,"msg":"ok"}"#.into()
+        }
         "DELETE" if p.contains("/reactions/") => r#"{"code":0,"msg":"ok"}"#.into(),
         _ => r#"{"code":999,"msg":"unexpected request"}"#.into(),
     }
@@ -1097,6 +1100,8 @@ async fn doc_comment_event_missing_ids_is_ignored() {
 async fn fetch_doc_comment_parses_quote_and_replies() {
     let stub = StubFeishu::start().await;
     let adapter = stub_adapter(&stub.base_url);
+    // Seed the bot identity so reply attribution (is_from_bot) resolves.
+    *adapter.bot_open_id.lock().await = Some("ou_bot".to_string());
 
     let detail = adapter
         .fetch_doc_comment("doxcnABC123", "docx", "c_1")
@@ -1108,11 +1113,12 @@ async fn fetch_doc_comment_parses_quote_and_replies() {
     assert_eq!(detail.quote.as_deref(), Some("引用原文段落"));
     assert_eq!(detail.replies.len(), 2);
     assert_eq!(detail.replies[0].reply_id, "r_1");
-    // person element renders as @user:{open_id} (bot id unknown here),
-    // docs_link as its URL.
+    assert!(!detail.replies[0].is_from_bot);
+    assert!(detail.replies[1].is_from_bot);
+    // person element renders as @bot (bot id seeded), docs_link as its URL.
     assert_eq!(
         detail.replies[0].text,
-        "这段@user:ou_bot 改写一下，参考 https://feishu.cn/docx/other"
+        "这段@bot 改写一下，参考 https://feishu.cn/docx/other"
     );
     assert_eq!(detail.replies[1].text, "bot 的回复");
 
@@ -1123,6 +1129,27 @@ async fn fetch_doc_comment_parses_quote_and_replies() {
     assert_eq!(req.0, "POST");
     assert!(req.1.contains("file_type=docx"), "{}", req.1);
     assert_eq!(StubFeishu::body_json(&req)["comment_ids"][0], "c_1");
+}
+
+#[tokio::test]
+async fn react_doc_comment_posts_add_reaction() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+
+    adapter
+        .react_doc_comment("doxcnABC123", "docx", "r_2", "OneSecond")
+        .await
+        .unwrap();
+
+    let req = stub.find(
+        "POST",
+        "/open-apis/drive/v2/files/doxcnABC123/comments/reaction",
+    );
+    assert!(req.1.contains("file_type=docx"), "{}", req.1);
+    let body = StubFeishu::body_json(&req);
+    assert_eq!(body["action"], "add");
+    assert_eq!(body["reply_id"], "r_2");
+    assert_eq!(body["reaction_type"], "OneSecond");
 }
 
 #[test]

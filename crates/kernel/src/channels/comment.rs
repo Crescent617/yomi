@@ -3,8 +3,8 @@
 //! See `docs/design/feishu-doc-comment.md`.
 
 use super::{
-    ChannelConfig, ChannelError, ChannelMessage, DocCommentDetail, DocCommentNotice, DocCommentRef,
-    PlatformAdapter,
+    ChannelConfig, ChannelError, ChannelMessage, ChannelStore, DocCommentDetail, DocCommentNotice,
+    DocCommentRef, PlatformAdapter,
 };
 use crate::types::ContentBlock;
 use std::fmt::Write as _;
@@ -21,6 +21,11 @@ pub(super) const COMMENT_REPLY_CHUNK_CHARS: usize = 4000;
 /// hint, the agent can always read the full doc for more.
 const QUOTE_MAX_CHARS: usize = 300;
 
+/// Thread-history replies injected per trigger (newest win).
+const THREAD_HISTORY_MAX: usize = 20;
+/// Per-reply cap in the history block (chars).
+const THREAD_HISTORY_REPLY_MAX_CHARS: usize = 2000;
+
 /// Handle one `drive.notice.comment_add_v1` event: policy-filter, fetch
 /// the comment content, assemble the user message and hand it to the
 /// serial dispatch path as an allowed trigger. Filtered-out events are
@@ -29,6 +34,7 @@ const QUOTE_MAX_CHARS: usize = 300;
 pub(super) async fn handle_doc_comment_added(
     channel_name: &str,
     config: &ChannelConfig,
+    store: &Arc<dyn ChannelStore>,
     adapter: &Arc<dyn PlatformAdapter>,
     dispatch_tx: &mpsc::Sender<(ChannelMessage, super::hub::Gate)>,
     notice: DocCommentNotice,
@@ -70,6 +76,26 @@ pub(super) async fn handle_doc_comment_added(
         return;
     }
 
+    // Accepted — ack the triggering reply (fire-and-forget, mirrors the
+    // chat gate's ack reaction). Needs a reply id to target.
+    if let Some(reply_id) = notice.reply_id.as_deref() {
+        let adapter = Arc::clone(adapter);
+        let (file_token, file_type, reply_id) = (
+            notice.file_token.clone(),
+            notice.file_type.clone(),
+            reply_id.to_string(),
+        );
+        let emoji = config.platform.ack_reaction();
+        tokio::spawn(async move {
+            if let Err(e) = adapter
+                .react_doc_comment(&file_token, &file_type, &reply_id, emoji)
+                .await
+            {
+                warn!(error = %e, reply_id = %reply_id, "doc comment ack reaction failed");
+            }
+        });
+    }
+
     let (detail, title) = tokio::join!(
         adapter.fetch_doc_comment(&notice.file_token, &notice.file_type, &notice.comment_id),
         adapter.fetch_doc_title(&notice.file_token, &notice.file_type),
@@ -109,6 +135,15 @@ pub(super) async fn handle_doc_comment_added(
         fetch_error.as_deref(),
         title.as_deref(),
     );
+    // The comment thread's prior replies ride as a leading context block
+    // (history first, trigger last — the chat convention).
+    let mut content = Vec::new();
+    if let Some(d) = &detail {
+        if let Some(history) = build_thread_history(store, channel_name, &notice, d).await {
+            content.push(history);
+        }
+    }
+    content.push(ContentBlock::Text { text });
     info!(
         channel = %channel_name,
         comment_id = %notice.comment_id,
@@ -127,7 +162,7 @@ pub(super) async fn handle_doc_comment_added(
         raw_text: reply_text
             .map(|t| t.replace("@bot", "").trim().to_string())
             .filter(|t| !t.is_empty()),
-        content: vec![ContentBlock::Text { text }],
+        content,
         image_keys: Vec::new(),
         thread_id: None,
         root_id: None,
@@ -203,6 +238,71 @@ fn assemble_message(
         let _ = write!(body, "[评论内容拉取失败: {error}]");
     }
     format!("{header}\n{body}")
+}
+
+/// The comment thread's prior replies as a `<comment_thread_history>`
+/// block — the doc-comment surface's "recent history". Deduped by the
+/// per-thread history cursor (same store as chat); the bot's own replies
+/// (already in the session as assistant turns) and the triggering reply
+/// (delivered verbatim below) are excluded. The cursor advances to the
+/// newest fetched reply at build time — best-effort, like chat. `None`
+/// when there is nothing (left) to inject.
+async fn build_thread_history(
+    store: &Arc<dyn ChannelStore>,
+    channel_name: &str,
+    notice: &DocCommentNotice,
+    detail: &DocCommentDetail,
+) -> Option<ContentBlock> {
+    let container =
+        super::doc_comment_mapping_key(&notice.file_type, &notice.file_token, &notice.comment_id);
+    // Comment timestamps are seconds; cursors are stored in ms (chat
+    // convention).
+    let cursor = store
+        .get_history_cursor(channel_name, &container)
+        .await
+        .ok()
+        .flatten();
+    if let Some(newest_ms) = detail.replies.iter().map(|r| r.create_time * 1000).max() {
+        if cursor.is_none_or(|c| newest_ms > c) {
+            if let Err(e) = store
+                .set_history_cursor(channel_name, &container, newest_ms)
+                .await
+            {
+                warn!(error = %e, "comment thread cursor advance failed");
+            }
+        }
+    }
+    let mut lines: Vec<String> = detail
+        .replies
+        .iter()
+        .filter(|r| !r.is_from_bot)
+        .filter(|r| Some(r.reply_id.as_str()) != notice.reply_id.as_deref())
+        .filter(|r| !r.text.trim().is_empty())
+        .filter(|r| cursor.is_none_or(|c| r.create_time * 1000 > c))
+        .map(|r| {
+            let ts = chrono::DateTime::from_timestamp(r.create_time, 0)
+                .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M").to_string())
+                .unwrap_or_default();
+            let text = crate::utils::strs::truncate_by_chars(
+                r.text.trim(),
+                THREAD_HISTORY_REPLY_MAX_CHARS,
+                "…",
+            );
+            format!("[{ts}] {}: {text}", r.user_id)
+        })
+        .collect();
+    if lines.len() > THREAD_HISTORY_MAX {
+        lines.drain(..lines.len() - THREAD_HISTORY_MAX);
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    Some(ContentBlock::Text {
+        text: format!(
+            "<comment_thread_history>\n{}\n</comment_thread_history>",
+            lines.join("\n")
+        ),
+    })
 }
 
 /// The comment thread reply that triggered this event: the one matching
