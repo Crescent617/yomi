@@ -217,15 +217,8 @@ async fn accepted_comment_builds_meta_message() {
     let ContentBlock::Text { text } = &msg.content[0] else {
         panic!("expected text block");
     };
-    assert!(
-        text.contains("[platform: feishu][source: doc_comment]"),
-        "{text}"
-    );
+    assert!(text.contains("[platform: feishu]"), "{text}");
     assert!(text.contains("[doc: docx:doxcnABC123]"), "{text}");
-    assert!(
-        text.contains("[doc_url: https://feishu.cn/docx/doxcnABC123]"),
-        "{text}"
-    );
     assert!(text.contains("[comment_id: 7123456789]"), "{text}");
     assert!(text.contains("[reply_id: r_2]"), "{text}");
     assert!(text.contains("[doc_title: 2026 产品方案]"), "{text}");
@@ -248,7 +241,7 @@ async fn fetch_failure_injects_bare_meta_with_note() {
     let ContentBlock::Text { text } = &msg.content[0] else {
         panic!("expected text block");
     };
-    assert!(text.contains("[source: doc_comment]"), "{text}");
+    assert!(text.contains("[doc: docx:doxcnABC123]"), "{text}");
     assert!(text.contains("[评论内容拉取失败:"), "{text}");
     assert!(!text.contains('>'), "{text}");
 }

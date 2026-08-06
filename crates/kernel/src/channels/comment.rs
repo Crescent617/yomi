@@ -178,9 +178,8 @@ fn assemble_message(
     title: Option<&str>,
 ) -> String {
     let ts = fmt_ts(notice.create_time);
-    let doc_url = super::doc_link(&notice.file_type, &notice.file_token);
     let mut header = format!(
-        "[{ts}][from_user_id: {}][platform: feishu][source: doc_comment][doc: {}:{}][doc_url: {doc_url}][comment_id: {}]",
+        "[{ts}][from_user_id: {}][platform: feishu][doc: {}:{}][comment_id: {}]",
         notice.commenter_open_id, notice.file_type, notice.file_token, notice.comment_id
     );
     if let Some(title) = title.map(str::trim).filter(|t| !t.is_empty()) {

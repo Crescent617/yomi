@@ -11,7 +11,7 @@
 > - ✅ `batch_query` 用 tenant token 拉到真实评论：`is_whole`/`quote`/`reply_list.replies[].content.elements[]` 字段形态与解析代码一致；@bot 的 `person` 元素以 bot open_id 持久化；
 > - ✅ 局部评论 thread 回复 API 成功；全文评论 replies API 报错 **1069302**（与参考实现一致），降级路径创建全文评论需 `reply_list` 包装（裸 `{content}` 报 9499——已修复）；
 > - ✅ 文件级 subscribe API 接受 `drive.notice.comment_add_v1`（code 0）；
-> - ✅ **端到端闭环全部通过**（控制台订阅 + 发布版本后）：评论 @bot → 事件到达（`is_mentioned=true`）→ meta 头注入（`[source: doc_comment]` + doc/comment_id/reply_id/quote 齐全）→ 局部评论 thread 内回复、全文评论走降级新开评论（均真实落文档）；同评论组追问复用同一 session（`reusing session`）、上下文连贯；非 @ 评论正确过滤（`bot not mentioned`）；bot 自己的评论不产生事件（源头防循环）。
+> - ✅ **端到端闭环全部通过**（控制台订阅 + 发布版本后）：评论 @bot → 事件到达（`is_mentioned=true`）→ meta 头注入（doc/comment_id/reply_id/quote 齐全）→ 局部评论 thread 内回复、全文评论走降级新开评论（均真实落文档）；同评论组追问复用同一 session（`reusing session`）、上下文连贯（含 daemon 重启后续聊）；跨评论组隔离（各自新 session）；非 @ 评论正确过滤（`bot not mentioned`）；bot 自己的评论不产生事件（源头防循环）。
 
 ---
 
@@ -173,17 +173,16 @@ ChannelMessage {
 
 ### 5.3 meta：user 消息头标注文档来源（本设计核心）
 
-沿用现有 meta 头约定（adapter/hub 拼在 user 消息文本首行的 `[k: v]` 序列——`Message.metadata`/`_meta` 字段**不发给模型**，明确不使用）。组装的文本形态：
+沿用现有 meta 头约定（adapter/hub 拼在 user 消息文本首行的 `[k: v]` 序列——`Message.metadata`/`_meta` 字段**不发给模型**，明确不使用）。组装的文本形态（最终定为最小集——`[doc:]` 与 `[comment_id:]` 在场即表明评论来源，无需独立 `source` 键；`doc_url` 可由 `doc` 推导，不带）：
 
 ```
-[2026-08-06 20:13:00][from_user_id: ou_xxx][platform: feishu][source: doc_comment]
-[doc_title: 2026 产品方案][doc: docx:doxcnABC123][doc_url: https://feishu.cn/docx/doxcnABC123][comment_id: 7123456789][reply_id: 7123456790]
+[2026-08-06 20:13:00][from_user_id: ou_xxx][platform: feishu][doc: docx:doxcnABC123][comment_id: 7123456789][doc_title: 2026 产品方案][reply_id: 7123456790]
 > 被划词引用的原文…（局部评论才有此行）
 
-评论正文（@bot 占位已剔除）
+评论正文（@bot 在正文渲染为 @bot 标记）
 ```
 
-- `[source: doc_comment]` 是与普通聊天消息的区分标记（普通消息无此键）；`[doc: {file_type}:{file_token}]` 与 `[doc_url]` 给 agent 读文档/回评论所需的全部标识；
+- `[doc: {file_type}:{file_token}]` + `[comment_id]` 是 agent 读全文/看完整评论串所需的全部标识（经 lark-cli 等工具）；`doc_title`/`reply_id` 可选，缺失即省略；
 - 无 `chat_id` 键（本来就没有），不伪造；
 - 该 header 由 hub 侧组装（普通聊天消息的 header 在 adapter 拼，因为那里有事件原文；评论内容在 hub 拉取，故在 hub 拼）。
 
