@@ -41,6 +41,10 @@ const PAYLOAD_PB: u8 = 2;
 /// Legacy-rendered echo of a schema 2.0 card (real content unavailable).
 const UPGRADE_CLIENT_NOTICE: &str = "请升级至最新版本客户端，以查看内容";
 
+/// Platform error: whole-document comments take no thread replies — the
+/// adapter falls back to posting a new whole comment instead.
+const WHOLE_COMMENT_NO_REPLY: i64 = 1_069_302;
+
 /// Application-level ping cadence; the gateway answers every ping with a pong.
 const PING_INTERVAL: std::time::Duration = std::time::Duration::from_mins(1);
 /// No inbound frame (pongs included) for this long means a zombie
@@ -830,6 +834,116 @@ impl PlatformAdapter for FeishuAdapter {
             .map(str::to_string)
     }
 
+    /// refer: <https://open.feishu.cn/document/server-docs/docs/CommentAPI/batch_query>
+    /// `batch_query` (not the single-comment GET — that one serves whole
+    /// comments only) so partial/anchored comments fetch too. Bounded
+    /// like the other receive-side fetches: a hung API must not stall
+    /// the hub's dispatch machinery.
+    async fn fetch_doc_comment(
+        &self,
+        file_token: &str,
+        file_type: &str,
+        comment_id: &str,
+    ) -> Result<Option<super::DocCommentDetail>, ChannelError> {
+        let token = self.get_token().await?;
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.api_post(
+                &token,
+                &format!(
+                    "{}/open-apis/drive/v1/files/{file_token}/comments/batch_query?file_type={file_type}&user_id_type=open_id",
+                    self.base_url
+                ),
+                json!({ "comment_ids": [comment_id] }),
+            ),
+        )
+        .await
+        .map_err(|_| ChannelError::Platform("comment fetch timed out".into()))??;
+        let Some(item) = resp["data"]["items"].as_array().and_then(|a| a.first()) else {
+            return Ok(None);
+        };
+        let bot_open_id = self.ensure_bot_open_id(&token).await;
+        let replies = item["reply_list"]["replies"]
+            .as_array()
+            .map(|replies| {
+                replies
+                    .iter()
+                    .map(|r| super::DocCommentReplyLite {
+                        reply_id: r["reply_id"].as_str().unwrap_or_default().to_string(),
+                        user_id: r["user_id"].as_str().unwrap_or_default().to_string(),
+                        create_time: r["create_time"]
+                            .as_i64()
+                            .or_else(|| r["create_time"].as_str()?.parse().ok())
+                            .unwrap_or_default(),
+                        text: Self::extract_reply_text(
+                            r["content"]["elements"].as_array(),
+                            bot_open_id.as_deref(),
+                        ),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(Some(super::DocCommentDetail {
+            is_whole: item["is_whole"].as_bool().unwrap_or(false),
+            quote: item["quote"]
+                .as_str()
+                .filter(|q| !q.is_empty())
+                .map(str::to_string),
+            replies,
+        }))
+    }
+
+    /// refer: <https://open.feishu.cn/document/server-docs/docs/CommentAPI/reply>
+    /// Whole comments take no thread replies (platform error 1069302) —
+    /// fall back to posting a new whole comment as the answer.
+    async fn reply_doc_comment(
+        &self,
+        file_token: &str,
+        file_type: &str,
+        comment_id: &str,
+        text: &str,
+    ) -> Result<Option<String>, ChannelError> {
+        let token = self.get_token().await?;
+        let body = json!({
+            "content": { "elements": [{ "type": "text_run", "text_run": { "text": text } }] }
+        });
+        let url = format!(
+            "{}/open-apis/drive/v1/files/{file_token}/comments/{comment_id}/replies?file_type={file_type}&user_id_type=open_id",
+            self.base_url
+        );
+        // Raw post (not `api_post`): the 1069302 fallback needs the code.
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| api_err("comment reply request", e))?
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| api_err("comment reply parse", e))?;
+        if resp["code"].as_i64() == Some(WHOLE_COMMENT_NO_REPLY) {
+            // The create-comment API wraps the reply in a `reply_list`
+            // (E2E-verified: a bare `{content}` body is rejected with
+            // 9499 "Missing required parameter: ReplyList").
+            let create_body = json!({ "reply_list": { "replies": [body] } });
+            let resp = self
+                .api_post(
+                    &token,
+                    &format!(
+                        "{}/open-apis/drive/v1/files/{file_token}/comments?file_type={file_type}&user_id_type=open_id",
+                        self.base_url
+                    ),
+                    create_body,
+                )
+                .await?;
+            return Ok(resp_data_str(&resp, "comment_id"));
+        }
+        let resp = check_api_resp(resp)?;
+        Ok(resp_data_str(&resp, "reply_id").or_else(|| resp_data_str(&resp, "comment_id")))
+    }
+
     /// refer: <https://open.feishu.cn/document/server-docs/im-v1/message-card/patch>
     async fn update_card(&self, message_id: &str, card_json: &str) -> Result<(), ChannelError> {
         let token = self.get_token().await?;
@@ -1414,6 +1528,34 @@ impl FeishuAdapter {
             .unwrap_or_default()
     }
 
+    /// Extract display text from a comment reply's content elements:
+    /// text runs concatenated, docs links as their URL, @-mentions as
+    /// `@bot` (the bot itself) or `@user:{open_id}`.
+    fn extract_reply_text(
+        elements: Option<&Vec<serde_json::Value>>,
+        bot_open_id: Option<&str>,
+    ) -> String {
+        let Some(elements) = elements else {
+            return String::new();
+        };
+        elements
+            .iter()
+            .map(|e| match e["type"].as_str() {
+                Some("text_run") => e["text_run"]["text"].as_str().unwrap_or("").to_string(),
+                Some("docs_link") => e["docs_link"]["url"].as_str().unwrap_or("").to_string(),
+                Some("person") => {
+                    let uid = e["person"]["user_id"].as_str().unwrap_or("");
+                    if !uid.is_empty() && Some(uid) == bot_open_id {
+                        "@bot".to_string()
+                    } else {
+                        format!("@user:{uid}")
+                    }
+                }
+                _ => String::new(),
+            })
+            .collect()
+    }
+
     /// Feishu `create_time` is in milliseconds, but some v1.x events may be in
     /// seconds or microseconds. Normalise to seconds and format.
     fn parse_feishu_timestamp(value: &serde_json::Value) -> String {
@@ -1461,6 +1603,9 @@ impl FeishuAdapter {
             "im.message.receive_v1" => {} // parsed below
             "drive.file.permission_member_applied_v1" => {
                 return Self::forward_doc_permission_event(&msg["event"], incoming).await;
+            }
+            "drive.notice.comment_add_v1" => {
+                return self.forward_doc_comment_event(msg, incoming).await;
             }
             // Card callbacks are normally delivered as `card` data frames,
             // but tolerate delivery as a plain event too.
@@ -1595,6 +1740,7 @@ impl FeishuAdapter {
             create_time: message["create_time"]
                 .as_str()
                 .and_then(|s| s.parse::<i64>().ok()),
+            doc_comment: None,
         };
 
         if incoming
@@ -1610,6 +1756,81 @@ impl FeishuAdapter {
         let _ = self.seen_messages.lock().await.put(msg_id.clone(), ());
 
         Ok(Some(msg_id))
+    }
+
+    /// Parse a `drive.notice.comment_add_v1` event and forward it as a
+    /// [`ChannelEvent::DocCommentAdded`]. Ids only — the comment content is
+    /// fetched by the hub post-policy (deferred, like image keys). The only
+    /// adapter-side filter beyond dedup is the self-authored check (the
+    /// bot's own comment replies must not retrigger it); it needs the bot
+    /// identity, which is adapter domain knowledge, and only costs the
+    /// (cached) bot-info call for mention events — non-mention events are
+    /// forwarded untouched and filtered by the hub's policy instead.
+    async fn forward_doc_comment_event(
+        &self,
+        msg: &serde_json::Value,
+        incoming: &mpsc::Sender<ChannelEvent>,
+    ) -> Result<Option<String>, ChannelError> {
+        let event = &msg["event"];
+        let meta = &event["notice_meta"];
+        let comment_id = event["comment_id"].as_str().unwrap_or_default();
+        let reply_id = event["reply_id"].as_str().unwrap_or_default();
+        // Redelivery guard (lost ACK → resend), keyed like chat messages.
+        let dedup_key = format!("doc_comment:{comment_id}:{reply_id}");
+        if self.seen_messages.lock().await.contains(&dedup_key) {
+            info!(
+                comment_id,
+                reply_id, "duplicate comment event delivery, skipped"
+            );
+            return Ok(None);
+        }
+        let commenter = meta["from_user_id"]["open_id"].as_str().unwrap_or_default();
+        let file_token = meta["file_token"].as_str().unwrap_or_default();
+        let file_type = meta["file_type"].as_str().unwrap_or_default();
+        if comment_id.is_empty() || commenter.is_empty() || file_token.is_empty() {
+            warn!(payload = %msg, "comment event missing ids, ignored");
+            return Ok(None);
+        }
+        let is_mentioned = event["is_mentioned"].as_bool().unwrap_or(false);
+        if is_mentioned {
+            let token = self.get_token().await?;
+            if let Some(bot_id) = self.ensure_bot_open_id(&token).await {
+                if bot_id == commenter {
+                    debug!(comment_id, "self-authored comment event, skipped");
+                    return Ok(None);
+                }
+            }
+        }
+        let notice = super::DocCommentNotice {
+            file_token: file_token.to_string(),
+            file_type: file_type.to_string(),
+            comment_id: comment_id.to_string(),
+            reply_id: if reply_id.is_empty() {
+                None
+            } else {
+                Some(reply_id.to_string())
+            },
+            commenter_open_id: commenter.to_string(),
+            is_mentioned,
+            notice_type: meta["notice_type"].as_str().unwrap_or_default().to_string(),
+            create_time: msg["header"]["create_time"]
+                .as_str()
+                .and_then(|s| s.parse::<i64>().ok()),
+        };
+        info!(
+            comment_id,
+            reply_id, commenter, is_mentioned, file_type, "Feishu doc comment event"
+        );
+        if incoming
+            .send(ChannelEvent::DocCommentAdded(notice))
+            .await
+            .is_err()
+        {
+            return Err(ChannelError::Platform("incoming closed".to_string()));
+        }
+        // Record only after a successful forward (same rule as messages).
+        self.seen_messages.lock().await.put(dedup_key, ());
+        Ok(None)
     }
 
     /// Parse a `drive.file.permission_member_applied_v1` event and forward

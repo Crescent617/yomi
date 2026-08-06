@@ -237,6 +237,9 @@ app_secret = "..."
 | `history_context` | number | 群聊中触发时注入的最近聊天记录条数上限（拉取当前话题/频道自上次触发以来的消息作为上下文；0 关闭；平台单页上限 50） | `20` |
 | `approval_chat_id` | string | 飞书云文档权限申请的通知目标群 `chat_id`；未配置时改为私聊通知 `admin_users` 中的每位管理员；两者都未配置则该功能关闭（申请仅记录日志，可用 `/permits` 查询）。**注意**：云文档事件为两级订阅，除开发者后台添加 `drive.file.permission_member_applied_v1` 事件外，还需对每个文档调用一次文件级订阅 API（`POST /open-apis/drive/v1/files/{token}/subscribe?file_type=docx`，body `{"event_type":"drive.file.permission_member_applied_v1"}`），否则服务端不生成事件 | 无 |
 | `admin_users` | string[] | 有文档权限审批权的管理员 `open_id` 列表（卡片按钮与 `/permits` `/approve` `/deny` `/restart` 命令均校验）；未配置 `approval_chat_id` 时同时作为私聊通知的收件人 | `[]` |
+| `disabled_events` | string[] | 运行时停用的平台事件功能（词表按平台：飞书目前支持 `doc_comment` = 文档评论触发；未知名字启动时仅告警）。事件推送本身需控制台订阅，此开关用于免去控制台往返的临时停用；缺省全部启用 | `[]` |
+
+**飞书文档评论触发**：在开发者后台为应用订阅事件 `drive.notice.comment_add_v1`（长连接）并授予 `docs:document.comment:read`、`docs:document.comment:create`（或 `write_only`）权限后，用户在云文档评论中 @ 机器人即可触发 agent——评论（含划词引用原文）会作为 user 消息注入会话，meta 头标注 `[source: doc_comment]` 及文档/评论标识；agent 的回复直接投递为文档内的评论回复。每个评论组（comment thread）独立一个会话。仅 @ 机器人的评论触发；评论者维度复用 `allowed_users`/`blocked_users` 名单；`disabled_events = ["doc_comment"]` 可运行时停用。详见 `docs/design/feishu-doc-comment.md`。
 
 **Platform 配置：**
 

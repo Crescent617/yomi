@@ -173,6 +173,10 @@ impl ChannelStore for SqliteChannelStore {
                 channel_name,
                 external_chat_id: actual_chat_id.unwrap_or_default(),
                 reply_msg_id,
+                // A `doc:…` mapping key encodes the doc-comment delivery
+                // target (see `doc_comment_mapping_key`); anything else is
+                // an ordinary chat/thread routing.
+                doc_comment: super::parse_doc_comment_mapping_key(&mapping_key),
                 mapping_key,
             },
         ))

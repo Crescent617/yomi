@@ -185,6 +185,7 @@ impl TelegramAdapter {
             parent_id: None,
             is_group,
             create_time: None,
+            doc_comment: None,
         })
     }
 

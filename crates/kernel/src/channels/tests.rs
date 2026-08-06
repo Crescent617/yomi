@@ -183,3 +183,29 @@ fn test_blocks_to_text_mixed() {
 fn test_blocks_to_text_empty() {
     assert_eq!(blocks_to_text(&[]), "");
 }
+
+#[test]
+fn doc_comment_mapping_key_round_trip() {
+    let key = doc_comment_mapping_key("docx", "tok123", "c_1");
+    assert_eq!(key, "doc:docx:tok123:c_1");
+    let parsed = parse_doc_comment_mapping_key(&key).expect("parses");
+    assert_eq!(parsed.file_type, "docx");
+    assert_eq!(parsed.file_token, "tok123");
+    assert_eq!(parsed.comment_id, "c_1");
+}
+
+#[test]
+fn doc_comment_mapping_key_rejects_non_doc_keys() {
+    // Chat ids, thread ids, message ids — none parse as doc keys.
+    for key in [
+        "oc_abc",
+        "omt_1",
+        "om_x",
+        "doc:docx:tok",
+        "doc:docx:tok:c:extra",
+        "doc::tok:c",
+        "docx:tok:c_1",
+    ] {
+        assert!(parse_doc_comment_mapping_key(key).is_none(), "{key}");
+    }
+}

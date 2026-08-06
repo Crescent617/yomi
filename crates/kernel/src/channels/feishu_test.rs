@@ -256,6 +256,36 @@ fn response_for(method: &str, path: &str) -> Vec<u8> {
         "POST" if p.starts_with("/open-apis/drive/v1/permissions/") => {
             r#"{"code":0,"msg":"ok","data":{}}"#.into()
         }
+        // Doc comment APIs: batch_query serves one fixture comment;
+        // replies succeed except for the whole-comment id (platform
+        // error 1069302), which must fall back to a new whole comment.
+        "POST" if p.starts_with("/open-apis/drive/v1/files/") && p.ends_with("/comments/batch_query") => {
+            r#"{"code":0,"msg":"ok","data":{"items":[{
+                "comment_id":"c_1","user_id":"ou_commenter","create_time":1700000000,"is_whole":false,
+                "quote":"引用原文段落",
+                "reply_list":{"replies":[
+                    {"reply_id":"r_1","user_id":"ou_commenter","create_time":1700000000,
+                     "content":{"elements":[
+                        {"type":"text_run","text_run":{"text":"这段"}},
+                        {"type":"person","person":{"user_id":"ou_bot"}},
+                        {"type":"text_run","text_run":{"text":" 改写一下，参考 "}},
+                        {"type":"docs_link","docs_link":{"url":"https://feishu.cn/docx/other"}}
+                     ]}},
+                    {"reply_id":"r_2","user_id":"ou_bot","create_time":1700000006,
+                     "content":{"elements":[{"type":"text_run","text_run":{"text":"bot 的回复"}}]}}
+                ]}
+            }]}}"#.into()
+        }
+        "POST" if p.starts_with("/open-apis/drive/v1/files/") && p.ends_with("/replies") => {
+            if p.contains("/comments/c_whole/") {
+                r#"{"code":1069302,"msg":"whole comment can not add reply"}"#.into()
+            } else {
+                r#"{"code":0,"msg":"ok","data":{"reply_id":"r_new"}}"#.into()
+            }
+        }
+        "POST" if p.starts_with("/open-apis/drive/v1/files/") && p.ends_with("/comments") => {
+            r#"{"code":0,"msg":"ok","data":{"comment_id":"c_new"}}"#.into()
+        }
         "DELETE" if p.contains("/reactions/") => r#"{"code":0,"msg":"ok"}"#.into(),
         _ => r#"{"code":999,"msg":"unexpected request"}"#.into(),
     }
@@ -967,6 +997,186 @@ async fn unknown_event_type_is_ignored() {
 
     adapter.parse_event_json(&event, &tx).await.unwrap();
     assert!(rx.try_recv().is_err(), "nothing forwarded");
+}
+
+// ── Doc comment events & APIs ──────────────────────────────────────
+
+fn doc_comment_event(is_mentioned: bool, commenter: &str) -> serde_json::Value {
+    json!({
+        "header": { "event_type": "drive.notice.comment_add_v1", "create_time": "1700000000123" },
+        "event": {
+            "notice_meta": {
+                "file_type": "docx",
+                "file_token": "doxcnABC123",
+                "from_user_id": { "open_id": commenter },
+                "to_user_id": { "open_id": "ou_bot" },
+                "notice_type": "add_comment"
+            },
+            "comment_id": "7123456789",
+            "reply_id": "r_2",
+            "is_mentioned": is_mentioned
+        }
+    })
+}
+
+#[tokio::test]
+async fn doc_comment_event_is_forwarded() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+
+    adapter
+        .parse_event_json(&doc_comment_event(true, "ou_commenter"), &tx)
+        .await
+        .unwrap();
+
+    let crate::channels::ChannelEvent::DocCommentAdded(notice) =
+        rx.try_recv().expect("doc comment event forwarded")
+    else {
+        panic!("expected DocCommentAdded");
+    };
+    assert_eq!(notice.file_token, "doxcnABC123");
+    assert_eq!(notice.file_type, "docx");
+    assert_eq!(notice.comment_id, "7123456789");
+    assert_eq!(notice.reply_id.as_deref(), Some("r_2"));
+    assert_eq!(notice.commenter_open_id, "ou_commenter");
+    assert!(notice.is_mentioned);
+    assert_eq!(notice.notice_type, "add_comment");
+    assert_eq!(notice.create_time, Some(1_700_000_000_123));
+}
+
+#[tokio::test]
+async fn doc_comment_event_redelivery_is_deduplicated() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+    let event = doc_comment_event(true, "ou_commenter");
+
+    adapter.parse_event_json(&event, &tx).await.unwrap();
+    adapter.parse_event_json(&event, &tx).await.unwrap();
+
+    assert!(rx.try_recv().is_ok(), "first delivery forwarded");
+    assert!(rx.try_recv().is_err(), "redelivery deduplicated");
+}
+
+#[tokio::test]
+async fn doc_comment_event_from_bot_itself_is_skipped() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    // Seed the bot identity (normally fetched from the API, stubbed here)
+    // so the self-authored check can match.
+    *adapter.bot_open_id.lock().await = Some("ou_bot".to_string());
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+
+    adapter
+        .parse_event_json(&doc_comment_event(true, "ou_bot"), &tx)
+        .await
+        .unwrap();
+
+    assert!(
+        rx.try_recv().is_err(),
+        "self-authored event must be skipped"
+    );
+}
+
+#[tokio::test]
+async fn doc_comment_event_missing_ids_is_ignored() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let event = json!({
+        "header": { "event_type": "drive.notice.comment_add_v1" },
+        "event": { "notice_meta": { "file_type": "docx" }, "is_mentioned": true }
+    });
+
+    adapter.parse_event_json(&event, &tx).await.unwrap();
+    assert!(rx.try_recv().is_err(), "nothing forwarded");
+}
+
+#[tokio::test]
+async fn fetch_doc_comment_parses_quote_and_replies() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+
+    let detail = adapter
+        .fetch_doc_comment("doxcnABC123", "docx", "c_1")
+        .await
+        .unwrap()
+        .expect("comment found");
+
+    assert!(!detail.is_whole);
+    assert_eq!(detail.quote.as_deref(), Some("引用原文段落"));
+    assert_eq!(detail.replies.len(), 2);
+    assert_eq!(detail.replies[0].reply_id, "r_1");
+    // person element renders as @user:{open_id} (bot id unknown here),
+    // docs_link as its URL.
+    assert_eq!(
+        detail.replies[0].text,
+        "这段@user:ou_bot 改写一下，参考 https://feishu.cn/docx/other"
+    );
+    assert_eq!(detail.replies[1].text, "bot 的回复");
+
+    let req = stub.find(
+        "POST",
+        "/open-apis/drive/v1/files/doxcnABC123/comments/batch_query",
+    );
+    assert_eq!(req.0, "POST");
+    assert!(req.1.contains("file_type=docx"), "{}", req.1);
+    assert_eq!(StubFeishu::body_json(&req)["comment_ids"][0], "c_1");
+}
+
+#[test]
+fn extract_reply_text_renders_bot_mention_as_at_bot() {
+    let elements = vec![
+        json!({ "type": "text_run", "text_run": { "text": "hey " } }),
+        json!({ "type": "person", "person": { "user_id": "ou_bot" } }),
+        json!({ "type": "person", "person": { "user_id": "ou_alice" } }),
+    ];
+    let text = super::FeishuAdapter::extract_reply_text(Some(&elements), Some("ou_bot"));
+    assert_eq!(text, "hey @bot@user:ou_alice");
+}
+
+#[tokio::test]
+async fn reply_doc_comment_posts_text_run() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+
+    let id = adapter
+        .reply_doc_comment("doxcnABC123", "docx", "c_1", "回复内容")
+        .await
+        .unwrap();
+
+    assert_eq!(id.as_deref(), Some("r_new"));
+    let req = stub.find(
+        "POST",
+        "/open-apis/drive/v1/files/doxcnABC123/comments/c_1/replies",
+    );
+    assert_eq!(
+        StubFeishu::body_json(&req)["content"]["elements"][0]["text_run"]["text"],
+        "回复内容"
+    );
+}
+
+#[tokio::test]
+async fn reply_doc_comment_falls_back_to_new_comment_for_whole_comment() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+
+    let id = adapter
+        .reply_doc_comment("doxcnABC123", "docx", "c_whole", "回复内容")
+        .await
+        .unwrap();
+
+    assert_eq!(id.as_deref(), Some("c_new"));
+    // The fallback posted a new whole comment after the 1069302 error
+    // (the captured path carries its query — "…/comments?…" is the
+    // fallback, "…/comments/c_whole/replies?…" the failed first attempt).
+    let req = stub.find("POST", "/open-apis/drive/v1/files/doxcnABC123/comments?");
+    assert_eq!(
+        StubFeishu::body_json(&req)["reply_list"]["replies"][0]["content"]["elements"][0]
+            ["text_run"]["text"],
+        "回复内容"
+    );
 }
 
 // ── Doc permission grant & DM cards & card actions ─────────────────

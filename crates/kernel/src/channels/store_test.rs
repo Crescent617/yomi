@@ -95,6 +95,7 @@ async fn test_find_routing_by_session_id() {
             external_chat_id: "chat123".to_string(),
             reply_msg_id: Some("root_msg".to_string()),
             mapping_key: "12345".to_string(),
+            doc_comment: None,
         })
     );
 
@@ -103,6 +104,36 @@ async fn test_find_routing_by_session_id() {
         .await
         .unwrap();
     assert_eq!(not_found, None);
+}
+
+#[tokio::test]
+async fn test_find_routing_parses_doc_comment_mapping_key() {
+    let pool = create_test_pool().await;
+    let store = SqliteChannelStore::new(pool);
+
+    let sid = SessionId::new();
+    // Doc-comment sessions store an empty actual chat id; the delivery
+    // target rides the mapping key (see `doc_comment_mapping_key`).
+    store
+        .save_mapping("feishu", "doc:docx:tok123:c_1", &sid, "", None)
+        .await
+        .unwrap();
+
+    let found = store.find_routing_by_session(&sid).await.unwrap();
+    assert_eq!(
+        found,
+        Some(SessionRouting {
+            channel_name: "feishu".to_string(),
+            external_chat_id: String::new(),
+            reply_msg_id: None,
+            mapping_key: "doc:docx:tok123:c_1".to_string(),
+            doc_comment: Some(crate::channels::DocCommentRef {
+                file_token: "tok123".to_string(),
+                file_type: "docx".to_string(),
+                comment_id: "c_1".to_string(),
+            }),
+        })
+    );
 }
 
 #[tokio::test]

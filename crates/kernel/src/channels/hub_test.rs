@@ -22,6 +22,8 @@ pub struct MockAdapter {
     /// When false (default), image downloads fail — mirroring the trait's
     /// default unsupported behavior so degradation paths stay testable.
     pub image_download_ok: tokio::sync::Mutex<bool>,
+    /// Doc-comment replies sent: (`comment_id`, chunk text).
+    pub comment_replies: tokio::sync::Mutex<Vec<(String, String)>>,
 }
 
 impl MockAdapter {
@@ -33,6 +35,7 @@ impl MockAdapter {
             quoted_map: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             quoted_calls: tokio::sync::Mutex::new(Vec::new()),
             image_download_ok: tokio::sync::Mutex::new(false),
+            comment_replies: tokio::sync::Mutex::new(Vec::new()),
         }
     }
 }
@@ -99,6 +102,23 @@ impl PlatformAdapter for MockAdapter {
         Ok(ContentBlock::ImageUrl {
             image_url: format!("data:image/png;base64,fake-{image_key}").into(),
         })
+    }
+
+    async fn reply_doc_comment(
+        &self,
+        _file_token: &str,
+        _file_type: &str,
+        comment_id: &str,
+        text: &str,
+    ) -> std::result::Result<Option<String>, crate::channels::ChannelError> {
+        self.comment_replies
+            .lock()
+            .await
+            .push((comment_id.to_string(), text.to_string()));
+        Ok(Some(format!(
+            "reply-{}",
+            self.comment_replies.lock().await.len()
+        )))
     }
 }
 
@@ -256,6 +276,7 @@ async fn test_start_and_shutdown() {
             history_context: 0,
             approval_chat_id: None,
             admin_users: vec![],
+            disabled_events: vec![],
         },
         ChannelConfig {
             name: "mock2".to_string(),
@@ -276,6 +297,7 @@ async fn test_start_and_shutdown() {
             history_context: 0,
             approval_chat_id: None,
             admin_users: vec![],
+            disabled_events: vec![],
         },
     ];
 
@@ -474,6 +496,7 @@ fn test_routing() -> SessionRouting {
         external_chat_id: "chat-1".to_string(),
         reply_msg_id: None,
         mapping_key: "chat-1".to_string(),
+        doc_comment: None,
     }
 }
 
@@ -793,6 +816,7 @@ async fn test_restart_command_gate_and_trigger() {
         parent_id: None,
         is_group: false,
         create_time: None,
+        doc_comment: None,
     };
 
     // Non-admin: denied via the normal reply path; nothing sent inline.
@@ -901,6 +925,7 @@ async fn test_thread_command_one_shot_and_adoption() {
         parent_id: None,
         is_group: true,
         create_time: None,
+        doc_comment: None,
     };
     let handle = |m: ChannelMessage| {
         handle_incoming_message(
@@ -996,6 +1021,7 @@ async fn test_thread_command_inside_existing_thread_errors() {
         parent_id: Some("om_root".to_string()),
         is_group: true,
         create_time: None,
+        doc_comment: None,
     };
     let handle = |m: ChannelMessage| {
         handle_incoming_message(
@@ -1111,6 +1137,7 @@ async fn channel_trigger_titles_session_from_user_text_not_history() {
             parent_id: None,
             is_group: true,
             create_time: Some(300),
+            doc_comment: None,
         },
         &obs,
         &adapter,
@@ -1177,6 +1204,7 @@ async fn image_only_trigger_leaves_session_untitled() {
             parent_id: None,
             is_group: false,
             create_time: None,
+            doc_comment: None,
         },
         &obs,
         &adapter,
@@ -1243,6 +1271,7 @@ async fn thread_command_titles_session_from_payload_text() {
             parent_id: None,
             is_group: true,
             create_time: None,
+            doc_comment: None,
         },
         &obs,
         &adapter,
@@ -1294,6 +1323,7 @@ async fn test_thread_command_private_chat_and_platform_gate() {
         parent_id: None,
         is_group,
         create_time: None,
+        doc_comment: None,
     };
     let feishu = ChannelConfig {
         name: "mock".to_string(),
@@ -1452,6 +1482,7 @@ fn channel_message(
         parent_id: None,
         is_group,
         create_time: None,
+        doc_comment: None,
     }
 }
 
@@ -1555,6 +1586,109 @@ fn mapping_key_without_reply_in_thread_unchanged() {
     // Thread messages still key by thread_id as before.
     let msg = channel_message(Some("thread-1"), true, true);
     assert_eq!(session_mapping_key(&msg, "chat-1", false), "thread-1");
+}
+
+fn doc_comment_msg() -> ChannelMessage {
+    let mut msg = channel_message(None, false, false);
+    msg.external_chat_id = String::new();
+    msg.doc_comment = Some(crate::channels::DocCommentRef {
+        file_token: "tok123".to_string(),
+        file_type: "docx".to_string(),
+        comment_id: "c_1".to_string(),
+    });
+    msg
+}
+
+#[test]
+fn mapping_key_doc_comment_keys_by_comment_thread() {
+    let msg = doc_comment_msg();
+    // One session per comment thread — regardless of reply_in_thread.
+    assert_eq!(session_mapping_key(&msg, "", false), "doc:docx:tok123:c_1");
+    assert_eq!(session_mapping_key(&msg, "", true), "doc:docx:tok123:c_1");
+}
+
+#[test]
+fn doc_comment_messages_never_parse_as_commands() {
+    let mut msg = doc_comment_msg();
+    msg.raw_text = Some("/clear".to_string());
+    assert!(matches!(message_command(&msg), ChannelCommand::None));
+    // The same text on a chat message IS a command.
+    let mut chat_msg = channel_message(None, false, true);
+    chat_msg.raw_text = Some("/clear".to_string());
+    assert!(matches!(message_command(&chat_msg), ChannelCommand::Clear));
+}
+
+#[tokio::test]
+async fn deliver_reply_doc_comment_goes_to_comment_thread() {
+    let mock = Arc::new(MockAdapter::new("feishu"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(crate::channels::obs::ObsTracker::new());
+    let sid = SessionId::new();
+    let routing = SessionRouting {
+        channel_name: "feishu".to_string(),
+        external_chat_id: String::new(),
+        reply_msg_id: None,
+        mapping_key: "doc:docx:tok123:c_1".to_string(),
+        doc_comment: crate::channels::parse_doc_comment_mapping_key("doc:docx:tok123:c_1"),
+    };
+
+    let delivered = deliver_reply(
+        &obs,
+        &adapter,
+        &routing,
+        Some(run_buffer().into_reply()),
+        true,
+        true,
+        true,
+        &sid,
+        SettleKind::Stopped(&completed()),
+        &std::sync::Weak::new(),
+    )
+    .await;
+
+    assert_eq!(delivered.as_deref(), Some("reply-1"));
+    let replies = mock.comment_replies.lock().await;
+    assert_eq!(replies.len(), 1);
+    assert_eq!(replies[0].0, "c_1");
+    assert!(replies[0].1.contains("final answer"));
+    // Nothing went to any chat surface.
+    assert!(mock.outgoing.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn deliver_reply_doc_comment_chunks_long_text() {
+    let mock = Arc::new(MockAdapter::new("feishu"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(crate::channels::obs::ObsTracker::new());
+    let sid = SessionId::new();
+    let routing = SessionRouting {
+        channel_name: "feishu".to_string(),
+        external_chat_id: String::new(),
+        reply_msg_id: None,
+        mapping_key: "doc:docx:tok123:c_1".to_string(),
+        doc_comment: crate::channels::parse_doc_comment_mapping_key("doc:docx:tok123:c_1"),
+    };
+    let mut buf = reply::RunReplyBuffer::new();
+    buf.record_model_end(&"字".repeat(4500));
+
+    deliver_reply(
+        &obs,
+        &adapter,
+        &routing,
+        Some(buf.into_reply()),
+        true,
+        true,
+        true,
+        &sid,
+        SettleKind::Stopped(&completed()),
+        &std::sync::Weak::new(),
+    )
+    .await;
+
+    let replies = mock.comment_replies.lock().await;
+    assert_eq!(replies.len(), 2);
+    assert_eq!(replies[0].1.chars().count(), 4000);
+    assert_eq!(replies[1].1.chars().count(), 500);
 }
 
 #[test]
@@ -2318,6 +2452,7 @@ fn group_msg(thread_id: Option<String>) -> ChannelMessage {
         parent_id: None,
         is_group: true,
         create_time: None,
+        doc_comment: None,
     }
 }
 
@@ -2639,6 +2774,7 @@ async fn clear_does_not_rewind_history_cursor() {
         parent_id: None,
         is_group: true,
         create_time: Some(create_time),
+        doc_comment: None,
     };
 
     // Cursor already ahead (later activity was consumed): a
@@ -2719,6 +2855,7 @@ async fn refused_thread_command_does_not_advance_history_cursor() {
         parent_id: None,
         is_group: true,
         create_time: Some(ts),
+        doc_comment: None,
     };
 
     // Refused in-thread: no cursor on the thread container.
@@ -2801,6 +2938,7 @@ async fn model_commands_do_not_claim_fresh_thread() {
         parent_id: Some("om_root".to_string()),
         is_group: true,
         create_time: None,
+        doc_comment: None,
     };
     let thread_claimed = || async {
         store
@@ -4013,6 +4151,7 @@ async fn mention_command_query_set_reset() {
         parent_id: None,
         is_group: group,
         create_time: Some(1000),
+        doc_comment: None,
     };
     let handle = |m: ChannelMessage| {
         handle_incoming_message(
@@ -4474,6 +4613,7 @@ async fn test_subscribe_command_scopes() {
         parent_id: None,
         is_group: true,
         create_time: None,
+        doc_comment: None,
     };
 
     // Chat level: binds the chat id; recursive recorded.
@@ -4631,6 +4771,7 @@ async fn test_subscribe_refused_on_telegram() {
         parent_id: None,
         is_group: false,
         create_time: None,
+        doc_comment: None,
     };
     let reply = handle_incoming_message("tg", &config, &store, kernel, msg, &obs, &adapter)
         .await
@@ -4682,6 +4823,7 @@ async fn test_subscribe_ack_warns_in_rit_groups() {
         parent_id: None,
         is_group: true,
         create_time: None,
+        doc_comment: None,
     };
 
     let reply = handle_incoming_message(
@@ -4840,6 +4982,7 @@ async fn test_notify_run_subscribers() {
         external_chat_id: "oc_1".to_string(),
         reply_msg_id: None,
         mapping_key: "omt_1".to_string(),
+        doc_comment: None,
     };
 
     // No delivered reply → nothing to link to, no notification.
@@ -4945,6 +5088,7 @@ async fn notify_quote_setup() -> (
         external_chat_id: "oc_1".to_string(),
         reply_msg_id: None,
         mapping_key: "omt_1".to_string(),
+        doc_comment: None,
     };
     (store, mock, routing)
 }

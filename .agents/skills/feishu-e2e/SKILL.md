@@ -48,6 +48,8 @@ curl -s "https://open.feishu.cn/open-apis/im/v1/messages/om_xxx" -H "Authorizati
 
 **平台行为事实**（文档里看不出来的）：
 
+- 评论读一致性：`batch_query` 的 `reply_list` 有秒~分钟级读延迟（新回复可能暂不可见）；验证评论回复要用 `GET .../comments/{id}/replies`（list，及时）。评论 `create_time` 是秒级。
+- 评论事件：bot 自己的评论/回复**不产生** `drive.notice.comment_add_v1`（notice 只推被通知方，源头防循环）；应用作为文档 owner 会收到**所有**评论的事件（`is_mentioned=false`，需自行过滤）。
 - `container_id_type=thread` 的列表**包含话题根消息**，但**忽略 `start_time`**（别指望服务端按时间过滤）。
 - 其他应用发的 schema 2.0 卡片，get-message 只回降级文本（"请升级至最新版本客户端"）。
 - 事件字段：话题内消息带 `thread_id`；`root_id` = 话题根；`parent_id` = 直接回复的那条；顶层引用回复无 `thread_id`，`root_id` = `parent_id` = 被引用消息。

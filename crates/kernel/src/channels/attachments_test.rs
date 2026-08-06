@@ -61,6 +61,7 @@ fn routing() -> SessionRouting {
         external_chat_id: "chat1".to_string(),
         reply_msg_id: None,
         mapping_key: "chat1".to_string(),
+        doc_comment: None,
     }
 }
 

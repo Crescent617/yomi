@@ -412,15 +412,11 @@ fn applicant_summary(row: &PermRequestRow) -> String {
     )
 }
 
-fn doc_link(file_type: &str, file_token: &str) -> String {
-    format!("https://feishu.cn/{file_type}/{file_token}")
-}
-
 /// Markdown for the linked document reference, shared by cards and lists.
 fn doc_md(file_type: &str, file_token: &str) -> String {
     format!(
         "[{file_type}/{file_token}]({})",
-        doc_link(file_type, file_token)
+        super::doc_link(file_type, file_token)
     )
 }
 
@@ -486,7 +482,7 @@ fn build_request_card(id: i64, req: &DocPermissionRequest, doc_title: Option<&st
         format!(
             "**文档** [{}]({})",
             doc_text,
-            doc_link(&req.file_type, &req.file_token)
+            super::doc_link(&req.file_type, &req.file_token)
         ),
         format!("**申请权限** {}", req.permission),
     ];
@@ -558,7 +554,7 @@ fn build_resolved_card(row: &PermRequestRow, doc_title: Option<&str>) -> String 
         "**申请人** {}\n**文档** [{}]({})\n\n**{action_text}** · by {by_text}",
         applicant_summary(row),
         doc_text,
-        doc_link(&row.file_type, &row.file_token),
+        super::doc_link(&row.file_type, &row.file_token),
     );
     card_json(
         template,

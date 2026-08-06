@@ -11,6 +11,8 @@ pub(crate) mod attachments;
 
 pub(crate) mod approval;
 
+pub(crate) mod comment;
+
 /// Why a channel message was rejected by access control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessDeniedReason {
@@ -147,7 +149,16 @@ pub struct ChannelConfig {
     /// DM recipients when `approval_chat_id` is unset.
     #[serde(default)]
     pub admin_users: Vec<String>,
+    /// Runtime kill-switch for platform event features (the vocabulary is
+    /// per-platform, see [`PlatformConfig::known_event_names`]); unset =
+    /// all enabled. Event delivery itself requires console-side
+    /// subscription — this disables *reacting* without a console trip.
+    #[serde(default)]
+    pub disabled_events: Vec<String>,
 }
+
+/// Event feature: Feishu doc comments (`drive.notice.comment_add_v1`).
+pub(crate) const EVENT_DOC_COMMENT: &str = "doc_comment";
 
 fn default_history_context() -> usize {
     20
@@ -190,6 +201,7 @@ impl Default for ChannelConfig {
             history_context: default_history_context(),
             approval_chat_id: None,
             admin_users: Vec::new(),
+            disabled_events: Vec::new(),
         }
     }
 }
@@ -218,6 +230,16 @@ impl PlatformConfig {
         match self {
             Self::Feishu { .. } => "THANKS",
             Self::Telegram { .. } => "🙏",
+        }
+    }
+
+    /// Event feature names this platform understands — the valid
+    /// vocabulary of `ChannelConfig::disabled_events` (startup validation
+    /// only warns on unknown names; serde can't reject array contents).
+    pub(crate) fn known_event_names(&self) -> &'static [&'static str] {
+        match self {
+            Self::Feishu { .. } => &[EVENT_DOC_COMMENT],
+            Self::Telegram { .. } => &[],
         }
     }
 }
@@ -259,6 +281,12 @@ pub struct ChannelMessage {
     /// `None` on platforms that don't provide one). Used to advance the
     /// history cursor on every processed message.
     pub create_time: Option<i64>,
+    /// Doc-comment provenance: this message was assembled from a Feishu doc
+    /// comment (see `comment.rs`) rather than a chat message. Drives the
+    /// per-comment-thread session mapping key and the doc-bound reply
+    /// delivery; the chat-scoped fields (`external_chat_id`, thread/quote
+    /// ids) are empty for such messages.
+    pub doc_comment: Option<DocCommentRef>,
 }
 
 /// Platform inbound payload: a chat message, a platform event, or a card
@@ -273,6 +301,108 @@ pub enum ChannelEvent {
     /// Feishu `card.action.trigger`: a button tap on a notification card.
     /// The button's `value` carries the approval action and request id.
     CardAction(CardAction),
+    /// Feishu `drive.notice.comment_add_v1`: a doc comment @-mentioned the
+    /// bot. Carries ids only — the comment content is fetched post-policy
+    /// (same deferred pattern as `ChannelMessage::image_keys`), so
+    /// filtered-out events cost no platform API calls.
+    DocCommentAdded(DocCommentNotice),
+}
+
+/// A Feishu `drive.notice.comment_add_v1` event (ids only).
+#[derive(Debug, Clone)]
+pub struct DocCommentNotice {
+    pub file_token: String,
+    /// docx/sheet/bitable/...
+    pub file_type: String,
+    pub comment_id: String,
+    /// The triggering reply inside the comment thread (`None` only on
+    /// older/unexpected event shapes — `add_comment` events carry the
+    /// first reply's id too).
+    pub reply_id: Option<String>,
+    /// `notice_meta.from_user_id.open_id` — the comment's author.
+    pub commenter_open_id: String,
+    /// Whether the comment @-mentioned the bot (the trigger condition).
+    pub is_mentioned: bool,
+    /// `add_comment` / `add_reply` (other values are filtered out).
+    pub notice_type: String,
+    /// `header.create_time`, unix **milliseconds**.
+    pub create_time: Option<i64>,
+}
+
+/// Doc-comment provenance/routing: which comment thread a message came
+/// from and where the session's replies go. (The triggering reply id
+/// lives only on `DocCommentNotice` and in the meta header — delivery
+/// always targets the comment thread.)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocCommentRef {
+    pub file_token: String,
+    pub file_type: String,
+    pub comment_id: String,
+}
+
+/// A fetched doc comment (`batch_query` covers whole and partial comments
+/// alike — the single-comment GET serves whole comments only).
+#[derive(Debug, Clone)]
+pub struct DocCommentDetail {
+    /// Whole-document comment (vs. partial/anchored to a text selection).
+    pub is_whole: bool,
+    /// The quoted source text (partial comments only).
+    pub quote: Option<String>,
+    /// The comment thread's replies, in thread order.
+    pub replies: Vec<DocCommentReplyLite>,
+}
+
+/// One reply inside a doc comment thread, text already extracted.
+#[derive(Debug, Clone)]
+pub struct DocCommentReplyLite {
+    pub reply_id: String,
+    /// Commenter `open_id`.
+    pub user_id: String,
+    /// Unix seconds (the comment API's native precision).
+    pub create_time: i64,
+    pub text: String,
+}
+
+/// The session mapping key for a doc-comment session:
+/// `doc:{file_type}:{file_token}:{comment_id}` — one session per comment
+/// thread. The key doubles as the persisted delivery target:
+/// `find_routing_by_session` parses it back (no extra schema column).
+/// None of the segments can contain `:` (platform ids are alphanumeric).
+pub(crate) fn doc_comment_mapping_key(
+    file_type: &str,
+    file_token: &str,
+    comment_id: &str,
+) -> String {
+    format!("doc:{file_type}:{file_token}:{comment_id}")
+}
+
+/// Parse a doc-comment mapping key back into the delivery target. Strict
+/// four-segment shape; anything else is a plain chat/thread key → `None`.
+pub(crate) fn parse_doc_comment_mapping_key(key: &str) -> Option<DocCommentRef> {
+    let mut parts = key.split(':');
+    let (Some("doc"), Some(file_type), Some(file_token), Some(comment_id), None) = (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) else {
+        return None;
+    };
+    if file_type.is_empty() || file_token.is_empty() || comment_id.is_empty() {
+        return None;
+    }
+    Some(DocCommentRef {
+        file_token: file_token.to_string(),
+        file_type: file_type.to_string(),
+        comment_id: comment_id.to_string(),
+    })
+}
+
+/// A Feishu cloud document's web URL (`https://feishu.cn/{file_type}/{file_token}` —
+/// docx/sheet/bitable/... are isomorphic).
+pub(crate) fn doc_link(file_type: &str, file_token: &str) -> String {
+    format!("https://feishu.cn/{file_type}/{file_token}")
 }
 
 /// A Feishu cloud-document collaborator-permission application. The
@@ -320,8 +450,12 @@ pub struct SessionRouting {
     pub reply_msg_id: Option<String>,
     /// The session's mapping key (the conversation-scope key the mapping is
     /// stored under): the chat id for chat-level sessions, the thread
-    /// root/thread id for thread sessions. Used to match run subscriptions.
+    /// root/thread id for thread sessions, the `doc:…` comment-thread key
+    /// for doc-comment sessions. Used to match run subscriptions.
     pub mapping_key: String,
+    /// Delivery target for doc-comment sessions (parsed from
+    /// `mapping_key`); `None` for ordinary chat-routed sessions.
+    pub doc_comment: Option<DocCommentRef>,
 }
 
 // ── Store trait ──────────────────────────────────────────────────────
@@ -600,6 +734,36 @@ pub trait PlatformAdapter: Send + Sync {
     /// `None` — cards fall back to the raw file token.
     async fn fetch_doc_title(&self, _file_token: &str, _file_type: &str) -> Option<String> {
         None
+    }
+
+    /// Fetch one doc comment by id (Feishu `batch_query` — covers whole and
+    /// partial comments alike; the single-comment GET serves whole
+    /// comments only). `Ok(None)` = the comment is gone (deleted).
+    /// Default: unsupported.
+    async fn fetch_doc_comment(
+        &self,
+        _file_token: &str,
+        _file_type: &str,
+        _comment_id: &str,
+    ) -> Result<Option<DocCommentDetail>, ChannelError> {
+        Ok(None)
+    }
+
+    /// Reply to a doc comment thread with one plain-text chunk. Whole
+    /// comments can't take thread replies (platform error 1069302) — the
+    /// adapter falls back to posting a new whole comment. Chunking is the
+    /// caller's job. Returns the created reply/comment id when available.
+    /// Default: unsupported.
+    async fn reply_doc_comment(
+        &self,
+        _file_token: &str,
+        _file_type: &str,
+        _comment_id: &str,
+        _text: &str,
+    ) -> Result<Option<String>, ChannelError> {
+        Err(ChannelError::Platform(
+            "doc comment reply not supported for this platform".into(),
+        ))
     }
 
     /// Update a previously sent card message in place.

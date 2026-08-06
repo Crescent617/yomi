@@ -280,6 +280,12 @@
             "type": "array",
             "items": { "type": "string" },
             "default": []
+          },
+          "disabled_events": {
+            "description": "Platform event features disabled at runtime (vocabulary is per-platform; Feishu currently supports doc_comment = doc comment triggers). Event delivery itself requires console-side subscription — this disables reacting without a console trip. Unknown names only warn at startup; unset = all enabled.",
+            "type": "array",
+            "items": { "type": "string", "enum": ["doc_comment"] },
+            "default": []
           }
         },
         "required": ["name", "platform"],

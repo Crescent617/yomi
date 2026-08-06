@@ -105,6 +105,19 @@ impl ChannelHub {
     ) -> Result<()> {
         let name = config.name.clone();
         info!(channel = %name, "starting channel");
+        for event in &config.disabled_events {
+            if !config
+                .platform
+                .known_event_names()
+                .contains(&event.as_str())
+            {
+                warn!(
+                    channel = %name,
+                    event = %event,
+                    "disabled_events entry not recognized for this platform"
+                );
+            }
+        }
 
         let kv = kernel.upgrade().and_then(|k| k.kv_cache());
         let adapter = build_adapter(&config.platform, kv);
@@ -200,6 +213,24 @@ impl ChannelHub {
                                 tokio::spawn(async move {
                                     super::approval::handle_card_action(
                                         &name, &config, &store, &adapter, action,
+                                    ).await;
+                                });
+                                continue;
+                            }
+                            // Doc comments: policy + content fetch run
+                            // off-loop (spawned); the accepted trigger
+                            // enters the serial dispatch path like any
+                            // chat message.
+                            ChannelEvent::DocCommentAdded(notice) => {
+                                let (name, config, adapter, dispatch) = (
+                                    name_gate.clone(),
+                                    config_gate.clone(),
+                                    Arc::clone(&adapter_gate),
+                                    dispatch_tx.clone(),
+                                );
+                                tokio::spawn(async move {
+                                    super::comment::handle_doc_comment_added(
+                                        &name, &config, &adapter, &dispatch, notice,
                                     ).await;
                                 });
                                 continue;
@@ -481,6 +512,10 @@ impl ChannelHub {
                             )
                         };
                         let supports_cards = adapter.supports_status_card();
+                        // Doc-comment sessions have no chat surface: no
+                        // status cards, no typing — only the final reply
+                        // (deliver_reply's doc-comment branch).
+                        let is_doc_comment = routing.doc_comment.is_some();
 
                         // Reply buffering: collect assistant texts and tool
                         // calls for the run instead of sending each
@@ -499,7 +534,7 @@ impl ChannelHub {
                                 // First Running of the run: put the session's
                                 // model on the status card (one store read
                                 // per run; a gone kernel just skips it).
-                                if observability && !obs.has_state(&session_id) {
+                                if observability && !is_doc_comment && !obs.has_state(&session_id) {
                                     if let Some(k) = kernel.upgrade() {
                                         obs.set_model(
                                             &session_id,
@@ -581,7 +616,7 @@ impl ChannelHub {
 
                         // Observability: cheap state updates + throttled
                         // in-place PATCHes (design: feishu-channel-observability).
-                        if observability {
+                        if observability && !is_doc_comment {
                             obs.handle_event(
                                 &adapter,
                                 &session_id,
@@ -596,6 +631,7 @@ impl ChannelHub {
                         // observability is disabled).
                         if matches!(envelope.event, Event::Model(ModelEvent::Request { .. }))
                             && (!supports_cards || !observability)
+                            && !is_doc_comment
                         {
                             let _ = adapter.send_typing(&routing.external_chat_id).await;
                         }
@@ -971,6 +1007,45 @@ enum SettleKind<'a> {
     Timeout,
 }
 
+/// Deliver a doc-comment session's reply: there is no chat to morph or
+/// flush into — the run's final text goes back to the document as comment
+/// replies (chunked at the platform's comment length; a failed chunk
+/// doesn't stop the rest — partial delivery beats none). Attachments
+/// can't ride comment replies: they are dropped with a visible note
+/// appended to the reply instead of vanishing silently.
+async fn deliver_doc_comment_reply(
+    adapter: &Arc<dyn PlatformAdapter>,
+    dc: &super::DocCommentRef,
+    reply: Option<reply::FinalReply>,
+) -> Option<String> {
+    let mut reply = reply?;
+    let attachments = reply.attachments().len();
+    if attachments > 0 {
+        warn!(
+            comment_id = %dc.comment_id,
+            attachments,
+            "doc comment reply cannot carry attachments, dropping"
+        );
+        reply.push_note(&format!(
+            "（本次运行产出 {attachments} 个附件，无法投递到文档评论）"
+        ));
+    }
+    let text = reply.text()?.to_string();
+    let mut last_id = None;
+    for chunk in super::comment::chunk_text(&text, super::comment::COMMENT_REPLY_CHUNK_CHARS) {
+        match adapter
+            .reply_doc_comment(&dc.file_token, &dc.file_type, &dc.comment_id, &chunk)
+            .await
+        {
+            Ok(id) => last_id = id.or(last_id),
+            Err(e) => {
+                warn!(error = %e, comment_id = %dc.comment_id, "doc comment reply chunk failed");
+            }
+        }
+    }
+    last_id
+}
+
 async fn settle_with(
     obs: &Arc<ObsTracker>,
     session_id: &SessionId,
@@ -1042,6 +1117,11 @@ async fn deliver_reply(
     kind: SettleKind<'_>,
     kernel: &std::sync::Weak<Kernel>,
 ) -> Option<String> {
+    // Doc-comment sessions have no chat surface at all — the reply goes
+    // back to the document's comment thread (no cards, no receipts).
+    if let Some(dc) = &routing.doc_comment {
+        return deliver_doc_comment_reply(adapter, dc, reply).await;
+    }
     let mut reply = reply;
     // Split files off the reply up front: resolution failures become notes
     // on the reply text; the files are sent after the reply below.
@@ -1104,8 +1184,10 @@ async fn deliver_reply(
 }
 
 /// Outcome of gating one incoming message (see `gate_message`).
+/// `pub(super)` for `comment.rs`, which hands assembled doc-comment
+/// triggers to the dispatch path as `Allow`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Gate {
+pub(super) enum Gate {
     /// Accepted — process normally.
     Allow,
     /// Access denied (disabled / allowlist miss / blocklist hit).
@@ -1217,7 +1299,7 @@ async fn handle_incoming_message(
         "session mapping"
     );
 
-    let cmd = parse_channel_command(msg.raw_text.as_deref());
+    let cmd = message_command(&msg);
     match cmd {
         ChannelCommand::Help => Ok(Some(HELP_TEXT.to_string())),
         ChannelCommand::Clear => {
@@ -2308,6 +2390,11 @@ fn reply_anchor(msg: &ChannelMessage, reply_in_thread: bool) -> Option<String> {
 /// NOT join the quoted message's session: it starts its own, and the bot's
 /// `reply_in_thread` answer opens a fresh thread anchored at it.
 fn session_mapping_key(msg: &ChannelMessage, chat_id: &str, reply_in_thread: bool) -> String {
+    // Doc-comment sessions key by the comment thread — one session per
+    // comment group, regardless of chat-oriented rules (there is no chat).
+    if let Some(dc) = &msg.doc_comment {
+        return super::doc_comment_mapping_key(&dc.file_type, &dc.file_token, &dc.comment_id);
+    }
     if reply_in_thread && msg.is_group {
         if msg.thread_id.is_some() {
             // Inside a thread: key by the thread's root message so the whole
@@ -2544,6 +2631,18 @@ const HELP_TEXT: &str = "\
 `/restart` — restart the daemon (admin)
 
 Anything else is sent to the agent as a message.";
+
+/// The command an incoming message resolves to. Doc comments never parse
+/// as commands — a slash-leading comment goes to the agent verbatim (the
+/// comment surface has no control plane; their `raw_text` only feeds the
+/// session title).
+fn message_command(msg: &ChannelMessage) -> ChannelCommand {
+    if msg.doc_comment.is_some() {
+        ChannelCommand::None
+    } else {
+        parse_channel_command(msg.raw_text.as_deref())
+    }
+}
 
 /// Parsed channel command from an incoming message.
 enum ChannelCommand {
