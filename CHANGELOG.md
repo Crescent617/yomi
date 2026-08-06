@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.56] - 2026-08-06
+
+### Added
+- 飞书云文档评论触发：在文档评论中 @ 机器人即可唤起 agent，评论正文（含划词引用的原文）注入会话并标注来源文档与评论标识，agent 的回复直接投递为文档内的评论回复；需开发者后台订阅事件 `drive.notice.comment_add_v1` 并授予评论读写权限（详见 docs/CONFIG.md「飞书文档评论触发」）。
+- 文档评论按评论组（comment thread）各自独立成会话：同组追问上下文连贯，跨组互不串扰，重启 daemon 后会话仍可续上。
+- 新增通道配置项 `disabled_events`（字符串数组，默认 `[]` 全部启用）：运行时停用指定平台事件功能（飞书目前支持 `doc_comment`），临时停用无需往返开发者后台。
+
 ## [0.7.55] - 2026-08-06
 
 ### Fixed
