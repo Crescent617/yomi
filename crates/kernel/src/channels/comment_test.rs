@@ -14,8 +14,8 @@ struct CommentMockAdapter {
     /// `fetch_doc_comment` call count — the disabled-toggle test asserts
     /// the feature costs zero platform API calls when off.
     fetch_calls: tokio::sync::Mutex<usize>,
-    /// Ack reactions fired: reply ids.
-    reactions: tokio::sync::Mutex<Vec<String>>,
+    /// Reactions fired: (reply_id, emoji).
+    reactions: tokio::sync::Mutex<Vec<(String, String)>>,
     title: Option<String>,
 }
 
@@ -77,9 +77,12 @@ impl PlatformAdapter for CommentMockAdapter {
         _file_token: &str,
         _file_type: &str,
         reply_id: &str,
-        _emoji: &str,
+        emoji: &str,
     ) -> Result<(), ChannelError> {
-        self.reactions.lock().await.push(reply_id.to_string());
+        self.reactions
+            .lock()
+            .await
+            .push((reply_id.to_string(), emoji.to_string()));
         Ok(())
     }
 }
@@ -231,13 +234,26 @@ async fn blocked_and_non_allowlisted_commenters_are_dropped() {
     config.blocked_users = vec!["ou_commenter".to_string()];
     let mut rx = handle(&config, &adapter, notice()).await;
     assert!(rx.try_recv().is_err(), "blocked user must be dropped");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        adapter.reactions.lock().await.is_empty(),
+        "blocklist stays silent"
+    );
 
+    // Allowlist miss on an addressed comment: dropped with the soft deny
+    // reaction (THANKS on Feishu — chat parity).
     config.blocked_users.clear();
     config.allowed_users = vec!["ou_someone_else".to_string()];
     let mut rx = handle(&config, &adapter, notice()).await;
     assert!(
         rx.try_recv().is_err(),
         "non-allowlisted user must be dropped"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(
+        *adapter.reactions.lock().await,
+        vec![("r_2".to_string(), "THANKS".to_string())],
+        "soft deny reaction on the triggering reply"
     );
 
     config.allowed_users = vec!["ou_commenter".to_string()];
@@ -287,7 +303,10 @@ async fn accepted_comment_fires_ack_reaction_on_triggering_reply() {
     let _rx = handle(&config, &adapter, notice()).await;
     // The ack is fired off a spawned task — yield briefly.
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    assert_eq!(*adapter.reactions.lock().await, vec!["r_2".to_string()]);
+    assert_eq!(
+        *adapter.reactions.lock().await,
+        vec![("r_2".to_string(), "OneSecond".to_string())]
+    );
 }
 
 #[tokio::test]

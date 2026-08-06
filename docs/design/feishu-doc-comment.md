@@ -157,7 +157,7 @@ pub struct DocCommentNotice {
 1. `notice_type ∈ {add_comment, add_reply}`；
 2. `is_mentioned == true`（仅 @bot 的评论触发）；
 3. `commenter_open_id != bot_open_id`（跳过 bot 自己回的评论，防自触发循环）；
-4. 访问控制：仅用户维度 —— `commenter ∈ blocked_users` 拒绝；`allowed_users` 非空且不含 commenter 拒绝。**chat 维度不适用**（无 chat），不复用 `check_access`；
+4. 访问控制：仅用户维度 —— `commenter ∈ blocked_users` 拒绝（静默）；`allowed_users` 非空且不含 commenter 拒绝（**打 THANKS 婉拒表情**，与聊天网关的 allowlist-miss 语义一致）；
 5. 拉取（`tokio::join!`）：`adapter.fetch_doc_comment(file_token, file_type, comment_id)`（§5.4，batch_query）+ `adapter.fetch_doc_title(...)`（现有）。拉取失败：带裸 meta 注入（正文为 `[评论内容拉取失败: ...]`），不静默丢；
 6. 从返回的 `reply_list` 定位 `reply_id` 那条（`add_comment` 时即首条），抽取文本：`text_run` 拼接、`docs_link` 取 url、`person` 渲染为 `@user:{open_id}` 占位；
 7. 组装 `ChannelMessage` 送入 `dispatch_tx`（串行 dispatch，保序复用现有链路）：

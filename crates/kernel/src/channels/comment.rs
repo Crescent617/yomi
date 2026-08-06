@@ -73,28 +73,17 @@ pub(super) async fn handle_doc_comment_added(
     }
     if let Err(e) = check_commenter_access(config, &notice.commenter_open_id) {
         info!(channel = %channel_name, error = %e, "doc comment access denied");
+        // Chat parity: an allowlist miss on an addressed comment gets the
+        // soft deny reaction; blocklist hits stay silent.
+        if e.is_allowlist_miss() {
+            fire_reaction(adapter, &notice, config.platform.access_denied_reaction());
+        }
         return;
     }
 
     // Accepted — ack the triggering reply (fire-and-forget, mirrors the
-    // chat gate's ack reaction). Needs a reply id to target.
-    if let Some(reply_id) = notice.reply_id.as_deref() {
-        let adapter = Arc::clone(adapter);
-        let (file_token, file_type, reply_id) = (
-            notice.file_token.clone(),
-            notice.file_type.clone(),
-            reply_id.to_string(),
-        );
-        let emoji = config.platform.ack_reaction();
-        tokio::spawn(async move {
-            if let Err(e) = adapter
-                .react_doc_comment(&file_token, &file_type, &reply_id, emoji)
-                .await
-            {
-                warn!(error = %e, reply_id = %reply_id, "doc comment ack reaction failed");
-            }
-        });
-    }
+    // chat gate's ack reaction).
+    fire_reaction(adapter, &notice, config.platform.ack_reaction());
 
     let (detail, title) = tokio::join!(
         fetch_detail_with_trigger(adapter.as_ref(), &notice),
@@ -191,6 +180,28 @@ pub(super) async fn handle_doc_comment_added(
     {
         debug!(channel = %channel_name, "dispatch closed, doc comment dropped");
     }
+}
+
+/// Fire a reaction on the triggering reply (fire-and-forget, best-effort;
+/// needs a reply id to target).
+fn fire_reaction(
+    adapter: &Arc<dyn PlatformAdapter>,
+    notice: &DocCommentNotice,
+    emoji: &'static str,
+) {
+    let Some(reply_id) = notice.reply_id.clone() else {
+        return;
+    };
+    let adapter = Arc::clone(adapter);
+    let (file_token, file_type) = (notice.file_token.clone(), notice.file_type.clone());
+    tokio::spawn(async move {
+        if let Err(e) = adapter
+            .react_doc_comment(&file_token, &file_type, &reply_id, emoji)
+            .await
+        {
+            warn!(error = %e, reply_id = %reply_id, "doc comment reaction failed");
+        }
+    });
 }
 
 /// User-dimension access control for commenters (the chat-dimension rules
