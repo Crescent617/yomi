@@ -1683,6 +1683,24 @@ async fn handle_incoming_message(
         ChannelCommand::InvalidSubscribeCommand => Ok(Some(
             "Usage: `/subscribe [chat_id] [-r|--recursive]` or `/unsubscribe`.".to_string(),
         )),
+        ChannelCommand::Bind(target) => {
+            handle_bind(
+                channel_name,
+                config,
+                store,
+                &kernel,
+                &msg,
+                &chat_id,
+                &mapping_key,
+                reply_msg_id.clone(),
+                target,
+            )
+            .await
+            .map(Some)
+        }
+        ChannelCommand::InvalidBindCommand => {
+            Ok(Some("Usage: `/bind` or `/bind <session_id>`.".to_string()))
+        }
         ChannelCommand::None => {
             let (sid, mut content) = prepare_trigger(
                 channel_name,
@@ -1791,6 +1809,76 @@ async fn resolve_require_mention(
         }
     }
     (config.require_mention, MentionSource::Default)
+}
+
+/// `/bind`: show or retarget the current scope's session binding.
+/// Retargeting is admin-only. A session already routed elsewhere is
+/// refused: for chat scopes that means another chat/channel (a reply
+/// could land in the wrong chat); for doc-comment scopes, ANY other
+/// mapping (the delivery target comes from the mapping row itself, so
+/// sharing across comment threads would post answers to the wrong
+/// document). Unrouted sessions (GUI/CLI-created) are free to adopt.
+#[allow(clippy::too_many_arguments)]
+async fn handle_bind(
+    channel_name: &str,
+    config: &ChannelConfig,
+    store: &Arc<dyn ChannelStore>,
+    kernel: &Kernel,
+    msg: &ChannelMessage,
+    chat_id: &str,
+    mapping_key: &str,
+    reply_msg_id: Option<String>,
+    target: Option<String>,
+) -> Result<String> {
+    let current = store.find_mapping(channel_name, mapping_key).await?;
+    let Some(target) = target else {
+        return Ok(match current {
+            Some(sid) => format!(
+                "Current session: `{}`. Retarget with `/bind <session_id>`.",
+                sid.0
+            ),
+            None => "No session here yet — the first message will create one. \
+                     Adopt an existing one with `/bind <session_id>`."
+                .to_string(),
+        });
+    };
+    if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
+        return Ok(deny);
+    }
+    let sid = SessionId::from(target.clone());
+    let session = match kernel.get_session(&sid).await {
+        Ok(s) => s,
+        Err(_) => return Ok(format!("Session `{target}` not found.")),
+    };
+    if current.as_ref() == Some(&sid) {
+        return Ok(format!("Already bound to `{target}` here."));
+    }
+    if let Some(routing) = store.find_routing_by_session(&sid).await? {
+        let compatible = if msg.doc_comment.is_some() {
+            routing.mapping_key == mapping_key
+        } else {
+            routing.channel_name == channel_name && routing.external_chat_id == chat_id
+        };
+        if !compatible {
+            return Ok(format!(
+                "`{target}` is bound to another conversation; refusing to rebind."
+            ));
+        }
+    }
+    store
+        .save_mapping(
+            channel_name,
+            mapping_key,
+            &sid,
+            chat_id,
+            reply_msg_id.as_deref(),
+        )
+        .await?;
+    let title = session
+        .title
+        .map(|t| format!(" 「{t}」"))
+        .unwrap_or_default();
+    Ok(format!("✅ Bound this conversation to `{target}`{title}."))
 }
 
 /// `/mention` query or mutation. The override lives on the message's
@@ -2637,6 +2725,7 @@ const CMD_THREAD: &str = "/thread";
 const CMD_SUBSCRIBE: &str = "/subscribe";
 const CMD_UNSUBSCRIBE: &str = "/unsubscribe";
 const CMD_MENTION: &str = "/mention";
+const CMD_BIND: &str = "/bind";
 /// Max chars for the subscription notify card's quote line (ellipsis
 /// included — see `notify_quote_snippet`).
 const NOTIFY_QUOTE_MAX_CHARS: usize = 50;
@@ -2663,6 +2752,7 @@ const CMD_PREFIXES: &[&str] = &[
     CMD_UNSUBSCRIBE,
     CMD_SUBSCRIBE,
     CMD_MENTION,
+    CMD_BIND,
 ];
 
 /// `/help` response: the channel command list.
@@ -2681,6 +2771,7 @@ const HELP_TEXT: &str = "\
 `/subscribe [chat_id] [-r]` — DM you when runs here complete; `-r` covers this chat's threads (Feishu)
 `/unsubscribe` — cancel the subscription here
 `/mention` — show the @-requirement here; `/mention on|off|reset` to override it (admin)
+`/bind` — show this conversation's session id; `/bind <session_id>` to retarget it (admin)
 `/permits` — list pending doc-permission requests (admin)
 `/approve <id> [perm]` — approve a doc-permission request (admin)
 `/deny <id>` — deny a doc-permission request (admin)
@@ -2739,6 +2830,11 @@ enum ChannelCommand {
     Unsubscribe,
     /// A malformed `/subscribe` or `/unsubscribe` command.
     InvalidSubscribeCommand,
+    /// `/bind` with no target shows the scope's current session; with a
+    /// session id, retargets the scope's mapping to it (admin).
+    Bind(Option<String>),
+    /// A `/bind` with too many arguments.
+    InvalidBindCommand,
     /// Query (`None`) or mutate this conversation's require-mention
     /// override (admin only for mutations).
     Mention(Option<MentionMode>),
@@ -2872,6 +2968,11 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
             (Some("off"), None) => ChannelCommand::Mention(Some(MentionMode::Off)),
             (Some("reset"), None) => ChannelCommand::Mention(Some(MentionMode::Reset)),
             _ => ChannelCommand::InvalidMentionCommand,
+        },
+        CMD_BIND => match (parts.next(), parts.next()) {
+            (None, None) => ChannelCommand::Bind(None),
+            (Some(id), None) => ChannelCommand::Bind(Some(id.to_string())),
+            _ => ChannelCommand::InvalidBindCommand,
         },
         _ => ChannelCommand::None,
     }

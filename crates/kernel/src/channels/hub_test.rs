@@ -773,6 +773,129 @@ fn test_parse_thread_command() {
     assert!(HELP_TEXT.contains("/thread"));
 }
 
+/// `/bind`: no-arg shows the current binding; retargeting is admin-only,
+/// adopts unrouted sessions, refuses sessions routed to another chat,
+/// and refuses cross-scope binds for doc comments (delivery would target
+/// the wrong document).
+#[tokio::test]
+async fn bind_command_show_adopt_and_guards() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram {
+            token: "fake".into(),
+        },
+        admin_users: vec!["ou_admin".to_string()],
+        ..Default::default()
+    };
+    let msg = |user: &str, raw: &str| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: user.to_string(),
+        external_message_id: Some("m1".to_string()),
+        is_mention: true,
+        raw_text: Some(raw.to_string()),
+        content: vec![],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: false,
+        create_time: None,
+        doc_comment: None,
+    };
+    let call = |msg: ChannelMessage| {
+        handle_incoming_message(
+            "mock",
+            &config,
+            &store,
+            Arc::clone(&kernel),
+            msg,
+            &obs,
+            &adapter,
+        )
+    };
+
+    // No binding yet: no-arg shows guidance.
+    let reply = call(msg("ou_admin", "/bind")).await.unwrap().unwrap();
+    assert!(reply.contains("No session here yet"), "{reply}");
+
+    // An unrouted (e.g. GUI/CLI-created) session to adopt.
+    let sid = kernel
+        .create_session(crate::kernel::CreateSessionInput {
+            project_id: None,
+            working_dir: None,
+            auto_approve_level: crate::permission::Level::Dangerous,
+            tool_blocklist: vec![],
+            model_key: None,
+        })
+        .await
+        .unwrap();
+    let bind_cmd = format!("/bind {}", sid.0);
+
+    // Non-admin cannot bind.
+    let reply = call(msg("ou_random", &bind_cmd)).await.unwrap().unwrap();
+    assert!(reply.contains("permission denied"), "{reply}");
+
+    // Admin binds: the scope now maps to the session.
+    let reply = call(msg("ou_admin", &bind_cmd)).await.unwrap().unwrap();
+    assert!(reply.contains("Bound this conversation"), "{reply}");
+    assert_eq!(
+        store.find_mapping("mock", "oc_1").await.unwrap(),
+        Some(sid.clone())
+    );
+
+    // Idempotent re-bind.
+    let reply = call(msg("ou_admin", &bind_cmd)).await.unwrap().unwrap();
+    assert!(reply.contains("Already bound"), "{reply}");
+
+    // Unknown session id.
+    let reply = call(msg("ou_admin", "/bind sess_nope"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(reply.contains("not found"), "{reply}");
+
+    // No-arg now reports the binding.
+    let reply = call(msg("ou_admin", "/bind")).await.unwrap().unwrap();
+    assert!(reply.contains(&*sid.0), "{reply}");
+
+    // Cross-chat refusal: the session is routed to oc_1.
+    let mut other_chat = msg("ou_admin", &bind_cmd);
+    other_chat.external_chat_id = "oc_2".to_string();
+    let reply = call(other_chat).await.unwrap().unwrap();
+    assert!(reply.contains("refusing to rebind"), "{reply}");
+
+    // Doc-comment scope: a chat-routed session is incompatible (delivery
+    // targets the mapping row — sharing would post to the wrong place).
+    let mut doc_msg = msg("ou_admin", &bind_cmd);
+    doc_msg.external_chat_id = String::new();
+    doc_msg.external_message_id = None;
+    doc_msg.doc_comment = Some(crate::channels::DocCommentRef {
+        file_token: "tok".to_string(),
+        file_type: "docx".to_string(),
+        comment_id: "c_9".to_string(),
+    });
+    let reply = call(doc_msg).await.unwrap().unwrap();
+    assert!(reply.contains("refusing to rebind"), "{reply}");
+
+    // Malformed: too many args.
+    let reply = call(msg("ou_admin", "/bind a b")).await.unwrap().unwrap();
+    assert!(reply.contains("Usage"), "{reply}");
+}
+
 /// `/restart` (admin-only): the ack goes out inline via the adapter —
 /// never through the spawned reply path, which the shutdown could abort —
 /// and only then is the restart requested.
