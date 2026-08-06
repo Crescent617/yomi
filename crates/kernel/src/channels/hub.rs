@@ -133,19 +133,36 @@ impl ChannelHub {
             }
         });
 
-        let adapter_proc = Arc::clone(&adapter);
-        let name_proc = name.clone();
-        let config_proc = config.clone();
-        let obs_proc = Arc::clone(&self.obs);
+        let adapter_gate = Arc::clone(&adapter);
+        let name_gate = name.clone();
+        let config_gate = config.clone();
 
-        // Spawn the message processing loop
-        let proc_handle = tokio::spawn(async move {
+        // Gated messages awaiting serial dispatch (session routing,
+        // history backfill, receipts) — bounded like the incoming queue.
+        let (dispatch_tx, dispatch_rx) = mpsc::channel::<(ChannelMessage, Gate)>(256);
+        let adapter_dispatch = Arc::clone(&adapter);
+        let name_dispatch = name.clone();
+        let config_dispatch = config.clone();
+        let store_dispatch = Arc::clone(&self.store);
+        let obs_dispatch = Arc::clone(&self.obs);
+        let kernel_dispatch = kernel.clone();
+        let cancel_dispatch = sub_cancel.clone();
+
+        // Spawn the gate loop: cheap per-message decisions only (access
+        // control, mention check) with the reaction fired off-loop, so
+        // slow dispatch work (history fetches, image downloads) can't
+        // delay the ack reaction of whatever queued up behind it — up to
+        // the dispatch queue's capacity, past which backpressure stalls
+        // the gate by design. A /mention toggle still in dispatch can be
+        // gated under the stale override; the window is milliseconds and
+        // self-corrects on the next message.
+        let gate_handle = tokio::spawn(async move {
             let mut incoming_rx = incoming_rx;
             loop {
                 tokio::select! {
                     biased;
                     () = sub_cancel.cancelled() => {
-                        info!(channel = %name_proc, "processing loop cancelled");
+                        info!(channel = %name_gate, "gate loop cancelled");
                         break;
                     }
                     Some(event) = incoming_rx.recv() => {
@@ -161,10 +178,10 @@ impl ChannelHub {
                             // by the store's conditional update.
                             ChannelEvent::DocPermissionApplied(req) => {
                                 let (name, config, store, adapter) = (
-                                    name_proc.clone(),
-                                    config_proc.clone(),
+                                    name_gate.clone(),
+                                    config_gate.clone(),
                                     Arc::clone(&store),
-                                    Arc::clone(&adapter_proc),
+                                    Arc::clone(&adapter_gate),
                                 );
                                 tokio::spawn(async move {
                                     super::approval::handle_doc_permission_applied(
@@ -175,10 +192,10 @@ impl ChannelHub {
                             }
                             ChannelEvent::CardAction(action) => {
                                 let (name, config, store, adapter) = (
-                                    name_proc.clone(),
-                                    config_proc.clone(),
+                                    name_gate.clone(),
+                                    config_gate.clone(),
                                     Arc::clone(&store),
-                                    Arc::clone(&adapter_proc),
+                                    Arc::clone(&adapter_gate),
                                 );
                                 tokio::spawn(async move {
                                     super::approval::handle_card_action(
@@ -189,50 +206,100 @@ impl ChannelHub {
                             }
                         };
                         // Route to kernel
-                        let Some(coord) = kernel.upgrade() else {
-                            warn!("kernel gone, stopping processing loop");
+                        if kernel.upgrade().is_none() {
+                            warn!("kernel gone, stopping gate loop");
+                            break;
+                        }
+                        let (gate, reaction) = gate_message(&config_gate, &store, &msg).await;
+                        // Fire-and-forget: a slow reactions API must not
+                        // stall the gate. Silent messages (no reaction
+                        // decided) skip the spawn entirely.
+                        if reaction.is_some() {
+                            let adapter = Arc::clone(&adapter_gate);
+                            let config = config_gate.clone();
+                            let react_msg = msg.clone();
+                            tokio::spawn(async move {
+                                send_gate_reaction(&adapter, &config, &react_msg, reaction).await;
+                            });
+                        }
+                        if gate == Gate::Denied {
+                            continue;
+                        }
+                        // Allow / NotAddressed: stateful handling stays
+                        // serial, in arrival order, behind the gate.
+                        if dispatch_tx.send((msg, gate)).await.is_err() {
+                            break;
+                        }
+                    }
+                    else => {
+                        info!(channel = %name_gate, "incoming channel closed, exiting");
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Spawn the dispatch loop: the serial heavy worker. Receipts,
+        // session routing, history backfill and the cursor advance run
+        // here in arrival order — exactly what the gate loop's predecessor
+        // did after gating, just no longer in the reaction's way.
+        let dispatch_handle = tokio::spawn(async move {
+            let mut dispatch_rx = dispatch_rx;
+            loop {
+                tokio::select! {
+                    biased;
+                    () = cancel_dispatch.cancelled() => {
+                        info!(channel = %name_dispatch, "dispatch loop cancelled");
+                        break;
+                    }
+                    Some((msg, gate)) = dispatch_rx.recv() => {
+                        let Some(coord) = kernel_dispatch.upgrade() else {
+                            warn!("kernel gone, stopping dispatch loop");
                             break;
                         };
-                        match gate_message(&adapter_proc, &config_proc, &store, &msg).await {
-                            Gate::Allow => {}
-                            Gate::Denied => continue,
-                            // Non-addressed chatter still counts as a
-                            // mid-run post when it lands in a running
-                            // session's conversation.
-                            Gate::NotAddressed => {
-                                record_passive_receipt(
-                                    &name_proc,
-                                    &config_proc,
-                                    &store,
-                                    &obs_proc,
-                                    &msg,
-                                    |sid| coord.is_session_running(sid),
-                                )
-                                .await;
-                                continue;
-                            }
+                        // Non-addressed chatter still counts as a mid-run
+                        // post when it lands in a running session's
+                        // conversation.
+                        if gate == Gate::NotAddressed {
+                            record_passive_receipt(
+                                &name_dispatch,
+                                &config_dispatch,
+                                &store_dispatch,
+                                &obs_dispatch,
+                                &msg,
+                                |sid| coord.is_session_running(sid),
+                            )
+                            .await;
+                            continue;
                         }
                         let handled = handle_incoming_message(
-                            &name_proc,
-                            &config_proc,
-                            &store,
+                            &name_dispatch,
+                            &config_dispatch,
+                            &store_dispatch,
                             coord,
                             msg.clone(),
-                            &obs_proc,
-                            &adapter_proc,
+                            &obs_dispatch,
+                            &adapter_dispatch,
                         ).await;
                         // Advance the cursor only after a successfully
                         // handled message; a failed trigger consumed
                         // nothing (a history fetch failing mid-handle
                         // still skips its window — best-effort).
                         if handled.is_ok() {
-                            advance_history_cursor(&config_proc, &store, &name_proc, &msg).await;
+                            advance_history_cursor(
+                                &config_dispatch,
+                                &store_dispatch,
+                                &name_dispatch,
+                                &msg,
+                            )
+                            .await;
                         }
                         match handled {
                             Ok(Some(reply_text)) => {
                                 let chat_id = msg.external_chat_id.clone();
-                                let reply_msg_id = reply_anchor(&msg, config_proc.reply_in_thread);
-                                let adapter = Arc::clone(&adapter_proc);
+                                let reply_msg_id =
+                                    reply_anchor(&msg, config_dispatch.reply_in_thread);
+                                let adapter = Arc::clone(&adapter_dispatch);
                                 tokio::spawn(async move {
                                     if let Err(e) = adapter.send_message(
                                         &chat_id,
@@ -250,7 +317,7 @@ impl ChannelHub {
                         }
                     }
                     else => {
-                        info!(channel = %name_proc, "incoming channel closed, exiting");
+                        info!(channel = %name_dispatch, "dispatch channel closed, exiting");
                         break;
                     }
                 }
@@ -260,7 +327,8 @@ impl ChannelHub {
         let name_done = name.clone();
         let _handle = tokio::spawn(async move {
             let _ = recv_handle.await;
-            let _ = proc_handle.await;
+            let _ = gate_handle.await;
+            let _ = dispatch_handle.await;
             info!(channel = %name_done, "channel instance fully shut down");
         });
 
@@ -1049,19 +1117,19 @@ enum Gate {
 }
 
 /// Gate one incoming message: enforce access control and the mention
-/// requirement, emitting the platform's gate reactions.
+/// requirement, deciding the outcome and the reaction to fire.
 ///
 /// Reaction policy: an accepted, addressed message gets the platform's ack
-/// reaction (when it has one); an allowlist miss gets the access-denied
-/// reaction — but only when the message addresses the bot, so random group
-/// chatter stays untouched. Blocklist hits, disabled channels, and
-/// non-addressed messages stay silent.
+/// reaction; an allowlist miss gets the access-denied reaction — but only
+/// when the message addresses the bot, so random group chatter stays
+/// untouched. Blocklist hits, disabled channels, and non-addressed
+/// messages stay silent. The reaction itself is fired by the caller, off
+/// the serial dispatch path, so heavy per-message work can never delay it.
 async fn gate_message(
-    adapter: &Arc<dyn PlatformAdapter>,
     config: &ChannelConfig,
     store: &Arc<dyn ChannelStore>,
     msg: &ChannelMessage,
-) -> Gate {
+) -> (Gate, Option<&'static str>) {
     // Access control first: denied messages (blocked users, disabled
     // channels) never cost a store read. The mention requirement only
     // decides the denied reaction for an allowlist miss — resolved
@@ -1071,36 +1139,29 @@ async fn gate_message(
         if e.is_allowlist_miss() {
             let (require_mention, _) = resolve_require_mention(store, config, msg).await;
             if !require_mention || msg.is_mention {
-                send_gate_reaction(
-                    adapter,
-                    config,
-                    msg,
-                    config.platform.access_denied_reaction(),
-                )
-                .await;
+                return (Gate::Denied, Some(config.platform.access_denied_reaction()));
             }
         }
-        return Gate::Denied;
+        return (Gate::Denied, None);
     }
     let (require_mention, _) = resolve_require_mention(store, config, msg).await;
     let addressed = !require_mention || msg.is_mention;
     if !addressed {
         info!(channel = %config.name, chat_id = %msg.external_chat_id, "ignoring non-mention message");
-        return Gate::NotAddressed;
+        return (Gate::NotAddressed, None);
     }
-    send_gate_reaction(adapter, config, msg, config.platform.ack_reaction()).await;
-    Gate::Allow
+    (Gate::Allow, Some(config.platform.ack_reaction()))
 }
 
-/// Best-effort gate reaction; needs a message to target and only logs on
-/// failure.
+/// Best-effort gate reaction; needs an emoji and a message to target and
+/// only logs on failure.
 async fn send_gate_reaction(
     adapter: &Arc<dyn PlatformAdapter>,
     config: &ChannelConfig,
     msg: &ChannelMessage,
-    emoji: &'static str,
+    emoji: Option<&'static str>,
 ) {
-    let Some(message_id) = msg.external_message_id.as_deref() else {
+    let (Some(emoji), Some(message_id)) = (emoji, msg.external_message_id.as_deref()) else {
         return;
     };
     if let Err(e) = adapter

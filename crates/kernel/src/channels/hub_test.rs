@@ -3682,6 +3682,19 @@ async fn gate_store() -> Arc<dyn ChannelStore> {
     store
 }
 
+/// Gate the message and fire its reaction inline, so tests can assert on
+/// the mock adapter's reactions (production fires it off the gate loop).
+async fn gate_with_reaction(
+    adapter: &Arc<dyn PlatformAdapter>,
+    config: &ChannelConfig,
+    store: &Arc<dyn ChannelStore>,
+    msg: &ChannelMessage,
+) -> Gate {
+    let (gate, reaction) = gate_message(config, store, msg).await;
+    send_gate_reaction(adapter, config, msg, reaction).await;
+    gate
+}
+
 #[tokio::test]
 async fn gate_accepts_allowed_mention_with_ack_reaction() {
     let mock = Arc::new(MockAdapter::new("fs"));
@@ -3689,7 +3702,7 @@ async fn gate_accepts_allowed_mention_with_ack_reaction() {
     let msg = channel_message(None, true, true);
 
     assert_eq!(
-        gate_message(&adapter, &feishu_gate_config(), &gate_store().await, &msg).await,
+        gate_with_reaction(&adapter, &feishu_gate_config(), &gate_store().await, &msg).await,
         Gate::Allow
     );
     let reactions = mock.reactions.lock().await.clone();
@@ -3704,7 +3717,7 @@ async fn gate_denies_unlisted_user_with_denied_reaction() {
     msg.external_user_id = "stranger".to_string();
 
     assert_eq!(
-        gate_message(&adapter, &feishu_gate_config(), &gate_store().await, &msg).await,
+        gate_with_reaction(&adapter, &feishu_gate_config(), &gate_store().await, &msg).await,
         Gate::Denied
     );
     let reactions = mock.reactions.lock().await.clone();
@@ -3720,7 +3733,7 @@ async fn gate_stays_silent_for_unlisted_user_without_mention() {
     msg.is_mention = false;
 
     assert_eq!(
-        gate_message(&adapter, &feishu_gate_config(), &gate_store().await, &msg).await,
+        gate_with_reaction(&adapter, &feishu_gate_config(), &gate_store().await, &msg).await,
         Gate::Denied
     );
     assert!(mock.reactions.lock().await.is_empty());
@@ -3734,7 +3747,7 @@ async fn gate_marks_allowed_mention_miss_not_addressed() {
     msg.is_mention = false;
 
     assert_eq!(
-        gate_message(&adapter, &feishu_gate_config(), &gate_store().await, &msg).await,
+        gate_with_reaction(&adapter, &feishu_gate_config(), &gate_store().await, &msg).await,
         Gate::NotAddressed
     );
     assert!(mock.reactions.lock().await.is_empty());
@@ -3753,7 +3766,7 @@ async fn gate_reacts_to_unlisted_user_when_mentions_not_required() {
     msg.is_mention = false;
 
     assert_eq!(
-        gate_message(&adapter, &config, &gate_store().await, &msg).await,
+        gate_with_reaction(&adapter, &config, &gate_store().await, &msg).await,
         Gate::Denied
     );
     let reactions = mock.reactions.lock().await.clone();
@@ -3771,7 +3784,7 @@ async fn gate_stays_silent_for_blocked_user() {
     let msg = channel_message(None, true, true);
 
     assert_eq!(
-        gate_message(&adapter, &config, &gate_store().await, &msg).await,
+        gate_with_reaction(&adapter, &config, &gate_store().await, &msg).await,
         Gate::Denied
     );
     assert!(mock.reactions.lock().await.is_empty());
@@ -3787,14 +3800,14 @@ async fn gate_telegram_acks_with_eyes_and_denies_with_folded_hands() {
 
     let msg = channel_message(None, true, true);
     assert_eq!(
-        gate_message(&adapter, &config, &gate_store().await, &msg).await,
+        gate_with_reaction(&adapter, &config, &gate_store().await, &msg).await,
         Gate::Allow
     );
 
     let mut denied = channel_message(None, true, true);
     denied.external_user_id = "stranger".to_string();
     assert_eq!(
-        gate_message(&adapter, &config, &gate_store().await, &denied).await,
+        gate_with_reaction(&adapter, &config, &gate_store().await, &denied).await,
         Gate::Denied
     );
 
@@ -3820,7 +3833,7 @@ async fn gate_acks_every_allowed_message_when_mentions_not_required() {
     msg.is_mention = false;
 
     assert_eq!(
-        gate_message(&adapter, &config, &gate_store().await, &msg).await,
+        gate_with_reaction(&adapter, &config, &gate_store().await, &msg).await,
         Gate::Allow
     );
     let reactions = mock.reactions.lock().await.clone();
@@ -3835,7 +3848,7 @@ async fn gate_skips_reaction_without_message_id() {
     msg.external_user_id = "stranger".to_string();
 
     assert_eq!(
-        gate_message(&adapter, &feishu_gate_config(), &gate_store().await, &msg).await,
+        gate_with_reaction(&adapter, &feishu_gate_config(), &gate_store().await, &msg).await,
         Gate::Denied
     );
     assert!(mock.reactions.lock().await.is_empty());
@@ -3857,7 +3870,7 @@ async fn gate_chat_override_off_allows_non_mention() {
     msg.is_mention = false;
 
     assert_eq!(
-        gate_message(&adapter, &feishu_gate_config(), &store, &msg).await,
+        gate_with_reaction(&adapter, &feishu_gate_config(), &store, &msg).await,
         Gate::Allow
     );
 }
@@ -3879,13 +3892,13 @@ async fn gate_chat_override_on_tightens_permissive_config() {
     msg.is_mention = false;
 
     assert_eq!(
-        gate_message(&adapter, &config, &store, &msg).await,
+        gate_with_reaction(&adapter, &config, &store, &msg).await,
         Gate::NotAddressed
     );
     // …while a mention still passes.
     let mention = channel_message(None, true, true);
     assert_eq!(
-        gate_message(&adapter, &config, &store, &mention).await,
+        gate_with_reaction(&adapter, &config, &store, &mention).await,
         Gate::Allow
     );
 }
@@ -3908,7 +3921,7 @@ async fn gate_thread_override_wins_then_falls_back_to_chat() {
     msg.is_mention = false;
 
     assert_eq!(
-        gate_message(&adapter, &feishu_gate_config(), &store, &msg).await,
+        gate_with_reaction(&adapter, &feishu_gate_config(), &store, &msg).await,
         Gate::Allow
     );
 
@@ -3918,7 +3931,7 @@ async fn gate_thread_override_wins_then_falls_back_to_chat() {
         .await
         .unwrap();
     assert_eq!(
-        gate_message(&adapter, &feishu_gate_config(), &store, &msg).await,
+        gate_with_reaction(&adapter, &feishu_gate_config(), &store, &msg).await,
         Gate::NotAddressed
     );
 }
