@@ -1,6 +1,6 @@
 //! Feishu doc comments: policy filtering, content fetch, and assembly of
 //! the injected user message whose meta header marks the doc provenance.
-//! See `docs/design/feishu-doc-comment.md`.
+//! See `docs/archive/feishu-doc-comment.md`.
 
 use super::{
     ChannelConfig, ChannelError, ChannelMessage, ChannelStore, DocCommentDetail, DocCommentNotice,

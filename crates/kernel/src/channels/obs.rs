@@ -1,7 +1,7 @@
 //! Run observability for external channels: status card + run receipts.
 //!
 //! A "run" is bracketed by `AgentEvent::Lifecycle(Running)` and
-//! `AgentEvent::Lifecycle(Stopped)` (see `docs/design/feishu-channel-observability.md`).
+//! `AgentEvent::Lifecycle(Stopped)` (see `docs/archive/feishu-channel-observability.md`).
 //! Run state is tracked from `Running`, and the status card is materialized
 //! immediately at `Running` — the run is visible from the very start, so a
 //! slow first request (long thinking, a 429 retry loop) never leaves the

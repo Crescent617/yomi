@@ -1,6 +1,6 @@
 # 执行文档：多 Model 配置与 Session 级别运行时切换
 
-> 基于设计文档 `docs/design/multi-model-config.md`，将变更拆分为可执行的步骤。按依赖顺序执行，每步完成后应能编译通过（`cargo build`）或至少能通过 `cargo check`。
+> 基于设计文档 `docs/archive/multi-model-config.md`，将变更拆分为可执行的步骤。按依赖顺序执行，每步完成后应能编译通过（`cargo build`）或至少能通过 `cargo check`。
 
 ---
 

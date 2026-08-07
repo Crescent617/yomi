@@ -353,8 +353,8 @@ sequenceDiagram
 
 | 文档 | 路径 | 主题 |
 |------|------|------|
-| Event Bus 架构重构 | `docs/design/event-bus-subagent-observability.md` | PubSub filter 机制、Event 结构体自描述化、`EventPayload` 拆分、TUI 动态订阅与 Subagent 实时渲染 |
-| 执行计划 | `docs/design/execution-plan-subagent-observability.md` | 上述重构的 Phase 1~4 执行计划、验收标准、风险回退策略 |
+| Event Bus 架构重构 | `docs/archive/event-bus-subagent-observability.md` | PubSub filter 机制、Event 结构体自描述化、`EventPayload` 拆分、TUI 动态订阅与 Subagent 实时渲染 |
+| 执行计划 | `docs/archive/execution-plan-subagent-observability.md` | 上述重构的 Phase 1~4 执行计划、验收标准、风险回退策略 |
 
 ---
 
@@ -367,4 +367,4 @@ sequenceDiagram
 - `crates/cli/src/main.rs`
 - `crates/gui/src/main.rs`
 - `crates/tui/src/lib.rs`
-- `docs/design/*.md`
+- `docs/design/*.md` / `docs/archive/*.md`

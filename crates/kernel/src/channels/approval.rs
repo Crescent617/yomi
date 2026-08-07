@@ -1,6 +1,6 @@
 //! Feishu cloud-document permission applications: notification cards and
 //! command/button approvals.
-//! See `docs/design/feishu-doc-permission-approval.md`.
+//! See `docs/archive/feishu-doc-permission-approval.md`.
 
 use super::{
     CardAction, ChannelConfig, ChannelStore, DocPermissionRequest, PermRequestRow, PlatformAdapter,

@@ -1,6 +1,6 @@
 # Event Bus 重构执行计划：Subagent 实时观测
 
-> **对应设计文档**: `docs/design/event-bus-subagent-observability.md` (v2)  
+> **对应设计文档**: `docs/archive/event-bus-subagent-observability.md` (v2)
 > **总工期预估**: 2.5 周（含 review 与联调）  
 > **负责人**: @hrli  
 > **执行日期**: 2026-07-05
@@ -372,7 +372,7 @@
 ### 4.2 文档更新
 
 **文件范围**:
-- `docs/design/event-bus-subagent-observability.md`（更新为 Final 状态）
+- `docs/archive/event-bus-subagent-observability.md`（更新为 Final 状态）
 - `README.md` 或 `CHANGELOG.md`（如有，记录 breaking change）
 - 代码注释更新（`PubSub`、`EventBus` 等关键模块的 rustdoc）
 
