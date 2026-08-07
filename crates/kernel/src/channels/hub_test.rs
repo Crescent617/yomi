@@ -686,12 +686,149 @@ fn test_parse_existing_commands_from_raw_text() {
     ));
     assert!(matches!(
         parse_channel_command(Some("/steer")),
-        ChannelCommand::None
+        ChannelCommand::InvalidSteerCommand
     ));
     assert!(matches!(
         parse_channel_command(Some("/queue")),
+        ChannelCommand::InvalidQueueCommand
+    ));
+}
+
+#[test]
+fn test_parse_command_aliases() {
+    assert!(matches!(
+        parse_channel_command(Some("/h")),
+        ChannelCommand::Help
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/i")),
+        ChannelCommand::Info
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/c")),
+        ChannelCommand::Clear
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/c@yomi_bot")),
+        ChannelCommand::Clear
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/s")),
+        ChannelCommand::Stop
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/m")),
+        ChannelCommand::CurrentModel
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/m sonnet")),
+        ChannelCommand::SwitchModel(ref key) if key == "sonnet"
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/q run this next")),
+        ChannelCommand::Queue(ref text) if text == "run this next"
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/t hi there")),
+        ChannelCommand::Thread(ref text) if text == "hi there"
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/sub")),
+        ChannelCommand::Subscribe {
+            recursive: false,
+            target_chat_id: None
+        }
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/unsub")),
+        ChannelCommand::Unsubscribe
+    ));
+    // Aliases share the canonical command's argument validation.
+    assert!(matches!(
+        parse_channel_command(Some("/c now")),
         ChannelCommand::None
     ));
+    assert!(matches!(
+        parse_channel_command(Some("/q")),
+        ChannelCommand::InvalidQueueCommand
+    ));
+    // Every canonical name shows up in `/help`.
+    for (name, _) in COMMANDS {
+        assert!(HELP_TEXT.contains(name), "help text missing {name}");
+    }
+}
+
+#[test]
+fn test_parse_unknown_command() {
+    // Command-shaped tokens matching nothing report as unknown…
+    assert!(matches!(
+        parse_channel_command(Some("/claer")),
+        ChannelCommand::Unknown(ref cmd) if cmd == "/claer"
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/foo@yomi_bot")),
+        ChannelCommand::Unknown(ref cmd) if cmd == "/foo@yomi_bot"
+    ));
+    // … while paths and prose pass through to the agent as messages.
+    assert!(matches!(
+        parse_channel_command(Some("/tmp/foo")),
+        ChannelCommand::None
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/tmp/foo bar")),
+        ChannelCommand::None
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("hello")),
+        ChannelCommand::None
+    ));
+}
+
+#[tokio::test]
+async fn unknown_command_replies_with_error() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram {
+            token: "fake".into(),
+        },
+        ..Default::default()
+    };
+    let msg = ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: "ou_1".to_string(),
+        external_message_id: Some("m1".to_string()),
+        is_mention: true,
+        raw_text: Some("/claer".to_string()),
+        content: vec![],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: false,
+        create_time: None,
+        doc_comment: None,
+    };
+
+    let reply = handle_incoming_message("mock", &config, &store, kernel, msg, &obs, &adapter)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(reply.contains("Unknown command `/claer`"), "{reply}");
+    assert!(reply.contains("/help"), "{reply}");
 }
 
 #[test]
@@ -725,10 +862,11 @@ fn test_parse_compact_command() {
         parse_channel_command(Some("/compact now")),
         ChannelCommand::None
     ));
-    // Prefix lookalikes are not commands.
+    // Prefix lookalikes never trigger the command — they report as
+    // unknown instead.
     assert!(matches!(
         parse_channel_command(Some("/compaction")),
-        ChannelCommand::None
+        ChannelCommand::Unknown(_)
     ));
     assert!(HELP_TEXT.contains("/compact"));
 }
@@ -761,14 +899,14 @@ fn test_parse_thread_command() {
         ChannelCommand::Thread(text) if text == "hi there"
     ));
     // Text is required — a bare command is a usage error, and prefix
-    // lookalikes are not commands.
+    // lookalikes report as unknown commands.
     assert!(matches!(
         parse_channel_command(Some("/thread")),
         ChannelCommand::InvalidThreadCommand
     ));
     assert!(matches!(
         parse_channel_command(Some("/threads hi")),
-        ChannelCommand::None
+        ChannelCommand::Unknown(_)
     ));
     assert!(HELP_TEXT.contains("/thread"));
 }
@@ -1526,23 +1664,24 @@ async fn test_thread_command_private_chat_and_platform_gate() {
 
 #[test]
 fn test_longer_words_are_not_commands() {
-    // Prefix matching must not hijack longer words ("/clearance" would
-    // trigger the destructive /clear otherwise).
+    // Exact matching must not hijack longer words ("/clearance" would
+    // trigger the destructive /clear otherwise) — they report as unknown
+    // commands instead of reaching the agent.
     assert!(matches!(
         parse_channel_command(Some("/clearance")),
-        ChannelCommand::None
+        ChannelCommand::Unknown(_)
     ));
     assert!(matches!(
         parse_channel_command(Some("/helpful")),
-        ChannelCommand::None
+        ChannelCommand::Unknown(_)
     ));
     assert!(matches!(
         parse_channel_command(Some("/stopping")),
-        ChannelCommand::None
+        ChannelCommand::Unknown(_)
     ));
     assert!(matches!(
         parse_channel_command(Some("/information")),
-        ChannelCommand::None
+        ChannelCommand::Unknown(_)
     ));
     // … but the @bot suffix still works.
     assert!(matches!(
@@ -1940,10 +2079,10 @@ fn test_parse_approval_commands() {
         parse_channel_command(Some("/deny 3 4")),
         ChannelCommand::InvalidApprovalCommand
     ));
-    // Prefix lookalikes are not commands.
+    // Prefix lookalikes report as unknown commands.
     assert!(matches!(
         parse_channel_command(Some("/approved 3")),
-        ChannelCommand::None
+        ChannelCommand::Unknown(_)
     ));
 }
 
@@ -3474,13 +3613,17 @@ fn test_is_command_text() {
     // Bare commands, with @bot suffix, with leading mention(s), and
     // arg-less command tokens are all control-plane.
     assert!(is_command_text("/info"));
+    assert!(is_command_text("/c"));
+    assert!(is_command_text("/q run this next"));
     assert!(is_command_text("/clear@yomi_bot"));
     assert!(is_command_text("@_user_1 /info"));
     assert!(is_command_text("@_user_1 @_user_2 /clear"));
     assert!(is_command_text("  /steer"));
-    // Longer words, mid-sentence commands, plain mentions, and empty /
-    // mention-only texts stay.
+    // Longer words, unknown commands, mid-sentence commands, plain
+    // mentions, and empty / mention-only texts stay.
     assert!(!is_command_text("/clearance 大甩卖"));
+    assert!(!is_command_text("/claer"));
+    assert!(!is_command_text("/tmp/foo"));
     assert!(!is_command_text("记得跑一下 /info"));
     assert!(!is_command_text("@alice 你好"));
     assert!(!is_command_text(""));
@@ -4263,10 +4406,10 @@ fn mention_command_parse() {
         parse_channel_command(Some("/mention off now")),
         ChannelCommand::InvalidMentionCommand
     ));
-    // `/mentions` is not a command.
+    // `/mentions` reports as an unknown command.
     assert!(matches!(
         parse_channel_command(Some("/mentions")),
-        ChannelCommand::None
+        ChannelCommand::Unknown(_)
     ));
     assert!(HELP_TEXT.contains("/mention"));
 }
@@ -4726,10 +4869,10 @@ fn test_parse_subscribe_commands() {
         parse_channel_command(Some("/unsubscribe now")),
         ChannelCommand::InvalidSubscribeCommand
     ));
-    // Prefix lookalikes are not commands.
+    // Prefix lookalikes report as unknown commands.
     assert!(matches!(
         parse_channel_command(Some("/subscribed")),
-        ChannelCommand::None
+        ChannelCommand::Unknown(_)
     ));
     assert!(HELP_TEXT.contains("/subscribe"));
     assert!(HELP_TEXT.contains("/unsubscribe"));

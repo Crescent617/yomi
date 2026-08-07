@@ -1453,6 +1453,12 @@ async fn handle_incoming_message(
         ChannelCommand::InvalidThreadCommand => Ok(Some(
             "Usage: `/thread <text>` — the reply opens a new thread.".to_string(),
         )),
+        ChannelCommand::InvalidSteerCommand => Ok(Some(
+            "Usage: `/steer <text>` — inject a message into the current run.".to_string(),
+        )),
+        ChannelCommand::InvalidQueueCommand => Ok(Some(
+            "Usage: `/queue <text>` — queue a message for a later turn.".to_string(),
+        )),
         ChannelCommand::Queue(text) => {
             let (sid, mut blocks) = prepare_trigger(
                 channel_name,
@@ -1701,6 +1707,9 @@ async fn handle_incoming_message(
         ChannelCommand::InvalidBindCommand => {
             Ok(Some("Usage: `/bind` or `/bind <session_id>`.".to_string()))
         }
+        ChannelCommand::Unknown(cmd) => Ok(Some(format!(
+            "Unknown command `{cmd}`. See `/help` for the command list."
+        ))),
         ChannelCommand::None => {
             let (sid, mut content) = prepare_trigger(
                 channel_name,
@@ -2730,46 +2739,45 @@ const CMD_BIND: &str = "/bind";
 /// included — see `notify_quote_snippet`).
 const NOTIFY_QUOTE_MAX_CHARS: usize = 50;
 
-/// All channel command prefixes, longest-first so `/models` is matched
-/// before `/model` (the latter is a prefix of the former).
-const CMD_PREFIXES: &[&str] = &[
-    CMD_MODELS,
-    CMD_MODEL,
-    CMD_CLEAR,
-    CMD_COMPACT,
-    CMD_STOP,
-    CMD_STEER,
-    CMD_QUEUE,
-    CMD_INFO,
-    CMD_HELP,
-    CMD_PERMITS,
-    CMD_APPROVE,
-    CMD_DENY,
-    CMD_RESTART,
-    CMD_THREAD,
-    // `/unsubscribe` before `/subscribe` is unnecessary (neither prefixes
-    // the other) but keeps the list alphabetical-ish.
-    CMD_UNSUBSCRIBE,
-    CMD_SUBSCRIBE,
-    CMD_MENTION,
-    CMD_BIND,
+/// All channel commands: canonical name plus short aliases. Matching is
+/// exact (after stripping an `@bot` suffix), so table order is irrelevant
+/// and lookalike words (`/clearance`) never resolve.
+const COMMANDS: &[(&str, &[&str])] = &[
+    (CMD_HELP, &["/h"]),
+    (CMD_INFO, &["/i"]),
+    (CMD_MODELS, &[]),
+    (CMD_MODEL, &["/m"]),
+    (CMD_CLEAR, &["/c"]),
+    (CMD_COMPACT, &[]),
+    (CMD_STOP, &["/s"]),
+    (CMD_STEER, &[]),
+    (CMD_QUEUE, &["/q"]),
+    (CMD_THREAD, &["/t"]),
+    (CMD_SUBSCRIBE, &["/sub"]),
+    (CMD_UNSUBSCRIBE, &["/unsub"]),
+    (CMD_MENTION, &[]),
+    (CMD_BIND, &[]),
+    (CMD_PERMITS, &[]),
+    (CMD_APPROVE, &[]),
+    (CMD_DENY, &[]),
+    (CMD_RESTART, &[]),
 ];
 
 /// `/help` response: the channel command list.
 const HELP_TEXT: &str = "\
 **Commands**
-`/help` — this help
-`/info` — current session info
+`/help` (`/h`) — this help
+`/info` (`/i`) — current session info
 `/models` — list configured models (current one marked)
-`/model` — show current model; `/model <key>` to switch
-`/clear` — clear context and start fresh
+`/model` (`/m`) — show current model; `/model <key>` to switch
+`/clear` (`/c`) — clear context and start fresh
 `/compact` — summarize and compact the context
-`/stop` — stop the current run
+`/stop` (`/s`) — stop the current run
 `/steer <text>` — inject a message into the current run
-`/queue <text>` — queue a message for a later turn
-`/thread <text>` — ask in a new thread opened off this message (Feishu)
-`/subscribe [chat_id] [-r]` — DM you when runs here complete; `-r` covers this chat's threads (Feishu)
-`/unsubscribe` — cancel the subscription here
+`/queue <text>` (`/q`) — queue a message for a later turn
+`/thread <text>` (`/t`) — ask in a new thread opened off this message (Feishu)
+`/subscribe [chat_id] [-r]` (`/sub`) — DM you when runs here complete; `-r` covers this chat's threads (Feishu)
+`/unsubscribe` (`/unsub`) — cancel the subscription here
 `/mention` — show the @-requirement here; `/mention on|off|reset` to override it (admin)
 `/bind` — show this conversation's session id; `/bind <session_id>` to retarget it (admin)
 `/permits` — list pending doc-permission requests (admin)
@@ -2791,6 +2799,10 @@ enum ChannelCommand {
     Steer(String),
     /// Queue a normal user message for a later turn.
     Queue(String),
+    /// A `/steer` without text.
+    InvalidSteerCommand,
+    /// A `/queue` without text.
+    InvalidQueueCommand,
     /// List configured models and mark the current one.
     ListModels,
     /// Show the current session model.
@@ -2840,6 +2852,8 @@ enum ChannelCommand {
     Mention(Option<MentionMode>),
     /// A malformed `/mention` command.
     InvalidMentionCommand,
+    /// Command-shaped (`/word`) but matches no known command or alias.
+    Unknown(String),
     /// Not a command.
     None,
 }
@@ -2875,8 +2889,15 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
         return ChannelCommand::None;
     };
 
-    let Some(&command) = CMD_PREFIXES.iter().find(|prefix| cmd_matches(cmd, prefix)) else {
-        return ChannelCommand::None;
+    let Some(command) = resolve_command(cmd) else {
+        // Command-shaped but unknown — surface the typo instead of
+        // silently sending it to the agent. Paths (`/tmp/x`) and prose
+        // are not command-shaped and pass through as messages.
+        return if is_command_shaped(cmd) {
+            ChannelCommand::Unknown(cmd.to_string())
+        } else {
+            ChannelCommand::None
+        };
     };
 
     match command {
@@ -2888,7 +2909,11 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
         CMD_STEER | CMD_QUEUE => {
             let rest = parts.collect::<Vec<_>>().join(" ");
             if rest.is_empty() {
-                ChannelCommand::None
+                if command == CMD_QUEUE {
+                    ChannelCommand::InvalidQueueCommand
+                } else {
+                    ChannelCommand::InvalidSteerCommand
+                }
             } else if command == CMD_QUEUE {
                 ChannelCommand::Queue(rest)
             } else {
@@ -2978,21 +3003,33 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
     }
 }
 
-/// A command token matches a prefix exactly or with an `@bot` suffix
-/// (`/clear`, `/clear@yomi_bot`) — never a longer word (`/clearance` is
-/// not a command).
-fn cmd_matches(cmd: &str, prefix: &str) -> bool {
-    cmd == prefix
-        || cmd
-            .strip_prefix(prefix)
-            .is_some_and(|rest| rest.starts_with('@'))
+/// Resolve a command token to its canonical name: an exact match on the
+/// canonical name or an alias, allowing an `@bot` suffix (`/clear`,
+/// `/c@yomi_bot`) — never a longer word (`/clearance` is not a command).
+fn resolve_command(token: &str) -> Option<&'static str> {
+    let base = token.split('@').next().unwrap_or(token);
+    COMMANDS
+        .iter()
+        .find(|(name, aliases)| *name == base || aliases.contains(&base))
+        .map(|(name, _)| *name)
+}
+
+/// Whether a token is command-shaped: `/word` (word chars only, optional
+/// `@bot` suffix). Paths (`/tmp/x`) and prose are not, so they pass
+/// through to the agent as messages.
+fn is_command_shaped(token: &str) -> bool {
+    let base = token.split('@').next().unwrap_or(token);
+    base.strip_prefix('/').is_some_and(|rest| {
+        !rest.is_empty()
+            && rest
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+    })
 }
 
 pub(super) fn has_channel_command_prefix(raw_text: &str) -> bool {
     let command = raw_text.split_whitespace().next().unwrap_or_default();
-    CMD_PREFIXES
-        .iter()
-        .any(|prefix| cmd_matches(command, prefix))
+    resolve_command(command).is_some()
 }
 
 /// Whether a fetched history message is a channel command (`/info`,
