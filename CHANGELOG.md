@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.60] - 2026-08-07
+
 ### Fixed
 - 修复 `/bind` 把已绑定的会话改绑到同一聊天的其他位置（如某个话题）后，该会话的回复仍发到原位置的问题：改绑现在是真正的移动，原位置不再接收其回复。
 
