@@ -1034,6 +1034,123 @@ async fn bind_command_show_adopt_and_guards() {
     assert!(reply.contains("Usage"), "{reply}");
 }
 
+/// `/bind` retarget semantics: an already-routed session is *moved* (the
+/// old scope's mapping row is deleted, so delivery — one row per session —
+/// follows the new conversation), and the reply names the displaced
+/// session so it can be bound back.
+#[tokio::test]
+async fn bind_command_move_and_bind_back() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram {
+            token: "fake".into(),
+        },
+        admin_users: vec!["ou_admin".to_string()],
+        ..Default::default()
+    };
+    let msg = |raw: &str| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: "ou_admin".to_string(),
+        external_message_id: Some("m1".to_string()),
+        is_mention: true,
+        raw_text: Some(raw.to_string()),
+        content: vec![],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: false,
+        create_time: None,
+        doc_comment: None,
+    };
+    let call = |msg: ChannelMessage| {
+        handle_incoming_message(
+            "mock",
+            &config,
+            &store,
+            Arc::clone(&kernel),
+            msg,
+            &obs,
+            &adapter,
+        )
+    };
+    let new_session = || crate::kernel::CreateSessionInput {
+        project_id: None,
+        working_dir: None,
+        auto_approve_level: crate::permission::Level::Dangerous,
+        tool_blocklist: vec![],
+        model_key: None,
+    };
+    let sid1 = kernel.create_session(new_session()).await.unwrap();
+    let sid2 = kernel.create_session(new_session()).await.unwrap();
+
+    // Adopt sid1 at chat level — nothing displaced, no previous to name.
+    let reply = call(msg(&format!("/bind {}", sid1.0)))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(reply.contains("Bound this conversation"), "{reply}");
+    assert!(!reply.contains("Previously bound"), "{reply}");
+
+    // Retarget the scope to sid2: the reply names sid1 for bind-back, and
+    // sid1 loses its only mapping row (unrouted again).
+    let reply = call(msg(&format!("/bind {}", sid2.0)))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(reply.contains("Previously bound"), "{reply}");
+    assert!(reply.contains(&format!("/bind {}", sid1.0)), "{reply}");
+    assert_eq!(
+        store.find_mapping("mock", "oc_1").await.unwrap(),
+        Some(sid2.clone())
+    );
+    assert!(store
+        .find_routing_by_session(&sid1)
+        .await
+        .unwrap()
+        .is_none());
+
+    // Binding back works; the reply now names sid2.
+    let reply = call(msg(&format!("/bind {}", sid1.0)))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(reply.contains("Bound this conversation"), "{reply}");
+    assert!(reply.contains(&*sid2.0), "{reply}");
+
+    // Move: bind sid1 from a thread of the same chat.
+    let mut thread_msg = msg(&format!("/bind {}", sid1.0));
+    thread_msg.is_group = true;
+    thread_msg.thread_id = Some("t1".to_string());
+    thread_msg.external_message_id = Some("m2".to_string());
+    let reply = call(thread_msg).await.unwrap().unwrap();
+    assert!(reply.contains("Moved"), "{reply}");
+
+    // The old scope's row is gone; delivery routing follows the move.
+    assert_eq!(store.find_mapping("mock", "oc_1").await.unwrap(), None);
+    assert_eq!(
+        store.find_mapping("mock", "t1").await.unwrap(),
+        Some(sid1.clone())
+    );
+    let routing = store.find_routing_by_session(&sid1).await.unwrap().unwrap();
+    assert_eq!(routing.mapping_key, "t1");
+    assert_eq!(routing.external_chat_id, "oc_1");
+}
+
 /// `/restart` (admin-only): the ack goes out inline via the adapter —
 /// never through the spawned reply path, which the shutdown could abort —
 /// and only then is the restart requested.

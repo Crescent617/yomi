@@ -1862,6 +1862,11 @@ async fn handle_bind(
     if current.as_ref() == Some(&sid) {
         return Ok(format!("Already bound to `{target}` here."));
     }
+    // Retargeting a routed session is a move, not a share: delivery
+    // resolves a single mapping row per session (`find_routing_by_session`),
+    // so the old rows must go — otherwise replies keep posting to the
+    // previous conversation.
+    let mut moved = false;
     if let Some(routing) = store.find_routing_by_session(&sid).await? {
         let compatible = if msg.doc_comment.is_some() {
             routing.mapping_key == mapping_key
@@ -1873,6 +1878,8 @@ async fn handle_bind(
                 "`{target}` is bound to another conversation; refusing to rebind."
             ));
         }
+        store.delete_by_sessions(std::slice::from_ref(&sid)).await?;
+        moved = true;
     }
     store
         .save_mapping(
@@ -1887,7 +1894,22 @@ async fn handle_bind(
         .title
         .map(|t| format!(" 「{t}」"))
         .unwrap_or_default();
-    Ok(format!("✅ Bound this conversation to `{target}`{title}."))
+    // Name the session this retarget displaces, so it can be bound back.
+    let previous = current.map_or_else(String::new, |old| {
+        format!(
+            "\nPreviously bound here: `{}` — bind back with `/bind {}`.",
+            old.0, old.0
+        )
+    });
+    if moved {
+        Ok(format!(
+            "✅ Moved `{target}`{title} here — its previous conversation no longer receives its replies.{previous}"
+        ))
+    } else {
+        Ok(format!(
+            "✅ Bound this conversation to `{target}`{title}.{previous}"
+        ))
+    }
 }
 
 /// `/mention` query or mutation. The override lives on the message's
