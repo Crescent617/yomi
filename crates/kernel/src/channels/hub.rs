@@ -3046,11 +3046,16 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
     }
 }
 
+/// The command token without an `@bot` suffix (`/c@yomi_bot` → `/c`).
+fn command_base(token: &str) -> &str {
+    token.split('@').next().unwrap_or(token)
+}
+
 /// Resolve a command token to its canonical name: an exact match on the
 /// canonical name or an alias, allowing an `@bot` suffix (`/clear`,
 /// `/c@yomi_bot`) — never a longer word (`/clearance` is not a command).
 fn resolve_command(token: &str) -> Option<&'static str> {
-    let base = token.split('@').next().unwrap_or(token);
+    let base = command_base(token);
     COMMANDS
         .iter()
         .find(|(name, aliases)| *name == base || aliases.contains(&base))
@@ -3061,8 +3066,7 @@ fn resolve_command(token: &str) -> Option<&'static str> {
 /// `@bot` suffix). Paths (`/tmp/x`) and prose are not, so they pass
 /// through to the agent as messages.
 fn is_command_shaped(token: &str) -> bool {
-    let base = token.split('@').next().unwrap_or(token);
-    base.strip_prefix('/').is_some_and(|rest| {
+    command_base(token).strip_prefix('/').is_some_and(|rest| {
         !rest.is_empty()
             && rest
                 .chars()
