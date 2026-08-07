@@ -15,6 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.59] - 2026-08-07
+
+### Added
+- 斜杠命令支持短别名：`/h`（help）、`/i`（info）、`/m`（model）、`/c`（clear）、`/s`（stop）、`/q`（queue）、`/t`（thread）、`/sub`（subscribe）、`/unsub`（unsubscribe），带 `@机器人` 后缀同样生效。
+- 新增 `/bind` 命令：无参查看当前对话绑定的会话；`/bind <session_id>` 将当前对话改绑到指定会话（限管理员），可认领 GUI/CLI 创建的会话，已绑定到其他聊天的会话会被拒绝。
+
+### Changed
+- 不认识的斜杠命令（如打错的 `/claer`）现在回复 Unknown command 提示，不再被当作普通消息发给 agent；`/tmp/foo` 这类路径文本不受影响。
+
+### Fixed
+- 单独发送 `/steer`、`/queue`（不带文本）现在返回用法提示，不再被当作普通消息发出。
+- 文档评论者不在 `allowed_users` 时，@ 机器人的评论现在会收到拒绝表情反馈（此前静默无响应）；黑名单命中保持静默。
+
 ## [0.7.58] - 2026-08-06
 
 ### Added
