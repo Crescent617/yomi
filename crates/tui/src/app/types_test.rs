@@ -35,10 +35,7 @@ fn test_model_picker_items_marks_and_sorts_current_first() {
 fn test_model_picker_items_meta_format() {
     let models = vec![model("b-model", "model-b", "acme", 256_000)];
     let items = model_picker_items(&models, "b-model");
-    assert_eq!(
-        items[0].meta.as_deref(),
-        Some("acme · model-b · 256k ctx")
-    );
+    assert_eq!(items[0].meta.as_deref(), Some("acme · model-b · 256k ctx"));
 }
 
 #[test]
