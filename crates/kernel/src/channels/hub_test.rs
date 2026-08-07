@@ -1149,6 +1149,16 @@ async fn bind_command_move_and_bind_back() {
     let routing = store.find_routing_by_session(&sid1).await.unwrap().unwrap();
     assert_eq!(routing.mapping_key, "t1");
     assert_eq!(routing.external_chat_id, "oc_1");
+
+    // The old conversation got a farewell naming the moved session.
+    let outgoing = mock.outgoing.lock().await;
+    assert_eq!(outgoing.len(), 1);
+    let (chat, blocks) = &outgoing[0];
+    assert_eq!(chat, "oc_1");
+    let text = blocks_text(blocks);
+    assert!(text.contains("has moved"), "{text}");
+    assert!(text.contains(&*sid1.0), "{text}");
+    drop(outgoing);
 }
 
 /// `/restart` (admin-only): the ack goes out inline via the adapter —

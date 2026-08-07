@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - `/bind` 改绑成功时，回复会带上该对话原会话的 id 与绑回命令，需要反悔时可直接照抄执行。
+- `/bind` 移走会话时，原对话会收到一条告别提示，说明会话已移走、后续消息将开启新会话，不再表现为 bot 突然"失忆"。
 
 ## [0.7.59] - 2026-08-07
 

@@ -1695,6 +1695,7 @@ async fn handle_incoming_message(
                 config,
                 store,
                 &kernel,
+                adapter,
                 &msg,
                 &chat_id,
                 &mapping_key,
@@ -1833,6 +1834,7 @@ async fn handle_bind(
     config: &ChannelConfig,
     store: &Arc<dyn ChannelStore>,
     kernel: &Kernel,
+    adapter: &Arc<dyn PlatformAdapter>,
     msg: &ChannelMessage,
     chat_id: &str,
     mapping_key: &str,
@@ -1877,6 +1879,25 @@ async fn handle_bind(
             return Ok(format!(
                 "`{target}` is bound to another conversation; refusing to rebind."
             ));
+        }
+        // Say goodbye in the old conversation — its members otherwise just
+        // see a bot that suddenly forgot everything (doc-comment scopes
+        // have no chat to post to). Fire-and-forget, like the restart ack.
+        if routing.doc_comment.is_none() {
+            let text = format!(
+                "Session `{target}` has moved to another conversation — \
+                 the next message here starts fresh."
+            );
+            if let Err(e) = adapter
+                .send_message(
+                    &routing.external_chat_id,
+                    vec![ContentBlock::Text { text }],
+                    routing.reply_msg_id.as_deref(),
+                )
+                .await
+            {
+                warn!(channel = %channel_name, error = %e, "bind farewell send failed");
+            }
         }
         store.delete_by_sessions(std::slice::from_ref(&sid)).await?;
         moved = true;
