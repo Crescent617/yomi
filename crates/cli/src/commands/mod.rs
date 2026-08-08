@@ -4,6 +4,7 @@ pub mod cron;
 pub mod daemon;
 pub mod events;
 pub mod gc;
+pub mod run;
 pub mod session;
 pub mod skill;
 pub mod tui;

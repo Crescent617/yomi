@@ -31,6 +31,7 @@ daemon 是常驻进程：IM 通道（飞书/Telegram）、多客户端共享都�
 
 ## 查询与调试
 
+- `yomi run "prompt" [--resume <id>|--last] [--format json|stream-json] [--timeout N]`：headless 一次性运行，等 agent 结束后输出结果并按成败给退出码（0 成功 / 2 失败 / 3 超迭代 / 124 超时）。默认 daemon 活着就走 daemon，否则本地；`--ephemeral` 不记录 last session。脚本里要执行工具记得 `--yolo` 或 `--auto-approve`，否则权限请求会被立即拒绝。
 - `yomi usage [-n 天数] [--model X] [--provider Y]`：token 用量统计。
 - `yomi events [-s <session>]`：会话事件 NDJSON 流；`--all` 订阅所有会话（仅实时）；`--after-event-id` 断点续传。
 - `yomi cron list|get|create|update|pause|resume|delete` 管理定时任务；`cron trigger <id>` 立即手动触发一次。

@@ -26,6 +26,8 @@ struct Args {
 enum Commands {
     /// Start TUI session (default when no subcommand provided)
     Tui(tui::TuiArgs),
+    /// Run a single prompt headlessly and print the result
+    Run(commands::run::RunArgs),
     /// Manage sessions
     Session(SessionArgs),
     /// Garbage collect expired session data (dry-run by default)
@@ -322,6 +324,7 @@ async fn main() -> Result<()> {
 
     match args.command {
         Some(Commands::Tui(tui_args)) => tui::run(tui_args).await,
+        Some(Commands::Run(args)) => commands::run::run(args).await,
         Some(Commands::Session(args)) => run_session(args).await,
         Some(Commands::Gc(args)) => commands::gc::run(args).await,
         Some(Commands::Skill(args)) => run_skill(args).await,

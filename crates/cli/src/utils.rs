@@ -103,3 +103,61 @@ pub fn resolve_working_dir(global: &GlobalArgs) -> Result<PathBuf> {
     };
     Ok(dir.canonicalize()?)
 }
+
+/// Maximum stdin size to prevent OOM (400KB)
+const MAX_STDIN_SIZE: u64 = 400 * 1024;
+
+/// Combine prompt and piped stdin: both present wraps stdin in a code fence.
+pub fn combine_prompt_stdin(prompt: Option<String>, stdin: Option<String>) -> Option<String> {
+    match (prompt, stdin) {
+        (Some(p), Some(s)) => Some(format!("{p}\n\n```\n{s}\n```")),
+        (Some(p), None) => Some(p),
+        (None, Some(s)) => Some(s),
+        (None, None) => None,
+    }
+}
+
+/// Read piped stdin (non-TTY only), capped at 400KB. Returns None on TTY,
+/// empty input, or read failure (logged).
+pub async fn read_piped_stdin() -> Option<String> {
+    use std::io::{IsTerminal, Read as _};
+
+    if std::io::stdin().is_terminal() {
+        return None;
+    }
+    // Read stdin in a blocking thread to avoid blocking the async runtime.
+    match tokio::task::spawn_blocking(move || {
+        let mut buffer = String::with_capacity((MAX_STDIN_SIZE as usize).min(8192));
+        let mut stdin = std::io::stdin().take(MAX_STDIN_SIZE);
+        match stdin.read_to_string(&mut buffer) {
+            Ok(0) => None,
+            Ok(n) => {
+                // Only warn if we actually hit the limit (more data waiting).
+                if n >= MAX_STDIN_SIZE as usize {
+                    let mut extra = [0u8; 1];
+                    if std::io::stdin().read(&mut extra).is_ok_and(|n| n > 0) {
+                        tracing::warn!("Stdin truncated at {}KB limit", MAX_STDIN_SIZE / 1024);
+                    }
+                }
+                let trimmed = buffer.trim_end().to_string();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed)
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to read stdin: {e}");
+                None
+            }
+        }
+    })
+    .await
+    {
+        Ok(content) => content,
+        Err(e) => {
+            tracing::warn!("Stdin reading task panicked: {e}");
+            None
+        }
+    }
+}

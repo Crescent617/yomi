@@ -17,7 +17,7 @@ use tui::run_tui;
 /// Send a message to the daemon with automatic retry and session restore.
 /// On `session_not_found` (daemon restart), attempts `restore_session` once.
 /// Exponential backoff capped at 2s. Returns `Err` after `max_retries` failures.
-async fn send_with_retry(
+pub(crate) async fn send_with_retry(
     kernel: &dyn KernelApi,
     session_id: &SessionId,
     blocks: Vec<ContentBlock>,
@@ -124,13 +124,13 @@ pub async fn resolve_session(
         // --session <id>: restore specific session
         SessionArg::Specific(id) => {
             let session_id = SessionId::from(id.clone());
-            println!("Restoring session: {}", session_id.0);
+            eprintln!("Restoring session: {}", session_id.0);
 
             match kernel.restore_session(&session_id).await {
                 Ok(_) => Ok(session_id),
                 Err(e) => {
-                    println!("Failed to restore session: {e}");
-                    println!("Starting new session instead");
+                    eprintln!("Failed to restore session: {e}");
+                    eprintln!("Starting new session instead");
                     Ok(kernel.create_session(new_session_input()).await?)
                 }
             }
@@ -139,19 +139,19 @@ pub async fn resolve_session(
         SessionArg::Last => match app_storage.load_session(working_dir).await? {
             Some(entry) => {
                 let session_id = SessionId::from(entry.session_id);
-                println!("Restoring previous session: {}", session_id.0);
+                eprintln!("Restoring previous session: {}", session_id.0);
 
                 match kernel.restore_session(&session_id).await {
                     Ok(_) => Ok(session_id),
                     Err(e) => {
-                        println!("Failed to restore session: {e}");
-                        println!("Starting new session instead");
+                        eprintln!("Failed to restore session: {e}");
+                        eprintln!("Starting new session instead");
                         Ok(kernel.create_session(new_session_input()).await?)
                     }
                 }
             }
             None => {
-                println!("No previous session found, starting new session");
+                eprintln!("No previous session found, starting new session");
                 Ok(kernel.create_session(new_session_input()).await?)
             }
         },
@@ -161,18 +161,18 @@ pub async fn resolve_session(
         SessionArg::ForkLast => match app_storage.load_session(working_dir).await? {
             Some(entry) => {
                 let source_id = SessionId::from(entry.session_id);
-                println!("Forking last session: {}", source_id.0);
+                eprintln!("Forking last session: {}", source_id.0);
                 Ok(kernel.fork_session(&source_id, auto_approve_level).await?)
             }
             None => {
-                println!("No previous session found to fork, starting new session");
+                eprintln!("No previous session found to fork, starting new session");
                 Ok(kernel.create_session(new_session_input()).await?)
             }
         },
         // --fork <id>: fork specific session
         SessionArg::ForkSpecific(id) => {
             let source_id = SessionId::from(id.clone());
-            println!("Forking session: {}", source_id.0);
+            eprintln!("Forking session: {}", source_id.0);
             Ok(kernel.fork_session(&source_id, auto_approve_level).await?)
         }
     }

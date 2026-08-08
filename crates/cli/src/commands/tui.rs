@@ -12,11 +12,7 @@ use kernel::{
     permission::Level,
     utils::strs,
 };
-use std::io::{self, IsTerminal, Read};
 use std::sync::Arc;
-
-/// Maximum stdin size to prevent OOM (400KB)
-const MAX_STDIN_SIZE: u64 = 400 * 1024;
 
 #[derive(Default, clap::Parser)]
 pub struct TuiArgs {
@@ -74,62 +70,10 @@ impl TuiArgs {
     /// - stdin only: "{stdin}"
     /// - neither: None
     pub async fn build_initial_message(&self) -> Result<Option<String>> {
-        let prompt = self.prompt.clone();
-
-        // Quick check: if TTY, no stdin to read
-        if io::stdin().is_terminal() {
-            return Ok(prompt);
-        }
-
-        // Read stdin in blocking thread to avoid blocking async runtime
-        let stdin_result = tokio::task::spawn_blocking(move || {
-            // Pre-allocate up to 8KB initially to avoid over-allocation for small input
-            let mut buffer = String::with_capacity((MAX_STDIN_SIZE as usize).min(8192));
-            let mut stdin = io::stdin().take(MAX_STDIN_SIZE);
-
-            match stdin.read_to_string(&mut buffer) {
-                Ok(0) => Ok(None),
-                Ok(n) => {
-                    // Only warn if we actually hit the limit (have more data waiting)
-                    // This avoids false positives when stdin is exactly MAX_STDIN_SIZE
-                    if n >= MAX_STDIN_SIZE as usize {
-                        // Try to read one more byte to confirm truncation
-                        let mut extra = [0u8; 1];
-                        if io::stdin().read(&mut extra).is_ok_and(|n| n > 0) {
-                            tracing::warn!("Stdin truncated at {}KB limit", MAX_STDIN_SIZE / 1024);
-                        }
-                    }
-                    let trimmed = buffer.trim_end().to_string();
-                    Ok(if trimmed.is_empty() {
-                        None
-                    } else {
-                        Some(trimmed)
-                    })
-                }
-                Err(e) => Err(e),
-            }
-        })
-        .await;
-
-        // Handle JoinError (panic in blocking task) vs IO error
-        let stdin_content = match stdin_result {
-            Ok(Ok(content)) => content,
-            Ok(Err(e)) => {
-                tracing::warn!("Failed to read stdin: {}", e);
-                None
-            }
-            Err(e) => {
-                tracing::warn!("Stdin reading task panicked: {}", e);
-                None
-            }
-        };
-
-        Ok(match (prompt, stdin_content) {
-            (Some(p), Some(s)) => Some(format!("{p}\n\n```\n{s}\n```")),
-            (Some(p), None) => Some(p),
-            (None, Some(s)) => Some(s),
-            (None, None) => None,
-        })
+        Ok(crate::utils::combine_prompt_stdin(
+            self.prompt.clone(),
+            crate::utils::read_piped_stdin().await,
+        ))
     }
 }
 
@@ -252,7 +196,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     Ok(())
 }
 
-async fn create_local_kernel(config: &Config) -> Result<Arc<kernel::Kernel>> {
+pub(crate) async fn create_local_kernel(config: &Config) -> Result<Arc<kernel::Kernel>> {
     let kernel = kernel::build_kernel(config, false)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to build kernel: {e}"))?;
