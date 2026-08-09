@@ -16,7 +16,7 @@
 | # | 模块 | 形态 | 内核改动 | 状态 |
 |---|---|---|---|---|
 | 0 | cron job name 唯一 + create ensure 语义 | 内核 | 已完成（schema v19） | ✅ 已落地 |
-| 1 | Agent Templates（subagent SP 模板） | 文件资产 + 少量内核（desc 自足，无 skill） | `agent` 工具加 `template` 参数 + conductor resolve | ✅ 已落地（schema v20；内置 planner/reviewer/explorer；发现靠 desc + INDEX.md） |
+| 1 | Agent Templates（subagent SP 模板） | 文件资产 + 少量内核（desc 自足，无 skill） | `agent` 工具加 `template` 参数 + conductor resolve | ✅ 已落地（schema v20；内置 planner/reviewer/explorer；发现靠 desc + 目录直读） |
 | 1.5 | 记忆层 `.agents/memory/`（agent 自写笔记，**仅项目层**） | 文件资产 + SP 门控指针（已落地） | 二期：索引装配（loader+截断+git-root）；全局层暂缓 | 一期已落地 |
 | 2 | 工单 tickets `.yomi/tickets/` | 文件约定 + task-tickets skill + `ticket.sh` 脚本 | **零** | ✅ 文件+skill+脚本已落地；GUI 投影曾实现并 e2e 验证，后按决策撤下（先验证好用再上展示，wire 保持 23 未升） |
 | 3 | Janitor 后台策展循环 | janitor skill + daemon ensure cron | 小：daemon 按项目 ensure + config 开关 | **暂缓**（2026-08，见 P3 暂缓说明） |
@@ -45,20 +45,20 @@
 
 ### 资产格式
 
-全局 `~/.yomi/agents/<name>/ROLE.md` + workspace `<cwd>/.yomi/agents/<name>/ROLE.md`，workspace 覆盖 global（glob `*/ROLE.md`，按目录名得名）。**纯 markdown，无 frontmatter**（2026-08 收敛：模型反正读全文，元数据只剩一行的价值不抵格式开销）——全文即角色 SP。每个目录维护一个 `INDEX.md`：每角色一行一句话用途（含负向线索），新增/删除角色时同步。文件名 `ROLE.md`（避免与项目级 `AGENTS.md` 混淆），目录层为将来附属文件预留。**位置定案（2026-08）：放 `.yomi/agents/` 而非 `.agents/agents/`**——模板正文是 yomi 的提示词约定（工具名、INDEX.md、内置角色语义都是 yomi 的），与别家 subagent 格式不保证兼容；共享目录的前提是共享格式。`.agents/` 只留给真正的跨厂商标准（skills）。
+全局 `~/.yomi/agents/<name>/ROLE.md` + workspace `<cwd>/.yomi/agents/<name>/ROLE.md`，workspace 覆盖 global（glob `*/ROLE.md`，按目录名得名）。**纯 markdown，无 frontmatter**（2026-08 收敛：模型反正读全文，元数据只剩一行的价值不抵格式开销）——全文即角色 SP。文件名 `ROLE.md`（避免与项目级 `AGENTS.md` 混淆），目录层为将来附属文件预留。~~INDEX.md 索引约定~~已废弃（2026-08）：手工索引对小规模角色是负资产（忘更新=静默失联），选择靠目录名 + 首行角色陈述 + read 全文。**位置定案（2026-08）：放 `.yomi/agents/` 而非 `.agents/agents/`**——模板正文是 yomi 的提示词约定（工具名、内置角色语义都是 yomi 的），与别家 subagent 格式不保证兼容；共享目录的前提是共享格式。`.agents/` 只留给真正的跨厂商标准（skills）。
 
 ```markdown
 你是独立验收者。你没有参与实现，只对照验收标准逐条判定……
 ```
 
 要点：
-- 全文即角色 SP——开头一句点明角色定位（模型按 name + INDEX.md 速览，read 全文确认）。
+- 全文即角色 SP——开头一句点明角色定位（模型按 name + 首行陈述速览，read 全文确认）。
 - body 保持短：角色定位 + 输出契约 + 关键边界重申。知识一律走 skill preload，模板不膨胀成第二个 skill 体系。
 - 格式纯 md、无 frontmatter（模型反正读全文）；无 yomi 私有魔法（NLAH 式可移植，未来可交换/共享）。
 
 ### 发现机制：`agent` 工具 desc 自足（无系统提示段、无单独 skill）
 
-- **不加 `# Agent Templates` 系统提示段，也不要单独 skill**（2026-08 收敛）：发现完全由 `agent` 工具 desc 自足承载——内置角色一句话用途（planner/reviewer/explorer）+ 目录约定 + 每个目录的 `INDEX.md` 索引（模型读一个文件即可选择，无需 glob 全文）。大部分 case 按 name 即可判断使用场景。
+- **不加 `# Agent Templates` 系统提示段，也不要单独 skill**（2026-08 收敛）：发现完全由 `agent` 工具 desc 自足承载——内置角色一句话用途（planner/reviewer/explorer）+ 目录约定（模型 glob 目录、read 全文选择）。大部分 case 按 name 即可判断使用场景。
 - 传不存在的模板名时报错并附当前可用列表（名称+来源）作自纠正兜底。
 - 无快照过期问题：resolve 实时读盘，session 中段新建的模板立即可用。
 - **子 agent 不注入模板清单**（子不能再生子，给了也是浪费 token）。
@@ -251,7 +251,7 @@ janitor 的记忆分两层，**其他 agent 只消费第二层，不直接访问
 
 | janitor 的产出 | 位置 | 消费通道 |
 |---|---|---|
-| 策展后的模板 | `~/.yomi/agents/` | `agent` 工具 desc + `INDEX.md`（P1 发现机制） |
+| 策展后的模板 | `~/.yomi/agents/` | `agent` 工具 desc + 目录直读（P1 发现机制） |
 | 新增/修订的 skill | 全局/项目 skill 目录 | skills 清单 |
 | 蒸馏出的事实笔记 | `.agents/memory/`（P1.5） | MEMORY.md 索引加载 + 主题文件按需读 |
 | 工单归档 | `.yomi/tickets/archive/` | glob/grep 按需查 |
@@ -270,7 +270,7 @@ janitor 的记忆分两层，**其他 agent 只消费第二层，不直接访问
 2. **约定漂移无看护** → 烟雾报警器方案（**不等完整 janitor**）：一个只读周检 cron，让漂移从"被动发现"变"主动可见"：
    ```bash
    yomi cron create --name system:drift-check --schedule "0 9 * * 1" \
-     --message "漂移检查（只读，异常才报告）：1) diff ~/.yomi/agents/INDEX.md 与实际角色目录；2) 本仓库 .agents/memory/MEMORY.md 行数 >150；3) .yomi/tickets/ 里 claimed 且 mtime 超 3 天的僵尸工单。"
+     --message "漂移检查（只读，异常才报告）：1) ~/.yomi/agents/ 角色目录内容审查；2) 本仓库 .agents/memory/MEMORY.md 行数 >150；3) .yomi/tickets/ 里 claimed 且 mtime 超 3 天的僵尸工单。"
    ```
    只读、固定节奏、零内核改动、P0 的 ensure 语义保证重复安装无害。完整 janitor（策展/遗忘/蒸馏）仍按 P3 暂缓。
 
@@ -292,7 +292,7 @@ janitor 的记忆分两层，**其他 agent 只消费第二层，不直接访问
 | 资产 | 耦合度 | 归属 |
 |---|---|---|
 | `task-tickets` / `janitor` skill | 零~弱耦合（纯约定 + playbook） | yomi-extensions |
-| ~~`agent-templates` skill~~ | — | **已删除**（2026-08 收敛）：发现由 `agent` 工具 desc 自足承载（内置一句话用途 + INDEX.md 约定），不再需要单独 skill |
+| ~~`agent-templates` skill~~ | — | **已删除**（2026-08 收敛）：发现由 `agent` 工具 desc 自足承载（内置一句话用途 + 目录约定），不再需要单独 skill |
 | 内置模板 planner/reviewer/explorer | 强耦合（schema 随 kernel 版本） | **预置进内核**（`crates/kernel/src/agent_tmpl/` + `include_str!`，三层合并的地板层） |
 | `feishu-e2e` / `release-it` / `yomi-cli` | 维护者工作流 | 留在 yomi 主仓 `.agents/skills/` |
 
@@ -308,13 +308,13 @@ npx skills add Crescent617/yomi-extensions -g --skill tickets   # 只装单个
 
 templates 不属于 skills 生态：官方模板内核预置、无需安装；yomi-extensions 里的实验性/社区模板手动 symlink 到 `~/.yomi/agents/`。
 
-**发现机制终版（2026-08 收敛）**：不需要 skill、不需要系统提示段——`agent` 工具 desc 自足：内置角色一句话用途（planner/reviewer/explorer）+ 目录约定 + 每目录 `INDEX.md` 索引（模型读一个文件即可选择）。传不存在的模板名时报错并附当前可用列表（名称+来源）作自纠正兜底。
+**发现机制终版（2026-08 收敛）**：不需要 skill、不需要系统提示段、不需要索引文件——`agent` 工具 desc 自足：内置角色一句话用途（planner/reviewer/explorer）+ 目录约定（glob + read 选择，首行即角色陈述）。传不存在的模板名时报错并附当前可用列表（名称+来源）作自纠正兜底。
 
 版本 skew：描述 kernel 行为的 skill 在 frontmatter/README 标注最低 yomi 版本。
 
 ## 落地顺序
 
-1. **P1 模板机制**：✅ 已落地——`NewSession` 参数结构体重构 + sessions.template 列（v20；v21 tools_block 列休眠）+ `agent_tmpl` 三层加载（内置 `include_str!` / 全局 / workspace 覆盖）+ `agent` 工具 `template` 参数（实时 resolve、错误列可用表；desc 自足含内置一句话用途与 INDEX.md 约定）+ conductor spawn 应用（body 换 base prompt；model/skills/工具全继承）+ 内置 planner/reviewer/explorer（对齐 CC）——纯 markdown 无 frontmatter，无单独 skill；
+1. **P1 模板机制**：✅ 已落地——`NewSession` 参数结构体重构 + sessions.template 列（v20；v21 tools_block 列休眠）+ `agent_tmpl` 三层加载（内置 `include_str!` / 全局 / workspace 覆盖）+ `agent` 工具 `template` 参数（实时 resolve、错误列可用表；desc 自足含内置一句话用途与目录约定）+ conductor spawn 应用（body 换 base prompt；model/skills/工具全继承）+ 内置 planner/reviewer/explorer（对齐 CC）——纯 markdown 无 frontmatter，无单独 skill；
 2. **P1.5 记忆层**：一期目录约定 + SP 门控指针（✅ 已落地，仅项目层）；二期索引装配（小内核）等空转信号再动；
 3. **P2 tickets**：✅ 文件约定 + task-tickets skill + `ticket.sh` 脚本落地（yomi-extensions，本机 symlink 生效）；GUI 投影曾实现并经 tauri-pilot e2e 验证，后按决策整体撤下（kernel ticket 模块/wire/GUI 组件均移除，git 历史可溯），等工单流程验证好用后再恢复展示层；
 4. **P3 janitor**：**暂缓**（见 P3 暂缓说明；复活看触发信号）；

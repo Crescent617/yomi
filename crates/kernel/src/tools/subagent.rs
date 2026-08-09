@@ -273,7 +273,7 @@ Brief the agent like a smart colleague who just walked in — it has no context.
 - Request short responses explicitly when needed ("report in under 200 words")
 
 ## Templates
-- `template`: name of a reusable role template — `<name>/ROLE.md` (pure markdown; the whole file becomes the subagent's system prompt) in `~/.yomi/agents/` or the workspace `.yomi/agents/`; each directory keeps an `INDEX.md` of one-line role summaries — read it to choose. When creating a new role, default to the workspace directory and register it in that INDEX.md (global only when the user asks). Builtins (no file needed): `planner` (只读实施规划，产出任务分解+关键文件清单), `reviewer` (独立验收，逐条 PASS/FAIL + VERDICT 行), `explorer` (只读代码库快搜，thoroughness 可调). For one-off roles, write the role directly into `prompt` instead."#
+- `template`: name of a reusable role template — `<name>/ROLE.md` (pure markdown that becomes the subagent's system prompt; start the file with a one-line role statement) in `~/.yomi/agents/` or the workspace `.yomi/agents/` — list the directory and read files to choose; most cases are obvious from the name. When creating a role, default to the workspace (global only when the user asks). Builtins (no file needed): `planner` (只读实施规划，产出任务分解+关键文件清单), `reviewer` (独立验收，逐条 PASS/FAIL + VERDICT 行), `explorer` (只读代码库快搜，thoroughness 可调). For one-off roles, write the role directly into `prompt` instead."#
     }
 
     fn schema(&self) -> Value {
