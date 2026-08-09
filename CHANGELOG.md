@@ -15,11 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.62] - 2026-08-09
+
 ### Changed
-- 内置角色 `reviewer`（独立验收）更名为 `verifier`，与 Claude Code 的同名角色对齐。
+- 内置角色 `reviewer`（独立验收）更名为 `verifier`，与 Claude Code 同名角色对齐；其系统提示按验证最佳实践重排：失败模式提醒、证据须含真实命令输出、结尾固定输出 `VERDICT:` 结论行。
+- 自定义模板目录不再使用 `INDEX.md` 索引文件；选择角色直接按目录名与文件首行说明即可。
+- `agent` 工具的模板说明重写为结构化短句（是什么/在哪/怎么选/怎么建/何时别用），并明确自建角色默认写项目内目录。
 
 ### Added
-- 新增内置角色 `reviewer`：静态代码审查——分级问题清单（必须修/建议修/需确认）、每条附文件行号与触发场景、强调信噪比（风格问题归 linter）。
+- 新增内置角色 `reviewer`：静态代码审查——按严重度分级的问题清单（必须修/建议修/需确认），每条附文件行号与触发场景，强调信噪比（风格问题归 linter），结尾固定输出 `REVIEW:` 结论行。
 
 ## [0.7.61] - 2026-08-09
 
