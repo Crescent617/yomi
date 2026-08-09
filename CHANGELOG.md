@@ -15,6 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.61] - 2026-08-09
+
+### Added
+- 新增 `yomi run` 命令：headless 一次性运行 prompt 并打印结果，按退出码区分成败（0 成功 / 2 失败 / 3 超迭代 / 124 超时），支持 `--model`、`--resume`、`--fork`、`--format`、`--timeout`、`--yolo`、`--daemon`/`--local` 等参数，便于脚本与 CI 调用。
+- `agent` 工具新增 `template` 参数：派子 agent 时可指定角色模板，其系统提示将替换为对应 `ROLE.md` 的内容。内置三个角色：`planner`（实施规划）、`reviewer`（独立验收）、`explorer`（只读代码探索）；自定义模板放 `~/.yomi/agents/<名称>/ROLE.md`（全局）或项目内 `.yomi/agents/<名称>/ROLE.md`（项目优先），每个目录可用 `INDEX.md` 登记角色一句话用途。
+- 项目记忆层：当项目根（或 `~/.agents/`）存在 `.agents/memory/MEMORY.md` 时，系统提示会注入记忆库指针，引导 agent 开工先扫索引、把学到的事实写回；文件不存在时完全不占用上下文。
+- GUI 会话信息弹窗新增 Created、Model、Template 字段，ID 与 Parent ID 移至最前，消息数改为读取数据库权威计数。
+
+### Changed
+- cron 任务名全局唯一：重复创建同名任务不再产生重复任务，而是直接返回已有任务的 id（任务内容保持不变）；如需调整请用 `yomi cron update`。存量重名任务保留最新一个，其余自动改名标记。
+
+### Fixed
+- 修复工具屏蔽列表（`tool_blocklist`）的容错问题：此前单个非法配置项会导致整个屏蔽列表静默失效（包括子 agent 禁止询问用户的防护），现在非法项只被跳过并记录警告。
+
 ## [0.7.60] - 2026-08-07
 
 ### Fixed
