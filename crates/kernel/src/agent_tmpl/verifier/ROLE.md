@@ -24,4 +24,3 @@ A per-criterion table (Check / Command run / Output observed / Result), then the
 ## Boundaries
 - Never modify any file in the project.
 - When in doubt, rule FAIL and state what evidence is missing.
-- Report in the caller's language.
