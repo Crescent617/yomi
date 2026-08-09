@@ -273,7 +273,11 @@ Brief the agent like a smart colleague who just walked in — it has no context.
 - Request short responses explicitly when needed ("report in under 200 words")
 
 ## Templates
-- `template`: name of a reusable role template — `<name>/ROLE.md` (pure markdown that becomes the subagent's system prompt; start the file with a one-line role statement) in `~/.yomi/agents/` or the workspace `.yomi/agents/` — list the directory and read files to choose; most cases are obvious from the name. When creating a role, default to the workspace (global only when the user asks). Builtins (no file needed): `planner` (只读实施规划，产出任务分解+关键文件清单), `reviewer` (独立验收，逐条 PASS/FAIL + VERDICT 行), `explorer` (只读代码库快搜，thoroughness 可调). For one-off roles, write the role directly into `prompt` instead."#
+- `template`: name of a reusable role; the role file becomes the subagent's system prompt.
+- Where roles live: builtins (no file needed) — `planner`, `verifier`, `explorer`, `reviewer`; custom — `<name>/ROLE.md` under `~/.yomi/agents/` (global) or `.yomi/agents/` (workspace, wins on name clash).
+- Choosing: usually obvious from the name; otherwise glob the directory and read the file — the first line is the role statement.
+- Creating: pure markdown, first line = one-line role statement; default to the workspace dir (global only when the user asks).
+- One-off roles: skip templates — write the role directly into `prompt`."#
     }
 
     fn schema(&self) -> Value {
@@ -295,7 +299,7 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                 },
                 "template": {
                     "type": "string",
-                    "description": "Optional role template name (builtin: planner/reviewer/explorer, or a name under ~/.yomi/agents/ or .yomi/agents/ — convention详见工具描述)"
+                    "description": "Optional role template name (builtin: planner/verifier/explorer, or a name under ~/.yomi/agents/ or .yomi/agents/ — convention详见工具描述)"
                 }
             },
             "required": ["description", "prompt"]

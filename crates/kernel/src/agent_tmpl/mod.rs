@@ -58,8 +58,9 @@ fn parse(name: &str, content: &str, source: TemplateSource) -> AgentTemplate {
 /// 内置模板（官方地板层）。文件存于本模块目录下，随二进制版本对齐。
 const BUILTIN: &[(&str, &str)] = &[
     ("planner", include_str!("planner/ROLE.md")),
-    ("reviewer", include_str!("reviewer/ROLE.md")),
+    ("verifier", include_str!("verifier/ROLE.md")),
     ("explorer", include_str!("explorer/ROLE.md")),
+    ("reviewer", include_str!("reviewer/ROLE.md")),
 ];
 
 /// 内置模板清单。

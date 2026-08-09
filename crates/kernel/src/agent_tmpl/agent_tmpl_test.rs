@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[test]
 fn builtin_templates_load() {
     let templates = builtin();
-    assert_eq!(templates.len(), 3);
+    assert_eq!(templates.len(), 4);
     for t in &templates {
         assert_eq!(t.source, TemplateSource::Builtin);
         assert!(!t.body.is_empty(), "{} missing body", t.name);
@@ -33,10 +33,10 @@ fn temp_global(tag: &str) -> PathBuf {
 
 #[tokio::test]
 async fn workspace_layer_overrides_builtin_by_name() {
-    let dir = workspace_with("override", &[("reviewer", "custom body\n")]);
+    let dir = workspace_with("override", &[("verifier", "custom body\n")]);
     let global = temp_global("override");
 
-    let t = resolve("reviewer", &global, Some(&dir)).await.unwrap();
+    let t = resolve("verifier", &global, Some(&dir)).await.unwrap();
     assert_eq!(t.source, TemplateSource::Workspace);
     assert_eq!(t.body, "custom body");
     // 未被覆盖的 builtin 仍在

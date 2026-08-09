@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- 内置角色 `reviewer`（独立验收）更名为 `verifier`，与 Claude Code 的同名角色对齐。
+
+### Added
+- 新增内置角色 `reviewer`：静态代码审查——分级问题清单（必须修/建议修/需确认）、每条附文件行号与触发场景、强调信噪比（风格问题归 linter）。
+
 ## [0.7.61] - 2026-08-09
 
 ### Added

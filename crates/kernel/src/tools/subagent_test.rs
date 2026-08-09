@@ -272,11 +272,11 @@ async fn run_spawn(f: TemplateFixture, parent_id: SessionId, template: &str) -> 
 async fn spawn_with_builtin_template_records_name_and_inherits_model() {
     let (f, parent_id) = template_fixture(None).await;
     let store = Arc::clone(&f.session_store);
-    let subagent_id = run_spawn(f, parent_id, "reviewer").await;
+    let subagent_id = run_spawn(f, parent_id, "verifier").await;
 
     let child = store.get(&subagent_id).await.unwrap().unwrap();
-    assert_eq!(child.template.as_deref(), Some("reviewer"));
-    // reviewer 不带 model_key → 继承父 session
+    assert_eq!(child.template.as_deref(), Some("verifier"));
+    // verifier 不带 model_key → 继承父 session
     assert_eq!(child.model_key.as_deref(), Some("parent-model"));
 }
 
@@ -317,5 +317,5 @@ async fn unknown_template_errors_with_available_list() {
 
     let text = output_text(&out);
     assert!(text.contains("unknown template 'no-such-role'"));
-    assert!(text.contains("reviewer (builtin)"));
+    assert!(text.contains("verifier (builtin)"));
 }

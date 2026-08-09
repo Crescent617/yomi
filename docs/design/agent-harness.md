@@ -16,7 +16,7 @@
 | # | 模块 | 形态 | 内核改动 | 状态 |
 |---|---|---|---|---|
 | 0 | cron job name 唯一 + create ensure 语义 | 内核 | 已完成（schema v19） | ✅ 已落地 |
-| 1 | Agent Templates（subagent SP 模板） | 文件资产 + 少量内核（desc 自足，无 skill） | `agent` 工具加 `template` 参数 + conductor resolve | ✅ 已落地（schema v20；内置 planner/reviewer/explorer；发现靠 desc + 目录直读） |
+| 1 | Agent Templates（subagent SP 模板） | 文件资产 + 少量内核（desc 自足，无 skill） | `agent` 工具加 `template` 参数 + conductor resolve | ✅ 已落地（schema v20；内置 planner/verifier/explorer/reviewer；发现靠 desc + 目录直读） |
 | 1.5 | 记忆层 `.agents/memory/`（agent 自写笔记，**仅项目层**） | 文件资产 + SP 门控指针（已落地） | 二期：索引装配（loader+截断+git-root）；全局层暂缓 | 一期已落地 |
 | 2 | 工单 tickets `.yomi/tickets/` | 文件约定 + task-tickets skill + `ticket.sh` 脚本 | **零** | ✅ 文件+skill+脚本已落地；GUI 投影曾实现并 e2e 验证，后按决策撤下（先验证好用再上展示，wire 保持 23 未升） |
 | 3 | Janitor 后台策展循环 | janitor skill + daemon ensure cron | 小：daemon 按项目 ensure + config 开关 | **暂缓**（2026-08，见 P3 暂缓说明） |
@@ -58,7 +58,7 @@
 
 ### 发现机制：`agent` 工具 desc 自足（无系统提示段、无单独 skill）
 
-- **不加 `# Agent Templates` 系统提示段，也不要单独 skill**（2026-08 收敛）：发现完全由 `agent` 工具 desc 自足承载——内置角色一句话用途（planner/reviewer/explorer）+ 目录约定（模型 glob 目录、read 全文选择）。大部分 case 按 name 即可判断使用场景。
+- **不加 `# Agent Templates` 系统提示段，也不要单独 skill**（2026-08 收敛）：发现完全由 `agent` 工具 desc 自足承载——内置角色一句话用途（planner/verifier/explorer/reviewer）+ 目录约定（模型 glob 目录、read 全文选择）。大部分 case 按 name 即可判断使用场景。
 - 传不存在的模板名时报错并附当前可用列表（名称+来源）作自纠正兜底。
 - 无快照过期问题：resolve 实时读盘，session 中段新建的模板立即可用。
 - **子 agent 不注入模板清单**（子不能再生子，给了也是浪费 token）。
@@ -68,7 +68,7 @@
 1. `tools/subagent.rs`：`agent` 工具 schema 加可选 `template` 参数；exec 时按名实时 resolve（global → workspace 合并后查找）。
 2. `kernel/conductor.rs` spawn 处：模板命中时 base_prompt 换为模板 body（替代父 base_prompt），空 body 回落默认 + warn。
 3. ~~tools_block / model_key / skills 字段~~：**全部不实现**（2026-08 收敛）——纯 prompt 角色，model/skills/工具集全继承。tools_block 曾实现（含跨层并集、sessions.tools_block 快照列 v21）后经评审与简化决策移除；**v21 列在 DB 中休眠**，重新启用时 git 历史可溯。正则匹配语义脆弱（评审 Major 2）是另一教训：若重做应考虑精确名匹配。
-4. 观测：**sessions 表加 `template TEXT` nullable 列（migration v20，对齐 v13 `model_key` 单列先例）**，subagent spawn 时写入模板名，NULL = 自由文本派活。用途：janitor 的 usage 统计（`GROUP BY template` 可 SQL 聚合，比事后捞 metadata 事件可靠）、GUI 展示"这个 sub 是 reviewer"、质量回退归因（Anthropic postmortem 教训）。
+4. 观测：**sessions 表加 `template TEXT` nullable 列（migration v20，对齐 v13 `model_key` 单列先例）**，subagent spawn 时写入模板名，NULL = 自由文本派活。用途：janitor 的 usage 统计（`GROUP BY template` 可 SQL 聚合，比事后捞 metadata 事件可靠）、GUI 展示"这个 sub 是 verification"、质量回退归因（Anthropic postmortem 教训）。
 
 ### 自治分级（模板治理）
 
@@ -82,7 +82,7 @@
 
 ### 内置首批模板（预置进内核，2026-08 修正）
 
-`planner` / `reviewer` / `explorer` 三个，与 Claude Code 内置对齐（Plan / verification / Explore）。**2026-08 对齐决策：不设 builder**——CC 的证据是执行不需要专门角色（通用 agent + 好的任务简报即可），yomi 不指定 template 的自由派活即等价物；builder 的输出契约价值不足以抵消一个冗余内置。`reviewer` 最值钱：固化"独立 evaluator 对照验收清单逐条判 PASS/FAIL + `VERDICT:` 锚点行"，对治自我评估偏差——这也是契约式 QA 循环的载体。**内置一律不设 `tools_block`**（同为 2026-08 决策）：约束写进正文即可，硬收窄机制保留给真正需要的自定义模板；planner 的计划可作为交付物落文件（如 `plan.md`/`docs/design/`），只读仅是默认而非硬约束。
+`planner` / `verifier` / `explorer` 三个，与 Claude Code 内置对齐（Plan / verification / Explore）。**2026-08 对齐决策：不设 builder**——CC 的证据是执行不需要专门角色（通用 agent + 好的任务简报即可），yomi 不指定 template 的自由派活即等价物；builder 的输出契约价值不足以抵消一个冗余内置。`verifier` 最值钱：固化"独立 evaluator 对照验收清单逐条判 PASS/FAIL + `VERDICT:` 锚点行"，对治自我评估偏差——这也是契约式 QA 循环的载体。**内置一律不设 `tools_block`**（同为 2026-08 决策）：约束写进正文即可，硬收窄机制保留给真正需要的自定义模板；planner 的计划可作为交付物落文件（如 `plan.md`/`docs/design/`），只读仅是默认而非硬约束。
 
 **官方模板预置在代码里，不走 yomi-extensions**（修正理由）：①模板无安装器生态（skills 有 `npx skills add`，templates 只能手动 symlink——预置消灭唯一分发摩擦，P1 开箱即用）；②模板与 kernel 同演进（resolve 语义、内置角色集），随二进制发版天然版本对齐；③先例：Claude Code 内置 agents（Explore/Plan）即产品内嵌。
 
@@ -188,7 +188,7 @@ one fact per line, keep the index lean.
 - **派活为主**：协调者建派工单（一个任务一个文件），spawn 子 agent 时在 prompt 里指明任务文件路径；"自主认领"降级为边缘场景（跨 session 捡活）；
 - 执行者先签收再动手（`claimed` + 自己的 session id）；完成置 `done` 写 Result，卡壳置 `blocked` 写明原因；
 - 僵尸回收约定：`claimed` 但 mtime 超 30 分钟未更新 → 可重置 `pending`（利用文件 mtime，零机制）；
-- 父 agent 聚合进度用 glob + grep，不逐个问；验收可派 `reviewer` 模板；
+- 父 agent 聚合进度用 glob + grep，不逐个问；验收可派 `verifier` 模板；
 - Ralph 式外循环可直接组合：cron 定时 steer 父 session"看 `.yomi/tickets/`，把 pending 派出去" ≈ 极简版 Gas Town Mayor。
 
 **诚实的代价**：原子 claim 弱（竞态窗口）、结构化查询弱。派单模型下竞态基本不出现（任务是指派的不是抢的），可接受。
@@ -293,7 +293,7 @@ janitor 的记忆分两层，**其他 agent 只消费第二层，不直接访问
 |---|---|---|
 | `task-tickets` / `janitor` skill | 零~弱耦合（纯约定 + playbook） | yomi-extensions |
 | ~~`agent-templates` skill~~ | — | **已删除**（2026-08 收敛）：发现由 `agent` 工具 desc 自足承载（内置一句话用途 + 目录约定），不再需要单独 skill |
-| 内置模板 planner/reviewer/explorer | 强耦合（schema 随 kernel 版本） | **预置进内核**（`crates/kernel/src/agent_tmpl/` + `include_str!`，三层合并的地板层） |
+| 内置模板 planner/verifier/explorer/reviewer | 强耦合（schema 随 kernel 版本） | **预置进内核**（`crates/kernel/src/agent_tmpl/` + `include_str!`，三层合并的地板层） |
 | `feishu-e2e` / `release-it` / `yomi-cli` | 维护者工作流 | 留在 yomi 主仓 `.agents/skills/` |
 
 理由：skill 迭代节奏远快于内核发版；`.agents/skills` 是跨厂商标准，约定型 skill 对机器上所有 agent 工具（Claude Code/Cursor/Codex）都有效；独立仓库是社区贡献的最小单位；主仓不背内容 churn。
@@ -308,13 +308,13 @@ npx skills add Crescent617/yomi-extensions -g --skill tickets   # 只装单个
 
 templates 不属于 skills 生态：官方模板内核预置、无需安装；yomi-extensions 里的实验性/社区模板手动 symlink 到 `~/.yomi/agents/`。
 
-**发现机制终版（2026-08 收敛）**：不需要 skill、不需要系统提示段、不需要索引文件——`agent` 工具 desc 自足：内置角色一句话用途（planner/reviewer/explorer）+ 目录约定（glob + read 选择，首行即角色陈述）。传不存在的模板名时报错并附当前可用列表（名称+来源）作自纠正兜底。
+**发现机制终版（2026-08 收敛）**：不需要 skill、不需要系统提示段、不需要索引文件——`agent` 工具 desc 自足：内置角色一句话用途（planner/verifier/explorer/reviewer）+ 目录约定（glob + read 选择，首行即角色陈述）。传不存在的模板名时报错并附当前可用列表（名称+来源）作自纠正兜底。
 
 版本 skew：描述 kernel 行为的 skill 在 frontmatter/README 标注最低 yomi 版本。
 
 ## 落地顺序
 
-1. **P1 模板机制**：✅ 已落地——`NewSession` 参数结构体重构 + sessions.template 列（v20；v21 tools_block 列休眠）+ `agent_tmpl` 三层加载（内置 `include_str!` / 全局 / workspace 覆盖）+ `agent` 工具 `template` 参数（实时 resolve、错误列可用表；desc 自足含内置一句话用途与目录约定）+ conductor spawn 应用（body 换 base prompt；model/skills/工具全继承）+ 内置 planner/reviewer/explorer（对齐 CC）——纯 markdown 无 frontmatter，无单独 skill；
+1. **P1 模板机制**：✅ 已落地——`NewSession` 参数结构体重构 + sessions.template 列（v20；v21 tools_block 列休眠）+ `agent_tmpl` 三层加载（内置 `include_str!` / 全局 / workspace 覆盖）+ `agent` 工具 `template` 参数（实时 resolve、错误列可用表；desc 自足含内置一句话用途与目录约定）+ conductor spawn 应用（body 换 base prompt；model/skills/工具全继承）+ 内置 planner/verifier/explorer/reviewer（对齐 CC）——纯 markdown 无 frontmatter，无单独 skill；
 2. **P1.5 记忆层**：一期目录约定 + SP 门控指针（✅ 已落地，仅项目层）；二期索引装配（小内核）等空转信号再动；
 3. **P2 tickets**：✅ 文件约定 + task-tickets skill + `ticket.sh` 脚本落地（yomi-extensions，本机 symlink 生效）；GUI 投影曾实现并经 tauri-pilot e2e 验证，后按决策整体撤下（kernel ticket 模块/wire/GUI 组件均移除，git 历史可溯），等工单流程验证好用后再恢复展示层；
 4. **P3 janitor**：**暂缓**（见 P3 暂缓说明；复活看触发信号）；

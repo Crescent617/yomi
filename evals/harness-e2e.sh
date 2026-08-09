@@ -34,15 +34,15 @@ cmd=$(sqlite3 "$DB" "SELECT action FROM cron_jobs WHERE name='e2e-eval'")
 echo "$cmd" | grep -q "echo a" && ok "cron ensure 原内容未被改写" || bad "cron ensure 原内容未被改写" "$cmd"
 "$YOMI" cron delete "$id1" >/dev/null 2>&1
 
-# ── 2. 模板 spawn：reviewer 落库 + VERDICT 锚点 ──
+# ── 2. 模板 spawn：verifier 落库 + VERDICT 锚点 ──
 "$YOMI" run --yolo --timeout 180 \
-  "用 agent 工具 spawn 子 agent（template=reviewer，wait_for_completion=true）：验收 README.md 是否存在。" \
+  "用 agent 工具 spawn 子 agent（template=verifier，wait_for_completion=true）：验收 README.md 是否存在。" \
   >/dev/null 2>&1
 sub=$(latest_sub)
 tpl=$(sqlite3 "$DB" "SELECT template FROM sessions WHERE id='$sub'")
-check "template 落库（reviewer）" "reviewer" "$tpl"
+check "template 落库（verifier）" "verifier" "$tpl"
 grep -q "VERDICT: " "$HOME/.yomi/sessions/$sub.jsonl" 2>/dev/null \
-  && ok "reviewer 输出含 VERDICT 锚点" || bad "reviewer 输出含 VERDICT 锚点" "未找到（$sub）"
+  && ok "verifier 输出含 VERDICT 锚点" || bad "verifier 输出含 VERDICT 锚点" "未找到（$sub）"
 
 # ── 3. explorer 只读：不出现 write/edit 工具调用 ──
 "$YOMI" run --yolo --timeout 180 \
