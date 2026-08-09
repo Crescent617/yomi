@@ -384,7 +384,6 @@ export interface SessionState {
   created_at?: string;
   message_count?: number;
   template?: string;
-  tools_block?: string[];
   token_usage?: {
     prompt_tokens: number;
     completion_tokens: number;

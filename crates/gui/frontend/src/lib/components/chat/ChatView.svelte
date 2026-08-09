@@ -517,12 +517,11 @@
 
   // ── Session detail fetch for the info popover ──
   // Fresh from the DB on every open (works for sub-agent sessions too, which
-  // never appear in session lists, so their template/tools_block wouldn't
-  // otherwise reach the client).
+  // never appear in session lists, so their template wouldn't otherwise
+  // reach the client).
   type SessionDetail = {
     created_at?: string;
     template?: string | null;
-    tools_block?: string[] | null;
   };
   let sessionDetail = $state<SessionDetail>({});
 
@@ -537,7 +536,6 @@
           sessionDetail = {
             created_at: info.created_at,
             template: info.template ?? null,
-            tools_block: info.tools_block ?? null,
           };
       })
       .catch(() => {});
@@ -962,19 +960,6 @@
                         title={sessionDetail.template}
                       >
                         {sessionDetail.template}
-                      </span>
-                    </div>
-                  {/if}
-                  {#if sessionDetail.tools_block?.length}
-                    <div class="flex items-center gap-1.5">
-                      <span class="shrink-0 text-muted-foreground"
-                        >Tools blocked</span
-                      >
-                      <span
-                        class="min-w-0 truncate rounded-sm bg-code-bg px-1.5 py-0.5 font-mono text-foreground"
-                        title={sessionDetail.tools_block.join(", ")}
-                      >
-                        {sessionDetail.tools_block.join(", ")}
                       </span>
                     </div>
                   {/if}

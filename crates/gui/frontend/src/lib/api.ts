@@ -156,7 +156,6 @@ export interface SessionInfo {
   parent_id?: string;
   message_count?: number;
   template?: string;
-  tools_block?: string[];
 }
 
 export interface BackgroundShellTask {
@@ -242,9 +241,6 @@ export async function listSessions(
             ? session.message_count
             : undefined,
         template: session.template ? String(session.template) : undefined,
-        tools_block: Array.isArray(session.tools_block)
-          ? session.tools_block.map(String)
-          : undefined,
       };
     }),
     next_cursor: result.next_cursor,
@@ -524,7 +520,6 @@ export async function getSession(session_id: string): Promise<{
   auto_approve_level: string | null;
   model_key: string | null;
   template: string | null;
-  tools_block: string[] | null;
 }> {
   return invokeCmd("get_session", { session_id: session_id });
 }

@@ -16,7 +16,7 @@
 | # | 模块 | 形态 | 内核改动 | 状态 |
 |---|---|---|---|---|
 | 0 | cron job name 唯一 + create ensure 语义 | 内核 | 已完成（schema v19） | ✅ 已落地 |
-| 1 | Agent Templates（subagent SP 模板） | 文件资产 + skill + 少量内核 | `agent` 工具加 `template` 参数 + conductor resolve | ✅ 已落地（schema v20；内置 planner/reviewer/explorer；skill 在 yomi-extensions） |
+| 1 | Agent Templates（subagent SP 模板） | 文件资产 + 少量内核（desc 自足，无 skill） | `agent` 工具加 `template` 参数 + conductor resolve | ✅ 已落地（schema v20；内置 planner/reviewer/explorer；发现靠 desc + INDEX.md） |
 | 1.5 | 记忆层 `.agents/memory/`（agent 自写笔记，**仅项目层**） | 文件资产 + SP 门控指针（已落地） | 二期：索引装配（loader+截断+git-root）；全局层暂缓 | 一期已落地 |
 | 2 | 工单 tickets `.yomi/tickets/` | 文件约定 + task-tickets skill + `ticket.sh` 脚本 | **零** | ✅ 文件+skill+脚本已落地；GUI 投影曾实现并 e2e 验证，后按决策撤下（先验证好用再上展示，wire 保持 23 未升） |
 | 3 | Janitor 后台策展循环 | janitor skill + daemon ensure cron | 小：daemon 按项目 ensure + config 开关 | **暂缓**（2026-08，见 P3 暂缓说明） |
@@ -45,37 +45,29 @@
 
 ### 资产格式
 
-全局 `~/.yomi/agents/<name>/ROLE.md` + workspace `<cwd>/.yomi/agents/<name>/ROLE.md`，workspace 覆盖 global（复用 SkillLoader 的扫描/合并思路：按目录名得名，glob `*/ROLE.md`）。文件名用 `ROLE.md`（模板定义的是"这个 agent 是谁"——角色定位、输出契约、边界；避免与项目级 `AGENTS.md` 标准混淆），目录层为将来附属文件（examples/、checklist 等）预留。**位置定案（2026-08）：放 `.yomi/agents/` 而非 `.agents/agents/`**——frontmatter 是 yomi 方言（`tools_block`/`model_key`/`skills` 的取值空间都是 yomi 的），与别家 subagent 格式互不兼容；共享目录的前提是共享格式，互不兼容的格式混住一个共享目录是最差结果。`.agents/` 只留给真正的跨厂商标准（skills）。
+全局 `~/.yomi/agents/<name>/ROLE.md` + workspace `<cwd>/.yomi/agents/<name>/ROLE.md`，workspace 覆盖 global（glob `*/ROLE.md`，按目录名得名）。**纯 markdown，无 frontmatter**（2026-08 收敛：模型反正读全文，元数据只剩一行的价值不抵格式开销）——全文即角色 SP。每个目录维护一个 `INDEX.md`：每角色一行一句话用途（含负向线索），新增/删除角色时同步。文件名 `ROLE.md`（避免与项目级 `AGENTS.md` 混淆），目录层为将来附属文件预留。**位置定案（2026-08）：放 `.yomi/agents/` 而非 `.agents/agents/`**——模板正文是 yomi 的提示词约定（工具名、INDEX.md、内置角色语义都是 yomi 的），与别家 subagent 格式不保证兼容；共享目录的前提是共享格式。`.agents/` 只留给真正的跨厂商标准（skills）。
 
 ```markdown
----
-description: 独立验收者。对照验收标准逐条判 PASS/FAIL。用于完成后验收，不用于实现。
-tools_block: [write, edit, shell]   # 只能收窄父 agent 的工具集
----
-
-你是独立验收者。你不参与实现，只对照验收标准逐条判定……
+你是独立验收者。你没有参与实现，只对照验收标准逐条判定……
 ```
 
 要点：
-- `description` 是**选择面**，必须带负向线索（"不用于……"），这是减少误选的关键。
+- 全文即角色 SP——开头一句点明角色定位（模型按 name + INDEX.md 速览，read 全文确认）。
 - body 保持短：角色定位 + 输出契约 + 关键边界重申。知识一律走 skill preload，模板不膨胀成第二个 skill 体系。
-- 格式纯 md + YAML frontmatter，无 yomi 私有魔法（NLAH 式可移植，未来可交换/共享）。
+- 格式纯 md、无 frontmatter（模型反正读全文）；无 yomi 私有魔法（NLAH 式可移植，未来可交换/共享）。
 
-### 发现机制：skill，不加系统提示段
+### 发现机制：`agent` 工具 desc 自足（无系统提示段、无单独 skill）
 
-- **不加 `# Agent Templates` 系统提示段**。常驻钩子 = skills 清单里的一行（`agent-templates` skill 的 description："使用 agent 工具派子任务前先查阅模板库"）。
-- 模型准备派活 → 触发 skill → glob 模板目录、只读 frontmatter、做选择。磁盘是实时 ground truth，**无快照过期问题**（session 中段新建的模板立即可用）。
-- 三层兜底保发现可靠性：
-  1. skills 清单常驻行（主通道，装了 yomi-extensions 才有）；
-  2. `agent` 工具 desc 加一句**自足**的静态指针（`Tool::desc()` 是 `&'static str`，写不了动态清单）——直接描述目录约定，不指向任何 skill（skill 是增强不是依赖，见"资产分发"节）；
-  3. 传不存在的模板名时报错并附当前可用列表（todo 工具同款风格）。
+- **不加 `# Agent Templates` 系统提示段，也不要单独 skill**（2026-08 收敛）：发现完全由 `agent` 工具 desc 自足承载——内置角色一句话用途（planner/reviewer/explorer）+ 目录约定 + 每个目录的 `INDEX.md` 索引（模型读一个文件即可选择，无需 glob 全文）。大部分 case 按 name 即可判断使用场景。
+- 传不存在的模板名时报错并附当前可用列表（名称+来源）作自纠正兜底。
+- 无快照过期问题：resolve 实时读盘，session 中段新建的模板立即可用。
 - **子 agent 不注入模板清单**（子不能再生子，给了也是浪费 token）。
 
 ### 内核改动点
 
 1. `tools/subagent.rs`：`agent` 工具 schema 加可选 `template` 参数；exec 时按名实时 resolve（global → workspace 合并后查找）。
-2. `kernel/conductor.rs` spawn 处：模板命中时 base_prompt 换为模板 body（替代父 base_prompt）；`tools_block` 追加进现有 sub 硬编码 blocklist（ask_user/agent/cron/goal）——只能收窄，不能扩大。
-3. `model_key` / `skills` 字段：**暂缓，全继承**（2026-08 简化决策）。frontmatter 解析对未知字段容忍，将来引入不破坏存量文件；多模型经济性、per-role 技能过滤等需求出现时再议。
+2. `kernel/conductor.rs` spawn 处：模板命中时 base_prompt 换为模板 body（替代父 base_prompt），空 body 回落默认 + warn。
+3. ~~tools_block / model_key / skills 字段~~：**全部不实现**（2026-08 收敛）——纯 prompt 角色，model/skills/工具集全继承。tools_block 曾实现（含跨层并集、sessions.tools_block 快照列 v21）后经评审与简化决策移除；**v21 列在 DB 中休眠**，重新启用时 git 历史可溯。正则匹配语义脆弱（评审 Major 2）是另一教训：若重做应考虑精确名匹配。
 4. 观测：**sessions 表加 `template TEXT` nullable 列（migration v20，对齐 v13 `model_key` 单列先例）**，subagent spawn 时写入模板名，NULL = 自由文本派活。用途：janitor 的 usage 统计（`GROUP BY template` 可 SQL 聚合，比事后捞 metadata 事件可靠）、GUI 展示"这个 sub 是 reviewer"、质量回退归因（Anthropic postmortem 教训）。
 
 ### 自治分级（模板治理）
@@ -92,13 +84,13 @@ tools_block: [write, edit, shell]   # 只能收窄父 agent 的工具集
 
 `planner` / `reviewer` / `explorer` 三个，与 Claude Code 内置对齐（Plan / verification / Explore）。**2026-08 对齐决策：不设 builder**——CC 的证据是执行不需要专门角色（通用 agent + 好的任务简报即可），yomi 不指定 template 的自由派活即等价物；builder 的输出契约价值不足以抵消一个冗余内置。`reviewer` 最值钱：固化"独立 evaluator 对照验收清单逐条判 PASS/FAIL + `VERDICT:` 锚点行"，对治自我评估偏差——这也是契约式 QA 循环的载体。**内置一律不设 `tools_block`**（同为 2026-08 决策）：约束写进正文即可，硬收窄机制保留给真正需要的自定义模板；planner 的计划可作为交付物落文件（如 `plan.md`/`docs/design/`），只读仅是默认而非硬约束。
 
-**官方模板预置在代码里，不走 yomi-extensions**（修正理由）：①模板无安装器生态（skills 有 `npx skills add`，templates 只能手动 symlink——预置消灭唯一分发摩擦，P1 开箱即用）；②模板 schema 与 kernel 强耦合（`tools_block`/resolve 语义），随二进制发版天然版本对齐；③先例：Claude Code 内置 agents（Explore/Plan）即产品内嵌。
+**官方模板预置在代码里，不走 yomi-extensions**（修正理由）：①模板无安装器生态（skills 有 `npx skills add`，templates 只能手动 symlink——预置消灭唯一分发摩擦，P1 开箱即用）；②模板与 kernel 同演进（resolve 语义、内置角色集），随二进制发版天然版本对齐；③先例：Claude Code 内置 agents（Explore/Plan）即产品内嵌。
 
 - **形态**：`crates/kernel/src/agent_tmpl/<name>/ROLE.md`（loader 模块与资产同目录），`include_str!` 编入二进制——纯文件可 review、dogfood 同一格式，不散在 .rs 字符串里。一模板一目录（对齐 skill 的 `<name>/SKILL.md` 先例，目录层为附属文件预留），文件名 `ROLE.md`（模板 = "这个 agent 是谁"的角色定义；与 `SKILL.md`/`AGENTS.md`/`MEMORY.md` 同属单词大写约定）——三层同构：
   - `crates/kernel/src/agent_tmpl/<name>/ROLE.md`（内置）
   - `~/.yomi/agents/<name>/ROLE.md`（全局，跟 `data_dir` 走）
   - `<repo>/.yomi/agents/<name>/ROLE.md`（workspace，同名覆盖）
-- **三层合并**（预置当地板不当天花板）：embedded（官方）→ `~/.yomi/agents/` → `.yomi/agents/`（workspace 最高），同名覆盖——用户改官方模板只需放个同名文件；错误路径列表标注 `(builtin)` 来源。**覆盖的例外：`tools_block` 跨层取并集**（评审 Major 1）——约束只能逐层加码，防止上层覆盖静默放宽下层的收窄（例如全局模板被 workspace 同名覆盖时，全局的 tools_block 仍然生效）。**信任边界**：workspace 层随仓库分发（git clone 即带入），信任等级 = 该仓库代码本身；body 可被覆盖，review 仓库自带模板如同 review 依赖。
+- **三层合并**（预置当地板不当天花板）：embedded（官方）→ `~/.yomi/agents/` → `.yomi/agents/`（workspace 最高），同名覆盖——用户改官方模板只需放个同名文件；错误路径列表标注 `(builtin)` 来源。**信任边界**：workspace 层随仓库分发（git clone 即带入），信任等级 = 该仓库代码本身；body 可被整体覆盖，review 仓库自带模板如同 review 依赖。
 
 ---
 
@@ -123,7 +115,7 @@ tools_block: [write, edit, shell]   # 只能收窄父 agent 的工具集
 ### 决策点
 
 1. **选仓库内**（Cline 流派），而非 Claude Code 的仓库外 keyed：与 skills 的 workspace 约定一致、可 git 可 review；不想进 git 则 `.gitignore` `.agents/memory/`。
-2. **按 git root resolve，不按 cwd**（Claude Code 的关键设计：同一 repo 含 worktree/子目录共享一份记忆）：`git rev-parse --show-toplevel` 优先，失败回退 cwd。此改进同样适用于 skills / templates / tickets，见开放问题。
+2. **git-root resolve 属二期**：一期 SP 门控按 `working_dir`（cwd）检测（与 tickets 一致），子目录启动的 session 看不到仓库根的 memory；二期索引装配时一并改 git-root（`git rev-parse --git-common-dir` 推主仓库根，worktree 共享），失败回退 cwd。
 3. **装配分期**：**一期不装索引**——目录约定 + SP 存在性门控指针（prompt builder 检测 `.agents/memory/MEMORY.md` 存在才注入一行指针 + 使用约定；实现 ~20 行代码，SP 侧固定 header + ≤2 行指针；convention in SP、content in files，与 `SKILL_SECTION_HEADER` 同先例），yomi 仓库已 dogfood。**二期再上索引装配**（loader + 截断 + git-root resolve，见下节"装配"），触发条件：观察到空转信号（memory 有事实但 agent 仍重复犯错），或需要"无指针也开箱即用"的体验。**观测说明（评审 Major 3）**：触发信号目前靠人观察（janitor 暂缓期无自动巡检）；后续可在 read/edit 事件流上对 `.agents/memory/` 路径计数，或二期加 CLI/GUI memory 面板时一并给人检入口。
 4. **写入纪律**：项目级 agent 自写自由（事实笔记非指令，风险低于模板）；**全局层暂缓**（一期无全局记忆；SP 门控保留全局检测，未来创建 `~/.agents/memory/MEMORY.md` 即自愈激活，届时写入走 janitor/用户确认）。
 5. **明确不做**：向量库/embedding 检索（mem0、Letta archival 路线）——文件 + grep + 索引在当前规模足够；事实量大到 grep 吃力再议。**也不需要专门的 memory 搜索工具**：MEMORY.md 的一行一事实设计本身就是检索界面（索引即目录）；参照 CC——连 transcript 层都只配文件 + grep。搜索工具的第一个真实需求场景预计是 session transcripts（"上次那个 bug 怎么修的"），届时为 sessions 做（CLI/GUI 会话搜索），memory 作为文件搭便车。升级信号：topics 多到 grep 信噪比崩、或 agent 反复找不到确实存在的事实。
@@ -259,7 +251,7 @@ janitor 的记忆分两层，**其他 agent 只消费第二层，不直接访问
 
 | janitor 的产出 | 位置 | 消费通道 |
 |---|---|---|
-| 策展后的模板 | `~/.yomi/agents/` | `agent-templates` skill（P1 发现机制） |
+| 策展后的模板 | `~/.yomi/agents/` | `agent` 工具 desc + `INDEX.md`（P1 发现机制） |
 | 新增/修订的 skill | 全局/项目 skill 目录 | skills 清单 |
 | 蒸馏出的事实笔记 | `.agents/memory/`（P1.5） | MEMORY.md 索引加载 + 主题文件按需读 |
 | 工单归档 | `.yomi/tickets/archive/` | glob/grep 按需查 |
@@ -269,6 +261,18 @@ janitor 的记忆分两层，**其他 agent 只消费第二层，不直接访问
 **明确不做**：不祝福其他 agent 直接 post_message 查询 janitor——ad-hoc 查询会污染它的工作上下文，且它是批处理角色而非 always-on 服务。需要"未蒸馏的历史"时走 session 搜索，不借道 janitor。通道分工：协作走 tickets（状态）与 post_message（通信），资产演进走 janitor（离线策展），互不交叉。
 
 ---
+
+## 质量缺口与对策（2026-08 评审后补）
+
+两个已认领的缺口及最小对策：
+
+1. **harness 回归测量** → `evals/harness-e2e.sh`（主仓）。11 项确定性断言覆盖全部 harness 表面：cron ensure、模板 spawn 落库 + VERDICT 锚点、explorer 只读、memory 门控正反例、ticket 状态机。改 harness 后手动跑（~2 分钟，含 2 次模型调用），无 LLM judge。后续可进 CI。
+2. **约定漂移无看护** → 烟雾报警器方案（**不等完整 janitor**）：一个只读周检 cron，让漂移从"被动发现"变"主动可见"：
+   ```bash
+   yomi cron create --name system:drift-check --schedule "0 9 * * 1" \
+     --message "漂移检查（只读，异常才报告）：1) diff ~/.yomi/agents/INDEX.md 与实际角色目录；2) 本仓库 .agents/memory/MEMORY.md 行数 >150；3) .yomi/tickets/ 里 claimed 且 mtime 超 3 天的僵尸工单。"
+   ```
+   只读、固定节奏、零内核改动、P0 的 ensure 语义保证重复安装无害。完整 janitor（策展/遗忘/蒸馏）仍按 P3 暂缓。
 
 ## 观望清单（明确不做 / 条件触发）
 
@@ -287,8 +291,8 @@ janitor 的记忆分两层，**其他 agent 只消费第二层，不直接访问
 
 | 资产 | 耦合度 | 归属 |
 |---|---|---|
-| `tickets` / `janitor` skill | 零~弱耦合（纯约定 + playbook） | yomi-extensions |
-| `agent-templates` skill | 中耦合（描述 kernel 的 `template` 参数） | yomi-extensions（约定优先写法：kernel 未支持时降级为"ROLE.md body 内联进 prompt"的穷人版模板） |
+| `task-tickets` / `janitor` skill | 零~弱耦合（纯约定 + playbook） | yomi-extensions |
+| ~~`agent-templates` skill~~ | — | **已删除**（2026-08 收敛）：发现由 `agent` 工具 desc 自足承载（内置一句话用途 + INDEX.md 约定），不再需要单独 skill |
 | 内置模板 planner/reviewer/explorer | 强耦合（schema 随 kernel 版本） | **预置进内核**（`crates/kernel/src/agent_tmpl/` + `include_str!`，三层合并的地板层） |
 | `feishu-e2e` / `release-it` / `yomi-cli` | 维护者工作流 | 留在 yomi 主仓 `.agents/skills/` |
 
@@ -304,13 +308,13 @@ npx skills add Crescent617/yomi-extensions -g --skill tickets   # 只装单个
 
 templates 不属于 skills 生态：官方模板内核预置、无需安装；yomi-extensions 里的实验性/社区模板手动 symlink 到 `~/.yomi/agents/`。
 
-**对 P1 的修正：发现机制不依赖 skill 存在**。`agent` 工具 desc 的静态指针必须自足——直接描述目录约定（"template: name of an agent template from `~/.yomi/agents/` or `.yomi/agents/`，`<name>/ROLE.md` + YAML frontmatter"），而不是"详见某 skill"。不装仓库时 desc + 错误路径列表面兜住发现；装了仓库获得深度内容。**skill 是增强，不是依赖。**
+**发现机制终版（2026-08 收敛）**：不需要 skill、不需要系统提示段——`agent` 工具 desc 自足：内置角色一句话用途（planner/reviewer/explorer）+ 目录约定 + 每目录 `INDEX.md` 索引（模型读一个文件即可选择）。传不存在的模板名时报错并附当前可用列表（名称+来源）作自纠正兜底。
 
 版本 skew：描述 kernel 行为的 skill 在 frontmatter/README 标注最低 yomi 版本。
 
 ## 落地顺序
 
-1. **P1 模板机制**：✅ 已落地——`NewSession` 参数结构体重构 + sessions.template/tools_block 列（v20/v21）+ `agent_tmpl` 三层加载（内置 `include_str!` / 全局 / workspace 覆盖，tools_block 跨层并集）+ `agent` 工具 `template` 参数（实时 resolve、错误列可用表）+ conductor spawn 应用（body 换 base prompt、tools_block 收窄；model/skills 全继承）+ 内置 planner/reviewer/explorer（不设 tools_block，对齐 CC）+ `agent-templates` skill（yomi-extensions）；
+1. **P1 模板机制**：✅ 已落地——`NewSession` 参数结构体重构 + sessions.template 列（v20；v21 tools_block 列休眠）+ `agent_tmpl` 三层加载（内置 `include_str!` / 全局 / workspace 覆盖）+ `agent` 工具 `template` 参数（实时 resolve、错误列可用表；desc 自足含内置一句话用途与 INDEX.md 约定）+ conductor spawn 应用（body 换 base prompt；model/skills/工具全继承）+ 内置 planner/reviewer/explorer（对齐 CC）——纯 markdown 无 frontmatter，无单独 skill；
 2. **P1.5 记忆层**：一期目录约定 + SP 门控指针（✅ 已落地，仅项目层）；二期索引装配（小内核）等空转信号再动；
 3. **P2 tickets**：✅ 文件约定 + task-tickets skill + `ticket.sh` 脚本落地（yomi-extensions，本机 symlink 生效）；GUI 投影曾实现并经 tauri-pilot e2e 验证，后按决策整体撤下（kernel ticket 模块/wire/GUI 组件均移除，git 历史可溯），等工单流程验证好用后再恢复展示层；
 4. **P3 janitor**：**暂缓**（见 P3 暂缓说明；复活看触发信号）；
@@ -320,7 +324,6 @@ templates 不属于 skills 生态：官方模板内核预置、无需安装；yo
 
 - 模板版本记录粒度（只在 metadata 记名字，还是连内容 hash 一起记，供质量回退归因）；
 - `.yomi/tickets/` 的安放位置：workspace 根 vs `.agents/` 下（前者更显眼、易 git 化，后者与 skills/agents 约定统一）；
-- **git-root resolve 的推广**：memory 确定按 git root；skills / templates / tickets 目前都是 `cwd.join()`，是否统一改为 git root（从子目录启动的碎片化问题）；
+- **git-root resolve 的推广**：一期 memory/tickets 均按 `working_dir`（cwd）定位；二期统一改 git root（子目录启动的碎片化问题）；
 - 全局 memory（暂缓）重启时的晋升路径：与模板同构（janitor 带证据 or 用户确认）？
 - janitor 的空闲判定与默认频率（固定 cron vs 检测活跃度）；
-- `tools_block` 的表述：`tools_block` 黑名单 vs `tools_allow` 白名单（白名单更安全但维护重，倾向黑名单 + 交集约束）。

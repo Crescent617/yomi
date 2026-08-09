@@ -216,7 +216,6 @@
         created_at: s.created_at,
         message_count: s.message_count,
         template: s.template,
-        tools_block: s.tools_block,
       });
       sessionState.sessions.push(session);
     } else {
@@ -230,7 +229,6 @@
       session.created_at = s.created_at ?? session.created_at;
       session.message_count = s.message_count ?? session.message_count;
       session.template = s.template ?? session.template;
-      session.tools_block = s.tools_block ?? session.tools_block;
     }
     return session;
   }
