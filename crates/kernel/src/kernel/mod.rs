@@ -1016,7 +1016,6 @@ impl Kernel {
             auto_approve_level: info.auto_approve_level,
             model_key: info.model_key,
             template: info.template,
-            tools_block: info.tools_block,
         }
     }
 

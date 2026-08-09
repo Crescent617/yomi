@@ -276,22 +276,17 @@ async fn spawn_with_builtin_template_records_name_and_inherits_model() {
 
     let child = store.get(&subagent_id).await.unwrap().unwrap();
     assert_eq!(child.template.as_deref(), Some("reviewer"));
-    // reviewer 不带 model_key → 继承父 session；内置模板不设 tools_block → None
+    // reviewer 不带 model_key → 继承父 session
     assert_eq!(child.model_key.as_deref(), Some("parent-model"));
-    assert_eq!(child.tools_block, None);
 }
 
 #[tokio::test]
-async fn spawn_with_workspace_template_ignores_model_key_and_inherits() {
+async fn spawn_with_workspace_template_records_name_and_inherits_model() {
     let dir = std::env::temp_dir().join(format!("yomi-subtmpl-test-{}", std::process::id()));
     let role_dir = dir.join(".yomi/agents/fast");
     std::fs::create_dir_all(&role_dir).unwrap();
-    // model_key 字段当前刻意忽略（全继承），写入不影响继承
-    std::fs::write(
-        role_dir.join("ROLE.md"),
-        "---\ndescription: 快速执行者\nmodel_key: fast-model\n---\n\nbody\n",
-    )
-    .unwrap();
+    // 纯 markdown 格式：全文即角色 SP
+    std::fs::write(role_dir.join("ROLE.md"), "你是快速执行者。\n").unwrap();
 
     let (f, parent_id) = template_fixture(Some(dir.to_str().unwrap())).await;
     let store = Arc::clone(&f.session_store);
@@ -300,8 +295,6 @@ async fn spawn_with_workspace_template_ignores_model_key_and_inherits() {
     let child = store.get(&subagent_id).await.unwrap().unwrap();
     assert_eq!(child.template.as_deref(), Some("fast"));
     assert_eq!(child.model_key.as_deref(), Some("parent-model"));
-    // 无 tools_block 的模板不落约束（None 而非空数组）
-    assert_eq!(child.tools_block, None);
 
     std::fs::remove_dir_all(&dir).unwrap();
 }

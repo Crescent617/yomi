@@ -362,9 +362,9 @@ impl ToolRegistry {
         }
 
         // Apply tool blocklist (regex patterns) — remove matching tools from the registry.
-        // Patterns compile individually: a bad entry (e.g. from a workspace
-        // template's tools_block) is skipped with a warn, never drops the
-        // whole blocklist (which includes the sub-agent ask_user guard).
+        // Patterns compile individually: a bad entry is skipped with a warn,
+        // never drops the whole blocklist (which includes the sub-agent
+        // ask_user guard).
         if !config.tool_blocklist.is_empty() {
             let patterns: Vec<regex::Regex> = config
                 .tool_blocklist

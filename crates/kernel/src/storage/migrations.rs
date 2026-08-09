@@ -278,6 +278,8 @@ const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 21,
+        // 列已应用但当前无代码使用（tools_block 机制简化拆除后刻意休眠，
+        // 见 docs/design/agent-harness.md P1；重新启用时 git 历史可溯）
         name: "add_session_tools_block",
         sqls: &[r"ALTER TABLE sessions ADD COLUMN tools_block TEXT;"],
     },

@@ -27,9 +27,6 @@ pub struct SessionInfo {
     pub model_key: Option<String>,
     /// subagent spawn 时使用的角色模板名；普通 session 为 None
     pub template: Option<String>,
-    /// spawn 时快照的工具收窄清单（JSON 数组落库）。即使模板文件事后被删
-    /// 改，约束也不丢——创建时刻的工具边界是契约。
-    pub tools_block: Option<Vec<String>>,
 }
 
 /// Input for [`SessionStore::create`]. Only `id` is required; the rest
@@ -50,8 +47,6 @@ pub struct NewSession {
     pub parent_id: Option<SessionId>,
     pub model_key: Option<String>,
     pub template: Option<String>,
-    /// 创建时刻快照的工具收窄清单（仅模板化 subagent 有值）。
-    pub tools_block: Option<Vec<String>>,
 }
 
 impl NewSession {
@@ -64,7 +59,6 @@ impl NewSession {
             parent_id: None,
             model_key: None,
             template: None,
-            tools_block: None,
         }
     }
 }

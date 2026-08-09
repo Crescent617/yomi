@@ -23,13 +23,7 @@ impl SqliteSessionStore {
 #[async_trait]
 impl SessionStore for SqliteSessionStore {
     async fn create(&self, input: NewSession) -> Result<()> {
-        let tools_block = input
-            .tools_block
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(|e| storage_err(format!("serialize tools_block: {e}")))?;
-        sqlx::query("INSERT INTO sessions (id, project_id, working_dir, auto_approve_level, parent_id, model_key, template, tools_block) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        sqlx::query("INSERT INTO sessions (id, project_id, working_dir, auto_approve_level, parent_id, model_key, template) VALUES (?, ?, ?, ?, ?, ?, ?)")
             .bind(&*input.id.0)
             .bind(input.project_id.as_ref().map(|p| &*p.0))
             .bind(input.working_dir.as_deref())
@@ -37,7 +31,6 @@ impl SessionStore for SqliteSessionStore {
             .bind(input.parent_id.as_ref().map(|p| &*p.0))
             .bind(input.model_key.as_deref())
             .bind(input.template.as_deref())
-            .bind(tools_block)
             .execute(&self.pool)
             .await
             .map_err(|e| storage_err(format!("failed to create session: {e}")))?;
@@ -47,8 +40,8 @@ impl SessionStore for SqliteSessionStore {
     async fn fork(&self, parent_id: &SessionId) -> Result<SessionId> {
         let new_id = SessionId::new();
         sqlx::query(
-            "INSERT INTO sessions (id, project_id, working_dir, auto_approve_level, model_key, template, tools_block)
-             SELECT ?, project_id, working_dir, auto_approve_level, model_key, template, tools_block FROM sessions WHERE id = ?",
+            "INSERT INTO sessions (id, project_id, working_dir, auto_approve_level, model_key, template)
+             SELECT ?, project_id, working_dir, auto_approve_level, model_key, NULL FROM sessions WHERE id = ?",
         )
         .bind(&*new_id.0)
         .bind(&*parent_id.0)
@@ -80,7 +73,7 @@ impl SessionStore for SqliteSessionStore {
 
     async fn get(&self, id: &SessionId) -> Result<Option<SessionInfo>> {
         let row = sqlx::query_as::<_, SessionRow>(
-            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template, tools_block
+            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template
              FROM sessions WHERE id = ?",
         )
         .bind(&*id.0)
@@ -116,7 +109,7 @@ impl SessionStore for SqliteSessionStore {
         limit: usize,
     ) -> Result<(Vec<SessionInfo>, Option<String>)> {
         let mut builder = sqlx::QueryBuilder::new(
-            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template, tools_block
+            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template
              FROM sessions WHERE id NOT LIKE 'sub_%'",
         );
 
@@ -155,7 +148,7 @@ impl SessionStore for SqliteSessionStore {
 
     async fn list_subagents(&self, parent_id: &SessionId) -> Result<Vec<SessionInfo>> {
         let rows = sqlx::query_as::<_, SessionRow>(
-            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template, tools_block
+            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template
              FROM sessions
              WHERE parent_id = ? AND id LIKE 'sub_%'
              ORDER BY updated_at DESC",
@@ -359,7 +352,6 @@ struct SessionRow {
     auto_approve_level: Option<String>,
     model_key: Option<String>,
     template: Option<String>,
-    tools_block: Option<String>,
 }
 
 impl From<SessionRow> for SessionInfo {
@@ -376,7 +368,6 @@ impl From<SessionRow> for SessionInfo {
             auto_approve_level: row.auto_approve_level,
             model_key: row.model_key,
             template: row.template,
-            tools_block: row.tools_block.and_then(|s| serde_json::from_str(&s).ok()),
         }
     }
 }

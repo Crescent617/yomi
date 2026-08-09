@@ -1,14 +1,13 @@
 //! Agent templates（`<name>/ROLE.md`）：subagent 的角色定义资产。
 //!
+//! 纯 markdown：全文即角色系统提示，名字取自目录名，无 frontmatter。
 //! 三层合并：内置（`include_str!`，地板层）→ 全局 `<data_dir>/agents/`
 //! → workspace `<cwd>/.yomi/agents/`（最高层），同名后者覆盖前者。
-//! 模板只收敛不扩权：`tools_block` 只会追加进 blocklist。
 //!
-//! 位置说明：模板 frontmatter 是 yomi 方言（`tools_block`/`model_key`/`skills`），
-//! 与别家 subagent 格式互不兼容，所以放 yomi 私有的 `.yomi/agents/` 而非
-//! 跨厂商的 `.agents/`——共享目录的前提是共享格式。
+//! 位置说明：模板正文是 yomi 的提示词约定，与别家 subagent 格式互不兼容，
+//! 所以放 yomi 私有的 `.yomi/agents/` 而非跨厂商的 `.agents/`——
+//! 共享目录的前提是共享格式。
 
-use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 /// workspace 模板目录（相对 `working_dir`）。
@@ -17,11 +16,6 @@ pub const WORKSPACE_DIR: &str = ".yomi/agents";
 pub const GLOBAL_DIR: &str = "agents";
 /// 模板主文件名。
 pub const ROLE_FILE: &str = "ROLE.md";
-
-/// 全局模板目录（`data_dir` 下的 `agents/`）。
-pub fn global_dir(data_dir: &Path) -> PathBuf {
-    data_dir.join(GLOBAL_DIR)
-}
 
 /// 模板来源层。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,75 +35,21 @@ impl TemplateSource {
     }
 }
 
-/// 一个解析完毕的角色模板。
+/// 一个角色模板：名字 + 正文（即 subagent 的系统提示）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentTemplate {
     pub name: String,
-    pub description: String,
-    /// 追加进 subagent 工具 blocklist 的工具名（只能收窄父 agent 的工具集）。
-    pub tools_block: Vec<String>,
-    /// 角色系统提示（frontmatter 之后的正文）。
     pub body: String,
     pub source: TemplateSource,
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct Frontmatter {
-    #[serde(default)]
-    description: String,
-    #[serde(default)]
-    tools_block: Vec<String>,
-    // model_key / skills 等未知字段刻意容忍（解析忽略）——全继承是当前的
-    // 有意简化，将来引入时不破坏存量文件。
-}
-
-/// 解析 `<name>/ROLE.md` 内容：YAML frontmatter + 正文。
-/// 无 frontmatter 时整体作为 body、元数据全默认；frontmatter 未闭合同样
-/// 按整体正文处理——宁可降级也不产出空 body 的静默残次模板。
 fn parse(name: &str, content: &str, source: TemplateSource) -> AgentTemplate {
-    let mut lines = content.lines();
-    let (fm, body) = if lines.next().map(str::trim) == Some("---") {
-        let mut yaml = String::new();
-        let mut rest = String::new();
-        let mut closed = false;
-        for line in lines {
-            if !closed && line.trim() == "---" {
-                closed = true;
-                continue;
-            }
-            if closed {
-                rest.push_str(line);
-                rest.push('\n');
-            } else {
-                yaml.push_str(line);
-                yaml.push('\n');
-            }
-        }
-        if closed {
-            (
-                serde_yaml::from_str(&yaml).unwrap_or_else(|e| {
-                    // 闭合法定但 YAML 非法：默认化会静默清空 tools_block（放宽
-                    // 工具集）——必须留痕。
-                    tracing::warn!("agent template '{name}' frontmatter parse failed: {e}");
-                    Frontmatter::default()
-                }),
-                rest.trim().to_string(),
-            )
-        } else {
-            (Frontmatter::default(), content.trim().to_string())
-        }
-    } else {
-        (Frontmatter::default(), content.trim().to_string())
-    };
-
+    let body = content.trim().to_string();
     if body.is_empty() {
         tracing::warn!("agent template '{name}' has empty body");
     }
-
     AgentTemplate {
         name: name.to_string(),
-        description: fm.description,
-        tools_block: fm.tools_block,
         body,
         source,
     }
@@ -128,6 +68,11 @@ pub fn builtin() -> Vec<AgentTemplate> {
         .iter()
         .map(|(name, content)| parse(name, content, TemplateSource::Builtin))
         .collect()
+}
+
+/// 全局模板目录（`data_dir` 下的 `agents/`）。
+pub fn global_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join(GLOBAL_DIR)
 }
 
 /// 扫描一个模板目录（`<dir>/<name>/ROLE.md`，一层），符号链接跟随。
@@ -151,26 +96,13 @@ async fn load_dir(dir: &Path, source: TemplateSource) -> Vec<AgentTemplate> {
     templates
 }
 
-/// 同名后者覆盖前者，保持有序（按 name 排序，输出稳定）。
-///
-/// 例外：`tools_block` 跨层取**并集**——约束只能逐层加码、不能被上层
-/// 覆盖悄悄放宽（"权限只能收窄"在层间同样成立；workspace 放一个省略
-/// `tools_block` 的同名文件不该让内置 reviewer 失去只读约束）。
+/// 同名后者覆盖前者，按 name 排序输出（稳定）。
 fn merge(layers: Vec<Vec<AgentTemplate>>) -> Vec<AgentTemplate> {
     let mut merged: Vec<AgentTemplate> = Vec::new();
     for layer in layers {
         for t in layer {
             match merged.iter_mut().find(|m| m.name == t.name) {
-                Some(existing) => {
-                    let mut tools_block = t.tools_block.clone();
-                    for tool in &existing.tools_block {
-                        if !tools_block.contains(tool) {
-                            tools_block.push(tool.clone());
-                        }
-                    }
-                    tools_block.sort();
-                    *existing = AgentTemplate { tools_block, ..t };
-                }
+                Some(existing) => *existing = t,
                 None => merged.push(t),
             }
         }
@@ -179,7 +111,7 @@ fn merge(layers: Vec<Vec<AgentTemplate>>) -> Vec<AgentTemplate> {
     merged
 }
 
-/// 三层合并后的模板清单：builtin → 全局（`global_dir`）→ workspace。
+/// 三层合并后的模板清单：builtin → 全局 → workspace。
 pub async fn list(global_dir: &Path, working_dir: Option<&Path>) -> Vec<AgentTemplate> {
     let workspace_dir = working_dir.map(|d| d.join(WORKSPACE_DIR));
     let global = load_dir(global_dir, TemplateSource::Global).await;

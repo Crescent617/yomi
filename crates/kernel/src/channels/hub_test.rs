@@ -2232,7 +2232,6 @@ fn test_format_session_info() {
         auto_approve_level: Some("dangerous".to_string()),
         model_key: None,
         template: None,
-        tools_block: None,
     };
     let models = vec![model_info("nova", "nova-2", 256_000)];
 

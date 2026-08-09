@@ -142,8 +142,6 @@ pub struct SessionResponse {
     pub model_key: Option<String>,
     /// subagent 角色模板名（创建时刻记录；普通 session 为 None）
     pub template: Option<String>,
-    /// 创建时刻快照的工具收窄清单
-    pub tools_block: Option<Vec<String>>,
 }
 
 /// A session that is actively executing in the kernel.
@@ -187,7 +185,6 @@ impl Default for SessionResponse {
             auto_approve_level: None,
             model_key: None,
             template: None,
-            tools_block: None,
         }
     }
 }

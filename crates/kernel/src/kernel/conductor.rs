@@ -470,7 +470,7 @@ impl Conductor {
         }
 
         // 模板化 subagent：session 记录里的模板名在 spawn 时实时 resolve，
-        // base prompt 换成角色定义；工具集只能在此基础上收窄（model/skills 全继承）。
+        // base prompt 换成角色定义（model/skills/工具集全继承父 agent）。
         let template = if is_sub_agent {
             match session_info.as_ref().and_then(|i| i.template.as_deref()) {
                 Some(name) => {
@@ -498,14 +498,6 @@ impl Conductor {
         } else {
             None
         };
-        // 工具收窄 = 创建时刻快照（落库）∪ 当前 resolve——模板文件事后被删改
-        // 也不丢约束（"只能收窄"在时间上同样成立）。
-        if let Some(persisted) = session_info.as_ref().and_then(|i| i.tools_block.as_ref()) {
-            tool_blocklist.extend(persisted.iter().cloned());
-        }
-        if let Some(ref t) = template {
-            tool_blocklist.extend(t.tools_block.iter().cloned());
-        }
 
         // Every non-sub-agent session learns the attachment syntax when the
         // feature is on: declared files reach the user alongside the message
