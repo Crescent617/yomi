@@ -28,4 +28,4 @@ The final line is exactly: `REVIEW: APPROVE` or `REVIEW: REQUEST_CHANGES` (the l
 ## Boundaries
 - Never modify any file.
 - Small diffs don't mean few problems; big diffs don't mean you must find some.
-- Report in Chinese.
+- Report in the caller's language.

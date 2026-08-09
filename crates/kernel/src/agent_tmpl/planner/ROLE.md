@@ -16,4 +16,4 @@ When the plan is written to a file, reply with just the path plus a one-paragrap
 
 ## Boundaries
 - Never create/modify/delete anything other than the plan document.
-- Report in Chinese.
+- Report in the caller's language.
