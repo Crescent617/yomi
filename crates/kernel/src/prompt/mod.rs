@@ -23,6 +23,12 @@ const SKILL_SECTION_HEADER: &str = "# Skills\nIMPORTANT: before replying, you mu
 /// sub-agent's parent decides what becomes an attachment.
 pub(crate) const ATTACHMENTS_SECTION: &str = "# Attachments\nTo attach files to your reply, include an attachments block, one path per line (absolute, or relative to the workspace) — each is delivered to the user as an attachment alongside your message:\n\n<yomi_attachments>\noutput/report.pdf\n</yomi_attachments>\n\nTo show this syntax to the user instead of attaching files, wrap it in a fenced code block.";
 
+/// Memory library pointer, injected only when a memory index actually exists
+/// (project `.agents/memory/MEMORY.md` and/or global `~/.agents/memory/MEMORY.md`).
+/// The convention lives in the system prompt; the facts live in the files —
+/// same pattern as the skills section.
+const MEMORY_SECTION_HEADER: &str = "# Memory\nYou have a persistent memory library. Skim its index before starting work, and record new durable facts (build gotchas, root causes, user preferences) back into it: one fact per line in MEMORY.md, details in topic files beside it.\n\n";
+
 impl<'a> SystemPromptBuilder<'a> {
     pub fn new() -> Self {
         Self::default()
@@ -71,6 +77,28 @@ impl<'a> SystemPromptBuilder<'a> {
             }
         }
 
+        // Memory library pointer (existence-gated): absent directories
+        // inject nothing, so non-memory projects pay zero prompt cost.
+        let mut memory_lines: Vec<String> = Vec::new();
+        if let Some(cwd) = self.working_dir {
+            let project_index = cwd.join(".agents/memory/MEMORY.md");
+            if tokio::fs::try_exists(&project_index).await.unwrap_or(false) {
+                memory_lines.push(format!("- Project: {}", project_index.display()));
+            }
+        }
+        let global_index = crate::utils::path::expand_tilde("~/.agents/memory/MEMORY.md");
+        if tokio::fs::try_exists(&global_index).await.unwrap_or(false) {
+            memory_lines.push(format!("- Global: {}", global_index.display()));
+        }
+        if !memory_lines.is_empty() {
+            prompt.push_str("\n\n");
+            prompt.push_str(MEMORY_SECTION_HEADER);
+            for line in memory_lines {
+                prompt.push_str(&line);
+                prompt.push('\n');
+            }
+        }
+
         prompt.push_str("\n\n");
 
         if !self.skills.is_empty() {
@@ -104,3 +132,7 @@ impl<'a> SystemPromptBuilder<'a> {
         prompt
     }
 }
+
+#[cfg(test)]
+#[path = "prompt_test.rs"]
+mod tests;

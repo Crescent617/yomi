@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::storage::NewSession;
 use crate::types::SessionId;
 use tempfile::TempDir;
 
@@ -12,7 +13,7 @@ async fn test_storage_set_open() {
     let session_id = SessionId::new();
     storage
         .session_store()
-        .create(&session_id, None, None, None, None, None)
+        .create(NewSession::new(session_id.clone()))
         .await
         .unwrap();
     storage

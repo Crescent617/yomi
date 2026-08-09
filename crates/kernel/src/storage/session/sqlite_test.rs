@@ -18,10 +18,7 @@ async fn test_create_and_get() {
     let store = create_test_store().await;
 
     let id = SessionId::new();
-    store
-        .create(&id, None, None, None, None, None)
-        .await
-        .unwrap();
+    store.create(NewSession::new(id.clone())).await.unwrap();
     let info = store.get(&id).await.unwrap().unwrap();
 
     assert_eq!(info.id.0, id.0);
@@ -34,7 +31,10 @@ async fn test_create_with_working_dir() {
 
     let id = SessionId::new();
     store
-        .create(&id, None, Some("/test/dir"), None, None, None)
+        .create(NewSession {
+            working_dir: Some("/test/dir".into()),
+            ..NewSession::new(id.clone())
+        })
         .await
         .unwrap();
     let info = store.get(&id).await.unwrap().unwrap();
@@ -48,7 +48,10 @@ async fn test_fork() {
 
     let parent = SessionId::new();
     store
-        .create(&parent, None, Some("/parent/dir"), None, None, None)
+        .create(NewSession {
+            working_dir: Some("/parent/dir".into()),
+            ..NewSession::new(parent.clone())
+        })
         .await
         .unwrap();
     let child = store.fork(&parent).await.unwrap();
@@ -63,12 +66,12 @@ async fn test_create_with_parent_id() {
     let store = create_test_store().await;
     let parent = SessionId::new();
     let child = SessionId::new();
+    store.create(NewSession::new(parent.clone())).await.unwrap();
     store
-        .create(&parent, None, None, None, None, None)
-        .await
-        .unwrap();
-    store
-        .create(&child, None, None, None, Some(&parent), None)
+        .create(NewSession {
+            parent_id: Some(parent.clone()),
+            ..NewSession::new(child.clone())
+        })
         .await
         .unwrap();
 
@@ -81,15 +84,9 @@ async fn test_list_ordering() {
     let store = create_test_store().await;
 
     let id1 = SessionId::new();
-    store
-        .create(&id1, None, None, None, None, None)
-        .await
-        .unwrap();
+    store.create(NewSession::new(id1.clone())).await.unwrap();
     let id2 = SessionId::new();
-    store
-        .create(&id2, None, None, None, None, None)
-        .await
-        .unwrap();
+    store.create(NewSession::new(id2.clone())).await.unwrap();
 
     // Update id1 to make it more recent
     store.update_message_count(&id1, 1).await.unwrap();
@@ -109,17 +106,28 @@ async fn test_list_filter_by_project_id() {
     let pid = crate::types::ProjectId::new();
     let id1 = SessionId::new();
     store
-        .create(&id1, Some(&pid), Some("/foo/bar"), None, None, None)
+        .create(NewSession {
+            project_id: Some(pid.clone()),
+            working_dir: Some("/foo/bar".into()),
+            ..NewSession::new(id1.clone())
+        })
         .await
         .unwrap();
     let id2 = SessionId::new();
     store
-        .create(&id2, None, Some("/baz/qux"), None, None, None)
+        .create(NewSession {
+            working_dir: Some("/baz/qux".into()),
+            ..NewSession::new(id2.clone())
+        })
         .await
         .unwrap();
     let id3 = SessionId::new();
     store
-        .create(&id3, Some(&pid), Some("/foo/bar"), None, None, None)
+        .create(NewSession {
+            project_id: Some(pid.clone()),
+            working_dir: Some("/foo/bar".into()),
+            ..NewSession::new(id3.clone())
+        })
         .await
         .unwrap();
 
@@ -139,12 +147,19 @@ async fn test_list_assigned_scope_filters_before_pagination() {
     let pid = crate::types::ProjectId::new();
     let assigned = SessionId::new();
     store
-        .create(&assigned, Some(&pid), Some("/project"), None, None, None)
+        .create(NewSession {
+            project_id: Some(pid.clone()),
+            working_dir: Some("/project".into()),
+            ..NewSession::new(assigned.clone())
+        })
         .await
         .unwrap();
     let unassigned = SessionId::new();
     store
-        .create(&unassigned, None, Some("/other"), None, None, None)
+        .create(NewSession {
+            working_dir: Some("/other".into()),
+            ..NewSession::new(unassigned.clone())
+        })
         .await
         .unwrap();
 
@@ -179,10 +194,7 @@ async fn test_list_limit_and_next_cursor() {
     let mut ids = Vec::new();
     for i in 0..5 {
         let id = SessionId::new();
-        store
-            .create(&id, None, None, None, None, None)
-            .await
-            .unwrap();
+        store.create(NewSession::new(id.clone())).await.unwrap();
         ids.push(id.clone());
         store
             .update_message_count(&ids[i], i as i64 + 1)
@@ -231,39 +243,38 @@ async fn test_list_limit_and_next_cursor() {
 async fn test_list_subagents_returns_only_direct_subagent_children() {
     let store = create_test_store().await;
     let parent = SessionId::new();
-    store
-        .create(&parent, None, None, None, None, None)
-        .await
-        .unwrap();
+    store.create(NewSession::new(parent.clone())).await.unwrap();
 
     let direct_subagent = SessionId::new_subagent();
     store
-        .create(&direct_subagent, None, None, None, Some(&parent), None)
+        .create(NewSession {
+            parent_id: Some(parent.clone()),
+            ..NewSession::new(direct_subagent.clone())
+        })
         .await
         .unwrap();
 
     let fork = store.fork(&parent).await.unwrap();
     let nested_subagent = SessionId::new_subagent();
     store
-        .create(
-            &nested_subagent,
-            None,
-            None,
-            None,
-            Some(&direct_subagent),
-            None,
-        )
+        .create(NewSession {
+            parent_id: Some(direct_subagent.clone()),
+            ..NewSession::new(nested_subagent.clone())
+        })
         .await
         .unwrap();
 
     let other_parent = SessionId::new();
     store
-        .create(&other_parent, None, None, None, None, None)
+        .create(NewSession::new(other_parent.clone()))
         .await
         .unwrap();
     let other_subagent = SessionId::new_subagent();
     store
-        .create(&other_subagent, None, None, None, Some(&other_parent), None)
+        .create(NewSession {
+            parent_id: Some(other_parent.clone()),
+            ..NewSession::new(other_subagent.clone())
+        })
         .await
         .unwrap();
 
@@ -279,19 +290,22 @@ async fn test_list_subagents_returns_only_direct_subagent_children() {
 async fn test_list_subagents_orders_by_most_recent() {
     let store = create_test_store().await;
     let parent = SessionId::new();
-    store
-        .create(&parent, None, None, None, None, None)
-        .await
-        .unwrap();
+    store.create(NewSession::new(parent.clone())).await.unwrap();
 
     let older = SessionId::new_subagent();
     store
-        .create(&older, None, None, None, Some(&parent), None)
+        .create(NewSession {
+            parent_id: Some(parent.clone()),
+            ..NewSession::new(older.clone())
+        })
         .await
         .unwrap();
     let newer = SessionId::new_subagent();
     store
-        .create(&newer, None, None, None, Some(&parent), None)
+        .create(NewSession {
+            parent_id: Some(parent.clone()),
+            ..NewSession::new(newer.clone())
+        })
         .await
         .unwrap();
     sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-1 minute') WHERE id = ?")
@@ -314,7 +328,10 @@ async fn test_list_expired_and_delete_batch() {
     // Create a session and manually set its updated_at to 10 days ago
     let old_id = SessionId::new();
     store
-        .create(&old_id, None, Some("/test"), None, None, None)
+        .create(NewSession {
+            working_dir: Some("/test".into()),
+            ..NewSession::new(old_id.clone())
+        })
         .await
         .unwrap();
     sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-10 days') WHERE id = ?")
@@ -326,7 +343,10 @@ async fn test_list_expired_and_delete_batch() {
     // Create a recent session
     let recent_id = SessionId::new();
     store
-        .create(&recent_id, None, Some("/test"), None, None, None)
+        .create(NewSession {
+            working_dir: Some("/test".into()),
+            ..NewSession::new(recent_id.clone())
+        })
         .await
         .unwrap();
 
@@ -354,15 +374,9 @@ async fn test_list_expired_empty_when_no_old_sessions() {
 
     // Create only recent sessions
     let id1 = SessionId::new();
-    store
-        .create(&id1, None, None, None, None, None)
-        .await
-        .unwrap();
+    store.create(NewSession::new(id1.clone())).await.unwrap();
     let id2 = SessionId::new();
-    store
-        .create(&id2, None, None, None, None, None)
-        .await
-        .unwrap();
+    store.create(NewSession::new(id2.clone())).await.unwrap();
 
     let cutoff = chrono::Utc::now() - chrono::Duration::days(30);
     let expired = store.list_expired(cutoff, true).await.unwrap();
@@ -383,7 +397,10 @@ async fn test_list_expired_cascades_to_subagent_sessions() {
     // Create a parent session with an old updated_at
     let parent_id = SessionId::new();
     store
-        .create(&parent_id, None, Some("/test"), None, None, None)
+        .create(NewSession {
+            working_dir: Some("/test".into()),
+            ..NewSession::new(parent_id.clone())
+        })
         .await
         .unwrap();
     sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-10 days') WHERE id = ?")
@@ -395,14 +412,20 @@ async fn test_list_expired_cascades_to_subagent_sessions() {
     // Create a child subagent session (recent - should still cascade with parent)
     let child_id = SessionId::new_subagent();
     store
-        .create(&child_id, None, None, None, Some(&parent_id), None)
+        .create(NewSession {
+            parent_id: Some(parent_id.clone()),
+            ..NewSession::new(child_id.clone())
+        })
         .await
         .unwrap();
 
     // Create a recent sibling session
     let recent_id = SessionId::new();
     store
-        .create(&recent_id, None, Some("/test"), None, None, None)
+        .create(NewSession {
+            working_dir: Some("/test".into()),
+            ..NewSession::new(recent_id.clone())
+        })
         .await
         .unwrap();
 
@@ -431,7 +454,7 @@ async fn test_list_expired_includes_orphan_subagents() {
     // Orphan subagent: no parent, old
     let orphan_id = SessionId::new_subagent();
     store
-        .create(&orphan_id, None, None, None, None, None)
+        .create(NewSession::new(orphan_id.clone()))
         .await
         .unwrap();
     sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-10 days') WHERE id = ?")
@@ -443,12 +466,15 @@ async fn test_list_expired_includes_orphan_subagents() {
     // Subagent with a *live* parent: must NOT be collected even if old
     let live_parent = SessionId::new();
     store
-        .create(&live_parent, None, None, None, None, None)
+        .create(NewSession::new(live_parent.clone()))
         .await
         .unwrap();
     let protected_child = SessionId::new_subagent();
     store
-        .create(&protected_child, None, None, None, Some(&live_parent), None)
+        .create(NewSession {
+            parent_id: Some(live_parent.clone()),
+            ..NewSession::new(protected_child.clone())
+        })
         .await
         .unwrap();
     sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-10 days') WHERE id = ?")
@@ -473,24 +499,39 @@ async fn test_list_ids_by_project() {
     // Two sessions in project 1
     let s1 = SessionId::new();
     store
-        .create(&s1, Some(&pid), Some("/p1"), None, None, None)
+        .create(NewSession {
+            project_id: Some(pid.clone()),
+            working_dir: Some("/p1".into()),
+            ..NewSession::new(s1.clone())
+        })
         .await
         .unwrap();
     let s2 = SessionId::new();
     store
-        .create(&s2, Some(&pid), Some("/p1"), None, None, None)
+        .create(NewSession {
+            project_id: Some(pid.clone()),
+            working_dir: Some("/p1".into()),
+            ..NewSession::new(s2.clone())
+        })
         .await
         .unwrap();
     // Subagent child of s1 (inherits project via parent linkage)
     let sub = SessionId::new_subagent();
     store
-        .create(&sub, None, None, None, Some(&s1), None)
+        .create(NewSession {
+            parent_id: Some(s1.clone()),
+            ..NewSession::new(sub.clone())
+        })
         .await
         .unwrap();
     // Session in another project
     let other = SessionId::new();
     store
-        .create(&other, Some(&other_pid), Some("/p2"), None, None, None)
+        .create(NewSession {
+            project_id: Some(other_pid.clone()),
+            working_dir: Some("/p2".into()),
+            ..NewSession::new(other.clone())
+        })
         .await
         .unwrap();
 
@@ -512,7 +553,7 @@ async fn test_list_expired_respects_pinned() {
 
     let pinned_id = SessionId::new();
     store
-        .create(&pinned_id, None, None, None, None, None)
+        .create(NewSession::new(pinned_id.clone()))
         .await
         .unwrap();
     sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-10 days') WHERE id = ?")
@@ -544,13 +585,16 @@ async fn test_list_excludes_subagent_sessions() {
 
     let parent_id = SessionId::new();
     store
-        .create(&parent_id, None, None, None, None, None)
+        .create(NewSession::new(parent_id.clone()))
         .await
         .unwrap();
 
     let child_id = SessionId::new_subagent();
     store
-        .create(&child_id, None, None, None, Some(&parent_id), None)
+        .create(NewSession {
+            parent_id: Some(parent_id.clone()),
+            ..NewSession::new(child_id.clone())
+        })
         .await
         .unwrap();
 

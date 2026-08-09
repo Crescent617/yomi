@@ -25,6 +25,48 @@ pub struct SessionInfo {
     pub project_id: Option<crate::types::ProjectId>,
     pub auto_approve_level: Option<String>,
     pub model_key: Option<String>,
+    /// subagent spawn 时使用的角色模板名；普通 session 为 None
+    pub template: Option<String>,
+    /// spawn 时快照的工具收窄清单（JSON 数组落库）。即使模板文件事后被删
+    /// 改，约束也不丢——创建时刻的工具边界是契约。
+    pub tools_block: Option<Vec<String>>,
+}
+
+/// Input for [`SessionStore::create`]. Only `id` is required; the rest
+/// defaults to absent. Built via [`NewSession::new`] + struct update syntax:
+///
+/// ```rust,ignore
+/// store.create(NewSession {
+///     working_dir: Some("/repo".into()),
+///     ..NewSession::new(id)
+/// }).await?;
+/// ```
+#[derive(Debug, Clone)]
+pub struct NewSession {
+    pub id: SessionId,
+    pub project_id: Option<crate::types::ProjectId>,
+    pub working_dir: Option<String>,
+    pub auto_approve_level: Option<String>,
+    pub parent_id: Option<SessionId>,
+    pub model_key: Option<String>,
+    pub template: Option<String>,
+    /// 创建时刻快照的工具收窄清单（仅模板化 subagent 有值）。
+    pub tools_block: Option<Vec<String>>,
+}
+
+impl NewSession {
+    pub fn new(id: SessionId) -> Self {
+        Self {
+            id,
+            project_id: None,
+            working_dir: None,
+            auto_approve_level: None,
+            parent_id: None,
+            model_key: None,
+            template: None,
+            tools_block: None,
+        }
+    }
 }
 
 impl SessionInfo {
@@ -52,17 +94,8 @@ pub fn format_age(ts: DateTime<Utc>) -> String {
 /// Storage for session lifecycle and metadata
 #[async_trait]
 pub trait SessionStore: Send + Sync {
-    /// Create a new session with the given ID, optional `project_id`, optional working directory,
-    /// optional `auto_approve_level`, optional `parent_id`, and optional `model_key`
-    async fn create(
-        &self,
-        id: &SessionId,
-        project_id: Option<&crate::types::ProjectId>,
-        working_dir: Option<&str>,
-        auto_approve_level: Option<&str>,
-        parent_id: Option<&SessionId>,
-        model_key: Option<&str>,
-    ) -> Result<()>;
+    /// Create a new session from the given input.
+    async fn create(&self, input: NewSession) -> Result<()>;
 
     /// Fork a session, copying its metadata (including `auto_approve_level` and `model_key`)
     async fn fork(&self, parent_id: &SessionId) -> Result<SessionId>;

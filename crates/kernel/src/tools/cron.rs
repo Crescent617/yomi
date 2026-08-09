@@ -122,7 +122,7 @@ impl CronTool {
             None => None,
         };
 
-        let job = crate::cron::create_cron_job(
+        let outcome = crate::cron::create_cron_job(
             &self.store,
             self.session_store.as_ref(),
             follow.as_ref(),
@@ -130,6 +130,21 @@ impl CronTool {
         )
         .await
         .map_err(|e| KernelError::tool(e.to_string()))?;
+
+        let job = outcome.job;
+        if !outcome.created {
+            // 同名撞车：什么都没新建、什么都没改，明说并指向 update。
+            return Ok(ToolOutput::text(
+                json!({
+                    "job_id": job.id.0,
+                    "created": false,
+                    "status": job.status.as_str(),
+                    "message": "A cron job with this name already exists; nothing was created or changed. Use update to modify it, or create with a different name.",
+                })
+                .to_string(),
+            ));
+        }
+
         self.notify_scheduler();
 
         let session_id = match &job.action {
@@ -139,6 +154,7 @@ impl CronTool {
         Ok(ToolOutput::text(
             json!({
                 "job_id": job.id.0,
+                "created": true,
                 "session_id": session_id,
                 "next_run_at": job.next_run_at.map(|t| t.to_rfc3339()),
             })
@@ -446,7 +462,8 @@ impl Tool for CronTool {
 Actions: list, create, update, delete, trigger (run once immediately, for testing).
 Schedule is a cron expression with 5 fields ('0 9 * * 1-5' = weekdays 09:00) or 6 fields with leading seconds, interpreted in the machine's LOCAL timezone.
 For send_message jobs: pass session_id to target an existing session (e.g. the current conversation); omit it to create a dedicated new session that every run reuses (the new session inherits the current working directory and project; model stays default).
-Use update with status active/paused to resume/pause a job; pass null (or 0 for max_runs, the zero timestamp for expires_at) to clear those limits. Job type cannot be changed after creation."
+Use update with status active/paused to resume/pause a job; pass null (or 0 for max_runs, the zero timestamp for expires_at) to clear those limits. Job type cannot be changed after creation.
+Job names are unique: creating with an existing name returns the existing job unchanged (created=false) instead of failing — safe to call create without checking first; use update to modify an existing job."
     }
 
     fn schema(&self) -> Value {
@@ -474,7 +491,7 @@ Use update with status active/paused to resume/pause a job; pass null (or 0 for 
                 },
                 "name": {
                     "type": "string",
-                    "description": "Job name. Required for create"
+                    "description": "Job name. Required for create. Names are unique — reusing an existing name returns the existing job unchanged (created=false)"
                 },
                 "schedule": {
                     "type": "string",

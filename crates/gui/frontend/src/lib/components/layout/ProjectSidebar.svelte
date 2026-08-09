@@ -213,6 +213,10 @@
         updated_at: s.updated_at ?? s.created_at,
         permission_level: s.auto_approve_level ?? "caution",
         model_key: s.model_key,
+        created_at: s.created_at,
+        message_count: s.message_count,
+        template: s.template,
+        tools_block: s.tools_block,
       });
       sessionState.sessions.push(session);
     } else {
@@ -223,6 +227,10 @@
         s.auto_approve_level ?? session.permission_level;
       session.updated_at = s.updated_at ?? s.created_at ?? session.updated_at;
       session.model_key = s.model_key ?? session.model_key;
+      session.created_at = s.created_at ?? session.created_at;
+      session.message_count = s.message_count ?? session.message_count;
+      session.template = s.template ?? session.template;
+      session.tools_block = s.tools_block ?? session.tools_block;
     }
     return session;
   }

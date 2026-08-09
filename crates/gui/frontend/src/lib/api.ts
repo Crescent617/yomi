@@ -153,6 +153,10 @@ export interface SessionInfo {
   project_id?: string;
   auto_approve_level?: string;
   model_key?: string;
+  parent_id?: string;
+  message_count?: number;
+  template?: string;
+  tools_block?: string[];
 }
 
 export interface BackgroundShellTask {
@@ -232,6 +236,15 @@ export async function listSessions(
           ? String(session.auto_approve_level)
           : undefined,
         model_key: session.model_key ? String(session.model_key) : undefined,
+        parent_id: session.parent_id ? String(session.parent_id) : undefined,
+        message_count:
+          typeof session.message_count === "number"
+            ? session.message_count
+            : undefined,
+        template: session.template ? String(session.template) : undefined,
+        tools_block: Array.isArray(session.tools_block)
+          ? session.tools_block.map(String)
+          : undefined,
       };
     }),
     next_cursor: result.next_cursor,
@@ -510,6 +523,8 @@ export async function getSession(session_id: string): Promise<{
   updated_at: string;
   auto_approve_level: string | null;
   model_key: string | null;
+  template: string | null;
+  tools_block: string[] | null;
 }> {
   return invokeCmd("get_session", { session_id: session_id });
 }

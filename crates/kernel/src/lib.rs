@@ -16,6 +16,7 @@ macro_rules! env_name {
 }
 
 pub mod agent;
+pub mod agent_tmpl;
 pub mod channels;
 pub mod checkpoint;
 pub mod client;

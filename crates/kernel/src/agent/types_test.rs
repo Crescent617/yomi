@@ -1,7 +1,7 @@
 use super::*;
 
 use crate::storage::migrations::run_migrations;
-use crate::storage::session::{sqlite::SqliteSessionStore, SessionStore};
+use crate::storage::session::{sqlite::SqliteSessionStore, NewSession, SessionStore};
 use crate::types::SessionId;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -51,7 +51,10 @@ async fn test_resolve_model_uses_session_model_key() {
     let store = test_session_store().await;
     let sid = SessionId::new();
     store
-        .create(&sid, None, None, None, None, Some("alt"))
+        .create(NewSession {
+            model_key: Some("alt".into()),
+            ..NewSession::new(sid.clone())
+        })
         .await
         .unwrap();
 
@@ -70,7 +73,10 @@ async fn test_resolve_model_falls_back_on_stale_key() {
     let sid = SessionId::new();
     // model_key points to a model that no longer exists in the registry
     store
-        .create(&sid, None, None, None, None, Some("removed-model"))
+        .create(NewSession {
+            model_key: Some("removed-model".into()),
+            ..NewSession::new(sid.clone())
+        })
         .await
         .unwrap();
 

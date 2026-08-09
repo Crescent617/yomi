@@ -123,6 +123,16 @@ pub struct CreateCronJobInput {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
+/// `create_cron_job` 的结果。
+///
+/// `created = false` 表示撞名：返回的是**已存在**的 job，本次传入的
+/// schedule/action 等参数均未生效——要调整已有 job 请走 update。
+#[derive(Debug, Clone)]
+pub struct CreateCronJobOutcome {
+    pub job: CronJob,
+    pub created: bool,
+}
+
 /// 更新任务输入（部分更新）
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct UpdateCronJobInput {
@@ -203,6 +213,9 @@ pub enum CronError {
 
     #[error("Job not found: {0}")]
     JobNotFound(String),
+
+    #[error("Cron job name already exists: {0}")]
+    DuplicateName(String),
 
     #[error("Shell command failed: {0}")]
     ShellFailed(String),

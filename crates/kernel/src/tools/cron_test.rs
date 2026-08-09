@@ -2,7 +2,7 @@ use super::*;
 
 use crate::cron::SqliteCronStore;
 use crate::storage::migrations::run_migrations;
-use crate::storage::SqliteSessionStore;
+use crate::storage::{NewSession, SqliteSessionStore};
 use serde_json::json;
 use sqlx::sqlite::SqlitePoolOptions;
 
@@ -103,14 +103,13 @@ async fn create_send_message_new_session_follows_context_but_not_model() {
     let f = fixture(true, false).await;
     // Current session carries a working dir, a project and a custom model.
     f.session_store
-        .create(
-            &SessionId::from("sess-1"),
-            Some(&crate::types::ProjectId::from("proj_1")),
-            Some("/repo/demo"),
-            Some("caution"),
-            None,
-            Some("custom-model"),
-        )
+        .create(NewSession {
+            project_id: Some(crate::types::ProjectId::from("proj_1")),
+            working_dir: Some("/repo/demo".into()),
+            auto_approve_level: Some("caution".into()),
+            model_key: Some("custom-model".into()),
+            ..NewSession::new(SessionId::from("sess-1"))
+        })
         .await
         .unwrap();
 
@@ -644,4 +643,45 @@ async fn update_sessionless_send_message_errors_without_session_store() {
             .contains("session store not available; pass session_id explicitly"),
         "unexpected error: {err}"
     );
+}
+
+#[tokio::test]
+async fn create_with_existing_name_returns_existing_job_unchanged() {
+    let f = fixture(false, false).await;
+
+    let first = exec(
+        &f.tool,
+        json!({
+            "action": "create",
+            "name": "janitor",
+            "schedule": "0 9 * * *",
+            "type": "shell",
+            "command": "true",
+        }),
+    )
+    .await
+    .unwrap();
+    let v1: Value = serde_json::from_str(&output_text(&first)).unwrap();
+    assert_eq!(v1["created"], json!(true));
+
+    // 同名再 create：返回同一个 job id，schedule/命令均不被改写
+    let second = exec(
+        &f.tool,
+        json!({
+            "action": "create",
+            "name": "janitor",
+            "schedule": "0 10 * * *",
+            "type": "shell",
+            "command": "false",
+        }),
+    )
+    .await
+    .unwrap();
+    let v2: Value = serde_json::from_str(&output_text(&second)).unwrap();
+    assert_eq!(v2["created"], json!(false));
+    assert_eq!(v2["job_id"], v1["job_id"]);
+
+    let jobs = f.cron_store.list(None, 10).await.unwrap();
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].schedule, "0 9 * * *");
 }

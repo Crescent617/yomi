@@ -4,7 +4,7 @@ use super::{format_message, PostMessageTool};
 use crate::agent::AgentInput;
 use crate::comms::InputBus;
 use crate::storage::migrations::run_migrations;
-use crate::storage::{SessionStore, SqliteSessionStore};
+use crate::storage::{NewSession, SessionStore, SqliteSessionStore};
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{ContentBlock, SessionId, ToolOutputBlock};
 
@@ -16,10 +16,7 @@ async fn session_store_with(id: &SessionId) -> std::sync::Arc<dyn SessionStore> 
         .unwrap();
     run_migrations(&pool).await.unwrap();
     let store = SqliteSessionStore::new(pool);
-    store
-        .create(id, None, None, None, None, None)
-        .await
-        .unwrap();
+    store.create(NewSession::new(id.clone())).await.unwrap();
     std::sync::Arc::new(store)
 }
 

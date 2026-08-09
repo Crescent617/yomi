@@ -8,8 +8,8 @@ pub mod worker;
 pub use scheduler::CronScheduler;
 pub use store::{CronStore, SqliteCronStore};
 pub use types::{
-    CreateCronJobInput, CronAction, CronError, CronJob, CronJobId, CronJobStatus, CronSchedule,
-    UpdateCronJobInput, NEVER_EXPIRES, UNLIMITED_MAX_RUNS,
+    CreateCronJobInput, CreateCronJobOutcome, CronAction, CronError, CronJob, CronJobId,
+    CronJobStatus, CronSchedule, UpdateCronJobInput, NEVER_EXPIRES, UNLIMITED_MAX_RUNS,
 };
 pub use worker::CronWorker;
 
@@ -68,14 +68,12 @@ pub async fn ensure_action_session(
 
     let id = crate::types::SessionId::new();
     session_store
-        .create(
-            &id,
-            follow.and_then(|i| i.project_id.as_ref()),
-            follow.and_then(|i| i.working_dir.as_deref()),
-            Some(crate::permission::Level::default().as_str()),
-            None,
-            None,
-        )
+        .create(crate::storage::NewSession {
+            project_id: follow.and_then(|i| i.project_id.clone()),
+            working_dir: follow.and_then(|i| i.working_dir.clone()),
+            auto_approve_level: Some(crate::permission::Level::default().as_str().to_string()),
+            ..crate::storage::NewSession::new(id.clone())
+        })
         .await
         .map_err(|e| CronError::Storage(format!("failed to create session for cron job: {e}")))?;
     if let Err(e) = session_store.update_title(&id, job_name).await {
@@ -122,8 +120,13 @@ pub async fn rollback_bound_session(
     }
 }
 
-/// 创建并持久化一个 cron job：校验 schedule、按需绑定专用 session、
-/// 计算 `next_run_at`、入库。若入库失败，回滚刚绑定的 session。
+/// 创建并持久化一个 cron job（ensure 语义）：name 是 job 的身份。
+/// 同名 job 已存在时不新建、不改写，直接返回它（`created = false`），
+/// 调用方始终拿到一个稳定 id——agent 跨 session 重复 create 同一个
+/// 名字不会产生重复 job。要调整已有 job 请走 update。
+///
+/// 新 job 的路径：校验 schedule、按需绑定专用 session、计算
+/// `next_run_at`、入库。若入库失败，回滚刚绑定的 session。
 ///
 /// `Kernel`（RPC 路径）与 cron tool 共用，保证行为一致。
 pub async fn create_cron_job(
@@ -131,7 +134,15 @@ pub async fn create_cron_job(
     session_store: Option<&Arc<dyn crate::storage::SessionStore>>,
     follow: Option<&crate::storage::SessionInfo>,
     input: CreateCronJobInput,
-) -> Result<CronJob, CronError> {
+) -> Result<CreateCronJobOutcome, CronError> {
+    // Ensure 语义短路：同名即命中，本次传入的参数不校验、不生效。
+    if let Some(existing) = store.get_by_name(&input.name).await? {
+        return Ok(CreateCronJobOutcome {
+            job: existing,
+            created: false,
+        });
+    }
+
     let next_run = next_run_from_schedule(&input.schedule)?;
 
     // `SendMessage` without a session gets a dedicated new session bound now,
@@ -177,10 +188,26 @@ pub async fn create_cron_job(
                 rollback_bound_session(session_store, action_session_id(&job.action)).await;
             }
         }
+        // 并发 create 撞名（唯一索引兜底）：返回竞态胜者，保持 ensure 语义。
+        if matches!(e, CronError::DuplicateName(_)) {
+            match store.get_by_name(&job.name).await {
+                Ok(Some(existing)) => {
+                    return Ok(CreateCronJobOutcome {
+                        job: existing,
+                        created: false,
+                    });
+                }
+                Ok(None) => {}
+                Err(fetch_err) => {
+                    // 回退查询失败不能吞掉原始的撞名错误
+                    tracing::warn!("cron name-conflict fallback fetch failed: {fetch_err}");
+                }
+            }
+        }
         return Err(e);
     }
 
-    Ok(job)
+    Ok(CreateCronJobOutcome { job, created: true })
 }
 
 /// 成功执行的 shell 命令输出。

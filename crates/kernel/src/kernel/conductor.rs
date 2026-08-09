@@ -469,6 +469,44 @@ impl Conductor {
             tool_blocklist.push(crate::tools::ask_user::ASK_USER_TOOL_NAME.to_string());
         }
 
+        // 模板化 subagent：session 记录里的模板名在 spawn 时实时 resolve，
+        // base prompt 换成角色定义；工具集只能在此基础上收窄（model/skills 全继承）。
+        let template = if is_sub_agent {
+            match session_info.as_ref().and_then(|i| i.template.as_deref()) {
+                Some(name) => {
+                    let agents_dir = crate::agent_tmpl::global_dir(&self.data_dir);
+                    match crate::agent_tmpl::resolve(name, &agents_dir, Some(working_dir.as_path()))
+                        .await
+                    {
+                        Some(t) if t.body.trim().is_empty() => {
+                            tracing::warn!(
+                                "template '{name}' has empty body; using default base prompt"
+                            );
+                            None
+                        }
+                        Some(t) => Some(t),
+                        None => {
+                            tracing::warn!(
+                                "template '{name}' not found at spawn; using default base prompt"
+                            );
+                            None
+                        }
+                    }
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+        // 工具收窄 = 创建时刻快照（落库）∪ 当前 resolve——模板文件事后被删改
+        // 也不丢约束（"只能收窄"在时间上同样成立）。
+        if let Some(persisted) = session_info.as_ref().and_then(|i| i.tools_block.as_ref()) {
+            tool_blocklist.extend(persisted.iter().cloned());
+        }
+        if let Some(ref t) = template {
+            tool_blocklist.extend(t.tools_block.iter().cloned());
+        }
+
         // Every non-sub-agent session learns the attachment syntax when the
         // feature is on: declared files reach the user alongside the message
         // (channels deliver them, the app shows clickable items). Sub-agents
@@ -476,14 +514,16 @@ impl Conductor {
         // decides what becomes an attachment. Note the narrower predicate
         // than the ask_user blocklist above, which covers every sub-agent
         // outright.
-        let base_prompt = if !is_sub_agent && self.agent_config.enable_attachments {
-            format!(
-                "{}\n\n{}",
-                self.base_prompt,
-                crate::prompt::ATTACHMENTS_SECTION
-            )
-        } else {
-            self.base_prompt.clone()
+        let base_prompt = match &template {
+            Some(t) => t.body.clone(),
+            None if !is_sub_agent && self.agent_config.enable_attachments => {
+                format!(
+                    "{}\n\n{}",
+                    self.base_prompt,
+                    crate::prompt::ATTACHMENTS_SECTION
+                )
+            }
+            None => self.base_prompt.clone(),
         };
 
         // Resolve tool flags here — session-level policy lives in the

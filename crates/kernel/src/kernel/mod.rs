@@ -676,14 +676,13 @@ impl Kernel {
 
         self.session_store()
             .await
-            .create(
-                &id,
-                input.project_id.as_ref(),
-                working_dir.as_deref(),
-                Some(input.auto_approve_level.as_str()),
-                None,
-                input.model_key.as_deref(),
-            )
+            .create(crate::storage::NewSession {
+                project_id: input.project_id.clone(),
+                working_dir,
+                auto_approve_level: Some(input.auto_approve_level.as_str().to_string()),
+                model_key: input.model_key.clone(),
+                ..crate::storage::NewSession::new(id.clone())
+            })
             .await?;
 
         if let Some(ref pid) = input.project_id {
@@ -1016,6 +1015,8 @@ impl Kernel {
             updated_at: info.updated_at,
             auto_approve_level: info.auto_approve_level,
             model_key: info.model_key,
+            template: info.template,
+            tools_block: info.tools_block,
         }
     }
 
@@ -1570,9 +1571,13 @@ impl Kernel {
         // The RPC path has no caller session to follow, so a newly bound
         // session uses defaults.
         let session_store = self.session_store().await;
-        let job = crate::cron::create_cron_job(store, Some(&session_store), None, input).await?;
-        self.notify_cron_scheduler();
-        Ok(job.id)
+        let outcome =
+            crate::cron::create_cron_job(store, Some(&session_store), None, input).await?;
+        // 撞名返回既有 job 时没有任何变化，无需唤醒 scheduler。
+        if outcome.created {
+            self.notify_cron_scheduler();
+        }
+        Ok(outcome.job.id)
     }
 
     /// List cron jobs with optional status filter.

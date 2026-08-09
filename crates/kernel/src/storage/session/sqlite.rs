@@ -1,6 +1,6 @@
 //! `SQLite` implementation of `SessionStore`
 
-use super::{storage_err, SessionInfo, SessionListScope, SessionStore};
+use super::{storage_err, NewSession, SessionInfo, SessionListScope, SessionStore};
 use crate::types::{Result, SessionId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -22,22 +22,22 @@ impl SqliteSessionStore {
 
 #[async_trait]
 impl SessionStore for SqliteSessionStore {
-    async fn create(
-        &self,
-        id: &SessionId,
-        project_id: Option<&crate::types::ProjectId>,
-        working_dir: Option<&str>,
-        auto_approve_level: Option<&str>,
-        parent_id: Option<&SessionId>,
-        model_key: Option<&str>,
-    ) -> Result<()> {
-        sqlx::query("INSERT INTO sessions (id, project_id, working_dir, auto_approve_level, parent_id, model_key) VALUES (?, ?, ?, ?, ?, ?)")
-            .bind(&*id.0)
-            .bind(project_id.map(|p| &*p.0))
-            .bind(working_dir)
-            .bind(auto_approve_level)
-            .bind(parent_id.map(|p| &*p.0))
-            .bind(model_key)
+    async fn create(&self, input: NewSession) -> Result<()> {
+        let tools_block = input
+            .tools_block
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| storage_err(format!("serialize tools_block: {e}")))?;
+        sqlx::query("INSERT INTO sessions (id, project_id, working_dir, auto_approve_level, parent_id, model_key, template, tools_block) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+            .bind(&*input.id.0)
+            .bind(input.project_id.as_ref().map(|p| &*p.0))
+            .bind(input.working_dir.as_deref())
+            .bind(input.auto_approve_level.as_deref())
+            .bind(input.parent_id.as_ref().map(|p| &*p.0))
+            .bind(input.model_key.as_deref())
+            .bind(input.template.as_deref())
+            .bind(tools_block)
             .execute(&self.pool)
             .await
             .map_err(|e| storage_err(format!("failed to create session: {e}")))?;
@@ -47,8 +47,8 @@ impl SessionStore for SqliteSessionStore {
     async fn fork(&self, parent_id: &SessionId) -> Result<SessionId> {
         let new_id = SessionId::new();
         sqlx::query(
-            "INSERT INTO sessions (id, project_id, working_dir, auto_approve_level, model_key)
-             SELECT ?, project_id, working_dir, auto_approve_level, model_key FROM sessions WHERE id = ?",
+            "INSERT INTO sessions (id, project_id, working_dir, auto_approve_level, model_key, template, tools_block)
+             SELECT ?, project_id, working_dir, auto_approve_level, model_key, template, tools_block FROM sessions WHERE id = ?",
         )
         .bind(&*new_id.0)
         .bind(&*parent_id.0)
@@ -80,7 +80,7 @@ impl SessionStore for SqliteSessionStore {
 
     async fn get(&self, id: &SessionId) -> Result<Option<SessionInfo>> {
         let row = sqlx::query_as::<_, SessionRow>(
-            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key
+            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template, tools_block
              FROM sessions WHERE id = ?",
         )
         .bind(&*id.0)
@@ -116,7 +116,7 @@ impl SessionStore for SqliteSessionStore {
         limit: usize,
     ) -> Result<(Vec<SessionInfo>, Option<String>)> {
         let mut builder = sqlx::QueryBuilder::new(
-            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key
+            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template, tools_block
              FROM sessions WHERE id NOT LIKE 'sub_%'",
         );
 
@@ -155,7 +155,7 @@ impl SessionStore for SqliteSessionStore {
 
     async fn list_subagents(&self, parent_id: &SessionId) -> Result<Vec<SessionInfo>> {
         let rows = sqlx::query_as::<_, SessionRow>(
-            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key
+            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template, tools_block
              FROM sessions
              WHERE parent_id = ? AND id LIKE 'sub_%'
              ORDER BY updated_at DESC",
@@ -358,6 +358,8 @@ struct SessionRow {
     project_id: Option<String>,
     auto_approve_level: Option<String>,
     model_key: Option<String>,
+    template: Option<String>,
+    tools_block: Option<String>,
 }
 
 impl From<SessionRow> for SessionInfo {
@@ -373,6 +375,8 @@ impl From<SessionRow> for SessionInfo {
             project_id: row.project_id.map(crate::types::ProjectId::from),
             auto_approve_level: row.auto_approve_level,
             model_key: row.model_key,
+            template: row.template,
+            tools_block: row.tools_block.and_then(|s| serde_json::from_str(&s).ok()),
         }
     }
 }

@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 use crate::channels::store::SqliteChannelStore;
 use crate::channels::PlatformConfig;
 use crate::storage::migrations::run_migrations;
-use crate::storage::{SessionStore, SqliteSessionStore};
+use crate::storage::{NewSession, SessionStore, SqliteSessionStore};
 use sqlx::sqlite::SqlitePoolOptions;
 
 pub struct MockAdapter {
@@ -152,7 +152,10 @@ async fn create_session_with_model(
 ) -> SessionId {
     let id = SessionId::new();
     store
-        .create(&id, None, None, None, None, model_key)
+        .create(NewSession {
+            model_key: model_key.map(str::to_string),
+            ..NewSession::new(id.clone())
+        })
         .await
         .unwrap();
     id
@@ -2228,6 +2231,8 @@ fn test_format_session_info() {
         updated_at: now - chrono::Duration::minutes(5),
         auto_approve_level: Some("dangerous".to_string()),
         model_key: None,
+        template: None,
+        tools_block: None,
     };
     let models = vec![model_info("nova", "nova-2", 256_000)];
 

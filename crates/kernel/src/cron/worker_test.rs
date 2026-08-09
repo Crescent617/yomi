@@ -29,6 +29,16 @@ impl CronStore for MockStore {
         Ok(self.jobs.lock().unwrap().get(id.0.as_str()).cloned())
     }
 
+    async fn get_by_name(&self, name: &str) -> Result<Option<CronJob>, CronError> {
+        Ok(self
+            .jobs
+            .lock()
+            .unwrap()
+            .values()
+            .find(|j| j.name == name)
+            .cloned())
+    }
+
     async fn list(
         &self,
         _status: Option<CronJobStatus>,

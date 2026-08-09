@@ -270,7 +270,10 @@ Brief the agent like a smart colleague who just walked in — it has no context.
 - Explain what to do and why
 - State what you've already ruled out
 - Give exact commands for lookups, open-ended questions for investigations
-- Request short responses explicitly when needed ("report in under 200 words")"#
+- Request short responses explicitly when needed ("report in under 200 words")
+
+## Templates
+- `template`: name of a reusable role template — `<name>/ROLE.md` in `~/.yomi/agents/` or the workspace `.yomi/agents/` (builtins: planner, reviewer, explorer). The template body becomes the subagent's system prompt and may narrow its toolset via `tools_block`. For one-off roles, write the role directly into `prompt` instead."#
     }
 
     fn schema(&self) -> Value {
@@ -289,6 +292,10 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                     "type": "boolean",
                     "description": "Whether you wait for this execution to finish before continuing. Use true when you need the result before continuing; the returned agent ID remains available for later post_message follow-up. Use false for background or concurrent collaboration so you can continue working while the agent runs and both agents can communicate with post_message.",
                     "default": true
+                },
+                "template": {
+                    "type": "string",
+                    "description": "Optional role template name, resolved live from ~/.yomi/agents/<name>/ROLE.md or workspace .yomi/agents/ (builtins: planner, reviewer, explorer). The template body becomes the subagent's system prompt and may narrow its tools."
                 }
             },
             "required": ["description", "prompt"]
@@ -313,6 +320,8 @@ Brief the agent like a smart colleague who just walked in — it has no context.
             SubAgentMode::Async
         };
 
+        let template_name = args["template"].as_str().map(str::to_string);
+
         tracing::info!("spawning sub-agent");
 
         // Prevent recursive spawning
@@ -324,6 +333,57 @@ Brief the agent like a smart colleague who just walked in — it has no context.
 
         let session_id = SessionId::new_subagent();
         let prompt = subagent_prompt(prompt, mode, &self.parent_session_id);
+
+        // Parent metadata: inherited fields + the workspace dir used to
+        // resolve workspace-layer templates.
+        let parent = match self.shared.session_store.as_ref() {
+            Some(store) => match store.get(&self.parent_session_id).await {
+                Ok(info @ Some(_)) => info,
+                Ok(None) => {
+                    tracing::warn!(
+                        "parent session {} not found; creating subagent session without \
+                         inherited metadata",
+                        self.parent_session_id.0
+                    );
+                    None
+                }
+                Err(e) => {
+                    tracing::warn!("failed to get parent session metadata: {}", e);
+                    None
+                }
+            },
+            None => None,
+        };
+
+        // Resolve the role template (live from disk). Unknown names are a
+        // tool error listing what's available — nothing is spawned.
+        let template = match template_name.as_deref() {
+            Some(name) => {
+                // 与 conductor 的 spawn 语义对齐：working_dir 缺省回落 data_dir/workspace。
+                let dir = parent.as_ref().map_or_else(
+                    || self.shared.data_dir.join("workspace"),
+                    |p| {
+                        p.working_dir.clone().map_or_else(
+                            || self.shared.data_dir.join("workspace"),
+                            std::path::PathBuf::from,
+                        )
+                    },
+                );
+                let agents_dir = crate::agent_tmpl::global_dir(&self.shared.data_dir);
+                match crate::agent_tmpl::resolve(name, &agents_dir, Some(dir.as_path())).await {
+                    Some(t) => Some(t),
+                    None => {
+                        let available =
+                            crate::agent_tmpl::available_summary(&agents_dir, Some(dir.as_path()))
+                                .await;
+                        return Ok(ToolOutput::error(format!(
+                            "unknown template '{name}'. Available: {available}"
+                        )));
+                    }
+                }
+            }
+            None => None,
+        };
 
         // Emit metadata event immediately so UI can show jump link before subagent finishes
         if let Some(ref bus) = self.shared.event_bus {
@@ -354,44 +414,37 @@ Brief the agent like a smart colleague who just walked in — it has no context.
         // Persist the new subagent session to the database.
         // Store failures are non-fatal: warn and continue so the subagent can still run.
         if let Some(ref store) = self.shared.session_store {
-            let parent = match store.get(&self.parent_session_id).await {
-                Ok(Some(info)) => Some(info),
-                Ok(None) => {
-                    tracing::warn!(
-                        "parent session {} not found; creating subagent session without \
-                         inherited metadata",
-                        self.parent_session_id.0
-                    );
-                    None
-                }
-                Err(e) => {
-                    tracing::warn!("failed to get parent session metadata: {}", e);
-                    None
-                }
-            };
             let runtime_auto_approve_level = match self.shared.permission_state.as_ref() {
                 Some(state) => Some(state.get_auto_approve_level().await.to_string()),
                 None => None,
             };
-            let (project_id, working_dir, persisted_auto_approve_level, model_key) =
-                parent.map_or((None, None, None, None), |p| {
-                    (
+            let (project_id, working_dir, persisted_auto_approve_level, parent_model_key) =
+                match parent {
+                    Some(p) => (
                         p.project_id,
                         p.working_dir,
                         p.auto_approve_level,
                         p.model_key,
-                    )
-                });
+                    ),
+                    None => (None, None, None, None),
+                };
             let auto_approve_level = runtime_auto_approve_level.or(persisted_auto_approve_level);
+            // 模板名与创建时刻的工具收窄清单一同落库（conductor spawn 据此应用角色；
+            // model/skills 全继承父 session）。
             if let Err(e) = store
-                .create(
-                    &session_id,
-                    project_id.as_ref(),
-                    working_dir.as_deref(),
-                    auto_approve_level.as_deref(),
-                    Some(&self.parent_session_id),
-                    model_key.as_deref(),
-                )
+                .create(crate::storage::NewSession {
+                    project_id,
+                    working_dir,
+                    auto_approve_level,
+                    parent_id: Some(self.parent_session_id.clone()),
+                    model_key: parent_model_key,
+                    template: template.as_ref().map(|t| t.name.clone()),
+                    tools_block: template
+                        .as_ref()
+                        .map(|t| t.tools_block.clone())
+                        .filter(|v| !v.is_empty()),
+                    ..crate::storage::NewSession::new(session_id.clone())
+                })
                 .await
             {
                 tracing::warn!("failed to create subagent session record: {}", e);

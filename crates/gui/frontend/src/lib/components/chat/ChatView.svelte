@@ -515,6 +515,34 @@
   let infoButtonRef = $state<HTMLButtonElement | null>(null);
   let infoTooltipRef = $state<HTMLDivElement | null>(null);
 
+  // ── Session detail fetch for the info popover ──
+  // Fresh from the DB on every open (works for sub-agent sessions too, which
+  // never appear in session lists, so their template/tools_block wouldn't
+  // otherwise reach the client).
+  type SessionDetail = {
+    created_at?: string;
+    template?: string | null;
+    tools_block?: string[] | null;
+  };
+  let sessionDetail = $state<SessionDetail>({});
+
+  $effect(() => {
+    if (!showSessionInfo || !activeSession) return;
+    const id = activeSession.id;
+    sessionDetail = {};
+    void api
+      .getSession(id)
+      .then((info) => {
+        if (showSessionInfo && activeSession?.id === id)
+          sessionDetail = {
+            created_at: info.created_at,
+            template: info.template ?? null,
+            tools_block: info.tools_block ?? null,
+          };
+      })
+      .catch(() => {});
+  });
+
   // ── Copy session IDs from the info popover (local check-swap feedback) ──
   let copiedIdKey = $state<string | null>(null);
   let copyIdTimer: ReturnType<typeof setTimeout> | undefined;
@@ -819,7 +847,8 @@
                       Messages
                     </div>
                     <div class="mt-0.5 font-semibold text-foreground">
-                      {activeSession.messages.length}
+                      {activeSession.message_count ??
+                        activeSession.messages.length}
                     </div>
                   </div>
                   <div class="rounded-sm bg-secondary/35 px-2 py-1.5">
@@ -849,12 +878,6 @@
                   </div>
                 </div>
                 <div class="space-y-1.5">
-                  <div class="flex items-center gap-1.5">
-                    <span class="shrink-0 text-muted-foreground">Updated</span>
-                    <span class="min-w-0 text-foreground">
-                      {new Date(activeSession.updated_at).toLocaleString()}
-                    </span>
-                  </div>
                   <div class="flex items-center gap-1.5">
                     <span class="shrink-0 text-muted-foreground">ID</span>
                     <button
@@ -902,6 +925,57 @@
                           />
                         {/if}
                       </button>
+                    </div>
+                  {/if}
+                  <div class="flex items-center gap-1.5">
+                    <span class="shrink-0 text-muted-foreground">Updated</span>
+                    <span class="min-w-0 text-foreground">
+                      {new Date(activeSession.updated_at).toLocaleString()}
+                    </span>
+                  </div>
+                  {#if activeSession.created_at ?? sessionDetail.created_at}
+                    <div class="flex items-center gap-1.5">
+                      <span class="shrink-0 text-muted-foreground">Created</span>
+                      <span class="min-w-0 text-foreground">
+                        {new Date(
+                          sessionDetail.created_at ?? activeSession.created_at!,
+                        ).toLocaleString()}
+                      </span>
+                    </div>
+                  {/if}
+                  {#if activeSession.model_key}
+                    <div class="flex items-center gap-1.5">
+                      <span class="shrink-0 text-muted-foreground">Model</span>
+                      <span
+                        class="min-w-0 truncate rounded-sm bg-code-bg px-1.5 py-0.5 font-mono text-foreground"
+                        title={activeSession.model_key}
+                      >
+                        {activeSession.model_key}
+                      </span>
+                    </div>
+                  {/if}
+                  {#if sessionDetail.template}
+                    <div class="flex items-center gap-1.5">
+                      <span class="shrink-0 text-muted-foreground">Template</span>
+                      <span
+                        class="min-w-0 truncate rounded-sm bg-code-bg px-1.5 py-0.5 font-mono text-foreground"
+                        title={sessionDetail.template}
+                      >
+                        {sessionDetail.template}
+                      </span>
+                    </div>
+                  {/if}
+                  {#if sessionDetail.tools_block?.length}
+                    <div class="flex items-center gap-1.5">
+                      <span class="shrink-0 text-muted-foreground"
+                        >Tools blocked</span
+                      >
+                      <span
+                        class="min-w-0 truncate rounded-sm bg-code-bg px-1.5 py-0.5 font-mono text-foreground"
+                        title={sessionDetail.tools_block.join(", ")}
+                      >
+                        {sessionDetail.tools_block.join(", ")}
+                      </span>
                     </div>
                   {/if}
                 </div>

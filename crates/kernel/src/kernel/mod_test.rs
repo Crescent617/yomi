@@ -1,4 +1,5 @@
 use super::{duration_until_next_midnight, mark_user_steer};
+use crate::storage::NewSession;
 use crate::types::{ContentBlock, ImageUrl};
 
 #[test]
@@ -62,7 +63,10 @@ async fn auto_gc_collects_expired_sessions_on_start() {
     let id = crate::types::SessionId::new();
     storage
         .session_store()
-        .create(&id, None, Some("/test"), None, None, None)
+        .create(NewSession {
+            working_dir: Some("/test".into()),
+            ..NewSession::new(id.clone())
+        })
         .await
         .unwrap();
     sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-100 days') WHERE id = ?")
@@ -105,7 +109,10 @@ async fn auto_gc_disabled_by_default() {
     let id = crate::types::SessionId::new();
     storage
         .session_store()
-        .create(&id, None, Some("/test"), None, None, None)
+        .create(NewSession {
+            working_dir: Some("/test".into()),
+            ..NewSession::new(id.clone())
+        })
         .await
         .unwrap();
     sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-100 days') WHERE id = ?")

@@ -361,26 +361,32 @@ impl ToolRegistry {
             ));
         }
 
-        // Apply tool blocklist (regex patterns) — remove matching tools from the registry
+        // Apply tool blocklist (regex patterns) — remove matching tools from the registry.
+        // Patterns compile individually: a bad entry (e.g. from a workspace
+        // template's tools_block) is skipped with a warn, never drops the
+        // whole blocklist (which includes the sub-agent ask_user guard).
         if !config.tool_blocklist.is_empty() {
-            if let Ok(set) = regex::RegexSetBuilder::new(&config.tool_blocklist)
-                .case_insensitive(true)
-                .build()
-            {
-                let to_remove: Vec<String> = self
-                    .list()
-                    .into_iter()
-                    .filter(|name| set.is_match(name))
-                    .collect();
-                for name in &to_remove {
-                    self.remove(name);
-                    tracing::info!("Tool '{}' blocked by blocklist pattern", name);
-                }
-            } else {
-                tracing::warn!(
-                    "Invalid regex in tool_blocklist: {:?}",
-                    config.tool_blocklist
-                );
+            let patterns: Vec<regex::Regex> = config
+                .tool_blocklist
+                .iter()
+                .filter_map(
+                    |p| match regex::RegexBuilder::new(p).case_insensitive(true).build() {
+                        Ok(re) => Some(re),
+                        Err(e) => {
+                            tracing::warn!("invalid tool_blocklist pattern '{p}': {e}");
+                            None
+                        }
+                    },
+                )
+                .collect();
+            let to_remove: Vec<String> = self
+                .list()
+                .into_iter()
+                .filter(|name| patterns.iter().any(|re| re.is_match(name)))
+                .collect();
+            for name in &to_remove {
+                self.remove(name);
+                tracing::info!("Tool '{}' blocked by blocklist pattern", name);
             }
         }
 

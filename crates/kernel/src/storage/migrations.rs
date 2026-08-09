@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 18;
+pub const CURRENT_SCHEMA_VERSION: i64 = 21;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -252,6 +252,34 @@ const MIGRATIONS: &[Migration] = &[
                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (channel_name, container_id)
             );"],
+    },
+    Migration {
+        version: 19,
+        name: "cron_jobs_unique_name",
+        sqls: &[
+            // 存量重名：每组只保留最新（updated_at 大者，rowid 决胜）的一条，
+            // 其余改名加 #dup- 后缀——不删行，留人工清理的余地。
+            r"UPDATE cron_jobs
+               SET name = name || '#dup-' || substr(id, 1, 8)
+               WHERE EXISTS (
+                   SELECT 1 FROM cron_jobs newer
+                   WHERE newer.name = cron_jobs.name
+                     AND (newer.updated_at > cron_jobs.updated_at
+                          OR (newer.updated_at = cron_jobs.updated_at
+                              AND newer.rowid > cron_jobs.rowid))
+               );",
+            r"CREATE UNIQUE INDEX IF NOT EXISTS idx_cron_jobs_name ON cron_jobs(name);",
+        ],
+    },
+    Migration {
+        version: 20,
+        name: "add_session_template",
+        sqls: &[r"ALTER TABLE sessions ADD COLUMN template TEXT;"],
+    },
+    Migration {
+        version: 21,
+        name: "add_session_tools_block",
+        sqls: &[r"ALTER TABLE sessions ADD COLUMN tools_block TEXT;"],
     },
 ];
 

@@ -12,13 +12,13 @@
 //!
 //! ```no_run
 //! use std::path::PathBuf;
-//! use kernel::storage::StorageSet;
+//! use kernel::storage::{NewSession, StorageSet};
 //! use kernel::types::SessionId;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let storage = StorageSet::open(PathBuf::from("~/.yomi")).await?;
 //! let session_id = SessionId::new();
-//! storage.session_store().create(&session_id, None, None, None, None, None).await?;
+//! storage.session_store().create(NewSession::new(session_id)).await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -50,7 +50,7 @@ pub use pinned_session::{
     PinnedSessionDetail, PinnedSessionInfo, PinnedSessionStore, SqlitePinnedSessionStore,
 };
 pub use project::{ProjectStore, SqliteProjectStore};
-pub use session::{format_age, SessionInfo, SessionStore, SqliteSessionStore};
+pub use session::{format_age, NewSession, SessionInfo, SessionStore, SqliteSessionStore};
 pub use todo::{
     strip_system_reminders, JsonTodoStore, TodoItem, TodoListData, TodoStatus, TodoStore,
     SYSTEM_REMINDER_END, SYSTEM_REMINDER_START,

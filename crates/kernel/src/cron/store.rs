@@ -12,6 +12,8 @@ pub trait CronStore: Send + Sync {
     async fn create(&self, job: &CronJob) -> Result<(), CronError>;
     /// 获取单个任务
     async fn get(&self, id: &CronJobId) -> Result<Option<CronJob>, CronError>;
+    /// 按名字获取任务（name 全库唯一）
+    async fn get_by_name(&self, name: &str) -> Result<Option<CronJob>, CronError>;
     /// 列出任务（可按状态过滤）
     async fn list(
         &self,
@@ -68,7 +70,8 @@ impl CronStore for SqliteCronStore {
         .bind(job.expires_at.to_rfc3339())
         .bind(job.last_error.as_ref())
         .execute(&self.pool)
-        .await?;
+        .await
+        .map_err(|e| map_name_conflict(e, &job.name))?;
 
         Ok(())
     }
@@ -76,6 +79,15 @@ impl CronStore for SqliteCronStore {
     async fn get(&self, id: &CronJobId) -> Result<Option<CronJob>, CronError> {
         let row = sqlx::query_as::<_, CronJobRow>("SELECT * FROM cron_jobs WHERE id = ?")
             .bind(&*id.0)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(row.map(|r| r.into()))
+    }
+
+    async fn get_by_name(&self, name: &str) -> Result<Option<CronJob>, CronError> {
+        let row = sqlx::query_as::<_, CronJobRow>("SELECT * FROM cron_jobs WHERE name = ?")
+            .bind(name)
             .fetch_optional(&self.pool)
             .await?;
 
@@ -137,7 +149,11 @@ impl CronStore for SqliteCronStore {
         .bind(Utc::now().to_rfc3339())
         .bind(&*id.0)
         .execute(&self.pool)
-        .await?;
+        .await
+        .map_err(|e| match &input.name {
+            Some(name) => map_name_conflict(e, name),
+            None => CronError::from(e),
+        })?;
 
         Ok(result.rows_affected() > 0)
     }
@@ -245,6 +261,16 @@ impl From<CronJobRow> for CronJob {
                 .unwrap_or(NEVER_EXPIRES),
             last_error,
         }
+    }
+}
+
+/// 把 name 唯一索引冲突翻译成领域错误；其他错误原样转换。
+fn map_name_conflict(e: sqlx::Error, name: &str) -> CronError {
+    match &e {
+        sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
+            CronError::DuplicateName(name.to_string())
+        }
+        _ => CronError::from(e),
     }
 }
 

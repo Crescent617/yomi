@@ -1,5 +1,5 @@
 use super::*;
-use crate::storage::StorageSet;
+use crate::storage::{NewSession, StorageSet};
 use crate::types::SessionId;
 
 async fn setup() -> (tempfile::TempDir, StorageSet) {
@@ -18,7 +18,10 @@ async fn create_full_session(storage: &StorageSet, old: bool) -> SessionId {
 async fn create_full_session_with_id(storage: &StorageSet, id: &SessionId, old: bool) {
     storage
         .session_store()
-        .create(id, None, Some("/test"), None, None, None)
+        .create(NewSession {
+            working_dir: Some("/test".into()),
+            ..NewSession::new(id.clone())
+        })
         .await
         .unwrap();
     if old {
@@ -251,7 +254,10 @@ async fn test_gc_cascades_subagents() {
     let child_id = SessionId::new_subagent();
     storage
         .session_store()
-        .create(&child_id, None, None, None, Some(&parent_id), None)
+        .create(NewSession {
+            parent_id: Some(parent_id.clone()),
+            ..NewSession::new(child_id.clone())
+        })
         .await
         .unwrap();
     let child_msgs = storage
@@ -264,7 +270,7 @@ async fn test_gc_cascades_subagents() {
     let orphan_id = SessionId::new_subagent();
     storage
         .session_store()
-        .create(&orphan_id, None, None, None, None, None)
+        .create(NewSession::new(orphan_id.clone()))
         .await
         .unwrap();
     age_session(&storage, &orphan_id).await;
@@ -326,7 +332,7 @@ async fn test_gc_orphan_sweep() {
     let live_id = SessionId::new();
     storage
         .session_store()
-        .create(&live_id, None, None, None, None, None)
+        .create(NewSession::new(live_id.clone()))
         .await
         .unwrap();
     let live_msg = sessions_dir.join(format!("{}.jsonl", live_id.0));
@@ -382,7 +388,7 @@ async fn test_gc_days_minimum_enforced() {
     let id = SessionId::new();
     storage
         .session_store()
-        .create(&id, None, None, None, None, None)
+        .create(NewSession::new(id.clone()))
         .await
         .unwrap();
     sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-12 hours') WHERE id = ?")
