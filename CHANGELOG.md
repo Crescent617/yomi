@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- 内置四个角色（planner/verifier/explorer/reviewer）的系统提示改为英文（指令遵循率更优，有 Multi-IF 等研究支撑）；报告输出仍固定为中文，结论锚点行（VERDICT:/REVIEW:）不变。
+
 ## [0.7.62] - 2026-08-09
 
 ### Changed
