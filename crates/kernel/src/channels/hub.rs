@@ -2999,7 +2999,8 @@ enum ChannelCommand {
 }
 
 /// A runtime override mutation (`/mention`, `/threads`): set the
-/// override, or clear it to fall back to the channel config.
+/// override, or clear it to fall back to the inherited value (thread →
+/// chat → channel config for `/mention`; channel config for `/threads`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OverrideMode {
     On,
