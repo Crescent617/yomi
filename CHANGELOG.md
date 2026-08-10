@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.68] - 2026-08-10
+
+### Changed
+- GUI 各面板（Agents/Automation/Favorites/Debug/Config/Usage）头部的缩进、高度与按钮样式统一。
+
+### Fixed
+- Agents 面板中切换活跃会话时，未保存的模板编辑会先弹出丢弃确认，不再被静默丢弃。
+
 ## [0.7.67] - 2026-08-10
 
 ### Added
