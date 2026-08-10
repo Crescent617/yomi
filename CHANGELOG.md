@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.66] - 2026-08-10
+
+### Fixed
+- 飞书文档底部评论区的全文评论：同一文档的所有评论现在共享一个会话，不再每条评论各开一个导致上下文断裂；划词评论仍保持每个评论串一个会话。
+
 ## [0.7.65] - 2026-08-10
 
 ### Added
