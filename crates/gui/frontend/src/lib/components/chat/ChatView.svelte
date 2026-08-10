@@ -933,7 +933,8 @@
                   </div>
                   {#if activeSession.created_at ?? sessionDetail.created_at}
                     <div class="flex items-center gap-1.5">
-                      <span class="shrink-0 text-muted-foreground">Created</span>
+                      <span class="shrink-0 text-muted-foreground">Created</span
+                      >
                       <span class="min-w-0 text-foreground">
                         {new Date(
                           sessionDetail.created_at ?? activeSession.created_at!,
@@ -954,7 +955,9 @@
                   {/if}
                   {#if sessionDetail.template}
                     <div class="flex items-center gap-1.5">
-                      <span class="shrink-0 text-muted-foreground">Template</span>
+                      <span class="shrink-0 text-muted-foreground"
+                        >Template</span
+                      >
                       <span
                         class="min-w-0 truncate rounded-sm bg-code-bg px-1.5 py-0.5 font-mono text-foreground"
                         title={sessionDetail.template}

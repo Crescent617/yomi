@@ -7,7 +7,7 @@
   import InlineLoadingStatus from "../ui/InlineLoadingStatus.svelte";
   import PageLoading from "../ui/PageLoading.svelte";
   import UsagePageSkeleton from "./UsagePageSkeleton.svelte";
-  import SidebarToggle from "./SidebarToggle.svelte";
+  import PanelHeader from "./PanelHeader.svelte";
   import {
     ArrowUpRight,
     ArrowDownLeft,
@@ -619,25 +619,16 @@
 </script>
 
 <div class="flex-1 flex flex-col min-w-0 overflow-y-auto">
-  <!-- Header: full-width so the nav toggle hugs the page edge on narrow
-       screens; the title row re-centers with the content at lg+ -->
-  <div
-    class="flex h-14 shrink-0 items-center gap-2 border-b border-border px-2 lg:px-0"
-  >
-    {#if onToggleLeftPanel}
-      <SidebarToggle class="lg:hidden" onclick={() => onToggleLeftPanel()} />
-    {/if}
-    <div
-      class="flex min-w-0 items-center gap-2 lg:container lg:mx-auto lg:px-6"
-    >
-      <TrendingUp class="w-5 h-5 text-primary" />
-      <h2 class="text-lg font-semibold">Usage</h2>
-      <span class="text-xs text-muted-foreground ml-1">· last 365 days</span>
+  <PanelHeader title="Usage" icon={TrendingUp} {onToggleLeftPanel}>
+    {#snippet meta()}
+      <span class="hidden text-xs text-muted-foreground sm:inline"
+        >last 365 days</span
+      >
       {#if loading && config}
         <InlineLoadingStatus label="Refreshing" />
       {/if}
-    </div>
-  </div>
+    {/snippet}
+  </PanelHeader>
 
   <div class="container mx-auto px-4 lg:px-6">
     {#if loading && !config}

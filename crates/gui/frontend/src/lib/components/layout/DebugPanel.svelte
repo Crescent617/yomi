@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Bug, ChevronUp, Copy, RefreshCw, WrapText } from "lucide-svelte";
-  import SidebarToggle from "./SidebarToggle.svelte";
+  import PanelHeader from "./PanelHeader.svelte";
   import { sessionState, showNotification } from "../../state.svelte";
   import {
     errorMessage,
@@ -153,37 +153,32 @@
 </script>
 
 <div class="flex h-full min-w-0 flex-1 flex-col bg-background">
-  <header
-    class="flex h-14 shrink-0 items-center gap-2 border-b border-border px-4 lg:px-6"
-  >
-    {#if onToggleLeftPanel}
-      <SidebarToggle class="lg:hidden" onclick={onToggleLeftPanel} />
-    {/if}
-    <Bug class="size-5 shrink-0 text-primary" />
-    <h1 class="truncate text-lg font-semibold">Debug</h1>
-    <div class="ml-3 flex rounded-md bg-secondary/60 p-0.5">
-      <button
-        type="button"
-        class="rounded px-2.5 py-1 text-xs transition-colors {source ===
-        'session'
-          ? 'bg-background text-foreground shadow-sm'
-          : 'text-muted-foreground hover:text-foreground'}"
-        onclick={() => selectSource("session")}
-      >
-        Session JSONL
-      </button>
-      <button
-        type="button"
-        class="rounded px-2.5 py-1 text-xs transition-colors {source === 'logs'
-          ? 'bg-background text-foreground shadow-sm'
-          : 'text-muted-foreground hover:text-foreground'}"
-        onclick={() => selectSource("logs")}
-      >
-        GUI Logs
-      </button>
-    </div>
-
-    <div class="ml-auto flex items-center gap-1.5">
+  <PanelHeader title="Debug" icon={Bug} {onToggleLeftPanel}>
+    {#snippet meta()}
+      <div class="ml-3 flex rounded-md bg-secondary/60 p-0.5">
+        <button
+          type="button"
+          class="rounded px-2.5 py-1 text-xs transition-colors {source ===
+          'session'
+            ? 'bg-background text-foreground shadow-sm'
+            : 'text-muted-foreground hover:text-foreground'}"
+          onclick={() => selectSource("session")}
+        >
+          Session JSONL
+        </button>
+        <button
+          type="button"
+          class="rounded px-2.5 py-1 text-xs transition-colors {source ===
+          'logs'
+            ? 'bg-background text-foreground shadow-sm'
+            : 'text-muted-foreground hover:text-foreground'}"
+          onclick={() => selectSource("logs")}
+        >
+          GUI Logs
+        </button>
+      </div>
+    {/snippet}
+    {#snippet actions()}
       {#if source === "logs"}
         <select
           class="max-w-48 rounded border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus:border-primary"
@@ -232,8 +227,8 @@
       >
         <RefreshCw class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}" />
       </button>
-    </div>
-  </header>
+    {/snippet}
+  </PanelHeader>
 
   <div
     class="flex h-8 shrink-0 items-center gap-3 border-b border-border bg-card/50 px-3 font-mono text-[10px] text-muted-foreground"

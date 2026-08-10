@@ -30,7 +30,7 @@
   import { formatMessageTime } from "../../utils";
   import TextBlock from "../chat/TextBlock.svelte";
   import ConfirmDialog from "../ui/ConfirmDialog.svelte";
-  import SidebarToggle from "./SidebarToggle.svelte";
+  import PanelHeader from "./PanelHeader.svelte";
 
   interface Props {
     onToggleLeftPanel?: () => void;
@@ -189,21 +189,18 @@
 </script>
 
 <div class="flex h-full w-full flex-col">
-  <header
-    class="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 lg:px-6"
+  <PanelHeader
+    title="Favorites"
+    icon={Star}
+    iconClass="text-warning fill-current"
+    {onToggleLeftPanel}
   >
-    <div class="flex min-w-0 items-center gap-2">
-      {#if onToggleLeftPanel}
-        <SidebarToggle class="lg:hidden" onclick={onToggleLeftPanel} />
-      {/if}
-      <Star class="size-5 shrink-0 text-warning" fill="currentColor" />
-      <h1 class="truncate text-lg font-semibold">Favorites</h1>
+    {#snippet meta()}
       <span class="hidden text-xs text-muted-foreground sm:inline">
         {visibleItems.length} saved
       </span>
-    </div>
-
-    <div class="flex shrink-0 items-center gap-1.5">
+    {/snippet}
+    {#snippet actions()}
       <div class="relative">
         <Search
           class="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
@@ -227,8 +224,8 @@
       >
         <RefreshCw class="size-4 {refreshing ? 'animate-spin' : ''}" />
       </button>
-    </div>
-  </header>
+    {/snippet}
+  </PanelHeader>
 
   <div class="flex min-h-0 flex-1 overflow-hidden">
     <aside

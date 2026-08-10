@@ -4,9 +4,8 @@
   import { sessionState } from "../../state.svelte";
   import { pushToast } from "../../toast.svelte";
   import ConfirmDialog from "../ui/ConfirmDialog.svelte";
-  import InlineLoadingStatus from "../ui/InlineLoadingStatus.svelte";
   import LoadingSkeleton from "../ui/LoadingSkeleton.svelte";
-  import SidebarToggle from "../layout/SidebarToggle.svelte";
+  import PanelHeader from "../layout/PanelHeader.svelte";
   import { Bot, Plus, RefreshCw, Trash2, Copy } from "lucide-svelte";
   import {
     checkTemplateName,
@@ -180,42 +179,36 @@
 </script>
 
 <div class="flex-1 flex flex-col min-w-0 overflow-hidden">
-  <!-- Header -->
-  <div
-    class="flex h-14 shrink-0 items-center gap-2 border-b border-border px-4"
-  >
-    {#if onToggleLeftPanel}
-      <SidebarToggle class="lg:hidden" onclick={() => onToggleLeftPanel()} />
-    {/if}
-    <Bot class="w-5 h-5 text-primary" />
-    <h2 class="text-lg font-semibold">Agent Templates</h2>
-    <span class="text-xs text-muted-foreground ml-1">
-      · role prompts for subagent spawn
-    </span>
-    <div class="flex-1"></div>
-    {#if loading && templates.length > 0}
-      <InlineLoadingStatus label="Refreshing" />
-    {/if}
-    <button
-      type="button"
-      onclick={() => startCreate()}
-      class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border hover:bg-secondary transition-colors text-sm"
-    >
-      <Plus size={14} />
-      New
-    </button>
-    <button
-      type="button"
-      onclick={() => {
-        loading = true;
-        load();
-      }}
-      class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border hover:bg-secondary transition-colors text-sm"
-      aria-label="Refresh templates"
-    >
-      <RefreshCw size={14} />
-    </button>
-  </div>
+  <PanelHeader title="Agent Templates" icon={Bot} {onToggleLeftPanel}>
+    {#snippet meta()}
+      <span class="hidden text-xs text-muted-foreground sm:inline"
+        >role prompts for subagent spawn</span
+      >
+    {/snippet}
+    {#snippet actions()}
+      <button
+        type="button"
+        onclick={() => {
+          loading = true;
+          load();
+        }}
+        disabled={loading}
+        class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+        title="Refresh templates"
+        aria-label="Refresh templates"
+      >
+        <RefreshCw class="size-4 {loading ? 'animate-spin' : ''}" />
+      </button>
+      <button
+        type="button"
+        onclick={() => startCreate()}
+        class="inline-flex h-8 items-center gap-1.5 rounded-md border border-primary/30 bg-primary/10 px-3 text-xs font-medium text-primary transition-colors hover:border-primary/40 hover:bg-primary/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <Plus class="size-4" />
+        New
+      </button>
+    {/snippet}
+  </PanelHeader>
 
   <div class="flex-1 flex min-h-0">
     <!-- List -->

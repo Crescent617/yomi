@@ -22,7 +22,7 @@
   import { isNeverExpires, type CronJob } from "../../api";
   import ConfirmDialog from "../ui/ConfirmDialog.svelte";
   import CreateJobModal from "./CreateJobModal.svelte";
-  import SidebarToggle from "../layout/SidebarToggle.svelte";
+  import PanelHeader from "../layout/PanelHeader.svelte";
 
   interface Props {
     onToggleLeftPanel?: () => void;
@@ -127,21 +127,13 @@
 </script>
 
 <div class="flex h-full w-full flex-col">
-  <header
-    class="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 lg:px-6"
-  >
-    <div class="flex min-w-0 items-center gap-2">
-      {#if onToggleLeftPanel}
-        <SidebarToggle class="lg:hidden" onclick={onToggleLeftPanel} />
-      {/if}
-      <CalendarClock class="size-5 shrink-0 text-primary" />
-      <h1 class="truncate text-lg font-semibold">Automation</h1>
+  <PanelHeader title="Automation" icon={CalendarClock} {onToggleLeftPanel}>
+    {#snippet meta()}
       <span class="hidden text-xs text-muted-foreground sm:inline"
         >{automationStore.jobs.length} tasks</span
       >
-    </div>
-
-    <div class="flex shrink-0 items-center gap-1.5">
+    {/snippet}
+    {#snippet actions()}
       <button
         type="button"
         onclick={() => automationStore.load()}
@@ -162,8 +154,8 @@
         <Plus class="size-4" />
         New Task
       </button>
-    </div>
-  </header>
+    {/snippet}
+  </PanelHeader>
 
   <div class="flex min-h-0 flex-1 overflow-hidden">
     <aside

@@ -115,9 +115,9 @@ describe("agent tool rendering", () => {
         }),
       ),
     ).toBe("reviewer · async");
-    expect(
-      extraMeta("agent", JSON.stringify({ description: "do work" })),
-    ).toBe("");
+    expect(extraMeta("agent", JSON.stringify({ description: "do work" }))).toBe(
+      "",
+    );
   });
 });
 
