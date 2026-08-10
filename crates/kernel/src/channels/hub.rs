@@ -2676,7 +2676,10 @@ fn reply_anchor(msg: &ChannelMessage, reply_in_thread: bool) -> Option<String> {
 /// `reply_in_thread` answer opens a fresh thread anchored at it.
 fn session_mapping_key(msg: &ChannelMessage, chat_id: &str, reply_in_thread: bool) -> String {
     // Doc-comment sessions key by the comment thread — one session per
-    // comment group, regardless of chat-oriented rules (there is no chat).
+    // comment group, except whole-document comments which carry the
+    // WHOLE_COMMENT_ID sentinel (set in comment.rs) and thereby share
+    // one session per document — regardless of chat-oriented rules
+    // (there is no chat).
     if let Some(dc) = &msg.doc_comment {
         return super::doc_comment_mapping_key(&dc.file_type, &dc.file_token, &dc.comment_id);
     }

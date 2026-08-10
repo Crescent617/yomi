@@ -192,6 +192,12 @@ fn doc_comment_mapping_key_round_trip() {
     assert_eq!(parsed.file_type, "docx");
     assert_eq!(parsed.file_token, "tok123");
     assert_eq!(parsed.comment_id, "c_1");
+
+    // The shared whole-document-comment session keys by document.
+    let key = doc_comment_mapping_key("docx", "tok123", WHOLE_COMMENT_ID);
+    assert_eq!(key, "doc:docx:tok123:whole");
+    let parsed = parse_doc_comment_mapping_key(&key).expect("parses");
+    assert_eq!(parsed.comment_id, WHOLE_COMMENT_ID);
 }
 
 #[test]

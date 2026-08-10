@@ -1111,7 +1111,7 @@ async fn fetch_doc_comment_parses_quote_and_replies() {
         .unwrap()
         .expect("comment found");
 
-    assert!(!detail.is_whole);
+    assert_eq!(detail.is_whole, Some(false));
     assert_eq!(detail.quote.as_deref(), Some("引用原文段落"));
     assert_eq!(detail.replies.len(), 2);
     assert_eq!(detail.replies[0].reply_id, "r_1");
@@ -1203,6 +1203,43 @@ async fn reply_doc_comment_falls_back_to_new_comment_for_whole_comment() {
     let req = stub.find("POST", "/open-apis/drive/v1/files/doxcnABC123/comments?");
     assert_eq!(
         StubFeishu::body_json(&req)["reply_list"]["replies"][0]["content"]["elements"][0]
+            ["text_run"]["text"],
+        "回复内容"
+    );
+}
+
+#[tokio::test]
+async fn reply_doc_comment_with_whole_sentinel_creates_new_comment_directly() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+
+    let id = adapter
+        .reply_doc_comment(
+            "doxcnABC123",
+            "docx",
+            super::super::WHOLE_COMMENT_ID,
+            "回复内容",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(id.as_deref(), Some("c_new"));
+    let requests = stub.requests.lock().unwrap();
+    // The doomed thread-reply attempt is skipped for the sentinel.
+    assert!(
+        requests
+            .iter()
+            .all(|(_, p, _)| !p.contains("/comments/whole/replies")),
+        "no reply attempt against the sentinel: {requests:?}"
+    );
+    let req = requests
+        .iter()
+        .find(|(m, p, _)| {
+            m == "POST" && p.starts_with("/open-apis/drive/v1/files/doxcnABC123/comments?")
+        })
+        .expect("create-comment called");
+    assert_eq!(
+        StubFeishu::body_json(req)["reply_list"]["replies"][0]["content"]["elements"][0]
             ["text_run"]["text"],
         "回复内容"
     );

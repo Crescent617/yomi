@@ -858,7 +858,10 @@ impl PlatformAdapter for FeishuAdapter {
 
     /// refer: <https://open.feishu.cn/document/server-docs/docs/CommentAPI/reply>
     /// Whole comments take no thread replies (platform error 1069302) —
-    /// fall back to posting a new whole comment as the answer.
+    /// the answer goes out as a new whole comment. The
+    /// [`super::WHOLE_COMMENT_ID`] sentinel (the shared whole-comment
+    /// session's delivery target) skips the doomed reply attempt and
+    /// creates the new comment directly.
     async fn reply_doc_comment(
         &self,
         file_token: &str,
@@ -870,6 +873,11 @@ impl PlatformAdapter for FeishuAdapter {
         let body = json!({
             "content": { "elements": [{ "type": "text_run", "text_run": { "text": text } }] }
         });
+        if comment_id == super::WHOLE_COMMENT_ID {
+            return self
+                .create_whole_comment(&token, file_token, file_type, &body)
+                .await;
+        }
         let url = format!(
             "{}/open-apis/drive/v1/files/{file_token}/comments/{comment_id}/replies?file_type={file_type}&user_id_type=open_id",
             self.base_url
@@ -887,21 +895,9 @@ impl PlatformAdapter for FeishuAdapter {
             .await
             .map_err(|e| api_err("comment reply parse", e))?;
         if resp["code"].as_i64() == Some(WHOLE_COMMENT_NO_REPLY) {
-            // The create-comment API wraps the reply in a `reply_list`
-            // (E2E-verified: a bare `{content}` body is rejected with
-            // 9499 "Missing required parameter: ReplyList").
-            let create_body = json!({ "reply_list": { "replies": [body] } });
-            let resp = self
-                .api_post(
-                    &token,
-                    &format!(
-                        "{}/open-apis/drive/v1/files/{file_token}/comments?file_type={file_type}&user_id_type=open_id",
-                        self.base_url
-                    ),
-                    create_body,
-                )
-                .await?;
-            return Ok(resp_data_str(&resp, "comment_id"));
+            return self
+                .create_whole_comment(&token, file_token, file_type, &body)
+                .await;
         }
         let resp = check_api_resp(resp)?;
         Ok(resp_data_str(&resp, "reply_id").or_else(|| resp_data_str(&resp, "comment_id")))
@@ -1514,6 +1510,32 @@ impl FeishuAdapter {
             .unwrap_or_default()
     }
 
+    /// Post a new whole-document comment carrying `body` (a reply-shaped
+    /// content payload) and return its comment id.
+    async fn create_whole_comment(
+        &self,
+        token: &str,
+        file_token: &str,
+        file_type: &str,
+        body: &serde_json::Value,
+    ) -> Result<Option<String>, ChannelError> {
+        // The create-comment API wraps the reply in a `reply_list`
+        // (E2E-verified: a bare `{content}` body is rejected with
+        // 9499 "Missing required parameter: ReplyList").
+        let create_body = json!({ "reply_list": { "replies": [body] } });
+        let resp = self
+            .api_post(
+                token,
+                &format!(
+                    "{}/open-apis/drive/v1/files/{file_token}/comments?file_type={file_type}&user_id_type=open_id",
+                    self.base_url
+                ),
+                create_body,
+            )
+            .await?;
+        Ok(resp_data_str(&resp, "comment_id"))
+    }
+
     /// The working body of `fetch_doc_comment` (split out so the caller
     /// can wrap the whole thing in one 5s timeout).
     async fn fetch_doc_comment_inner(
@@ -1536,9 +1558,9 @@ impl FeishuAdapter {
             ("user_id_type", "open_id".to_string()),
             ("page_size", "50".to_string()),
         ];
-        // The timeline (list endpoint) is required; quote/is_whole
-        // (batch_query) are best-effort — they are static once the comment
-        // exists, so its read lag is harmless.
+        // The timeline (list endpoint) is required; quote/is_whole ride
+        // batch_query (its only source). Both lag the event — the caller
+        // retries while the trigger reply or is_whole is unreadable.
         let (first_page, batch_resp) = tokio::join!(
             self.api_get(token, &replies_url, &query),
             self.api_post(token, &batch_url, json!({ "comment_ids": [comment_id] })),
@@ -1592,10 +1614,11 @@ impl FeishuAdapter {
             })
             .collect();
         Ok(Some(super::DocCommentDetail {
+            // None = batch_query has not caught up with the event yet
+            // (the caller retries — the session mapping keys off this).
             is_whole: batch_item
                 .as_ref()
-                .and_then(|item| item["is_whole"].as_bool())
-                .unwrap_or_default(),
+                .map(|item| item["is_whole"].as_bool().unwrap_or_default()),
             quote: batch_item.as_ref().and_then(|item| {
                 item["quote"]
                     .as_str()

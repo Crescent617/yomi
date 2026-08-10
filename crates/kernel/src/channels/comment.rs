@@ -153,6 +153,17 @@ pub(super) async fn handle_doc_comment_added(
         commenter = %notice.commenter_open_id,
         "doc comment accepted"
     );
+    // Whole-document comments share ONE session per document: the doc's
+    // bottom comment area is a single conversation, each new whole
+    // comment merely gets a fresh platform thread id. The routing key
+    // therefore carries the WHOLE_COMMENT_ID sentinel instead of the
+    // real comment id (the real id stays in the meta header for
+    // provenance). `is_whole` unknown (fetch degraded) keys per comment
+    // thread — the safer split, partial comments are the majority.
+    let routing_comment_id = match detail.as_ref().and_then(|d| d.is_whole) {
+        Some(true) => super::WHOLE_COMMENT_ID,
+        _ => &notice.comment_id,
+    };
     let msg = ChannelMessage {
         external_chat_id: String::new(),
         external_user_id: notice.commenter_open_id.clone(),
@@ -170,7 +181,7 @@ pub(super) async fn handle_doc_comment_added(
         doc_comment: Some(DocCommentRef {
             file_token: notice.file_token.clone(),
             file_type: notice.file_type.clone(),
-            comment_id: notice.comment_id.clone(),
+            comment_id: routing_comment_id.to_string(),
         }),
     };
     if dispatch_tx
@@ -261,10 +272,13 @@ fn assemble_message(
 }
 
 /// Fetch the comment, retrying briefly until the **triggering reply**
-/// shows up: `batch_query` reads lag the event by up to a few seconds
-/// (E2E-verified — without the retry we once injected the *previous*
-/// reply's text). Degrading to the thread's latest reply after the
-/// retries is better than dropping the trigger.
+/// shows up and `is_whole` is known: the timeline read lags the event by
+/// up to a few seconds (E2E-verified — without the retry we once
+/// injected the *previous* reply's text), and `batch_query` (the only
+/// `is_whole` source) lags too — the session-mapping decision (shared
+/// whole-comment session vs. per-thread) must not race it. Degrading to
+/// the thread's latest reply / a per-thread key after the retries is
+/// better than dropping the trigger.
 async fn fetch_detail_with_trigger(
     adapter: &dyn PlatformAdapter,
     notice: &DocCommentNotice,
@@ -279,15 +293,24 @@ async fn fetch_detail_with_trigger(
         let detail = adapter
             .fetch_doc_comment(&notice.file_token, &notice.file_type, &notice.comment_id)
             .await;
-        let found = notice.reply_id.as_deref().is_none_or(
+        let reply_found = notice.reply_id.as_deref().is_none_or(
             |rid| matches!(&detail, Ok(Some(d)) if d.replies.iter().any(|r| r.reply_id == rid)),
         );
-        if found || attempt >= RETRY_DELAYS.len() {
-            if !found {
+        // is_whole unknown (batch_query lag) — keep waiting; a deleted
+        // comment reads as Ok(None), which reply_found already gates.
+        let meta_found = !matches!(&detail, Ok(Some(d)) if d.is_whole.is_none());
+        if (reply_found && meta_found) || attempt >= RETRY_DELAYS.len() {
+            if !reply_found {
                 warn!(
                     comment_id = %notice.comment_id,
                     reply_id = notice.reply_id.as_deref().unwrap_or(""),
                     "triggering reply still not readable after retries, using latest"
+                );
+            }
+            if !meta_found {
+                warn!(
+                    comment_id = %notice.comment_id,
+                    "is_whole still not readable after retries, keying per comment thread"
                 );
             }
             return detail;

@@ -105,7 +105,7 @@ fn lite(
 
 fn detail_with_replies(replies: Vec<(&str, &str)>) -> DocCommentDetail {
     DocCommentDetail {
-        is_whole: false,
+        is_whole: Some(false),
         quote: Some("被划词引用的原文段落".to_string()),
         replies: replies
             .into_iter()
@@ -291,6 +291,83 @@ async fn retries_fetch_until_triggering_reply_is_visible() {
     assert_eq!(*adapter.fetch_calls.lock().await, 2, "one retry");
 }
 
+#[tokio::test]
+async fn retries_fetch_until_is_whole_is_visible() {
+    let config = feishu_config();
+    // The triggering reply is readable at once, but batch_query lags
+    // (is_whole unknown) — the session mapping must wait for it.
+    let mut stale = detail_with_replies(vec![("r_2", "@bot 新内容")]);
+    stale.is_whole = None;
+    let mut fresh = detail_with_replies(vec![("r_2", "@bot 新内容")]);
+    fresh.is_whole = Some(true);
+    let adapter = Arc::new(CommentMockAdapter::new(None));
+    {
+        let mut q = adapter.fetch_queue.lock().await;
+        q.push_back(Some(stale));
+        q.push_back(Some(fresh));
+    }
+    let mut rx = handle(&config, &adapter, notice()).await;
+    let (msg, _gate) = rx.try_recv().expect("trigger dispatched");
+
+    assert_eq!(*adapter.fetch_calls.lock().await, 2, "one retry for meta");
+    assert_eq!(
+        msg.doc_comment
+            .as_ref()
+            .expect("doc_comment set")
+            .comment_id,
+        super::super::WHOLE_COMMENT_ID,
+        "whole comment routes to the shared per-document session"
+    );
+}
+
+// Real time (not start_paused): sqlx pool connect trips PoolTimedOut
+// under a paused clock — the bounded retries cost ~3.5s.
+#[tokio::test]
+async fn is_whole_staying_unknown_degrades_to_per_thread_key() {
+    let config = feishu_config();
+    // batch_query never catches up: the trigger still dispatches (better
+    // than dropping) but keys per comment thread — the safer split.
+    let mut detail = detail_with_replies(vec![("r_2", "@bot 看看")]);
+    detail.is_whole = None;
+    let adapter = Arc::new(CommentMockAdapter::new(Some(detail)));
+    let mut rx = handle(&config, &adapter, notice()).await;
+    let (msg, _gate) = rx.try_recv().expect("trigger dispatched");
+
+    assert_eq!(
+        msg.doc_comment
+            .as_ref()
+            .expect("doc_comment set")
+            .comment_id,
+        "7123456789",
+        "unknown is_whole keys per comment thread"
+    );
+    assert_eq!(
+        *adapter.fetch_calls.lock().await,
+        4,
+        "initial + bounded retries"
+    );
+}
+
+#[tokio::test]
+async fn whole_comment_keys_session_by_document() {
+    let config = feishu_config();
+    let mut detail = detail_with_replies(vec![("r_2", "@bot 看看全文")]);
+    detail.is_whole = Some(true);
+    detail.quote = None;
+    let adapter = Arc::new(CommentMockAdapter::new(Some(detail)));
+    let mut rx = handle(&config, &adapter, notice()).await;
+    let (msg, _gate) = rx.try_recv().expect("trigger dispatched");
+
+    // Routing carries the sentinel — one session per document for whole
+    // comments — while the meta header keeps the real comment id.
+    let dc = msg.doc_comment.as_ref().expect("doc_comment set");
+    assert_eq!(dc.comment_id, super::super::WHOLE_COMMENT_ID);
+    let ContentBlock::Text { text } = msg.content.last().expect("meta block") else {
+        panic!("expected text block");
+    };
+    assert!(text.contains("[comment_id: 7123456789]"), "{text}");
+}
+
 // ── Ack reaction ───────────────────────────────────────────────────
 
 #[tokio::test]
@@ -328,7 +405,7 @@ async fn filtered_comment_fires_no_reaction() {
 async fn thread_history_excludes_bot_and_triggering_reply() {
     let config = feishu_config();
     let detail = DocCommentDetail {
-        is_whole: false,
+        is_whole: Some(false),
         quote: None,
         replies: vec![
             lite("r_0", "ou_alice", 1_700_000_000, "早期讨论", false),
@@ -360,7 +437,7 @@ async fn thread_history_cursor_dedups_across_triggers() {
     let config = feishu_config();
     let store = test_store().await;
     let detail = || DocCommentDetail {
-        is_whole: false,
+        is_whole: Some(false),
         quote: None,
         replies: vec![
             lite("r_0", "ou_alice", 1_700_000_000, "早期讨论", false),
@@ -389,7 +466,7 @@ async fn command_trigger_skips_history_and_leaves_cursor_alone() {
     {
         let mut q = adapter.fetch_queue.lock().await;
         q.push_back(Some(DocCommentDetail {
-            is_whole: false,
+            is_whole: Some(false),
             quote: None,
             replies: vec![
                 lite("r_0", "ou_alice", 1_700_000_000, "早期讨论", false),
@@ -397,7 +474,7 @@ async fn command_trigger_skips_history_and_leaves_cursor_alone() {
             ],
         }));
         q.push_back(Some(DocCommentDetail {
-            is_whole: false,
+            is_whole: Some(false),
             quote: None,
             replies: vec![
                 lite("r_0", "ou_alice", 1_700_000_000, "早期讨论", false),

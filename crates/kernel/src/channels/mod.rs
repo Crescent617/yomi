@@ -333,6 +333,11 @@ pub struct DocCommentNotice {
 /// from and where the session's replies go. (The triggering reply id
 /// lives only on `DocCommentNotice` and in the meta header — delivery
 /// always targets the comment thread.)
+///
+/// For **whole-document comments** the `comment_id` is the
+/// [`WHOLE_COMMENT_ID`] sentinel instead of a real id: every whole
+/// comment of one document shares a single session (the doc's bottom
+/// comment area behaves like one conversation).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocCommentRef {
     pub file_token: String,
@@ -345,7 +350,10 @@ pub struct DocCommentRef {
 #[derive(Debug, Clone)]
 pub struct DocCommentDetail {
     /// Whole-document comment (vs. partial/anchored to a text selection).
-    pub is_whole: bool,
+    /// `None` when `batch_query` has not caught up with the event yet
+    /// (read lag) — the session-mapping decision needs this, so the
+    /// caller retries while it is unknown.
+    pub is_whole: Option<bool>,
     /// The quoted source text (partial comments only).
     pub quote: Option<String>,
     /// The comment thread's replies, in thread order.
@@ -366,11 +374,21 @@ pub struct DocCommentReplyLite {
     pub is_from_bot: bool,
 }
 
+/// Sentinel `comment_id` segment for the shared whole-document-comment
+/// session: whole comments (the doc's bottom comment area) each get a
+/// fresh platform comment thread, but they belong to ONE session per
+/// document. Platform comment ids are numeric, so "whole" never
+/// collides. Delivery resolves it to posting a new whole comment (whole
+/// comments take no thread replies — platform error 1069302).
+pub(crate) const WHOLE_COMMENT_ID: &str = "whole";
+
 /// The session mapping key for a doc-comment session:
 /// `doc:{file_type}:{file_token}:{comment_id}` — one session per comment
-/// thread. The key doubles as the persisted delivery target:
-/// `find_routing_by_session` parses it back (no extra schema column).
-/// None of the segments can contain `:` (platform ids are alphanumeric).
+/// thread, or per **document** for whole comments (the `comment_id`
+/// segment is then the [`WHOLE_COMMENT_ID`] sentinel). The key doubles
+/// as the persisted delivery target: `find_routing_by_session` parses it
+/// back (no extra schema column). None of the segments can contain `:`
+/// (platform ids are alphanumeric).
 pub(crate) fn doc_comment_mapping_key(
     file_type: &str,
     file_token: &str,
@@ -381,6 +399,8 @@ pub(crate) fn doc_comment_mapping_key(
 
 /// Parse a doc-comment mapping key back into the delivery target. Strict
 /// four-segment shape; anything else is a plain chat/thread key → `None`.
+/// The `comment_id` may be the [`WHOLE_COMMENT_ID`] sentinel (the shared
+/// whole-comment session) — delivery handles it.
 pub(crate) fn parse_doc_comment_mapping_key(key: &str) -> Option<DocCommentRef> {
     let mut parts = key.split(':');
     let (Some("doc"), Some(file_type), Some(file_token), Some(comment_id), None) = (

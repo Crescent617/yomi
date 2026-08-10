@@ -1997,6 +1997,15 @@ fn mapping_key_doc_comment_keys_by_comment_thread() {
     // One session per comment thread — regardless of reply_in_thread.
     assert_eq!(session_mapping_key(&msg, "", false), "doc:docx:tok123:c_1");
     assert_eq!(session_mapping_key(&msg, "", true), "doc:docx:tok123:c_1");
+
+    // Whole-document comments (sentinel id, set in comment.rs) share one
+    // session per document.
+    let mut msg = doc_comment_msg();
+    msg.doc_comment.as_mut().unwrap().comment_id = crate::channels::WHOLE_COMMENT_ID.to_string();
+    assert_eq!(
+        session_mapping_key(&msg, "", false),
+        "doc:docx:tok123:whole"
+    );
 }
 
 #[test]
