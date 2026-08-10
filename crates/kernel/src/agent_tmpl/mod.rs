@@ -188,7 +188,14 @@ pub async fn save(root: &Path, name: &str, body: &str) -> std::io::Result<PathBu
 /// 删除 `<root>/<name>/` 目录（builtin 不在磁盘上，天然不可达）。
 pub async fn delete(root: &Path, name: &str) -> std::io::Result<()> {
     validate_name(name).map_err(invalid_input)?;
-    tokio::fs::remove_dir_all(root.join(name)).await
+    tokio::fs::remove_dir_all(root.join(name))
+        .await
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => {
+                invalid_input(format!("template '{name}' does not exist at this scope"))
+            }
+            _ => e,
+        })
 }
 
 /// 错误信息用的可用模板概览：`planner (builtin), my-role (workspace), ...`

@@ -985,8 +985,13 @@ impl Kernel {
         Ok(skills)
     }
 
-    /// Resolve the cwd used to resolve workspace-layer assets of a session:
-    /// session `working_dir` → project dir → `<data_dir>/workspace`.
+    /// Resolve the cwd used to resolve workspace-layer agent templates of a
+    /// session: session `working_dir` → `<data_dir>/workspace`.
+    ///
+    /// Deliberately mirrors the subagent spawn resolution
+    /// (`tools/subagent.rs`, `kernel/conductor.rs`), which does NOT fall back
+    /// to the project dir — the panel must show what spawn sees.
+    /// (`list_session_skills` uses a different, project-aware chain.)
     /// `None` session means no workspace context.
     async fn session_asset_cwd(
         &self,
@@ -1003,13 +1008,11 @@ impl Kernel {
                 .ok_or_else(|| SessionError::NotFound {
                     session_id: sid.0.to_string(),
                 })?;
-        let working_dir = info.working_dir.map(std::path::PathBuf::from);
-        let project_dir = match &info.project_id {
-            Some(pid) => self.project_store.get(pid).await?.map(|p| p.dir),
-            None => None,
+        let cwd = match info.working_dir {
+            Some(dir) => std::path::PathBuf::from(dir),
+            None => self.data_dir().await.join("workspace"),
         };
-        let fallback = self.data_dir().await.join("workspace");
-        Ok(Some(working_dir.or(project_dir).unwrap_or(fallback)))
+        Ok(Some(cwd))
     }
 
     /// List effective agent templates (builtin → global → workspace merged),

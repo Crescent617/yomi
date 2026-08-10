@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import * as api from "../../api";
   import type { AgentTemplateInfo, AgentTemplateScope } from "../../api";
   import { sessionState } from "../../state.svelte";
@@ -9,16 +8,17 @@
   import LoadingSkeleton from "../ui/LoadingSkeleton.svelte";
   import SidebarToggle from "../layout/SidebarToggle.svelte";
   import { Bot, Plus, RefreshCw, Trash2, Copy } from "lucide-svelte";
+  import {
+    checkTemplateName,
+    createDraftDirty,
+    NEW_TEMPLATE_STUB,
+  } from "./template-utils";
 
   let {
     onToggleLeftPanel,
   }: {
     onToggleLeftPanel?: () => void;
   } = $props();
-
-  const NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
-  const NEW_STUB =
-    "You are a specialist. Describe the role's responsibilities, principles, and output expectations here.\n";
 
   let templates = $state<AgentTemplateInfo[]>([]);
   let loading = $state(true);
@@ -41,7 +41,11 @@
 
   const sessionId = $derived(sessionState.activeSessionId ?? undefined);
   const selected = $derived(templates.find((t) => t.name === selectedName));
-  const dirty = $derived(selected !== undefined && draft !== selected?.body);
+  const dirty = $derived(
+    creating
+      ? createDraftDirty(newName, draft)
+      : selected !== undefined && draft !== selected?.body,
+  );
 
   const groups = $derived.by(() => {
     const by: Record<string, AgentTemplateInfo[]> = {
@@ -53,21 +57,9 @@
     return by;
   });
 
-  const nameError = $derived.by(() => {
-    if (!creating) return "";
-    if (!NAME_RE.test(newName))
-      return "Use kebab-case: ^[a-z0-9][a-z0-9-]{0,63}$";
-    const hit = templates.find((t) => t.name === newName);
-    if (hit && hit.source === newScope)
-      return `"${newName}" already exists in ${newScope}`;
-    return "";
-  });
-
-  const overrideNote = $derived.by(() => {
-    if (!creating || nameError) return "";
-    const hit = templates.find((t) => t.name === newName);
-    return hit ? `Will override the ${hit.source} template` : "";
-  });
+  const nameCheck = $derived(checkTemplateName(newName, templates, newScope));
+  const nameError = $derived(creating ? nameCheck.error : "");
+  const overrideNote = $derived(creating ? nameCheck.override : "");
 
   async function load() {
     try {
@@ -80,7 +72,21 @@
     }
   }
 
-  onMount(load);
+  // Load on mount and whenever the active session (workspace context)
+  // changes; a context switch drops the selection tied to the old context.
+  let prevSessionId: string | undefined | null = null;
+  $effect(() => {
+    if (prevSessionId === sessionId) return;
+    const switched = prevSessionId !== null;
+    prevSessionId = sessionId;
+    if (switched) {
+      creating = false;
+      selectedName = null;
+      draft = "";
+      actionError = "";
+    }
+    load();
+  });
 
   /** Guard against losing an unsaved draft when switching selection. */
   function guarded(action: () => void) {
@@ -107,7 +113,7 @@
       creating = true;
       newName = prefill?.name ?? "";
       newScope = "global";
-      draft = prefill?.body ?? NEW_STUB;
+      draft = prefill?.body ?? NEW_TEMPLATE_STUB;
     });
   }
 
@@ -118,12 +124,16 @@
       : selected?.source === "workspace"
         ? "workspace"
         : "global";
-    if (!name || !draft.trim()) {
-      actionError = "Body must not be empty";
-      return;
-    }
     if (creating && nameError) {
       actionError = nameError;
+      return;
+    }
+    if (!name) {
+      actionError = "Name is required";
+      return;
+    }
+    if (!draft.trim()) {
+      actionError = "Body must not be empty";
       return;
     }
     try {

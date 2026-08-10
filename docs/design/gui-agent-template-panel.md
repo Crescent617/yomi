@@ -6,6 +6,8 @@
 > 2. **无 `path` 字段**、无搜索框；dirty guard 用复用的 `ConfirmDialog`（切模板时确认丢弃）。
 > 3. `TemplateScope` 只有 `global`/`workspace`，builtin 只读 + "Duplicate to Global"。
 > 4. wire 协议版本 bump 到 24；`dispatcher_test.rs` 新增 `test_agent_templates_wire_round_trip` 全链路测试。
+> 5. **review 后修正**：`session_asset_cwd` 对齐 spawn 解析（`working_dir` → `<data_dir>/workspace`，**无 project dir 步骤**）——原稿「抽 helper 与 `list_session_skills` 共用」作废，两者规则本就不同（skills 解析有 project dir 回落，spawn 没有），强行共用反而互相污染。
+> 6. 前端纯逻辑（名字校验/覆盖提示/草稿脏判定）抽至 `agents/template-utils.ts` 并配 vitest；面板随活跃会话切换自动 reload 并重置选择。
 >
 > 保留的核心决策不变：独立 ActivityBar 面板、session 语境解析 workspace 层、全部操作走 wire。
 
