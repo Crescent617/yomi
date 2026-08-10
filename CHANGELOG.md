@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.64] - 2026-08-10
+
+### Added
+- GUI 与 TUI 的工具调用块：`agent` 工具指定 `template` 时显示所用角色模板名（如 `reviewer`），便于一眼看出子 agent 的角色。
+
 ## [0.7.63] - 2026-08-09
 
 ### Changed
