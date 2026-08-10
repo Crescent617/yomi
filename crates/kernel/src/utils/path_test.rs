@@ -41,3 +41,20 @@ fn test_default_skill_folders() {
     assert_eq!(folders[0], PathBuf::from("/data/skills"));
     assert!(folders[1].to_string_lossy().ends_with("/.agents/skills"));
 }
+
+#[test]
+fn session_workspace_dir_prefers_working_dir() {
+    let data = PathBuf::from("/data");
+    assert_eq!(
+        session_workspace_dir(&data, Some(PathBuf::from("/proj"))),
+        PathBuf::from("/proj")
+    );
+}
+
+#[test]
+fn session_workspace_dir_falls_back_to_data_workspace() {
+    assert_eq!(
+        session_workspace_dir(std::path::Path::new("/data"), None),
+        PathBuf::from("/data/workspace")
+    );
+}

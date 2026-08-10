@@ -30,6 +30,14 @@ pub fn default_skill_folders(data_dir: &std::path::Path) -> Vec<PathBuf> {
     vec![data_dir.join("skills"), expand_tilde("~/.agents/skills")]
 }
 
+/// Session workspace cwd rule: the session's `working_dir` when set, else
+/// `<data_dir>/workspace`. Subagent spawn (`conductor`, `subagent` tool) and
+/// workspace-layer asset resolution (agent templates) must all agree on
+/// this rule.
+pub fn session_workspace_dir(data_dir: &std::path::Path, working_dir: Option<PathBuf>) -> PathBuf {
+    working_dir.unwrap_or_else(|| data_dir.join("workspace"))
+}
+
 #[cfg(test)]
 #[path = "path_test.rs"]
 mod tests;

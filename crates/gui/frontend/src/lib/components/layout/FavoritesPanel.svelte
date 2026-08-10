@@ -30,6 +30,7 @@
   import { formatMessageTime } from "../../utils";
   import TextBlock from "../chat/TextBlock.svelte";
   import ConfirmDialog from "../ui/ConfirmDialog.svelte";
+  import IconButton from "../ui/IconButton.svelte";
   import PanelHeader from "./PanelHeader.svelte";
 
   interface Props {
@@ -183,9 +184,6 @@
       deleting = false;
     }
   }
-
-  const iconBtnClass =
-    "inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50";
 </script>
 
 <div class="flex h-full w-full flex-col">
@@ -214,16 +212,13 @@
           class="h-8 w-40 rounded-md border border-input bg-background pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring sm:w-56"
         />
       </div>
-      <button
-        type="button"
-        onclick={refresh}
+      <IconButton
+        label="Refresh favorites"
+        icon={RefreshCw}
+        spinning={refreshing}
         disabled={refreshing}
-        class={iconBtnClass}
-        title="Refresh favorites"
-        aria-label="Refresh favorites"
-      >
-        <RefreshCw class="size-4 {refreshing ? 'animate-spin' : ''}" />
-      </button>
+        onclick={refresh}
+      />
     {/snippet}
   </PanelHeader>
 
@@ -318,15 +313,12 @@
           class="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 lg:px-6"
         >
           <div class="flex min-w-0 items-center gap-2">
-            <button
-              type="button"
+            <IconButton
+              label="Back to list"
+              icon={ArrowLeft}
+              class="lg:hidden"
               onclick={() => (selectedId = null)}
-              class="{iconBtnClass} lg:hidden"
-              title="Back to list"
-              aria-label="Back to list"
-            >
-              <ArrowLeft class="size-4" />
-            </button>
+            />
             <div class="min-w-0">
               <h2 class="truncate text-base font-semibold">
                 {selected.note || firstLine(selected)}
@@ -346,46 +338,28 @@
           </div>
 
           <div class="flex shrink-0 items-center gap-1">
-            <button
-              type="button"
+            <IconButton
+              label={copied ? "Copied" : "Copy as markdown"}
+              icon={copied ? Check : Copy}
+              iconClass={copied ? "text-success" : ""}
               onclick={copySelected}
-              class={iconBtnClass}
-              title={copied ? "Copied" : "Copy as markdown"}
-              aria-label={copied ? "Copied" : "Copy as markdown"}
-            >
-              {#if copied}
-                <Check class="size-4 text-success" />
-              {:else}
-                <Copy class="size-4" />
-              {/if}
-            </button>
-            <button
-              type="button"
+            />
+            <IconButton
+              label="Share as image"
+              icon={Share2}
               onclick={shareSelected}
-              class={iconBtnClass}
-              title="Share as image"
-              aria-label="Share as image"
-            >
-              <Share2 class="size-4" />
-            </button>
-            <button
-              type="button"
+            />
+            <IconButton
+              label="Open source session"
+              icon={ExternalLink}
               onclick={jumpToSource}
-              class={iconBtnClass}
-              title="Open source session"
-              aria-label="Open source session"
-            >
-              <ExternalLink class="size-4" />
-            </button>
-            <button
-              type="button"
+            />
+            <IconButton
+              label="Remove favorite"
+              icon={Trash2}
+              tone="destructive"
               onclick={() => (deleteTarget = selected)}
-              class="{iconBtnClass} hover:bg-destructive/10 hover:text-destructive"
-              title="Remove favorite"
-              aria-label="Remove favorite"
-            >
-              <Trash2 class="size-4" />
-            </button>
+            />
           </div>
         </header>
 

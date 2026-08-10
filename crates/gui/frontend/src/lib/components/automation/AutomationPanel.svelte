@@ -21,6 +21,7 @@
   import { automationStore } from "../../automation.svelte";
   import { isNeverExpires, type CronJob } from "../../api";
   import ConfirmDialog from "../ui/ConfirmDialog.svelte";
+  import IconButton from "../ui/IconButton.svelte";
   import CreateJobModal from "./CreateJobModal.svelte";
   import PanelHeader from "../layout/PanelHeader.svelte";
 
@@ -134,18 +135,13 @@
       >
     {/snippet}
     {#snippet actions()}
-      <button
-        type="button"
-        onclick={() => automationStore.load()}
+      <IconButton
+        label="Refresh tasks"
+        icon={RefreshCw}
+        spinning={automationStore.loading}
         disabled={automationStore.loading}
-        class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
-        title="Refresh tasks"
-        aria-label="Refresh tasks"
-      >
-        <RefreshCw
-          class="size-4 {automationStore.loading ? 'animate-spin' : ''}"
-        />
-      </button>
+        onclick={() => automationStore.load()}
+      />
       <button
         type="button"
         onclick={() => automationStore.openCreate()}
@@ -303,58 +299,38 @@
           </div>
 
           <div class="flex shrink-0 items-center gap-1">
-            <button
-              type="button"
+            <IconButton
+              label="Run now"
+              icon={isPending(job.id, "run") ? RefreshCw : Play}
+              spinning={isPending(job.id, "run")}
+              tone="primary"
+              disabled={pendingAction !== null}
               onclick={() => runJob(job)}
+            />
+            <IconButton
+              label={job.status === "active" ? "Pause task" : "Activate task"}
+              icon={isPending(job.id, "toggle")
+                ? RefreshCw
+                : job.status === "active"
+                  ? Pause
+                  : RotateCcw}
+              spinning={isPending(job.id, "toggle")}
               disabled={pendingAction !== null}
-              class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
-              title="Run now"
-              aria-label="Run now"
-            >
-              {#if isPending(job.id, "run")}
-                <RefreshCw class="size-4 animate-spin" />
-              {:else}
-                <Play class="size-4" />
-              {/if}
-            </button>
-            <button
-              type="button"
               onclick={() => toggleJob(job)}
+            />
+            <IconButton
+              label="Edit task"
+              icon={Pencil}
               disabled={pendingAction !== null}
-              class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
-              title={job.status === "active" ? "Pause task" : "Activate task"}
-              aria-label={job.status === "active"
-                ? "Pause task"
-                : "Activate task"}
-            >
-              {#if isPending(job.id, "toggle")}
-                <RefreshCw class="size-4 animate-spin" />
-              {:else if job.status === "active"}
-                <Pause class="size-4" />
-              {:else}
-                <RotateCcw class="size-4" />
-              {/if}
-            </button>
-            <button
-              type="button"
               onclick={() => automationStore.openEdit(job.id)}
+            />
+            <IconButton
+              label="Delete task"
+              icon={Trash2}
+              tone="destructive"
               disabled={pendingAction !== null}
-              class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
-              title="Edit task"
-              aria-label="Edit task"
-            >
-              <Pencil class="size-4" />
-            </button>
-            <button
-              type="button"
               onclick={() => (deleteTarget = job)}
-              disabled={pendingAction !== null}
-              class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
-              title="Delete task"
-              aria-label="Delete task"
-            >
-              <Trash2 class="size-4" />
-            </button>
+            />
           </div>
         </div>
 

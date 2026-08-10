@@ -202,7 +202,10 @@ impl Kernel {
             .ok()
             .flatten()
             .and_then(|info| info.working_dir);
-        stored.map_or_else(|| self.agent_shared.data_dir.join("workspace"), Into::into)
+        crate::utils::path::session_workspace_dir(
+            &self.agent_shared.data_dir,
+            stored.map(Into::into),
+        )
     }
 
     /// Get usage store from `agent_shared`
@@ -1008,10 +1011,10 @@ impl Kernel {
                 .ok_or_else(|| SessionError::NotFound {
                     session_id: sid.0.to_string(),
                 })?;
-        let cwd = match info.working_dir {
-            Some(dir) => std::path::PathBuf::from(dir),
-            None => self.data_dir().await.join("workspace"),
-        };
+        let cwd = crate::utils::path::session_workspace_dir(
+            &self.data_dir().await,
+            info.working_dir.map(std::path::PathBuf::from),
+        );
         Ok(Some(cwd))
     }
 

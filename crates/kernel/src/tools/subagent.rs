@@ -364,14 +364,12 @@ Brief the agent like a smart colleague who just walked in — it has no context.
         let template = match template_name.as_deref() {
             Some(name) => {
                 // 与 conductor 的 spawn 语义对齐：working_dir 缺省回落 data_dir/workspace。
-                let dir = parent.as_ref().map_or_else(
-                    || self.shared.data_dir.join("workspace"),
-                    |p| {
-                        p.working_dir.clone().map_or_else(
-                            || self.shared.data_dir.join("workspace"),
-                            std::path::PathBuf::from,
-                        )
-                    },
+                let dir = crate::utils::path::session_workspace_dir(
+                    &self.shared.data_dir,
+                    parent
+                        .as_ref()
+                        .and_then(|p| p.working_dir.clone())
+                        .map(std::path::PathBuf::from),
                 );
                 let agents_dir = crate::agent_tmpl::global_dir(&self.shared.data_dir);
                 match crate::agent_tmpl::resolve(name, &agents_dir, Some(dir.as_path())).await {

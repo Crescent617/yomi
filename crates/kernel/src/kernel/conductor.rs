@@ -405,7 +405,10 @@ impl Conductor {
             .and_then(|i| i.working_dir.clone())
             .map(std::path::PathBuf::from);
 
-        let cwd = working_dir.or_else(|| Some(self.data_dir.join("workspace")));
+        let cwd = Some(crate::utils::path::session_workspace_dir(
+            &self.data_dir,
+            working_dir,
+        ));
 
         // Create file state store
         let file_state_store = match Self::create_file_state_store(&sid.0, &self.data_dir).await {

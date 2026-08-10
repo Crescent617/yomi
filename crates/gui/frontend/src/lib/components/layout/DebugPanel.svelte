@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Bug, ChevronUp, Copy, RefreshCw, WrapText } from "lucide-svelte";
+  import IconButton from "../ui/IconButton.svelte";
   import PanelHeader from "./PanelHeader.svelte";
   import { sessionState, showNotification } from "../../state.svelte";
   import {
@@ -193,40 +194,25 @@
           {/each}
         </select>
       {/if}
-      <button
-        type="button"
-        class="rounded p-1.5 transition-colors {wrapLines
-          ? 'bg-secondary text-foreground'
-          : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}"
-        title={wrapLines ? "Disable line wrapping" : "Enable line wrapping"}
-        aria-label={wrapLines
-          ? "Disable line wrapping"
-          : "Enable line wrapping"}
-        aria-pressed={wrapLines}
+      <IconButton
+        label={wrapLines ? "Disable line wrapping" : "Enable line wrapping"}
+        icon={WrapText}
+        pressed={wrapLines}
         onclick={() => (wrapLines = !wrapLines)}
-      >
-        <WrapText class="h-3.5 w-3.5" />
-      </button>
-      <button
-        type="button"
-        class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50"
-        title="Copy visible content"
-        aria-label="Copy visible content"
+      />
+      <IconButton
+        label="Copy visible content"
+        icon={Copy}
         disabled={!content}
         onclick={copyContent}
-      >
-        <Copy class="h-3.5 w-3.5" />
-      </button>
-      <button
-        type="button"
-        class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50"
-        title="Refresh"
-        aria-label="Refresh"
+      />
+      <IconButton
+        label="Refresh"
+        icon={RefreshCw}
+        spinning={loading}
         disabled={loading}
         onclick={refresh}
-      >
-        <RefreshCw class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}" />
-      </button>
+      />
     {/snippet}
   </PanelHeader>
 

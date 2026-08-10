@@ -5,6 +5,7 @@
   import { pushToast } from "../../toast.svelte";
   import ConfirmDialog from "../ui/ConfirmDialog.svelte";
   import LoadingSkeleton from "../ui/LoadingSkeleton.svelte";
+  import IconButton from "../ui/IconButton.svelte";
   import PanelHeader from "../layout/PanelHeader.svelte";
   import { Bot, Plus, RefreshCw, Trash2, Copy } from "lucide-svelte";
   import {
@@ -79,10 +80,13 @@
     const switched = prevSessionId !== null;
     prevSessionId = sessionId;
     if (switched) {
-      creating = false;
-      selectedName = null;
-      draft = "";
-      actionError = "";
+      // Route through the same dirty guard as manual selection changes.
+      guarded(() => {
+        creating = false;
+        selectedName = null;
+        draft = "";
+        actionError = "";
+      });
     }
     load();
   });
@@ -186,19 +190,16 @@
       >
     {/snippet}
     {#snippet actions()}
-      <button
-        type="button"
+      <IconButton
+        label="Refresh templates"
+        icon={RefreshCw}
+        spinning={loading}
+        disabled={loading}
         onclick={() => {
           loading = true;
           load();
         }}
-        disabled={loading}
-        class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
-        title="Refresh templates"
-        aria-label="Refresh templates"
-      >
-        <RefreshCw class="size-4 {loading ? 'animate-spin' : ''}" />
-      </button>
+      />
       <button
         type="button"
         onclick={() => startCreate()}
