@@ -314,6 +314,57 @@ impl ChannelStore for SqliteChannelStore {
         Ok(())
     }
 
+    async fn get_rit_override(&self, channel_name: &str, chat_id: &str) -> Result<Option<bool>> {
+        let row: Option<(bool,)> = sqlx::query_as(
+            "SELECT reply_in_thread FROM channel_rit_overrides
+             WHERE channel_name = ? AND chat_id = ?",
+        )
+        .bind(channel_name)
+        .bind(chat_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("Failed to get rit override: {e}")))?;
+
+        Ok(row.map(|r| r.0))
+    }
+
+    async fn set_rit_override(
+        &self,
+        channel_name: &str,
+        chat_id: &str,
+        reply_in_thread: bool,
+    ) -> Result<()> {
+        sqlx::query(
+            r"INSERT INTO channel_rit_overrides (channel_name, chat_id, reply_in_thread, updated_at)
+               VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(channel_name, chat_id) DO UPDATE SET
+               reply_in_thread = excluded.reply_in_thread,
+               updated_at = CURRENT_TIMESTAMP",
+        )
+        .bind(channel_name)
+        .bind(chat_id)
+        .bind(reply_in_thread)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("Failed to set rit override: {e}")))?;
+
+        Ok(())
+    }
+
+    async fn clear_rit_override(&self, channel_name: &str, chat_id: &str) -> Result<()> {
+        sqlx::query(
+            "DELETE FROM channel_rit_overrides
+             WHERE channel_name = ? AND chat_id = ?",
+        )
+        .bind(channel_name)
+        .bind(chat_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("Failed to clear rit override: {e}")))?;
+
+        Ok(())
+    }
+
     async fn save_perm_request(
         &self,
         channel_name: &str,

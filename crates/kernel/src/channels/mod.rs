@@ -553,6 +553,36 @@ pub trait ChannelStore: Send + Sync {
         Ok(())
     }
 
+    /// The chat-level `reply_in_thread` override, set at runtime via
+    /// `/threads on|off`. `None` = no override (the channel config
+    /// applies). Chat-scoped only: threads are a product of the mode,
+    /// not an override target.
+    async fn get_rit_override(
+        &self,
+        channel_name: &str,
+        chat_id: &str,
+    ) -> KernelResult<Option<bool>> {
+        let _ = (channel_name, chat_id);
+        Ok(None)
+    }
+
+    /// Set or replace the chat's `reply_in_thread` override.
+    async fn set_rit_override(
+        &self,
+        channel_name: &str,
+        chat_id: &str,
+        reply_in_thread: bool,
+    ) -> KernelResult<()> {
+        let _ = (channel_name, chat_id, reply_in_thread);
+        Ok(())
+    }
+
+    /// Remove the chat's override, falling back to the channel config.
+    async fn clear_rit_override(&self, channel_name: &str, chat_id: &str) -> KernelResult<()> {
+        let _ = (channel_name, chat_id);
+        Ok(())
+    }
+
     /// Persist a doc-permission application as a pending approval row.
     /// Deduplicates on (channel, file, permission, applicant sets) while a
     /// pending row exists — ws redelivery carries no unique event id, so

@@ -901,15 +901,15 @@ fn test_parse_thread_command() {
         parse_channel_command(Some("/thread@yomi_bot hi there")),
         ChannelCommand::Thread(text) if text == "hi there"
     ));
-    // Text is required — a bare command is a usage error, and prefix
-    // lookalikes report as unknown commands.
+    // Text is required — a bare command is a usage error; `/threads`
+    // (the reply-in-thread override) parses as its own command.
     assert!(matches!(
         parse_channel_command(Some("/thread")),
         ChannelCommand::InvalidThreadCommand
     ));
     assert!(matches!(
         parse_channel_command(Some("/threads hi")),
-        ChannelCommand::Unknown(_)
+        ChannelCommand::InvalidThreadsCommand
     ));
     assert!(HELP_TEXT.contains("/thread"));
 }
@@ -4519,15 +4519,15 @@ fn mention_command_parse() {
     ));
     assert!(matches!(
         parse_channel_command(Some("/mention on")),
-        ChannelCommand::Mention(Some(MentionMode::On))
+        ChannelCommand::Mention(Some(OverrideMode::On))
     ));
     assert!(matches!(
         parse_channel_command(Some("/mention off")),
-        ChannelCommand::Mention(Some(MentionMode::Off))
+        ChannelCommand::Mention(Some(OverrideMode::Off))
     ));
     assert!(matches!(
         parse_channel_command(Some("/mention reset")),
-        ChannelCommand::Mention(Some(MentionMode::Reset))
+        ChannelCommand::Mention(Some(OverrideMode::Reset))
     ));
     assert!(matches!(
         parse_channel_command(Some("/mention loudly")),
@@ -4543,6 +4543,161 @@ fn mention_command_parse() {
         ChannelCommand::Unknown(_)
     ));
     assert!(HELP_TEXT.contains("/mention"));
+}
+
+#[test]
+fn threads_command_parse() {
+    assert!(matches!(
+        parse_channel_command(Some("/threads")),
+        ChannelCommand::Threads(None)
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/threads on")),
+        ChannelCommand::Threads(Some(OverrideMode::On))
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/threads off")),
+        ChannelCommand::Threads(Some(OverrideMode::Off))
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/threads reset")),
+        ChannelCommand::Threads(Some(OverrideMode::Reset))
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/threads loudly")),
+        ChannelCommand::InvalidThreadsCommand
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/threads off now")),
+        ChannelCommand::InvalidThreadsCommand
+    ));
+    assert!(HELP_TEXT.contains("/threads"));
+}
+
+/// The chat override wins over the channel config; other chats and a
+/// cleared override fall back to it.
+#[tokio::test]
+async fn rit_override_resolution() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        ..Default::default()
+    };
+    assert!(!config.reply_in_thread);
+    assert!(!resolve_reply_in_thread(&store, &config, "oc_1").await);
+
+    store.set_rit_override("mock", "oc_1", true).await.unwrap();
+    assert!(resolve_reply_in_thread(&store, &config, "oc_1").await);
+    // Other chats are unaffected.
+    assert!(!resolve_reply_in_thread(&store, &config, "oc_2").await);
+
+    store.clear_rit_override("mock", "oc_1").await.unwrap();
+    assert!(!resolve_reply_in_thread(&store, &config, "oc_1").await);
+}
+
+/// `/threads` end to end: admin gate, chat scoping, query/reset texts,
+/// DM refusal — and the override flips the session mapping mode.
+#[tokio::test]
+async fn threads_command_query_set_reset() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "app".to_string(),
+            app_secret: "secret".to_string(),
+        },
+        require_mention: true,
+        admin_users: vec!["ou_admin".to_string()],
+        ..Default::default()
+    };
+    let msg = |user: &str, text: &str, group: bool| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: user.to_string(),
+        external_message_id: Some("m1".to_string()),
+        is_mention: true,
+        raw_text: Some(text.to_string()),
+        content: vec![ContentBlock::Text {
+            text: text.to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: group,
+        create_time: Some(1000),
+        doc_comment: None,
+    };
+    let handle = |m: ChannelMessage| {
+        handle_incoming_message(
+            "mock",
+            &config,
+            &store,
+            Arc::clone(&kernel),
+            m,
+            &obs,
+            &adapter,
+        )
+    };
+
+    // Non-admin mutation: denied, nothing persisted.
+    let reply = handle(msg("ou_random", "/threads on", true)).await.unwrap();
+    assert_eq!(
+        reply.as_deref(),
+        Some("permission denied：你不在 admin_users 中。")
+    );
+    assert_eq!(store.get_rit_override("mock", "oc_1").await.unwrap(), None);
+
+    // Admin sets the chat override on.
+    let reply = handle(msg("ou_admin", "/threads on", true)).await.unwrap();
+    let text = reply.unwrap();
+    assert!(text.contains("`on`"), "ack: {text}");
+    assert_eq!(
+        store.get_rit_override("mock", "oc_1").await.unwrap(),
+        Some(true)
+    );
+    // …and the mapping mode follows: a top-level group message now keys
+    // by its own message id instead of the chat id.
+    assert!(resolve_reply_in_thread(&store, &config, "oc_1").await);
+
+    // Query reports the override and its source.
+    let reply = handle(msg("ou_random", "/threads", true)).await.unwrap();
+    let text = reply.unwrap();
+    assert!(text.contains("`on`"), "query: {text}");
+    assert!(text.contains("chat override"), "source: {text}");
+
+    // A thread message still queries/mutates the chat scope.
+    let mut thread_msg = msg("ou_random", "/threads", true);
+    thread_msg.thread_id = Some("omt_1".to_string());
+    let reply = handle(thread_msg).await.unwrap();
+    assert!(reply.unwrap().contains("chat override"));
+
+    // Reset: back to the channel default.
+    let reply = handle(msg("ou_admin", "/threads reset", true))
+        .await
+        .unwrap();
+    let text = reply.unwrap();
+    assert!(text.contains("channel default"), "reset ack: {text}");
+    assert_eq!(store.get_rit_override("mock", "oc_1").await.unwrap(), None);
+    assert!(!resolve_reply_in_thread(&store, &config, "oc_1").await);
+
+    // DMs need no override and persist nothing.
+    let reply = handle(msg("ou_admin", "/threads on", false)).await.unwrap();
+    assert!(reply.unwrap().contains("DM"));
+    assert_eq!(store.get_rit_override("mock", "oc_1").await.unwrap(), None);
 }
 
 /// `/mention` end to end: admin gate, container scoping, query/reset

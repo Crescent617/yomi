@@ -229,7 +229,7 @@ app_secret = "..."
 | `blocked_chats` | string[] | 屏蔽的聊天 ID；被屏蔽对象完全静默处理（无任何反馈） | `[]` |
 | `blocked_users` | string[] | 屏蔽的用户 ID；被屏蔽对象完全静默处理（无任何反馈） | `[]` |
 | `require_mention` | boolean | 是否需要 @ 触发 | `true` |
-| `reply_in_thread` | boolean | 群聊中回复是否锚定到触发消息的 thread（Feishu 话题回复，Telegram 引用回复）；私聊不受影响。关闭时也可在飞书（群聊或私聊）对单条消息用 `/thread <文本>` 命令一次性让回复开新话题 | `false` |
+| `reply_in_thread` | boolean | 群聊中回复是否锚定到触发消息的 thread（Feishu 话题回复，Telegram 引用回复）；私聊不受影响。关闭时也可在飞书（群聊或私聊）对单条消息用 `/thread <文本>` 命令一次性让回复开新话题；运行中可用 `/threads on\|off\|reset` 命令按群覆盖此默认值（admin） | `false` |
 | `auto_approve_level` | string | 通道级别自动批准：`safe`/`caution`/`dangerous` | `safe` |
 | `observability` | boolean | 运行可观测性（状态卡片 + 运行回执记录）；关闭后退回"收到确认 + 最终回复"的旧行为 | `true` |
 | `tool_trace` | boolean | 最终回复气泡附带运行轨迹（工具调用 + 中间过程文本）：卡片平台（Feishu，需客户端 V7.9+）以可折叠面板呈现，其他平台以纯文本行附在正文后；关闭后最终回复仅为纯文本 | `true` |

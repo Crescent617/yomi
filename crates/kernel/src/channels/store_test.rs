@@ -262,6 +262,61 @@ async fn test_mention_override_round_trip() {
         .unwrap();
 }
 
+#[tokio::test]
+async fn test_rit_override_round_trip() {
+    let pool = create_test_pool().await;
+    let store = SqliteChannelStore::new(pool);
+
+    assert_eq!(
+        store.get_rit_override("feishu", "oc_1").await.unwrap(),
+        None
+    );
+
+    store
+        .set_rit_override("feishu", "oc_1", true)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_rit_override("feishu", "oc_1").await.unwrap(),
+        Some(true)
+    );
+
+    // Upsert replaces; chats and channels are independent keys.
+    store
+        .set_rit_override("feishu", "oc_1", false)
+        .await
+        .unwrap();
+    store
+        .set_rit_override("feishu", "oc_2", true)
+        .await
+        .unwrap();
+    store
+        .set_rit_override("telegram", "oc_1", true)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_rit_override("feishu", "oc_1").await.unwrap(),
+        Some(false)
+    );
+    assert_eq!(
+        store.get_rit_override("feishu", "oc_2").await.unwrap(),
+        Some(true)
+    );
+
+    // Clear removes the row; other keys are untouched.
+    store.clear_rit_override("feishu", "oc_1").await.unwrap();
+    assert_eq!(
+        store.get_rit_override("feishu", "oc_1").await.unwrap(),
+        None
+    );
+    assert_eq!(
+        store.get_rit_override("feishu", "oc_2").await.unwrap(),
+        Some(true)
+    );
+    // Clearing a missing key is a no-op.
+    store.clear_rit_override("feishu", "oc_1").await.unwrap();
+}
+
 // ── Doc permission requests ────────────────────────────────────────
 
 fn perm_req() -> DocPermissionRequest {

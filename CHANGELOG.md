@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- 新增频道命令 `/threads`：查看本群的 `reply_in_thread` 生效值；`/threads on|off|reset` 按群覆盖频道默认值（admin），只影响之后的消息，已有话题会话不受影响。
+
 ## [0.7.64] - 2026-08-10
 
 ### Added

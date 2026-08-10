@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 21;
+pub const CURRENT_SCHEMA_VERSION: i64 = 22;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -282,6 +282,17 @@ const MIGRATIONS: &[Migration] = &[
         // 见 docs/design/agent-harness.md P1；重新启用时 git 历史可溯）
         name: "add_session_tools_block",
         sqls: &[r"ALTER TABLE sessions ADD COLUMN tools_block TEXT;"],
+    },
+    Migration {
+        version: 22,
+        name: "add_channel_rit_overrides",
+        sqls: &[r"CREATE TABLE channel_rit_overrides (
+                channel_name TEXT NOT NULL,
+                chat_id TEXT NOT NULL,
+                reply_in_thread INTEGER NOT NULL,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (channel_name, chat_id)
+            );"],
     },
 ];
 

@@ -328,8 +328,13 @@ impl ChannelHub {
                         }
                         match handled {
                             Ok(Some(reply_text)) => {
-                                let reply_msg_id =
-                                    reply_anchor(&msg, config_dispatch.reply_in_thread);
+                                let rit = resolve_reply_in_thread(
+                                    &store_dispatch,
+                                    &config_dispatch,
+                                    &msg.external_chat_id,
+                                )
+                                .await;
+                                let reply_msg_id = reply_anchor(&msg, rit);
                                 let adapter = Arc::clone(&adapter_dispatch);
                                 tokio::spawn(async move {
                                     if let Err(e) = send_command_reply(
@@ -1330,9 +1335,9 @@ async fn handle_incoming_message(
     adapter: &Arc<dyn PlatformAdapter>,
 ) -> Result<Option<String>> {
     let chat_id = msg.external_chat_id.clone();
-    let reply_msg_id = reply_anchor(&msg, config.reply_in_thread);
-    let mapping_key =
-        effective_mapping_key(store, channel_name, &msg, &chat_id, config.reply_in_thread).await?;
+    let rit = resolve_reply_in_thread(store, config, &chat_id).await;
+    let reply_msg_id = reply_anchor(&msg, rit);
+    let mapping_key = effective_mapping_key(store, channel_name, &msg, &chat_id, rit).await?;
     tracing::debug!(
         channel = %channel_name,
         chat_id = %chat_id,
@@ -1498,7 +1503,7 @@ async fn handle_incoming_message(
             // Chat level — or a thread without a session: switch the chat
             // session instead and let the thread inherit it (also keeps
             // thread mappings conversation-only).
-            let chat_level = is_chat_level_message(&msg, config.reply_in_thread)
+            let chat_level = is_chat_level_message(&msg, rit)
                 || store
                     .find_mapping(channel_name, &mapping_key)
                     .await?
@@ -1551,10 +1556,17 @@ async fn handle_incoming_message(
             "Usage: `/mention` to show the current setting; `/mention on|off|reset` to change it (admin)."
                 .to_string(),
         )),
+        ChannelCommand::Threads(mode) => {
+            handle_threads_command(config, store, &msg, mode).await.map(Some)
+        }
+        ChannelCommand::InvalidThreadsCommand => Ok(Some(
+            "Usage: `/threads` to show the current setting; `/threads on|off|reset` to change it (admin)."
+                .to_string(),
+        )),
         ChannelCommand::Info => {
             // Chat-level messages show the chat session, in-thread ones
             // the thread's. Read-only: never creates a session or mapping.
-            let chat_level = is_chat_level_message(&msg, config.reply_in_thread);
+            let chat_level = is_chat_level_message(&msg, rit);
             let key = if chat_level { &chat_id } else { &mapping_key };
             let Some(sid) = store.find_mapping(channel_name, key).await? else {
                 let model_key =
@@ -1635,7 +1647,7 @@ async fn handle_incoming_message(
                 ));
             }
             let scope_key =
-                subscription_scope_key(store, channel_name, &msg, &chat_id, config.reply_in_thread)
+                subscription_scope_key(store, channel_name, &msg, &chat_id, rit)
                     .await?;
             store
                 .save_run_subscription(
@@ -1659,7 +1671,7 @@ async fn handle_incoming_message(
             // In reply_in_thread group chats every top-level trigger opens
             // its own thread, so a non-recursive chat subscription can
             // never match a run — say so instead of silently no-oping.
-            let rit_hint = if !in_thread && !recursive && config.reply_in_thread && msg.is_group {
+            let rit_hint = if !in_thread && !recursive && rit && msg.is_group {
                 " Note: this chat replies in threads — every new question starts its own thread, which this subscription does NOT cover; use `/subscribe -r` to get notified here."
             } else {
                 ""
@@ -1675,7 +1687,7 @@ async fn handle_incoming_message(
                 ));
             }
             let scope_key =
-                subscription_scope_key(store, channel_name, &msg, &chat_id, config.reply_in_thread)
+                subscription_scope_key(store, channel_name, &msg, &chat_id, rit)
                     .await?;
             let removed = store
                 .remove_run_subscription(channel_name, &scope_key, &msg.external_user_id)
@@ -1940,7 +1952,7 @@ async fn handle_mention_command(
     config: &ChannelConfig,
     store: &Arc<dyn ChannelStore>,
     msg: &ChannelMessage,
-    mode: Option<MentionMode>,
+    mode: Option<OverrideMode>,
 ) -> Result<String> {
     if !msg.is_group {
         return Ok("No need for this in DMs — every message is answered.".to_string());
@@ -1960,8 +1972,8 @@ async fn handle_mention_command(
         return Ok(deny);
     }
     match mode {
-        MentionMode::On | MentionMode::Off => {
-            let value = matches!(mode, MentionMode::On);
+        OverrideMode::On | OverrideMode::Off => {
+            let value = matches!(mode, OverrideMode::On);
             store
                 .set_mention_override(&config.name, container.id(), value)
                 .await?;
@@ -1971,7 +1983,7 @@ async fn handle_mention_command(
                 on_off(config.require_mention),
             ))
         }
-        MentionMode::Reset => {
+        OverrideMode::Reset => {
             store
                 .clear_mention_override(&config.name, container.id())
                 .await?;
@@ -1979,6 +1991,84 @@ async fn handle_mention_command(
             Ok(format!(
                 "Override cleared for this {scope}; now following {source}: `{}`.",
                 on_off(effective),
+            ))
+        }
+    }
+}
+
+/// The effective `reply_in_thread` for a chat: the per-chat override
+/// (`/threads on|off`) wins over the channel config. DMs have no
+/// override (the command refuses them), so this stays a single lookup.
+async fn resolve_reply_in_thread(
+    store: &Arc<dyn ChannelStore>,
+    config: &ChannelConfig,
+    chat_id: &str,
+) -> bool {
+    match store.get_rit_override(&config.name, chat_id).await {
+        Ok(value) => value.unwrap_or(config.reply_in_thread),
+        Err(e) => {
+            warn!(error = %e, "rit override read failed, falling back to channel config");
+            config.reply_in_thread
+        }
+    }
+}
+
+/// `/threads`: query or mutate the chat-level `reply_in_thread`
+/// override. The mode only makes sense for whole chats — a thread
+/// exists because of it — so the chat is the only scope (unlike
+/// `/mention`, threads carry no own override).
+async fn handle_threads_command(
+    config: &ChannelConfig,
+    store: &Arc<dyn ChannelStore>,
+    msg: &ChannelMessage,
+    mode: Option<OverrideMode>,
+) -> Result<String> {
+    if !msg.is_group {
+        return Ok("No need for this in DMs — replies are never threaded.".to_string());
+    }
+    let on_off = |v: bool| if v { "on" } else { "off" };
+    let chat_id = &msg.external_chat_id;
+    let Some(mode) = mode else {
+        let override_value = store
+            .get_rit_override(&config.name, chat_id)
+            .await
+            .ok()
+            .flatten();
+        let (effective, source) = match override_value {
+            Some(v) => (v, "chat override"),
+            None => (config.reply_in_thread, "channel default"),
+        };
+        return Ok(format!(
+            "Reply-in-thread in this chat: `{}` ({source}); channel default: `{}`.",
+            on_off(effective),
+            on_off(config.reply_in_thread),
+        ));
+    };
+    if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
+        return Ok(deny);
+    }
+    match mode {
+        OverrideMode::On | OverrideMode::Off => {
+            let value = matches!(mode, OverrideMode::On);
+            store.set_rit_override(&config.name, chat_id, value).await?;
+            // Existing sessions keep their mapping; the mode only shapes
+            // how new messages route.
+            let note = if value {
+                " New top-level messages will each open their own thread."
+            } else {
+                " New messages will share the chat-level session; existing threads keep working."
+            };
+            Ok(format!(
+                "Reply-in-thread set to `{}` for this chat (channel default: `{}`).{note}",
+                on_off(value),
+                on_off(config.reply_in_thread),
+            ))
+        }
+        OverrideMode::Reset => {
+            store.clear_rit_override(&config.name, chat_id).await?;
+            Ok(format!(
+                "Override cleared for this chat; now following the channel default: `{}`.",
+                on_off(config.reply_in_thread),
             ))
         }
     }
@@ -2055,7 +2145,9 @@ async fn maybe_history_prefix(
     // With reply_in_thread, a channel-level trigger opens a fresh thread —
     // the chat's cross-topic chatter is noise there, not context. Triggers
     // inside an existing thread still get that thread's history.
-    if config.reply_in_thread && msg.thread_id.is_none() {
+    if msg.thread_id.is_none()
+        && resolve_reply_in_thread(store, config, &msg.external_chat_id).await
+    {
         return None;
     }
     let container = history_container(msg);
@@ -2231,11 +2323,13 @@ async fn prepare_trigger(
             let id = msg.external_message_id.clone();
             (id.clone().unwrap_or_else(|| chat_id.clone()), id)
         }
-        TriggerKind::Normal => (
-            effective_mapping_key(store, channel_name, msg, &chat_id, config.reply_in_thread)
-                .await?,
-            reply_anchor(msg, config.reply_in_thread),
-        ),
+        TriggerKind::Normal => {
+            let rit = resolve_reply_in_thread(store, config, &msg.external_chat_id).await;
+            (
+                effective_mapping_key(store, channel_name, msg, &chat_id, rit).await?,
+                reply_anchor(msg, rit),
+            )
+        }
     };
     let (sid, root_in_session) = get_or_create_session(
         channel_name,
@@ -2536,14 +2630,9 @@ async fn record_passive_receipt(
     ) {
         return;
     }
-    let Ok(mapping_key) = effective_mapping_key(
-        store,
-        channel_name,
-        msg,
-        &msg.external_chat_id,
-        config.reply_in_thread,
-    )
-    .await
+    let rit = resolve_reply_in_thread(store, config, &msg.external_chat_id).await;
+    let Ok(mapping_key) =
+        effective_mapping_key(store, channel_name, msg, &msg.external_chat_id, rit).await
     else {
         return;
     };
@@ -2777,6 +2866,7 @@ const CMD_THREAD: &str = "/thread";
 const CMD_SUBSCRIBE: &str = "/subscribe";
 const CMD_UNSUBSCRIBE: &str = "/unsubscribe";
 const CMD_MENTION: &str = "/mention";
+const CMD_THREADS: &str = "/threads";
 const CMD_BIND: &str = "/bind";
 /// Max chars for the subscription notify card's quote line (ellipsis
 /// included — see `notify_quote_snippet`).
@@ -2799,6 +2889,7 @@ const COMMANDS: &[(&str, &[&str])] = &[
     (CMD_SUBSCRIBE, &["/sub"]),
     (CMD_UNSUBSCRIBE, &["/unsub"]),
     (CMD_MENTION, &[]),
+    (CMD_THREADS, &[]),
     (CMD_BIND, &[]),
     (CMD_PERMITS, &[]),
     (CMD_APPROVE, &[]),
@@ -2822,6 +2913,7 @@ const HELP_TEXT: &str = "\
 `/subscribe [chat_id] [-r]` (`/sub`) — DM you when runs here complete; `-r` covers this chat's threads (Feishu)
 `/unsubscribe` (`/unsub`) — cancel the subscription here
 `/mention` — show the @-requirement here; `/mention on|off|reset` to override it (admin)
+`/threads` — show reply-in-thread mode for this chat; `/threads on|off|reset` to override it (admin)
 `/bind` — show this conversation's session id; `/bind <session_id>` to retarget it (admin)
 `/permits` — list pending doc-permission requests (admin)
 `/approve <id> [perm]` — approve a doc-permission request (admin)
@@ -2892,19 +2984,24 @@ enum ChannelCommand {
     InvalidBindCommand,
     /// Query (`None`) or mutate this conversation's require-mention
     /// override (admin only for mutations).
-    Mention(Option<MentionMode>),
+    Mention(Option<OverrideMode>),
     /// A malformed `/mention` command.
     InvalidMentionCommand,
+    /// Query (`None`) or mutate this chat's reply-in-thread override
+    /// (admin only for mutations).
+    Threads(Option<OverrideMode>),
+    /// A malformed `/threads` command.
+    InvalidThreadsCommand,
     /// Command-shaped (`/word`) but matches no known command or alias.
     Unknown(String),
     /// Not a command.
     None,
 }
 
-/// A `/mention` mutation: set the container's override, or clear it to
-/// fall back to the parent scope (thread → chat → channel config).
+/// A runtime override mutation (`/mention`, `/threads`): set the
+/// override, or clear it to fall back to the channel config.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MentionMode {
+enum OverrideMode {
     On,
     Off,
     Reset,
@@ -3032,10 +3129,17 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
         }
         CMD_MENTION => match (parts.next(), parts.next()) {
             (None, None) => ChannelCommand::Mention(None),
-            (Some("on"), None) => ChannelCommand::Mention(Some(MentionMode::On)),
-            (Some("off"), None) => ChannelCommand::Mention(Some(MentionMode::Off)),
-            (Some("reset"), None) => ChannelCommand::Mention(Some(MentionMode::Reset)),
+            (Some("on"), None) => ChannelCommand::Mention(Some(OverrideMode::On)),
+            (Some("off"), None) => ChannelCommand::Mention(Some(OverrideMode::Off)),
+            (Some("reset"), None) => ChannelCommand::Mention(Some(OverrideMode::Reset)),
             _ => ChannelCommand::InvalidMentionCommand,
+        },
+        CMD_THREADS => match (parts.next(), parts.next()) {
+            (None, None) => ChannelCommand::Threads(None),
+            (Some("on"), None) => ChannelCommand::Threads(Some(OverrideMode::On)),
+            (Some("off"), None) => ChannelCommand::Threads(Some(OverrideMode::Off)),
+            (Some("reset"), None) => ChannelCommand::Threads(Some(OverrideMode::Reset)),
+            _ => ChannelCommand::InvalidThreadsCommand,
         },
         CMD_BIND => match (parts.next(), parts.next()) {
             (None, None) => ChannelCommand::Bind(None),
