@@ -103,6 +103,24 @@ describe("cron tool rendering", () => {
   });
 });
 
+describe("agent tool rendering", () => {
+  test("shows template and async metadata", () => {
+    expect(
+      extraMeta(
+        "agent",
+        JSON.stringify({
+          description: "review code",
+          template: "reviewer",
+          wait_for_completion: false,
+        }),
+      ),
+    ).toBe("reviewer · async");
+    expect(
+      extraMeta("agent", JSON.stringify({ description: "do work" })),
+    ).toBe("");
+  });
+});
+
 describe("post_message tool rendering", () => {
   test("uses the recipient as the compact target", () => {
     expect(extractTarget("post_message", argumentsJson)).toBe("sub_123");

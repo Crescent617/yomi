@@ -1259,13 +1259,17 @@ fn tool_header_summary(tool_name: &str, args: Option<&str>) -> ToolHeaderSummary
                 metadata.push(format!("{count} results"));
             }
         }
-        ToolKind::Agent
+        ToolKind::Agent => {
+            if let Some(template) = text("template") {
+                metadata.push(compact(template));
+            }
             if value
                 .as_ref()
                 .and_then(|v| v["wait_for_completion"].as_bool())
-                == Some(false) =>
-        {
-            metadata.push("async".to_string());
+                == Some(false)
+            {
+                metadata.push("async".to_string());
+            }
         }
         ToolKind::PostMessage => {
             if let Some(title) = text("title") {

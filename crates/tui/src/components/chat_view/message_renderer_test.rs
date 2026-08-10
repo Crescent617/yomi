@@ -193,6 +193,20 @@ fn cron_metadata_summarizes_args() {
 }
 
 #[test]
+fn agent_metadata_shows_template_and_async() {
+    let summary = super::tool_header_summary(
+        "agent",
+        Some(r#"{"description":"review code","template":"reviewer","wait_for_completion":false}"#),
+    );
+    assert_eq!(summary.label, "Agent");
+    assert_eq!(summary.target.as_deref(), Some("review code"));
+    assert_eq!(summary.metadata.as_deref(), Some("reviewer · async"));
+
+    let plain = super::tool_header_summary("agent", Some(r#"{"description":"do work"}"#));
+    assert_eq!(plain.metadata, None);
+}
+
+#[test]
 fn snake_case_builtins_extract_targets() {
     assert_eq!(
         extract_tool_target("web_search", Some(r#"{"query":"rust tui"}"#)),

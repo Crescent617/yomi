@@ -227,8 +227,9 @@ export function extraMeta(tool_name: string, args: string): string {
     } else if (cronAction === "list" && parsed.status) {
       extras.push(firstText(parsed.status));
     }
-  } else if (name === "agent" && parsed.wait_for_completion === false) {
-    extras.push("async");
+  } else if (name === "agent") {
+    if (parsed.template) extras.push(firstText(parsed.template));
+    if (parsed.wait_for_completion === false) extras.push("async");
   } else if (name === "postmessage" && parsed.title) {
     extras.push(firstText(parsed.title));
   } else if (name === "reminder" && parsed.delay_seconds != null) {
