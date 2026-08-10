@@ -985,6 +985,90 @@ impl Kernel {
         Ok(skills)
     }
 
+    /// Resolve the cwd used to resolve workspace-layer assets of a session:
+    /// session `working_dir` → project dir → `<data_dir>/workspace`.
+    /// `None` session means no workspace context.
+    async fn session_asset_cwd(
+        &self,
+        session_id: Option<&SessionId>,
+    ) -> Result<Option<std::path::PathBuf>> {
+        let Some(sid) = session_id else {
+            return Ok(None);
+        };
+        let info =
+            self.session_store()
+                .await
+                .get(sid)
+                .await?
+                .ok_or_else(|| SessionError::NotFound {
+                    session_id: sid.0.to_string(),
+                })?;
+        let working_dir = info.working_dir.map(std::path::PathBuf::from);
+        let project_dir = match &info.project_id {
+            Some(pid) => self.project_store.get(pid).await?.map(|p| p.dir),
+            None => None,
+        };
+        let fallback = self.data_dir().await.join("workspace");
+        Ok(Some(working_dir.or(project_dir).unwrap_or(fallback)))
+    }
+
+    /// List effective agent templates (builtin → global → workspace merged),
+    /// matching what the subagent tool resolves at spawn time.
+    pub async fn list_agent_templates(
+        &self,
+        session_id: Option<&SessionId>,
+    ) -> Result<Vec<crate::agent_tmpl::AgentTemplate>> {
+        let cwd = self.session_asset_cwd(session_id).await?;
+        let global = crate::agent_tmpl::global_dir(&self.data_dir().await);
+        Ok(crate::agent_tmpl::list(&global, cwd.as_deref()).await)
+    }
+
+    async fn agent_template_root(
+        &self,
+        session_id: Option<&SessionId>,
+        scope: crate::agent_tmpl::TemplateScope,
+    ) -> Result<std::path::PathBuf> {
+        use crate::agent_tmpl::TemplateScope;
+        match scope {
+            TemplateScope::Global => Ok(crate::agent_tmpl::global_dir(&self.data_dir().await)),
+            TemplateScope::Workspace => {
+                let cwd = self.session_asset_cwd(session_id).await?.ok_or_else(|| {
+                    SessionError::Other(
+                        "workspace template scope requires a session context".to_string(),
+                    )
+                })?;
+                Ok(cwd.join(crate::agent_tmpl::WORKSPACE_DIR))
+            }
+        }
+    }
+
+    /// Create or overwrite a custom template at the given scope.
+    pub async fn save_agent_template(
+        &self,
+        session_id: Option<&SessionId>,
+        scope: crate::agent_tmpl::TemplateScope,
+        name: &str,
+        body: &str,
+    ) -> Result<()> {
+        let root = self.agent_template_root(session_id, scope).await?;
+        crate::agent_tmpl::save(&root, name, body).await?;
+        Ok(())
+    }
+
+    /// Delete a custom template layer; deleting an override reveals the
+    /// lower layer again. Builtin templates are not on disk and thus
+    /// unreachable.
+    pub async fn delete_agent_template(
+        &self,
+        session_id: Option<&SessionId>,
+        scope: crate::agent_tmpl::TemplateScope,
+        name: &str,
+    ) -> Result<()> {
+        let root = self.agent_template_root(session_id, scope).await?;
+        crate::agent_tmpl::delete(&root, name).await?;
+        Ok(())
+    }
+
     /// Get full session info merged with runtime phase
     pub async fn get_session(&self, sid: &SessionId) -> Result<crate::types::SessionResponse> {
         let info = self.session_store().await.get(sid).await?;

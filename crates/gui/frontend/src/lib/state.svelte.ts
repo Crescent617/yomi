@@ -544,7 +544,8 @@ export type ActivePanel =
   | "debug"
   | "config"
   | "automation"
-  | "favorites";
+  | "favorites"
+  | "agents";
 
 export const appState = $state({
   connectionStatus: "disconnected" as
@@ -605,9 +606,7 @@ export function removeProjectAttentionItems(
 }
 
 export function removeSessionAttentionItems(sessionIds: Set<string>): void {
-  const kept = attentionItems.filter(
-    (item) => !sessionIds.has(item.sessionId),
-  );
+  const kept = attentionItems.filter((item) => !sessionIds.has(item.sessionId));
   attentionItems.splice(0, attentionItems.length, ...kept);
 }
 

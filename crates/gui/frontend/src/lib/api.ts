@@ -555,6 +555,49 @@ export interface SkillInfo {
   description: string;
 }
 
+export type AgentTemplateSource = "builtin" | "global" | "workspace";
+export type AgentTemplateScope = "global" | "workspace";
+
+export interface AgentTemplateInfo {
+  name: string;
+  body: string;
+  source: AgentTemplateSource;
+}
+
+export async function listAgentTemplates(
+  session_id?: string,
+): Promise<AgentTemplateInfo[]> {
+  return invokeCmd<AgentTemplateInfo[]>("list_agent_templates", {
+    session_id: session_id ?? null,
+  });
+}
+
+export async function saveAgentTemplate(
+  name: string,
+  body: string,
+  scope: AgentTemplateScope,
+  session_id?: string,
+): Promise<void> {
+  return invokeCmd("save_agent_template", {
+    session_id: session_id ?? null,
+    scope,
+    name,
+    body,
+  });
+}
+
+export async function deleteAgentTemplate(
+  name: string,
+  scope: AgentTemplateScope,
+  session_id?: string,
+): Promise<void> {
+  return invokeCmd("delete_agent_template", {
+    session_id: session_id ?? null,
+    scope,
+    name,
+  });
+}
+
 export async function listSessionSkills(
   session_id: string,
 ): Promise<SkillInfo[]> {

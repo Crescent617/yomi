@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 // ── Wire Protocol ────────────────────────────────────────────────────────
 
 /// Wire protocol version. Bumped on any breaking change to the IPC schema.
-pub const WIRE_PROTOCOL_VERSION: u32 = 23;
+pub const WIRE_PROTOCOL_VERSION: u32 = 24;
 
 /// All operations a client can request from the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -228,6 +228,22 @@ pub enum ReqMethod {
     SetSessionModel {
         session_id: String,
         key: String,
+    },
+
+    // ── Agent Template ───────────────────────────────────────────────
+    ListAgentTemplates {
+        session_id: Option<String>,
+    },
+    SaveAgentTemplate {
+        session_id: Option<String>,
+        scope: crate::agent_tmpl::TemplateScope,
+        name: String,
+        body: String,
+    },
+    DeleteAgentTemplate {
+        session_id: Option<String>,
+        scope: crate::agent_tmpl::TemplateScope,
+        name: String,
     },
 }
 

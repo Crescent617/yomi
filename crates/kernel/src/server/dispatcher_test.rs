@@ -134,3 +134,59 @@ async fn test_restart_wire_request() {
     let result = call.await.unwrap();
     assert!(result.is_err(), "test server is intentionally not replaced");
 }
+
+#[tokio::test]
+async fn test_agent_templates_wire_round_trip() {
+    use crate::agent_tmpl::{TemplateScope, TemplateSource};
+
+    let (client, tmp, shutdown) = setup().await;
+
+    // builtin floor is visible without any session context
+    let list = client.list_agent_templates(None).await.unwrap();
+    assert!(list
+        .iter()
+        .any(|t| t.name == "planner" && t.source == TemplateSource::Builtin));
+
+    // save global → listed with effective body, file on disk
+    client
+        .save_agent_template(None, TemplateScope::Global, "wire-role", "# Wire\nbody")
+        .await
+        .unwrap();
+    let list = client.list_agent_templates(None).await.unwrap();
+    let t = list.iter().find(|t| t.name == "wire-role").unwrap();
+    assert_eq!(t.source, TemplateSource::Global);
+    assert_eq!(t.body, "# Wire\nbody");
+    assert!(tmp.path().join("agents/wire-role/ROLE.md").exists());
+
+    // override builtin, then delete → builtin restored
+    client
+        .save_agent_template(None, TemplateScope::Global, "planner", "custom")
+        .await
+        .unwrap();
+    let list = client.list_agent_templates(None).await.unwrap();
+    assert_eq!(
+        list.iter().find(|t| t.name == "planner").unwrap().source,
+        TemplateSource::Global
+    );
+    client
+        .delete_agent_template(None, TemplateScope::Global, "planner")
+        .await
+        .unwrap();
+    let list = client.list_agent_templates(None).await.unwrap();
+    assert_eq!(
+        list.iter().find(|t| t.name == "planner").unwrap().source,
+        TemplateSource::Builtin
+    );
+
+    // invalid name rejected; workspace scope needs a session context
+    assert!(client
+        .save_agent_template(None, TemplateScope::Global, "../bad", "x")
+        .await
+        .is_err());
+    assert!(client
+        .save_agent_template(None, TemplateScope::Workspace, "ws-role", "x")
+        .await
+        .is_err());
+
+    shutdown.cancel();
+}

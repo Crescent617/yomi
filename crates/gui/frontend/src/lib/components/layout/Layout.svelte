@@ -12,6 +12,7 @@
   import ActivityBar from "./ActivityBar.svelte";
   import UsagePanel from "./UsagePanel.svelte";
   import DebugPanel from "./DebugPanel.svelte";
+  import AgentsPanel from "../agents/AgentsPanel.svelte";
   import AutomationPanel from "../automation/AutomationPanel.svelte";
   import FavoritesPanel from "./FavoritesPanel.svelte";
   import ConfigPanel from "./ConfigPanel.svelte";
@@ -92,7 +93,9 @@
         : null;
     mobileSidebarOpen = true;
     // Move focus into the drawer so keyboard users land on its controls.
-    void tick().then(() => drawerEl?.querySelector<HTMLElement>("button")?.focus());
+    void tick().then(() =>
+      drawerEl?.querySelector<HTMLElement>("button")?.focus(),
+    );
   }
 
   function closeMobileSidebar() {
@@ -228,6 +231,8 @@
         <FavoritesPanel onToggleLeftPanel={toggleMobileSidebar} />
       {:else if appState.activePanel === "automation"}
         <AutomationPanel onToggleLeftPanel={toggleMobileSidebar} />
+      {:else if appState.activePanel === "agents"}
+        <AgentsPanel onToggleLeftPanel={toggleMobileSidebar} />
       {:else if appState.activePanel === "debug"}
         <DebugPanel onToggleLeftPanel={toggleMobileSidebar} />
       {:else if appState.activePanel === "config"}

@@ -608,6 +608,42 @@ impl KernelServer {
                 )
             }
 
+            // ── Agent Template ─────────────────────────────────────────────
+            ReqMethod::ListAgentTemplates { session_id } => rpc_body(
+                "list_agent_templates_failed",
+                self.kernel
+                    .list_agent_templates(session_id.map(SessionId::from).as_ref())
+                    .await,
+            ),
+            ReqMethod::SaveAgentTemplate {
+                session_id,
+                scope,
+                name,
+                body,
+            } => rpc_body(
+                "save_agent_template_failed",
+                self.kernel
+                    .save_agent_template(
+                        session_id.map(SessionId::from).as_ref(),
+                        scope,
+                        &name,
+                        &body,
+                    )
+                    .await
+                    .map(|()| serde_json::Value::Null),
+            ),
+            ReqMethod::DeleteAgentTemplate {
+                session_id,
+                scope,
+                name,
+            } => rpc_body(
+                "delete_agent_template_failed",
+                self.kernel
+                    .delete_agent_template(session_id.map(SessionId::from).as_ref(), scope, &name)
+                    .await
+                    .map(|()| serde_json::Value::Null),
+            ),
+
             ReqMethod::Hello => ok_body(ProtoResponse {
                 proto: crate::wire::WIRE_PROTOCOL_VERSION,
                 instance_id: &self.instance_id,

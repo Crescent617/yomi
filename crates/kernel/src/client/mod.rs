@@ -243,6 +243,25 @@ pub trait KernelApi: Send + Sync {
     async fn list_models(&self) -> Result<Vec<crate::kernel::ModelInfo>>;
     async fn get_session_model(&self, session_id: &SessionId) -> Result<String>;
     async fn set_session_model(&self, session_id: &SessionId, key: &str) -> Result<()>;
+
+    // ── Agent Template ─────────────────────────────────────────────────────
+    async fn list_agent_templates(
+        &self,
+        session_id: Option<&SessionId>,
+    ) -> Result<Vec<crate::agent_tmpl::AgentTemplate>>;
+    async fn save_agent_template(
+        &self,
+        session_id: Option<&SessionId>,
+        scope: crate::agent_tmpl::TemplateScope,
+        name: &str,
+        body: &str,
+    ) -> Result<()>;
+    async fn delete_agent_template(
+        &self,
+        session_id: Option<&SessionId>,
+        scope: crate::agent_tmpl::TemplateScope,
+        name: &str,
+    ) -> Result<()>;
 }
 
 // ── LocalKernel (existing Kernel wrapped) ──────────────────────
@@ -636,6 +655,32 @@ impl KernelApi for Kernel {
 
     async fn set_session_model(&self, session_id: &SessionId, key: &str) -> Result<()> {
         Self::set_session_model(self, session_id, key).await
+    }
+
+    async fn list_agent_templates(
+        &self,
+        session_id: Option<&SessionId>,
+    ) -> Result<Vec<crate::agent_tmpl::AgentTemplate>> {
+        Self::list_agent_templates(self, session_id).await
+    }
+
+    async fn save_agent_template(
+        &self,
+        session_id: Option<&SessionId>,
+        scope: crate::agent_tmpl::TemplateScope,
+        name: &str,
+        body: &str,
+    ) -> Result<()> {
+        Self::save_agent_template(self, session_id, scope, name, body).await
+    }
+
+    async fn delete_agent_template(
+        &self,
+        session_id: Option<&SessionId>,
+        scope: crate::agent_tmpl::TemplateScope,
+        name: &str,
+    ) -> Result<()> {
+        Self::delete_agent_template(self, session_id, scope, name).await
     }
 }
 
@@ -1884,6 +1929,51 @@ impl KernelApi for RemoteKernel {
         self.call(ReqMethod::SetSessionModel {
             session_id: session_id.0.to_string(),
             key: key.to_string(),
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn list_agent_templates(
+        &self,
+        session_id: Option<&SessionId>,
+    ) -> Result<Vec<crate::agent_tmpl::AgentTemplate>> {
+        let result = self
+            .call(ReqMethod::ListAgentTemplates {
+                session_id: session_id.map(|s| s.0.to_string()),
+            })
+            .await?;
+        let templates: Vec<crate::agent_tmpl::AgentTemplate> = serde_json::from_value(result)?;
+        Ok(templates)
+    }
+
+    async fn save_agent_template(
+        &self,
+        session_id: Option<&SessionId>,
+        scope: crate::agent_tmpl::TemplateScope,
+        name: &str,
+        body: &str,
+    ) -> Result<()> {
+        self.call(ReqMethod::SaveAgentTemplate {
+            session_id: session_id.map(|s| s.0.to_string()),
+            scope,
+            name: name.to_string(),
+            body: body.to_string(),
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn delete_agent_template(
+        &self,
+        session_id: Option<&SessionId>,
+        scope: crate::agent_tmpl::TemplateScope,
+        name: &str,
+    ) -> Result<()> {
+        self.call(ReqMethod::DeleteAgentTemplate {
+            session_id: session_id.map(|s| s.0.to_string()),
+            scope,
+            name: name.to_string(),
         })
         .await?;
         Ok(())

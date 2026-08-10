@@ -9,6 +9,7 @@
     Monitor,
     CalendarClock,
     Star,
+    Bot,
     PanelLeftClose,
   } from "lucide-svelte";
   import { appState, requestActivePanel } from "../../state.svelte";
@@ -32,6 +33,7 @@
     { id: "chat", icon: MessageSquare, label: "Chat" },
     { id: "favorites", icon: Star, label: "Favorites" },
     { id: "automation", icon: CalendarClock, label: "Automation" },
+    { id: "agents", icon: Bot, label: "Agents" },
     { id: "usage", icon: BarChart3, label: "Usage" },
     { id: "debug", icon: Bug, label: "Debug" },
     { id: "config", icon: Settings, label: "Config" },

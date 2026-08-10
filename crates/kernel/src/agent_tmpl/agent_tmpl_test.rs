@@ -74,3 +74,65 @@ async fn load_dir_skips_flat_files_and_garbage() {
     assert_eq!(ws[0].name, "good");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn validate_name_accepts_kebab_case() {
+    for name in ["planner", "my-role", "a", "0x", "release-checker-2"] {
+        assert!(validate_name(name).is_ok(), "{name} should be valid");
+    }
+}
+
+#[test]
+fn validate_name_rejects_traversal_and_bad_chars() {
+    for name in [
+        "",
+        "-lead",
+        "UPPER",
+        "has space",
+        "../escape",
+        "a/b",
+        "a\\b",
+        &"x".repeat(65),
+    ] {
+        assert!(validate_name(name).is_err(), "{name} should be invalid");
+    }
+}
+
+#[tokio::test]
+async fn save_then_resolve_roundtrip() {
+    let global = temp_global("save");
+    let file = save(&global, "my-role", "# My Role\nbody\n").await.unwrap();
+    assert!(file.ends_with(format!("my-role/{ROLE_FILE}")));
+
+    let t = resolve("my-role", &global, None).await.unwrap();
+    assert_eq!(t.source, TemplateSource::Global);
+    assert_eq!(t.body, "# My Role\nbody");
+    std::fs::remove_dir_all(&global).unwrap();
+}
+
+#[tokio::test]
+async fn save_rejects_empty_body() {
+    let global = temp_global("empty");
+    assert!(save(&global, "blank", "  \n").await.is_err());
+}
+
+#[tokio::test]
+async fn delete_override_restores_lower_layer() {
+    let global = temp_global("del");
+    save(&global, "verifier", "custom body\n").await.unwrap();
+    assert_eq!(
+        resolve("verifier", &global, None).await.unwrap().source,
+        TemplateSource::Global
+    );
+
+    delete(&global, "verifier").await.unwrap();
+    let t = resolve("verifier", &global, None).await.unwrap();
+    assert_eq!(t.source, TemplateSource::Builtin);
+    std::fs::remove_dir_all(&global).unwrap();
+}
+
+#[tokio::test]
+async fn delete_rejects_bad_name() {
+    let global = temp_global("delbad");
+    assert!(delete(&global, "../outside").await.is_err());
+}

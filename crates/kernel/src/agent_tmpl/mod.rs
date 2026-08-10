@@ -10,6 +10,8 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 /// workspace 模板目录（相对 `working_dir`）。
 pub const WORKSPACE_DIR: &str = ".yomi/agents";
 /// 全局模板目录（相对 `data_dir`）。
@@ -18,7 +20,8 @@ pub const GLOBAL_DIR: &str = "agents";
 pub const ROLE_FILE: &str = "ROLE.md";
 
 /// 模板来源层。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TemplateSource {
     Builtin,
     Global,
@@ -36,11 +39,19 @@ impl TemplateSource {
 }
 
 /// 一个角色模板：名字 + 正文（即 subagent 的系统提示）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentTemplate {
     pub name: String,
     pub body: String,
     pub source: TemplateSource,
+}
+
+/// 可写层（builtin 随二进制发布，只读）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TemplateScope {
+    Global,
+    Workspace,
 }
 
 fn parse(name: &str, content: &str, source: TemplateSource) -> AgentTemplate {
@@ -133,6 +144,51 @@ pub async fn resolve(
         .await
         .into_iter()
         .find(|t| t.name == name)
+}
+
+/// 校验模板名：`^[a-z0-9][a-z0-9-]{0,63}$`。同时杜绝路径穿越。
+pub fn validate_name(name: &str) -> Result<(), String> {
+    let valid = !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    if valid {
+        Ok(())
+    } else {
+        Err(format!(
+            "invalid template name '{name}': expected ^[a-z0-9][a-z0-9-]{{0,63}}$"
+        ))
+    }
+}
+
+fn invalid_input(msg: String) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidInput, msg)
+}
+
+/// 写入 `<root>/<name>/ROLE.md`（自动建目录），返回文件路径。
+pub async fn save(root: &Path, name: &str, body: &str) -> std::io::Result<PathBuf> {
+    validate_name(name).map_err(invalid_input)?;
+    if body.trim().is_empty() {
+        return Err(invalid_input(format!(
+            "template '{name}' body must not be empty"
+        )));
+    }
+    let dir = root.join(name);
+    tokio::fs::create_dir_all(&dir).await?;
+    let file = dir.join(ROLE_FILE);
+    tokio::fs::write(&file, body).await?;
+    Ok(file)
+}
+
+/// 删除 `<root>/<name>/` 目录（builtin 不在磁盘上，天然不可达）。
+pub async fn delete(root: &Path, name: &str) -> std::io::Result<()> {
+    validate_name(name).map_err(invalid_input)?;
+    tokio::fs::remove_dir_all(root.join(name)).await
 }
 
 /// 错误信息用的可用模板概览：`planner (builtin), my-role (workspace), ...`

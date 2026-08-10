@@ -1,3 +1,4 @@
+pub mod agent_template;
 pub mod automation;
 pub mod chat;
 pub mod checkpoint;
