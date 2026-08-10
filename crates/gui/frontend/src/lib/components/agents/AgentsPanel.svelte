@@ -18,7 +18,7 @@
 
   const NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
   const NEW_STUB =
-    "# Role\n\nYou are a specialist. Describe the role's responsibilities, principles, and output expectations here.\n";
+    "You are a specialist. Describe the role's responsibilities, principles, and output expectations here.\n";
 
   let templates = $state<AgentTemplateInfo[]>([]);
   let loading = $state(true);
