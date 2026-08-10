@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.69] - 2026-08-10
+
+### Fixed
+- cron 定时任务自动创建的专用会话，工具自动批准等级现在跟随全局配置 `auto_approve` 且不低于 `caution`；此前固定为 `safe`，无人值守的任务会在编辑文件等操作时一直等待批准而卡住。
+
 ## [0.7.68] - 2026-08-10
 
 ### Changed
