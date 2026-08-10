@@ -347,6 +347,7 @@ impl ToolRegistry {
                     Arc::clone(&config.shared.cron_scheduler),
                     config.shared.session_store.clone(),
                     config.input_bus.cloned(),
+                    config.shared.config_auto_approve,
                 ));
             } else {
                 tracing::warn!("Cron tool enabled but cron store not configured; skipping");

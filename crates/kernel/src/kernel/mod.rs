@@ -256,6 +256,7 @@ impl Kernel {
         tasks_config: crate::config::TasksConfig,
         gc_config: crate::config::GcConfig,
         update_session_title: bool,
+        config_auto_approve: Level,
     ) -> Result<Arc<Self>> {
         let session_store = storage.session_store();
         let message_store = storage.message_store();
@@ -323,7 +324,8 @@ impl Kernel {
             data_dir,
         )
         .with_goal_store(goal_store)
-        .with_cron(cron_store.clone(), Arc::clone(&cron_scheduler));
+        .with_cron(cron_store.clone(), Arc::clone(&cron_scheduler))
+        .with_config_auto_approve(config_auto_approve);
 
         let agent_shared = match todo_interceptor {
             Some(interceptor) => agent_shared.with_message_interceptor(interceptor),
@@ -1660,8 +1662,14 @@ impl Kernel {
         // The RPC path has no caller session to follow, so a newly bound
         // session uses defaults.
         let session_store = self.session_store().await;
-        let outcome =
-            crate::cron::create_cron_job(store, Some(&session_store), None, input).await?;
+        let outcome = crate::cron::create_cron_job(
+            store,
+            Some(&session_store),
+            None,
+            input,
+            self.agent_shared.config_auto_approve,
+        )
+        .await?;
         // 撞名返回既有 job 时没有任何变化，无需唤醒 scheduler。
         if outcome.created {
             self.notify_cron_scheduler();
@@ -1738,9 +1746,14 @@ impl Kernel {
                     ..
                 }
             );
-            let action =
-                crate::cron::ensure_action_session(action, &existing.name, &session_store, None)
-                    .await?;
+            let action = crate::cron::ensure_action_session(
+                action,
+                &existing.name,
+                &session_store,
+                None,
+                self.agent_shared.config_auto_approve,
+            )
+            .await?;
             if binds_new_session {
                 bound_session = crate::cron::action_session_id(&action);
             }

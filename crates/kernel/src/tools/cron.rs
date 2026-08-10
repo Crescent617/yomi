@@ -33,6 +33,10 @@ pub struct CronTool {
     session_store: Option<Arc<dyn SessionStore>>,
     /// Needed to deliver `trigger` messages.
     input_bus: Option<Arc<InputBus>>,
+    /// Global config's auto-approve threshold — baseline for dedicated
+    /// sessions bound to `send_message` jobs (floored at caution inside
+    /// [`crate::cron::ensure_action_session`]).
+    config_auto_approve: crate::permission::Level,
 }
 
 impl CronTool {
@@ -41,12 +45,14 @@ impl CronTool {
         scheduler: Arc<std::sync::Mutex<Option<Arc<CronScheduler>>>>,
         session_store: Option<Arc<dyn SessionStore>>,
         input_bus: Option<Arc<InputBus>>,
+        config_auto_approve: crate::permission::Level,
     ) -> Self {
         Self {
             store,
             scheduler,
             session_store,
             input_bus,
+            config_auto_approve,
         }
     }
 
@@ -127,6 +133,7 @@ impl CronTool {
             self.session_store.as_ref(),
             follow.as_ref(),
             input,
+            self.config_auto_approve,
         )
         .await
         .map_err(|e| KernelError::tool(e.to_string()))?;
@@ -264,9 +271,15 @@ impl CronTool {
                         "session store not available; pass session_id explicitly".to_string(),
                     ));
                 };
-                action = crate::cron::ensure_action_session(action, &job.name, session_store, None)
-                    .await
-                    .map_err(|e| KernelError::tool(e.to_string()))?;
+                action = crate::cron::ensure_action_session(
+                    action,
+                    &job.name,
+                    session_store,
+                    None,
+                    self.config_auto_approve,
+                )
+                .await
+                .map_err(|e| KernelError::tool(e.to_string()))?;
                 bound_session = crate::cron::action_session_id(&action);
             }
             input.action = Some(action);

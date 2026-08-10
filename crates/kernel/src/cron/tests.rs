@@ -195,27 +195,42 @@ mod tests {
     async fn create_cron_job_returns_existing_on_name_conflict() {
         let store = test_cron_store().await;
 
-        let first =
-            super::super::create_cron_job(&store, None, None, shell_input("janitor", "0 9 * * *"))
-                .await
-                .unwrap();
+        let first = super::super::create_cron_job(
+            &store,
+            None,
+            None,
+            shell_input("janitor", "0 9 * * *"),
+            crate::permission::Level::Safe,
+        )
+        .await
+        .unwrap();
         assert!(first.created);
 
         // 同名再 create：返回既有 job（同 id），新 schedule 不生效、不产生新行
-        let second =
-            super::super::create_cron_job(&store, None, None, shell_input("janitor", "0 10 * * *"))
-                .await
-                .unwrap();
+        let second = super::super::create_cron_job(
+            &store,
+            None,
+            None,
+            shell_input("janitor", "0 10 * * *"),
+            crate::permission::Level::Safe,
+        )
+        .await
+        .unwrap();
         assert!(!second.created);
         assert_eq!(second.job.id.0, first.job.id.0);
         assert_eq!(second.job.schedule, "0 9 * * *");
         assert_eq!(store.list(None, 10).await.unwrap().len(), 1);
 
         // 不同名：正常新建
-        let third =
-            super::super::create_cron_job(&store, None, None, shell_input("other", "0 9 * * *"))
-                .await
-                .unwrap();
+        let third = super::super::create_cron_job(
+            &store,
+            None,
+            None,
+            shell_input("other", "0 9 * * *"),
+            crate::permission::Level::Safe,
+        )
+        .await
+        .unwrap();
         assert!(third.created);
         assert_ne!(third.job.id.0, first.job.id.0);
     }
@@ -307,13 +322,65 @@ mod tests {
             std::sync::Arc::new(RaceStore::new().await);
 
         // pre-check 时库里还没有，insert 时撞名——回退应返回竞态胜者而非报错
-        let out =
-            super::super::create_cron_job(&store, None, None, shell_input("janitor", "0 9 * * *"))
-                .await
-                .unwrap();
+        let out = super::super::create_cron_job(
+            &store,
+            None,
+            None,
+            shell_input("janitor", "0 9 * * *"),
+            crate::permission::Level::Safe,
+        )
+        .await
+        .unwrap();
 
         assert!(!out.created);
         assert_eq!(out.job.id.0, "cron-winner");
         assert_eq!(store.list(None, 10).await.unwrap().len(), 1);
+    }
+
+    // ── ensure_action_session 权限等级：follow config，下限 caution ─────
+
+    async fn test_session_store() -> std::sync::Arc<dyn crate::storage::SessionStore> {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        crate::storage::migrations::run_migrations(&pool)
+            .await
+            .unwrap();
+        std::sync::Arc::new(crate::storage::SqliteSessionStore::new(pool))
+    }
+
+    async fn bound_session_level(config_level: crate::permission::Level) -> String {
+        let session_store = test_session_store().await;
+        let action = super::super::ensure_action_session(
+            CronAction::SendMessage {
+                session_id: None,
+                content: "hi".to_string(),
+            },
+            "nightly",
+            &session_store,
+            None,
+            config_level,
+        )
+        .await
+        .unwrap();
+        let sid = super::super::action_session_id(&action).expect("session bound");
+        session_store
+            .get(&sid)
+            .await
+            .unwrap()
+            .and_then(|i| i.auto_approve_level)
+            .expect("auto_approve_level persisted")
+    }
+
+    #[tokio::test]
+    async fn cron_session_level_follows_config_floored_at_caution() {
+        use crate::permission::Level;
+        // safe/caution 都被抬到 caution（无人值守，低了会卡在批准上）
+        assert_eq!(bound_session_level(Level::Safe).await, "caution");
+        assert_eq!(bound_session_level(Level::Caution).await, "caution");
+        // 更高的配置原样保留
+        assert_eq!(bound_session_level(Level::Dangerous).await, "dangerous");
     }
 }

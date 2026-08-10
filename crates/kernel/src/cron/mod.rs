@@ -46,8 +46,10 @@ pub enum CronActionOutcome {
 
 /// 确保 `SendMessage` action 绑定了具体 session。
 ///
-/// `session_id` 为空时新建一个专用 session（标题取 job 名，权限等级为
-/// 默认 safe），并把新 id 回填进 action；之后每次触发都发往同一个 session。
+/// `session_id` 为空时新建一个专用 session（标题取 job 名），并把新 id 回填进
+/// action；之后每次触发都发往同一个 session。新 session 的权限等级 follow
+/// 全局 config（`config_auto_approve`），下限 caution——cron session 无人值守，
+/// safe 阈值下 caution 级工具调用永远等不到批准，任务会卡死。
 ///
 /// `follow` 为调用方所在 session 的元信息（tool 场景）：新 session 会继承其
 /// `working_dir` 与 `project_id`；`model_key` 不继承，保持默认模型。
@@ -57,6 +59,7 @@ pub async fn ensure_action_session(
     job_name: &str,
     session_store: &Arc<dyn crate::storage::SessionStore>,
     follow: Option<&crate::storage::SessionInfo>,
+    config_auto_approve: crate::permission::Level,
 ) -> Result<CronAction, CronError> {
     let CronAction::SendMessage {
         session_id: None,
@@ -66,12 +69,13 @@ pub async fn ensure_action_session(
         return Ok(action);
     };
 
+    let auto_approve_level = config_auto_approve.max(crate::permission::Level::Caution);
     let id = crate::types::SessionId::new();
     session_store
         .create(crate::storage::NewSession {
             project_id: follow.and_then(|i| i.project_id.clone()),
             working_dir: follow.and_then(|i| i.working_dir.clone()),
-            auto_approve_level: Some(crate::permission::Level::default().as_str().to_string()),
+            auto_approve_level: Some(auto_approve_level.as_str().to_string()),
             ..crate::storage::NewSession::new(id.clone())
         })
         .await
@@ -129,11 +133,15 @@ pub async fn rollback_bound_session(
 /// `next_run_at`、入库。若入库失败，回滚刚绑定的 session。
 ///
 /// `Kernel`（RPC 路径）与 cron tool 共用，保证行为一致。
+///
+/// `config_auto_approve` 是全局 config 的自动批准阈值，新建专用 session 时
+/// 以其为基线（下限 caution，见 [`ensure_action_session`]）。
 pub async fn create_cron_job(
     store: &Arc<dyn CronStore>,
     session_store: Option<&Arc<dyn crate::storage::SessionStore>>,
     follow: Option<&crate::storage::SessionInfo>,
     input: CreateCronJobInput,
+    config_auto_approve: crate::permission::Level,
 ) -> Result<CreateCronJobOutcome, CronError> {
     // Ensure 语义短路：同名即命中，本次传入的参数不校验、不生效。
     if let Some(existing) = store.get_by_name(&input.name).await? {
@@ -158,7 +166,14 @@ pub async fn create_cron_job(
         let session_store = session_store.ok_or_else(|| {
             CronError::Storage("session store not available; pass session_id explicitly".into())
         })?;
-        ensure_action_session(input.action, &input.name, session_store, follow).await?
+        ensure_action_session(
+            input.action,
+            &input.name,
+            session_store,
+            follow,
+            config_auto_approve,
+        )
+        .await?
     } else {
         input.action
     };

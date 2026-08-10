@@ -363,6 +363,9 @@ pub struct AgentShared {
     /// `KernelServer` on start; tools use it to notify the scheduler of job
     /// changes. Empty when not running under a daemon.
     pub cron_scheduler: Arc<std::sync::Mutex<Option<Arc<crate::cron::CronScheduler>>>>,
+    /// The global config's auto-approve threshold, used as the baseline for
+    /// sessions created internally without an interactive user (e.g. cron).
+    pub config_auto_approve: crate::permission::Level,
 }
 
 impl AgentShared {
@@ -435,6 +438,7 @@ impl AgentShared {
             background_tasks: Arc::new(BgTaskTracker::default()),
             cron_store: None,
             cron_scheduler: Arc::new(std::sync::Mutex::new(None)),
+            config_auto_approve: crate::permission::Level::default(),
         }
     }
 
@@ -484,6 +488,13 @@ impl AgentShared {
     ) -> Self {
         self.cron_store = store;
         self.cron_scheduler = scheduler;
+        self
+    }
+
+    /// Set the global config's auto-approve threshold.
+    #[must_use]
+    pub fn with_config_auto_approve(mut self, level: crate::permission::Level) -> Self {
+        self.config_auto_approve = level;
         self
     }
 

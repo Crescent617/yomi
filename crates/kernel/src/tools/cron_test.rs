@@ -29,6 +29,9 @@ async fn fixture(with_session_store: bool, with_input_bus: bool) -> TestFixture 
         Arc::new(std::sync::Mutex::new(None)),
         with_session_store.then(|| Arc::clone(&session_store)),
         input_bus,
+        // Fixture plays the "global config = safe" scenario: bound sessions
+        // must be floored to caution.
+        crate::permission::Level::Safe,
     );
 
     TestFixture {
@@ -79,6 +82,8 @@ async fn create_send_message_without_session_binds_new_session() {
         .unwrap()
         .expect("session should exist");
     assert_eq!(info.title.as_deref(), Some("daily standup"));
+    // Config says safe, but unattended cron sessions floor at caution.
+    assert_eq!(info.auto_approve_level.as_deref(), Some("caution"));
 
     // Persisted job references the new session concretely.
     let job = f
