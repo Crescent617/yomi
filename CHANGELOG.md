@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.67] - 2026-08-10
+
+### Added
+- GUI 新增 Agents 面板（左侧导航栏机器人图标）：集中管理 subagent 角色模板——按来源分组查看（内置/全局/项目级）、新建、编辑、删除；内置模板只读，可一键复制为自定义模板后修改，保存对之后派生的 subagent 生效。
+
 ## [0.7.66] - 2026-08-10
 
 ### Fixed
