@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.70] - 2026-08-11
+
+### Added
+- 新增命令 `yomi session cat`：查看会话的消息日志，默认友好输出（只显示用户/助手文本和工具调用，图片显示为本地文件路径，超长内容截断），`--raw` 输出原始记录（大段内联 base64 图片数据会省略）；直接读取日志文件，daemon 不在也能用。
+- GUI Usage 页新增 "This Month" 卡片：显示当月 1 号起（本地时区）的 token 用量。
+
 ## [0.7.69] - 2026-08-10
 
 ### Fixed
