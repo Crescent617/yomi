@@ -13,6 +13,7 @@
     ArrowDownLeft,
     Zap,
     Calendar,
+    CalendarRange,
     TrendingUp,
     Award,
     BarChart3,
@@ -93,6 +94,41 @@
 
   const activeDays = $derived.by(
     () => daily.filter((d) => d.total_tokens > 0).length,
+  );
+
+  // ── month-to-date (local 1st of current month → today) ──
+
+  const monthStartDate = $derived.by(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
+
+  const monthSummary = $derived.by(() => {
+    const start = toLocalISODate(monthStartDate);
+    const acc = {
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cached_tokens: 0,
+      total_tokens: 0,
+      request_count: 0,
+    };
+    for (const d of daily) {
+      if (d.date >= start) {
+        acc.prompt_tokens += d.prompt_tokens;
+        acc.completion_tokens += d.completion_tokens;
+        acc.cached_tokens += d.cached_tokens;
+        acc.total_tokens += d.total_tokens;
+        acc.request_count += d.request_count;
+      }
+    }
+    return acc;
+  });
+
+  const monthStartLabel = $derived(
+    monthStartDate.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    }),
   );
 
   const streaks = $derived.by(() => {
@@ -767,7 +803,24 @@
 
         <!-- Summary Cards -->
         {#if filteredSummary}
-          <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+          <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+            <div class="rounded-md border border-border bg-card p-3 space-y-1">
+              <div
+                class="flex items-center gap-1.5 text-xs text-muted-foreground"
+              >
+                <CalendarRange class="w-3.5 h-3.5" />
+                This Month
+              </div>
+              <div class="text-lg font-semibold font-mono">
+                {formatNumber(monthSummary.total_tokens)}
+              </div>
+              <div class="text-[10px] text-muted-foreground">
+                since {monthStartLabel} · {formatNumber(
+                  monthSummary.request_count,
+                )} req
+              </div>
+            </div>
+
             <div class="rounded-md border border-border bg-card p-3 space-y-1">
               <div
                 class="flex items-center gap-1.5 text-xs text-muted-foreground"
