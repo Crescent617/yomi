@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `--bg` / `--fg` 不再是全局选项，仅 `run` 与 TUI 接受；其他子命令传入会报错，不再静默忽略。
+
 ## [0.7.72] - 2026-08-11
 
 ### Added

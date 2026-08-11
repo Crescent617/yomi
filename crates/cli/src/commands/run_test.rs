@@ -50,8 +50,8 @@ fn parse_defaults() {
     assert!(args.resume.is_none());
     assert!(args.fork.is_none());
     assert!(!args.yolo);
-    assert!(!args.global.bg);
-    assert!(!args.global.fg);
+    assert!(!args.mode.bg);
+    assert!(!args.mode.fg);
     assert!(!args.ephemeral);
     assert!(!args.verbose);
     assert!(args.timeout.is_none());

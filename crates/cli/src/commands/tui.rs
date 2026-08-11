@@ -14,6 +14,9 @@ pub struct TuiArgs {
     #[command(flatten)]
     pub global: GlobalArgs,
 
+    #[command(flatten)]
+    pub mode: crate::args::KernelModeArgs,
+
     /// Initial prompt to send on startup (non-interactive mode if provided)
     #[arg(short, long, value_name = "PROMPT")]
     pub prompt: Option<String>,
@@ -86,7 +89,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     // Kernel selection: global three-way (--bg / --fg / auto), see
     // `daemon::select_kernel`. Auto mode uses a healthy running daemon and
     // otherwise falls back to a local in-process kernel.
-    let (kernel, daemon_mode) = daemon::select_kernel(&args.global, &config).await?;
+    let (kernel, daemon_mode) = daemon::select_kernel(&args.mode, &config).await?;
 
     print_startup_info(&config);
 

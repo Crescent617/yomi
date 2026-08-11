@@ -24,11 +24,11 @@ git diff | yomi run "review 这些改动"        # prompt + stdin 时 stdin 包�
 | `-y, --yolo` | 全部自动批准（`Level::Dangerous`） |
 | `--auto-approve <safe\|caution\|dangerous>` | 覆盖配置的批准阈值 |
 | `--timeout <SECONDS>` | 墙钟超时，到期 cancel 并 exit 124 |
-| `--bg` / `--fg` | 全局三态：强制 daemon（不存在则 spawn，hello 严格校验）/ 强制本地前台 |
+| `--bg` / `--fg` | 强制 daemon（不存在则 spawn，hello 严格校验）/ 强制本地前台（仅 `run`/`tui` 接受这两个旗标） |
 | `--ephemeral` | 不把 session 记为当前目录的 last session |
 | `-v, --verbose` | 工具调用/重试进度打到 stderr（stdout 只放结果） |
 
-## Kernel 选择（全局三态，`run`/`tui` 共享）
+## Kernel 选择（三态，`run`/`tui` 共享，其他子命令不接受这两个旗标）
 
 - **默认 auto**：探测到活 daemon 且 hello 握手（含协议版本）通过就用 daemon；没有 daemon 在跑则本地 in-process kernel。**auto 模式不 spawn daemon**（CI 场景不留后台进程）；daemon 活着但 hello 失败是硬错误，**绝不静默 fallback 本地**。
 - `--bg`：强制后台 daemon，不存在则 spawn，连接必须通过 hello 校验，否则报错。

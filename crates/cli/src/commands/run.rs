@@ -42,6 +42,9 @@ pub struct RunArgs {
     #[command(flatten)]
     global: GlobalArgs,
 
+    #[command(flatten)]
+    mode: crate::args::KernelModeArgs,
+
     /// Prompt text (reads from stdin when omitted)
     prompt: Vec<String>,
 
@@ -489,7 +492,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
 
     let prompt = prompt_from_parts(&args.prompt, crate::utils::read_piped_stdin().await)?;
 
-    let (kernel, _daemon_mode) = crate::daemon::select_kernel(&args.global, &config).await?;
+    let (kernel, _daemon_mode) = crate::daemon::select_kernel(&args.mode, &config).await?;
 
     let session_arg = if let Some(fork) = &args.fork {
         SessionArg::ForkSpecific(fork.clone())

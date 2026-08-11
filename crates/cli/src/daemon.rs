@@ -268,8 +268,8 @@ pub async fn connect_strict() -> Result<kernel::client::RemoteKernel> {
         .context("Failed to connect to daemon. Is it running?")
 }
 
-/// Kernel selection shared by `run` and `tui` (driven by the global
-/// `--bg` / `--fg` flags):
+/// Kernel selection shared by `run` and `tui` (driven by their
+/// `--bg` / `--fg` flags, see `KernelModeArgs`):
 ///
 /// - `--fg`: local in-process kernel, the daemon is left untouched.
 /// - `--bg`: background daemon mode, spawning it when needed; the connection
@@ -280,13 +280,13 @@ pub async fn connect_strict() -> Result<kernel::client::RemoteKernel> {
 ///
 /// Returns the kernel plus whether it is daemon-backed.
 pub async fn select_kernel(
-    global: &crate::args::GlobalArgs,
+    mode: &crate::args::KernelModeArgs,
     config: &kernel::config::Config,
 ) -> Result<(std::sync::Arc<dyn kernel::client::KernelApi>, bool)> {
     use kernel::client::RemoteKernel;
     use std::sync::Arc;
 
-    if global.fg {
+    if mode.fg {
         tracing::info!("--fg: using local in-process kernel");
         return Ok((
             crate::commands::tui::create_local_kernel(config).await?,
@@ -294,7 +294,7 @@ pub async fn select_kernel(
         ));
     }
 
-    if global.bg {
+    if mode.bg {
         tracing::info!("--bg: using daemon");
         spawn_daemon().await?;
         let kernel = RemoteKernel::connect(&socket_addr())
