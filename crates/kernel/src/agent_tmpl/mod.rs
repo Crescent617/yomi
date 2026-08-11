@@ -47,7 +47,7 @@ pub struct AgentTemplate {
 }
 
 /// 可写层（builtin 随二进制发布，只读）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TemplateScope {
     Global,

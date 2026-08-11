@@ -5,7 +5,19 @@ use serde::{Deserialize, Serialize};
 /// 用于表示：
 /// - 工具的固有危险级别（Tool Level）
 /// - 用户配置的自动批准阈值（Auto-approve Threshold）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Default,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Level {
     /// 只读、无副作用的操作

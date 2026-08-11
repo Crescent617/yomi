@@ -1,9 +1,8 @@
 //! `yomi run` — headless one-shot run: send a prompt, wait for the agent to
 //! finish, print the result, and exit with a status code.
 //!
-//! Kernel selection: `--daemon` forces the background daemon (spawning it if
-//! needed), `--local` forces an in-process kernel; by default the daemon is
-//! used only when one is already accepting connections (never spawned).
+//! Kernel selection is the global three-way (`--bg` / `--fg` / auto)
+//! shared with `tui` — see `crate::daemon::select_kernel`.
 //!
 //! Termination: the run ends when, after our own user-message echo, the agent
 //! emits `Lifecycle Stopped` (or a non-recoverable `Error`, whose code path
@@ -21,7 +20,7 @@ use crate::session::SessionArg;
 use crate::storage::AppStorage;
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use kernel::client::{KernelApi, RemoteKernel};
+use kernel::client::KernelApi;
 use kernel::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolEvent, UserEvent};
 use kernel::permission::Level;
 use kernel::tools::AskUserResponse;
@@ -81,16 +80,6 @@ pub struct RunArgs {
     /// Wall-clock timeout in seconds; cancels the run on expiry (exit 124)
     #[arg(long, value_name = "SECONDS")]
     timeout: Option<u64>,
-
-    /// Use the background daemon, spawning it if needed
-    /// (default: use it only when one is already running)
-    #[arg(long, conflicts_with = "local")]
-    daemon: bool,
-
-    /// Force a local in-process kernel
-    /// (default: local only when no daemon is running)
-    #[arg(long)]
-    local: bool,
 
     /// Do not record this session as the directory's last session
     #[arg(long)]
@@ -323,28 +312,6 @@ fn prompt_from_parts(args: &[String], stdin: Option<String>) -> Result<String> {
     }
 }
 
-/// Kernel selection: explicit flags win; otherwise use the daemon only when
-/// one is already accepting connections (auto mode never spawns one).
-async fn select_kernel(
-    config: &kernel::config::Config,
-    daemon: bool,
-    local: bool,
-) -> Result<Arc<dyn KernelApi>> {
-    if local {
-        return Ok(crate::commands::tui::create_local_kernel(config).await?);
-    }
-    if daemon {
-        crate::daemon::spawn_daemon().await?;
-        return Ok(Arc::new(RemoteKernel::new(crate::daemon::socket_addr())));
-    }
-    if crate::daemon::try_connect().await.is_some() {
-        tracing::info!("Using running daemon");
-        Ok(Arc::new(RemoteKernel::new(crate::daemon::socket_addr())))
-    } else {
-        Ok(crate::commands::tui::create_local_kernel(config).await?)
-    }
-}
-
 async fn apply_effect(kernel: &dyn KernelApi, session_id: &SessionId, effect: Effect) {
     match effect {
         Effect::RespondPermission { req_id, approved } => {
@@ -522,7 +489,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
 
     let prompt = prompt_from_parts(&args.prompt, crate::utils::read_piped_stdin().await)?;
 
-    let kernel = select_kernel(&config, args.daemon, args.local).await?;
+    let (kernel, _daemon_mode) = crate::daemon::select_kernel(&args.global, &config).await?;
 
     let session_arg = if let Some(fork) = &args.fork {
         SessionArg::ForkSpecific(fork.clone())

@@ -1117,7 +1117,14 @@ impl RemoteKernel {
         }
     }
 
-    async fn call(&self, method: ReqMethod) -> Result<serde_json::Value> {
+    /// Send a raw wire request and return the untyped result value.
+    ///
+    /// Escape hatch for tooling (e.g. `yomi rpc`) that talks the wire
+    /// protocol directly without a typed `KernelApi` wrapper. Prefer the
+    /// typed trait methods for anything permanent. Streaming methods
+    /// (`Subscribe`/`SubscribeAll`) only return an ack here — use
+    /// `subscribe_session_events`/`subscribe_all_events` to follow events.
+    pub async fn call(&self, method: ReqMethod) -> Result<serde_json::Value> {
         self.ensure_connected().await?;
         self.call_raw(method).await
     }

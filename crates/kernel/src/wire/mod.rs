@@ -11,7 +11,11 @@ use serde::{Deserialize, Serialize};
 pub const WIRE_PROTOCOL_VERSION: u32 = 24;
 
 /// All operations a client can request from the daemon.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// The derived `JsonSchema` powers `yomi rpc --help`: heavy payload types are
+/// stubbed with `#[schemars(with = ...)]` so the derive doesn't cascade
+/// across the codebase — schemas there are indicative, not exhaustive.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReqMethod {
     /// Handshake: client checks daemon wire protocol version.
@@ -60,6 +64,7 @@ pub enum ReqMethod {
     },
     SendMessage {
         session_id: String,
+        #[schemars(with = "serde_json::Value")]
         blocks: Vec<ContentBlock>,
     },
     ListSessionSkills {
@@ -67,6 +72,7 @@ pub enum ReqMethod {
     },
     Command {
         session_id: String,
+        #[schemars(with = "serde_json::Value")]
         cmd: Command,
     },
     Subscribe {
@@ -77,6 +83,7 @@ pub enum ReqMethod {
         /// it was cleared by a `MessageAdded` event), the server replays
         /// the entire current buffer.
         #[serde(default)]
+        #[schemars(with = "Option<String>")]
         after_event_id: Option<crate::types::EventId>,
     },
     Unsubscribe {
@@ -145,6 +152,7 @@ pub enum ReqMethod {
 
     // ── Favorites ────────────────────────────────────────────────────────
     AddFavorite {
+        #[schemars(with = "serde_json::Value")]
         input: crate::storage::AddFavoriteInput,
     },
     RemoveFavorite {
@@ -168,6 +176,7 @@ pub enum ReqMethod {
     CreateCronJob {
         name: String,
         schedule: String,
+        #[schemars(with = "serde_json::Value")]
         action: crate::cron::CronAction,
         max_runs: Option<u32>,
         expires_at: Option<DateTime<Utc>>,
@@ -183,6 +192,7 @@ pub enum ReqMethod {
         job_id: String,
         name: Option<String>,
         schedule: Option<String>,
+        #[schemars(with = "Option<serde_json::Value>")]
         action: Option<crate::cron::CronAction>,
         status: Option<String>,
         /// `None` = 不变；`Some(0)` = 恢复不限次数

@@ -257,6 +257,70 @@ pub async fn restart_daemon() -> Result<()> {
     Ok(())
 }
 
+/// Connect to a running daemon with a strict hello handshake.
+///
+/// Shared by the daemon-only commands (session/cron/events/rpc): unlike
+/// `select_kernel` this never spawns and never falls back to a local
+/// kernel — the daemon must be up and protocol-compatible.
+pub async fn connect_strict() -> Result<kernel::client::RemoteKernel> {
+    kernel::client::RemoteKernel::connect(&socket_addr())
+        .await
+        .context("Failed to connect to daemon. Is it running?")
+}
+
+/// Kernel selection shared by `run` and `tui` (driven by the global
+/// `--bg` / `--fg` flags):
+///
+/// - `--fg`: local in-process kernel, the daemon is left untouched.
+/// - `--bg`: background daemon mode, spawning it when needed; the connection
+///   must pass the hello handshake — strict, no fallback.
+/// - neither (auto): use a running daemon that passes hello; fall back to
+///   local only when no daemon is running at all. A daemon that accepts the
+///   socket but fails hello is a hard error — never a silent local fallback.
+///
+/// Returns the kernel plus whether it is daemon-backed.
+pub async fn select_kernel(
+    global: &crate::args::GlobalArgs,
+    config: &kernel::config::Config,
+) -> Result<(std::sync::Arc<dyn kernel::client::KernelApi>, bool)> {
+    use kernel::client::RemoteKernel;
+    use std::sync::Arc;
+
+    if global.fg {
+        tracing::info!("--fg: using local in-process kernel");
+        return Ok((
+            crate::commands::tui::create_local_kernel(config).await?,
+            false,
+        ));
+    }
+
+    if global.bg {
+        tracing::info!("--bg: using daemon");
+        spawn_daemon().await?;
+        let kernel = RemoteKernel::connect(&socket_addr())
+            .await
+            .context("Daemon failed the hello handshake")?;
+        return Ok((Arc::new(kernel), true));
+    }
+
+    if try_connect().await.is_none() {
+        tracing::info!("No running daemon; using local in-process kernel");
+        return Ok((
+            crate::commands::tui::create_local_kernel(config).await?,
+            false,
+        ));
+    }
+    let kernel = RemoteKernel::connect(&socket_addr()).await.map_err(|e| {
+        anyhow::anyhow!(
+            "A daemon is running but failed the hello handshake ({e}); \
+             refusing to fall back to a local kernel. \
+             Fix it with `yomi daemon restart`, or use `--fg`."
+        )
+    })?;
+    tracing::info!("Using running daemon");
+    Ok((Arc::new(kernel), true))
+}
+
 /// Check daemon status.
 pub async fn daemon_status() -> Result<String> {
     let addr = socket_addr();

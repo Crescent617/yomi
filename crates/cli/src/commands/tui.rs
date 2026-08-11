@@ -6,12 +6,7 @@ use crate::{
     utils::DEBUG_MODE,
 };
 use anyhow::Result;
-use kernel::{
-    client::{KernelApi, RemoteKernel},
-    config::Config,
-    permission::Level,
-    utils::strs,
-};
+use kernel::{config::Config, permission::Level, utils::strs};
 use std::sync::Arc;
 
 #[derive(Default, clap::Parser)]
@@ -47,13 +42,6 @@ pub struct TuiArgs {
     #[arg(short, long, value_name = "SESSION_ID")]
     #[allow(clippy::option_option)]
     pub fork: Option<Option<String>>,
-
-    /// Run with background daemon (external kernel), spawning it if needed.
-    ///
-    /// Without --bg, the TUI always uses the local in-process kernel and
-    /// never connects to the daemon.
-    #[arg(long, visible_alias = "bg")]
-    pub daemon: bool,
 
     /// Model key to use for this session (overrides default model)
     #[arg(short, long, value_name = "MODEL_KEY")]
@@ -95,16 +83,10 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     let app_storage = Arc::new(AppStorage::new(config.data_dir.clone())?);
     let _log_guard = kernel::utils::logging::init_logging(&config, "tui", false)?;
 
-    // Kernel selection:
-    // - --daemon/--bg: connect to the daemon, spawning it when needed.
-    // - default: local in-process kernel, never touching the daemon.
-    let daemon_mode = args.daemon;
-    let kernel: Arc<dyn KernelApi> = if args.daemon {
-        daemon::spawn_daemon().await?;
-        Arc::new(RemoteKernel::new(daemon::socket_addr()))
-    } else {
-        create_local_kernel(&config).await?
-    };
+    // Kernel selection: global three-way (--bg / --fg / auto), see
+    // `daemon::select_kernel`. Auto mode uses a healthy running daemon and
+    // otherwise falls back to a local in-process kernel.
+    let (kernel, daemon_mode) = daemon::select_kernel(&args.global, &config).await?;
 
     print_startup_info(&config);
 

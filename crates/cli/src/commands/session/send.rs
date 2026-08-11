@@ -7,7 +7,7 @@
 
 use crate::args::GlobalArgs;
 use anyhow::{Context, Result};
-use kernel::client::{KernelApi, RemoteKernel};
+use kernel::client::KernelApi;
 use kernel::types::{ContentBlock, SessionId};
 use std::io::{IsTerminal, Read as _};
 
@@ -20,10 +20,7 @@ pub async fn run(
     let session_id = super::resolve_session_id(global, session).await?;
     let sid = SessionId::from(session_id.clone());
 
-    let addr = crate::daemon::socket_addr();
-    let kernel = RemoteKernel::connect(&addr)
-        .await
-        .context("Failed to connect to daemon. Is it running?")?;
+    let kernel = crate::daemon::connect_strict().await?;
 
     // send_message would happily spawn an agent for a typo'd session id
     // (empty history, fallback working dir) — fail fast instead.

@@ -23,6 +23,9 @@ cargo fmt -- --check
 
 # Harness 回归冒烟（改 prompt 装配/工具 desc/内置模板/conductor/cron 后跑）
 evals/harness-e2e.sh
+
+# running before commit
+just ci
 ```
 
 ## Architecture Overview

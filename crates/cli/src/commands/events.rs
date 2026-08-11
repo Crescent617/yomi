@@ -7,7 +7,7 @@
 
 use crate::args::GlobalArgs;
 use anyhow::{Context, Result};
-use kernel::client::{KernelApi, RemoteKernel};
+use kernel::client::KernelApi;
 use kernel::types::{EventId, SessionId};
 use std::io::Write as _;
 
@@ -17,10 +17,7 @@ pub async fn run(
     all: bool,
     after_event_id: Option<String>,
 ) -> Result<()> {
-    let addr = crate::daemon::socket_addr();
-    let kernel = RemoteKernel::connect(&addr)
-        .await
-        .context("Failed to connect to daemon. Is it running?")?;
+    let kernel = crate::daemon::connect_strict().await?;
 
     let mut subscriber = if all {
         if after_event_id.is_some() {

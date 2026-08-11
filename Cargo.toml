@@ -55,6 +55,7 @@ directories = "6.0"
 md5 = "0.8"
 rand = "0.10"
 serde_yaml = "0.9"
+schemars = { version = "1", features = ["chrono04"] }
 smol_str = "0.3"
 tempfile = "3.0"
 tokio-test = "0.4"

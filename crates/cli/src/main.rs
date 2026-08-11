@@ -40,6 +40,8 @@ enum Commands {
     Usage(UsageArgs),
     /// Stream session events from the daemon as NDJSON
     Events(EventsArgs),
+    /// Send a raw wire-protocol request to the daemon (debug/tooling)
+    Rpc(RpcArgs),
     /// Manage cron jobs
     Cron(CronArgs),
     /// Show version
@@ -222,6 +224,30 @@ struct EventsArgs {
     after_event_id: Option<String>,
 }
 
+/// Send a raw wire-protocol request to the daemon (debug/tooling)
+#[derive(Parser)]
+#[command(disable_help_flag = true)]
+pub struct RpcArgs {
+    #[command(flatten)]
+    global: GlobalArgs,
+
+    /// Wire method name in `snake_case` (`--help` lists all methods,
+    /// `<METHOD> --help` shows one method's parameters), or a full method
+    /// JSON object, e.g. `{"get_session": {"session_id": "sess_…"}}`
+    method: Option<String>,
+
+    /// Method parameters as a JSON object (reads from stdin when omitted and piped)
+    params: Option<String>,
+
+    /// Print compact single-line JSON instead of pretty-printed
+    #[arg(long)]
+    compact: bool,
+
+    /// Print help: alone lists all wire methods; after METHOD shows its parameters
+    #[arg(short, long)]
+    help: bool,
+}
+
 #[derive(Parser)]
 struct CronArgs {
     #[command(flatten)]
@@ -345,6 +371,7 @@ async fn main() -> Result<()> {
         Some(Commands::Events(args)) => {
             commands::events::run(&args.global, args.session, args.all, args.after_event_id).await
         }
+        Some(Commands::Rpc(args)) => commands::rpc::run(args).await,
         Some(Commands::Cron(args)) => run_cron(args).await,
         Some(Commands::Version) => {
             println!("v{}", env!("CARGO_PKG_VERSION"));

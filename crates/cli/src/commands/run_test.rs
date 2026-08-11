@@ -50,8 +50,8 @@ fn parse_defaults() {
     assert!(args.resume.is_none());
     assert!(args.fork.is_none());
     assert!(!args.yolo);
-    assert!(!args.daemon);
-    assert!(!args.local);
+    assert!(!args.global.bg);
+    assert!(!args.global.fg);
     assert!(!args.ephemeral);
     assert!(!args.verbose);
     assert!(args.timeout.is_none());
@@ -68,7 +68,7 @@ fn parse_formats() {
 
 #[test]
 fn parse_conflicts() {
-    assert!(RunArgs::try_parse_from(["yomi-run", "--daemon", "--local", "hi"]).is_err());
+    assert!(RunArgs::try_parse_from(["yomi-run", "--bg", "--fg", "hi"]).is_err());
     assert!(
         RunArgs::try_parse_from(["yomi-run", "--yolo", "--auto-approve", "safe", "hi"]).is_err()
     );

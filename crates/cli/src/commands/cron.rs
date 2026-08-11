@@ -13,10 +13,7 @@ use kernel::cron::{
 };
 
 async fn connect() -> Result<RemoteKernel> {
-    let addr = crate::daemon::socket_addr();
-    RemoteKernel::connect(&addr)
-        .await
-        .context("Failed to connect to daemon. Is it running?")
+    crate::daemon::connect_strict().await
 }
 
 /// Parse an expiry timestamp: RFC 3339 (e.g. `2026-08-01T09:00:00+08:00`),
