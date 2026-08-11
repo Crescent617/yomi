@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.72] - 2026-08-11
+
+### Added
+- 新增 `yomi rpc <method> [参数JSON]` 命令：将任意 daemon 请求以 JSON 形式直接发出并打印结果，便于脚本与调试；`yomi rpc --help` 列出全部可用方法，`yomi rpc <method> --help` 查看该方法的参数说明。
+- CLI 新增全局选项 `--bg` / `--fg`（作用于 `run` 与 TUI）：`--bg` 强制使用后台 daemon（未运行则自动启动），`--fg` 强制使用本地前台内核。
+
+### Changed
+- `run` 与 TUI 的内核选择统一为：默认有健康 daemon 就连接 daemon，没有 daemon 才使用本地内核；daemon 在运行但握手失败（如协议版本不匹配）时直接报错并提示修复方式，不再继续执行。TUI 此前默认永远使用本地内核。
+- `run` 的 `--local` 选项移除，由 `--fg` 取代；`run` 与 TUI 的 `--daemon` 选项移除，由 `--bg` 取代。
+
 ## [0.7.71] - 2026-08-11
 
 ### Changed
