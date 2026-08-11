@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `yomi session cat` 默认不再显示工具调用，需要时加 `--tools` 查看。
+
 ## [0.7.70] - 2026-08-11
 
 ### Added

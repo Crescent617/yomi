@@ -22,7 +22,7 @@ daemon 是常驻进程：IM 通道（飞书/Telegram）、多客户端共享都�
 ## 会话管理
 
 - `yomi session list` 默认只列当前目录的会话，`-a` 列全部。
-- `yomi session cat [-s <id>]` 查看会话消息日志：默认友好输出（user/assistant 文本 + tool 行（名称/args/结果，超长截断），图片显示 asset 真实文件路径）；`--raw` 输出 JSONL（可接 jq，大的 inline base64 会被抹成 `[omitted:N]`）。直接读文件，不依赖 daemon。
+- `yomi session cat [-s <id>]` 查看会话消息日志：默认友好输出（user/assistant 文本，图片显示 asset 真实文件路径）；`--tools` 加上工具调用行（名称/args/结果，超长截断）；`--raw` 输出 JSONL（可接 jq，大的 inline base64 会被抹成 `[omitted:N]`）。直接读文件，不依赖 daemon。
 - `session cancel` 停 agent loop（会话保留）；`session stop` 从 daemon 内存移除。
 - `yomi session checkpoint cleanup` 清理无属主的 checkpoint 备份文件。
 

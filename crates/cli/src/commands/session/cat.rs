@@ -1,8 +1,8 @@
 //! `yomi session cat` — read a session's JSONL message log.
 //!
-//! Default output is a friendly transcript: user/assistant text blocks plus
-//! tool calls (name/args/result); image blocks render as the real asset file
-//! path on disk.
+//! Default output is a friendly transcript: user/assistant text blocks, with
+//! image blocks rendered as the real asset file path on disk. `--tools` adds
+//! tool calls (name/args/result) to the transcript.
 //! `--raw` dumps the JSONL file (large inline base64 payloads elided).
 
 use crate::args::GlobalArgs;
@@ -15,7 +15,12 @@ use std::fmt::Write as _;
 use std::path::Path;
 use tokio::io::AsyncWriteExt;
 
-pub async fn run(global: &GlobalArgs, session: Option<String>, raw: bool) -> Result<()> {
+pub async fn run(
+    global: &GlobalArgs,
+    session: Option<String>,
+    raw: bool,
+    tools: bool,
+) -> Result<()> {
     let session_id = super::resolve_session_id(global, session).await?;
     let data_dir = crate::utils::data_dir(global)?;
 
@@ -32,7 +37,7 @@ pub async fn run(global: &GlobalArgs, session: Option<String>, raw: bool) -> Res
     }
 
     let messages = store.get(&session_id).await?;
-    let transcript = format_transcript(messages, &data_dir);
+    let transcript = format_transcript(messages, &data_dir, tools);
     if transcript.is_empty() {
         println!("No displayable messages found in session {session_id}");
     } else {
@@ -92,10 +97,15 @@ fn redact_base64(line: &str) -> String {
     out
 }
 
-/// Render a friendly transcript of user/assistant/tool messages.
+/// Render a friendly transcript of user/assistant messages.
+/// Tool calls are included only when `show_tools` is set.
 /// Pure function so it stays unit-testable.
-fn format_transcript(messages: Vec<Message>, data_dir: &Path) -> String {
-    let dangling = dangling_tool_calls(&messages);
+fn format_transcript(messages: Vec<Message>, data_dir: &Path, show_tools: bool) -> String {
+    let dangling = if show_tools {
+        dangling_tool_calls(&messages)
+    } else {
+        HashMap::new()
+    };
     let mut out = String::new();
     let mut section = |label: &str, ts: chrono::DateTime<chrono::Utc>, body: &str| {
         if body.trim().is_empty() {
@@ -135,6 +145,9 @@ fn format_transcript(messages: Vec<Message>, data_dir: &Path) -> String {
                 }
             }
             SessionMessage::Tool(m) => {
+                if !show_tools {
+                    continue;
+                }
                 let mut body = format!("args: {}", strs::truncate_with_suffix(&m.args, 300, "..."));
                 let result = render_blocks(&m.result, data_dir);
                 if !result.trim().is_empty() {

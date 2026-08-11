@@ -97,6 +97,9 @@ enum SessionsCommands {
         /// Dump the raw JSONL file (large inline base64 payloads elided)
         #[arg(long)]
         raw: bool,
+        /// Include tool calls (name/args/result) in the transcript
+        #[arg(long)]
+        tools: bool,
     },
     /// Manage checkpoints for a session
     Checkpoint(SessionCheckpointArgs),
@@ -366,9 +369,11 @@ async fn run_session(args: SessionArgs) -> Result<()> {
             session,
             steer,
         } => commands::session::send::run(&args.global, message, session, steer).await,
-        SessionsCommands::Cat { session, raw } => {
-            commands::session::cat::run(&args.global, session, raw).await
-        }
+        SessionsCommands::Cat {
+            session,
+            raw,
+            tools,
+        } => commands::session::cat::run(&args.global, session, raw, tools).await,
         SessionsCommands::Checkpoint(cp_args) => run_session_checkpoint(cp_args).await,
     }
 }
