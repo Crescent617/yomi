@@ -89,6 +89,15 @@ enum SessionsCommands {
         #[arg(long)]
         steer: bool,
     },
+    /// Read a session's message log (friendly transcript by default)
+    Cat {
+        /// Session ID (defaults to current directory's last session)
+        #[arg(short, long)]
+        session: Option<String>,
+        /// Dump the raw JSONL file (large inline base64 payloads elided)
+        #[arg(long)]
+        raw: bool,
+    },
     /// Manage checkpoints for a session
     Checkpoint(SessionCheckpointArgs),
 }
@@ -357,6 +366,9 @@ async fn run_session(args: SessionArgs) -> Result<()> {
             session,
             steer,
         } => commands::session::send::run(&args.global, message, session, steer).await,
+        SessionsCommands::Cat { session, raw } => {
+            commands::session::cat::run(&args.global, session, raw).await
+        }
         SessionsCommands::Checkpoint(cp_args) => run_session_checkpoint(cp_args).await,
     }
 }

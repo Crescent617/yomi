@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 use comfy_table::{ContentArrangement, Table};
 
 pub mod cancel;
+pub mod cat;
 pub mod send;
 pub mod stop;
 

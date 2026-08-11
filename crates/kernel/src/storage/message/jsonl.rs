@@ -23,7 +23,8 @@ impl JsonlMessageStore {
         }
     }
 
-    fn file_path(&self, session_id: &str) -> PathBuf {
+    /// Path of the JSONL log for a session (`{base_dir}/{safe_id}.jsonl`).
+    pub fn file_path(&self, session_id: &str) -> PathBuf {
         let safe_id = session_id.replace(['/', '\\'], "_");
         self.base_dir.join(format!("{safe_id}.jsonl"))
     }
