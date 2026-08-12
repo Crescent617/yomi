@@ -52,7 +52,8 @@ pub async fn get_connection_info(
 
 /// Switch the GUI to a remote daemon at `addr` (e.g. `wss://host:port`).
 /// Validates connectivity before swapping; the previous connection stays
-/// untouched on failure.
+/// untouched on failure. The local daemon (if any) is deliberately left
+/// running so switching back is instant and its cron jobs keep firing.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn connect_remote(
     state: State<'_, AppState>,
@@ -71,9 +72,6 @@ pub async fn connect_remote(
         .await
         .map_err(|e| GuiError::unknown(format!("Daemon at {addr} is not ready: {e}")))?;
     state.swap_kernel(Arc::new(remote), crate::state::ConnectionMode::Remote(addr));
-    crate::daemon::stop_daemon()
-        .await
-        .map_err(|e| GuiError::unknown(format!("Failed to stop local daemon: {e}")))?;
     let managed = crate::daemon::is_managed().await;
     Ok(connection_info_json(&state.connection_mode(), managed))
 }
