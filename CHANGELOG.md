@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.74] - 2026-08-12
+
+### Changed
+- 配置文件中的 `[env]` 环境变量现在会覆盖系统里已存在的同名变量（此前保留系统已有值、只补缺失项）；覆盖在当前进程内不可恢复。
+
+### Fixed
+- 连接远程 daemon 后本地 daemon 保持运行（定时任务与消息通道不受影响），切回本地时直接重连、无需重新启动；此前连接远程会停掉本地 daemon。
+
 ## [0.7.73] - 2026-08-11
 
 ### Changed
