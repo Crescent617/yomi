@@ -293,7 +293,7 @@
       }
     },
     "env": {
-      "description": "General-purpose environment variables injected at startup when absent from the host. Keys are used verbatim and do not require the YOMI_ prefix.",
+      "description": "General-purpose environment variables injected at startup, overriding host values. Keys are used verbatim and do not require the YOMI_ prefix.",
       "type": "object",
       "additionalProperties": { "type": "string" },
       "default": {}

@@ -44,8 +44,13 @@ YOMI_TEST_CONFIG_ENV = "configured"
     );
 }
 
+/// Serializes tests that mutate process env and the global injected-env
+/// registry — they race when run on parallel test threads.
+static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
-fn inject_env_preserves_existing_values() {
+fn inject_env_overrides_existing_values() {
+    let _guard = ENV_TEST_LOCK.lock().unwrap();
     let key = format!("YOMI_TEST_ENV_{}", crate::types::MessageId::new().as_str());
     std::env::set_var(&key, "host");
     let mut config = Config::default();
@@ -53,12 +58,13 @@ fn inject_env_preserves_existing_values() {
 
     config.inject_env().unwrap();
 
-    assert_eq!(std::env::var(&key).unwrap(), "host");
-    std::env::remove_var(key);
+    assert_eq!(std::env::var(&key).unwrap(), "configured");
+    Config::clear_injected_env();
 }
 
 #[test]
 fn inject_env_sets_missing_values() {
+    let _guard = ENV_TEST_LOCK.lock().unwrap();
     let key = format!("YOMI_TEST_ENV_{}", crate::types::MessageId::new().as_str());
     let mut config = Config::default();
     config.env.insert(key.clone(), "configured".to_string());
@@ -66,11 +72,12 @@ fn inject_env_sets_missing_values() {
     config.inject_env().unwrap();
 
     assert_eq!(std::env::var(&key).unwrap(), "configured");
-    std::env::remove_var(key);
+    Config::clear_injected_env();
 }
 
 #[test]
 fn inject_env_replaces_values_set_by_an_earlier_injection() {
+    let _guard = ENV_TEST_LOCK.lock().unwrap();
     let key = format!("YOMI_TEST_ENV_{}", crate::types::MessageId::new().as_str());
     let mut first = Config::default();
     first.env.insert(key.clone(), "first".to_string());
@@ -86,14 +93,15 @@ fn inject_env_replaces_values_set_by_an_earlier_injection() {
 }
 
 #[test]
-fn injected_env_names_tracks_only_values_set_by_config() {
-    let injected_key = format!("YOMI_TEST_ENV_{}", crate::types::MessageId::new().as_str());
+fn injected_env_names_tracks_all_configured_values() {
+    let _guard = ENV_TEST_LOCK.lock().unwrap();
+    let fresh_key = format!("YOMI_TEST_ENV_{}", crate::types::MessageId::new().as_str());
     let host_key = format!("YOMI_TEST_ENV_{}", crate::types::MessageId::new().as_str());
     std::env::set_var(&host_key, "host");
     let mut config = Config::default();
     config
         .env
-        .insert(injected_key.clone(), "configured".to_string());
+        .insert(fresh_key.clone(), "configured".to_string());
     config
         .env
         .insert(host_key.clone(), "configured".to_string());
@@ -101,14 +109,14 @@ fn injected_env_names_tracks_only_values_set_by_config() {
     config.inject_env().unwrap();
     let names = Config::injected_env_names();
 
-    assert!(names.contains(&injected_key));
-    assert!(!names.contains(&host_key));
+    assert!(names.contains(&fresh_key));
+    assert!(names.contains(&host_key));
     Config::clear_injected_env();
-    std::env::remove_var(host_key);
 }
 
 #[test]
 fn inject_env_does_not_clear_removed_values() {
+    let _guard = ENV_TEST_LOCK.lock().unwrap();
     let key = format!("YOMI_TEST_ENV_{}", crate::types::MessageId::new().as_str());
     let mut config = Config::default();
     config.env.insert(key.clone(), "configured".to_string());
@@ -123,6 +131,7 @@ fn inject_env_does_not_clear_removed_values() {
 
 #[test]
 fn inject_env_rejects_invalid_names() {
+    let _guard = ENV_TEST_LOCK.lock().unwrap();
     let mut config = Config::default();
     config
         .env

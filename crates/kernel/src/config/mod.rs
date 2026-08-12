@@ -65,7 +65,7 @@ pub mod env_names {
     /// Path to a configuration file to use instead of the default
     pub const CONFIG: &str = env_name!("CONFIG");
 
-    // NOTE: General-purpose environment variables injected at startup when absent from the host. Keys are used verbatim and do not require the [`crate::ENV_PREFIX`] prefix.
+    // NOTE: General-purpose environment variables injected at startup, overriding host values. Keys are used verbatim and do not require the [`crate::ENV_PREFIX`] prefix.
 
     /// Serper.dev API key (optional, no prefix)
     pub const SERPER_API_KEY: &str = "SERPER_API_KEY";
@@ -244,7 +244,8 @@ pub struct KernelConfig {
 #[serde(default)]
 pub struct Config {
     pub agent: AgentConfig,
-    /// General-purpose environment variables injected at startup when absent from the host.
+    /// General-purpose environment variables injected at startup, overriding
+    /// host values.
     /// Keys are used verbatim and do not require the [`crate::ENV_PREFIX`] prefix.
     pub env: BTreeMap<String, String>,
     pub tasks: TasksConfig,
@@ -379,11 +380,13 @@ impl Config {
 
     /// Inject configured environment variables into the host process.
     ///
-    /// Missing variables are added. Values previously injected by Yomi are
-    /// updated when the configuration changes. Existing host variables are
-    /// preserved, and removed `[env]` entries remain in this process until it
-    /// exits; daemon children explicitly remove tracked injected variables
-    /// before starting so they reload the current configuration.
+    /// Configured values override any existing host variables, and values
+    /// previously injected by Yomi are updated when the configuration
+    /// changes. Overriding is one-way: the previous host value cannot be
+    /// restored. Removed `[env]` entries keep their last injected value in
+    /// this process until it exits; daemon children explicitly remove
+    /// tracked injected variables before starting so they reload the
+    /// current configuration.
     pub fn inject_env(&self) -> std::result::Result<(), KernelError> {
         self.validate_env_entries()?;
         let mut injected = INJECTED_ENV
@@ -391,16 +394,8 @@ impl Config {
             .lock()
             .map_err(|error| KernelError::config(format!("injected env lock poisoned: {error}")))?;
         for (name, value) in &self.env {
-            let current = std::env::var(name).ok();
-            let was_injected = injected
-                .get(name)
-                .is_some_and(|previous| current.as_deref() == Some(previous.as_str()));
-            if current.is_none() || was_injected {
-                std::env::set_var(name, value);
-                injected.insert(name.clone(), value.clone());
-            } else {
-                injected.remove(name);
-            }
+            std::env::set_var(name, value);
+            injected.insert(name.clone(), value.clone());
         }
         Ok(())
     }
