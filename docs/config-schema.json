@@ -9,6 +9,11 @@
       "description": "Agent behavior and execution settings.",
       "type": "object",
       "properties": {
+        "name": {
+          "description": "Agent identity name. Substituted into the {{name}} placeholder of system_prompt.",
+          "type": "string",
+          "default": "Yomi"
+        },
         "default_model": {
           "description": "Default model name for new sessions (points to a model in Config.models).",
           "type": "string",
@@ -26,7 +31,7 @@
           "default": true
         },
         "system_prompt": {
-          "description": "Custom system prompt override. If omitted, the built-in default prompt is used.",
+          "description": "Custom system prompt override; supports the {{name}} placeholder. If omitted, the built-in default prompt is used.",
           "type": "string"
         },
         "tool_blocklist": {

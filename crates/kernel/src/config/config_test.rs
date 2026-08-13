@@ -642,3 +642,27 @@ fn newly_created_kernel_config_has_private_permissions() {
     let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
 }
+
+#[test]
+fn agent_name_from_toml() {
+    let parsed: Config = toml::from_str(
+        r#"
+[agent]
+name = "Claw"
+"#,
+    )
+    .unwrap();
+    assert_eq!(parsed.agent.name, "Claw");
+}
+
+#[test]
+fn agent_name_defaults_to_yomi() {
+    let parsed: Config = toml::from_str(
+        r#"
+[agent]
+default_model = "default"
+"#,
+    )
+    .unwrap();
+    assert_eq!(parsed.agent.name, "Yomi");
+}

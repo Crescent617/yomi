@@ -14,6 +14,9 @@ use thiserror::Error;
 // Independent feature switches; a bool per capability is the intended shape.
 #[allow(clippy::struct_excessive_bools)]
 pub struct AgentConfig {
+    /// Agent identity name. Substituted into the `{{name}}` placeholder of
+    /// `system_prompt` when the config is finalized in `build_agent_config`.
+    pub name: String,
     /// Default model name for new sessions (points to a model in Config.models)
     pub default_model: String,
     pub max_iterations: usize,
@@ -197,6 +200,7 @@ impl AgentSpawnArgs {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
+            name: "Yomi".to_string(),
             default_model: "default".to_string(),
             max_iterations: 100,
             enable_subagent: true,
@@ -214,6 +218,20 @@ impl Default for AgentConfig {
 
 /// Default system prompt for the agent
 const DEFAULT_SYSTEM_PROMPT: &str = include_str!("prompts/sp.md");
+
+/// Placeholder in `system_prompt` replaced with [`AgentConfig::name`] by
+/// [`AgentConfig::rendered_system_prompt`].
+const NAME_PLACEHOLDER: &str = "{{name}}";
+
+impl AgentConfig {
+    /// Render the system prompt with every `{{name}}` placeholder replaced by
+    /// the configured agent name. Prompts without the placeholder pass through
+    /// unchanged.
+    #[must_use]
+    pub fn rendered_system_prompt(&self) -> String {
+        self.system_prompt.replace(NAME_PLACEHOLDER, &self.name)
+    }
+}
 
 /// Sub-agent execution mode
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

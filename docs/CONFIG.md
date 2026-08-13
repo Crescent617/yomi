@@ -116,10 +116,11 @@ effort = "medium"  # low | medium | high
 
 | 字段 | 类型 | 说明 | 默认值 |
 |---|---|---|---|
+| `name` | string | Agent 身份名，替换 `system_prompt` 中的 `{{name}}` 占位符 | `"Yomi"` |
 | `default_model` | string | 默认模型标识名 | `"default"` |
 | `max_iterations` | integer | 单次会话最大迭代次数 | `100` |
 | `enable_subagent` | boolean | 允许 spawn 子 agent | `true` |
-| `system_prompt` | string | 自定义系统提示，省略则用内置默认 | 内置 |
+| `system_prompt` | string | 自定义系统提示，支持 `{{name}}` 占位符；省略则用内置默认 | 内置 |
 | `tool_blocklist` | string[] | 工具禁用列表（正则） | `[]` |
 | `max_tool_output_length` | integer | 最大工具输出长度（字节） | `40000` |
 

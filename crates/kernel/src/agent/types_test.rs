@@ -107,3 +107,43 @@ async fn test_resolve_model_without_session_store_uses_default() {
     let (_, cfg) = shared.resolve_model(&sid).await.unwrap();
     assert_eq!(cfg.name, "default");
 }
+
+#[test]
+fn rendered_system_prompt_substitutes_default_name() {
+    let cfg = AgentConfig::default();
+    let sp = cfg.rendered_system_prompt();
+    assert!(sp.starts_with("You are Yomi,"));
+    assert!(!sp.contains(NAME_PLACEHOLDER));
+}
+
+#[test]
+fn rendered_system_prompt_uses_configured_name() {
+    let cfg = AgentConfig {
+        name: "Claw".to_string(),
+        ..AgentConfig::default()
+    };
+    assert!(cfg.rendered_system_prompt().starts_with("You are Claw,"));
+}
+
+#[test]
+fn rendered_system_prompt_leaves_prompt_without_placeholder_untouched() {
+    let cfg = AgentConfig {
+        name: "Claw".to_string(),
+        system_prompt: "You are a bespoke assistant.".to_string(),
+        ..AgentConfig::default()
+    };
+    assert_eq!(cfg.rendered_system_prompt(), "You are a bespoke assistant.");
+}
+
+#[test]
+fn rendered_system_prompt_substitutes_every_placeholder_occurrence() {
+    let cfg = AgentConfig {
+        name: "Claw".to_string(),
+        system_prompt: "You are {{name}}. Obey {{name}}'s user.".to_string(),
+        ..AgentConfig::default()
+    };
+    assert_eq!(
+        cfg.rendered_system_prompt(),
+        "You are Claw. Obey Claw's user."
+    );
+}

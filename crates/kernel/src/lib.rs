@@ -152,6 +152,9 @@ pub async fn build_agent_config(config: &Config, base_dir: &Path) -> AgentConfig
     }
 
     let mut agent = config.agent.clone();
+    // Bake the identity name into the prompt template: custom prompts get the
+    // same `{{name}}` treatment, prompts without the placeholder pass through.
+    agent.system_prompt = agent.rendered_system_prompt();
     agent.skills = skills;
     agent.enable_cron_tool = config.features.cron_tool_enabled();
     agent.enable_todo_tool = config.features.todo_tool_enabled();
@@ -214,3 +217,7 @@ pub async fn build_kernel(config: &Config, enable_cron: bool) -> Result<Arc<Kern
 
     Ok(kernel)
 }
+
+#[cfg(test)]
+#[path = "lib_test.rs"]
+mod tests;
