@@ -61,11 +61,9 @@
       originalContent = await fsProvider.readFile(entry.path);
       currentContent = originalContent;
 
-      const isDark = document.documentElement.classList.contains("dark");
       editor = await createEditor(container, {
         doc: originalContent,
         filename: entry.name,
-        theme: isDark ? "dark" : "light",
         onChange: (val) => {
           currentContent = val;
         },

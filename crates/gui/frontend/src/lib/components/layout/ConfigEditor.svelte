@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import {
     AlertCircle,
     ChevronLeft,
@@ -10,8 +10,14 @@
     Save,
     Zap,
   } from "lucide-svelte";
+  import type { EditorView } from "codemirror";
   import * as api from "../../api";
-  import { deleteToLineStart } from "../../editor/delete-to-line-start";
+  import { createEditor } from "../../editor/cmSetup";
+  import {
+    errorLineField,
+    jumpToLine,
+    setErrorLine,
+  } from "../../editor/error-line";
   import { appState, showNotification } from "../../state.svelte";
   import ConfirmDialog from "../ui/ConfirmDialog.svelte";
 
@@ -20,13 +26,6 @@
     line: number | null;
     column: number | null;
   };
-
-  type TomlToken = {
-    text: string;
-    className: string;
-  };
-
-  const lineHeight = 24;
 
   let content = $state("");
   let disk_content = $state("");
@@ -41,15 +40,10 @@
   let restartConfirmOpen = $state(false);
   let effectiveCollapsed = $state(false);
 
-  let textareaRef = $state<HTMLTextAreaElement>();
-  let scrollTop = $state(0);
-  let scrollLeft = $state(0);
-  let currentLine = $state(1);
+  let container = $state<HTMLElement>();
+  let editor: EditorView | undefined;
 
   const dirty = $derived(content !== disk_content);
-  const lines = $derived(content.split("\n"));
-  const highlightedLines = $derived(highlightToml(content));
-  const errorLine = $derived(saveError?.line ?? null);
 
   const restartMessage =
     "Restart the daemon to apply config changes?\n\nAll running sessions and tasks will be interrupted. Chat history is preserved.";
@@ -85,123 +79,6 @@
     appState.config_dirty = dirty;
   });
 
-  function findUnquoted(text: string, target: string): number {
-    let quote = "";
-    let escaped = false;
-    for (let i = 0; i < text.length; i += 1) {
-      const char = text[i];
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (quote === '"' && char === "\\") {
-        escaped = true;
-        continue;
-      }
-      if (char === '"' || char === "'") {
-        if (!quote) quote = char;
-        else if (quote === char) quote = "";
-        continue;
-      }
-      if (!quote && char === target) return i;
-    }
-    return -1;
-  }
-
-  function valueTokens(value: string): TomlToken[] {
-    const result: TomlToken[] = [];
-    const pattern =
-      /("(?:\\.|[^"\\])*"|'[^']*'|\b(?:true|false)\b|[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)/g;
-    let offset = 0;
-    for (const match of value.matchAll(pattern)) {
-      const index = match.index ?? 0;
-      if (index > offset) {
-        result.push({ text: value.slice(offset, index), className: "" });
-      }
-      const token = match[0];
-      result.push({
-        text: token,
-        className:
-          token.startsWith('"') || token.startsWith("'")
-            ? "text-success"
-            : token === "true" || token === "false"
-              ? "text-warning"
-              : "text-info",
-      });
-      offset = index + token.length;
-    }
-    if (offset < value.length) {
-      result.push({ text: value.slice(offset), className: "" });
-    }
-    return result;
-  }
-
-  function highlightTomlLine(line: string): TomlToken[] {
-    const commentIndex = findUnquoted(line, "#");
-    const body = commentIndex >= 0 ? line.slice(0, commentIndex) : line;
-    const comment = commentIndex >= 0 ? line.slice(commentIndex) : "";
-    const result: TomlToken[] = [];
-
-    if (body.trimStart().startsWith("[")) {
-      result.push({ text: body, className: "text-info" });
-    } else {
-      const equalsIndex = findUnquoted(body, "=");
-      if (equalsIndex >= 0) {
-        const key = body.slice(0, equalsIndex);
-        const leading = key.match(/^\s*/)?.[0] ?? "";
-        if (leading) result.push({ text: leading, className: "" });
-        result.push({
-          text: key.slice(leading.length),
-          className: "text-primary",
-        });
-        result.push({ text: "=", className: "text-muted-foreground" });
-        result.push(...valueTokens(body.slice(equalsIndex + 1)));
-      } else {
-        result.push({ text: body, className: "" });
-      }
-    }
-
-    if (comment) {
-      result.push({ text: comment, className: "text-muted-foreground" });
-    }
-    return result;
-  }
-
-  function highlightToml(source: string): TomlToken[][] {
-    let multiline = "";
-    return source.split("\n").map((line) => {
-      if (multiline) {
-        const end = line.indexOf(multiline);
-        if (end < 0) return [{ text: line, className: "text-success" }];
-        const tokens = [
-          {
-            text: line.slice(0, end + multiline.length),
-            className: "text-success",
-          },
-        ];
-        const rest = line.slice(end + multiline.length);
-        multiline = "";
-        return [...tokens, ...highlightTomlLine(rest)];
-      }
-
-      const basic = line.indexOf('"""');
-      const literal = line.indexOf("'''");
-      const start =
-        basic < 0 ? literal : literal < 0 ? basic : Math.min(basic, literal);
-      if (start < 0) return highlightTomlLine(line);
-
-      const delimiter = start === basic ? '"""' : "'''";
-      if (line.indexOf(delimiter, start + delimiter.length) >= 0) {
-        return highlightTomlLine(line);
-      }
-      multiline = delimiter;
-      return [
-        ...highlightTomlLine(line.slice(0, start)),
-        { text: line.slice(start), className: "text-success" },
-      ];
-    });
-  }
-
   function parseSaveDiagnostic(error: unknown): SaveDiagnostic {
     const message = api.errorMessage(error);
     const location = message.match(/line\s+(\d+)\s*,\s*column\s+(\d+)/i);
@@ -212,41 +89,17 @@
     };
   }
 
-  function syncScroll(element: HTMLTextAreaElement = textareaRef!) {
-    if (!element) return;
-    scrollTop = element.scrollTop;
-    scrollLeft = element.scrollLeft;
+  function flagErrorLine(line: number | null) {
+    editor?.dispatch({ effects: setErrorLine.of(line) });
   }
 
-  function updateCursor(element: HTMLTextAreaElement = textareaRef!) {
-    if (!element) return;
-    currentLine = element.value
-      .slice(0, element.selectionStart)
-      .split("\n").length;
-  }
-
-  function jumpToLine(line: number, column = 1) {
-    if (!textareaRef) return;
-    const sourceLines = content.split("\n");
-    const safeLine = Math.max(1, Math.min(line, sourceLines.length));
-    const safeColumn = Math.max(
-      1,
-      Math.min(column, sourceLines[safeLine - 1].length + 1),
-    );
-    let offset = 0;
-    for (let i = 0; i < safeLine - 1; i += 1) {
-      offset += sourceLines[i].length + 1;
+  function jumpToDiagnostic() {
+    if (!editor) return;
+    if (saveError?.line) {
+      jumpToLine(editor, saveError.line, saveError.column ?? 1);
+    } else {
+      editor.focus();
     }
-    offset += safeColumn - 1;
-
-    textareaRef.focus();
-    textareaRef.setSelectionRange(offset, offset);
-    textareaRef.scrollTop = Math.max(
-      0,
-      (safeLine - 1) * lineHeight - textareaRef.clientHeight / 2,
-    );
-    syncScroll(textareaRef);
-    currentLine = safeLine;
   }
 
   function handleBeforeUnload(event: BeforeUnloadEvent) {
@@ -287,13 +140,18 @@
       filePath = toml.path;
       full_config = toml.full_config;
       saveError = null;
+      if (editor && editor.state.doc.toString() !== toml.content) {
+        // Hard reload: rebuild the editor so the discarded document and
+        // its undo history are both gone — a plain dispatch would let
+        // Cmd+Z resurrect edits the user explicitly discarded.
+        editor.destroy();
+        editor = await createConfigEditor(toml.content);
+      }
+      flagErrorLine(null);
       if (!initial && toml.content !== previousDiskContent) {
         appState.config_restart_required = true;
         appState.config_applied = false;
       }
-      currentLine = 1;
-      scrollTop = 0;
-      scrollLeft = 0;
       return true;
     } catch (e: unknown) {
       console.error("Failed to load config:", e);
@@ -328,6 +186,7 @@
     const snapshot = content;
     saving = true;
     saveError = null;
+    flagErrorLine(null);
     try {
       await api.saveConfigToml(snapshot);
       disk_content = snapshot;
@@ -337,50 +196,49 @@
     } catch (e: unknown) {
       console.error("Failed to save config:", e);
       saveError = parseSaveDiagnostic(e);
+      flagErrorLine(saveError.line);
       showNotification("Save failed", "error");
     } finally {
       saving = false;
     }
   }
 
-  function handleKeydown(event: KeyboardEvent) {
-    if (event.key === "s" && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault();
-      void save();
-      return;
-    }
-    // WKWebView on macOS deletes to line start natively for Cmd+Backspace
-    // without firing an input event, leaving the highlight overlay stale.
-    // Handle it manually so the textarea and `content` stay in sync.
-    if (
-      event.key === "Backspace" &&
-      event.metaKey &&
-      !event.ctrlKey &&
-      !event.altKey &&
-      !event.shiftKey
-    ) {
-      event.preventDefault();
-      const element = event.currentTarget as HTMLTextAreaElement;
-      const { start, end, cursor } = deleteToLineStart(
-        element.value,
-        element.selectionStart,
-        element.selectionEnd,
-      );
-      if (start === end) return;
-      element.setRangeText("", start, end, "end");
-      element.setSelectionRange(cursor, cursor);
-      content = element.value;
-      saveError = null;
-      updateCursor(element);
-    }
+  async function createConfigEditor(doc: string): Promise<EditorView> {
+    return createEditor(container!, {
+      doc,
+      filename: "config.toml",
+      extensions: [errorLineField],
+      onChange: (value) => {
+        content = value;
+        if (saveError) {
+          saveError = null;
+          flagErrorLine(null);
+        }
+      },
+      onSave: () => void save(),
+    });
   }
 
   onMount(() => {
-    void loadFromDisk(true);
+    void (async () => {
+      await loadFromDisk(true);
+      await tick();
+      if (!container) return;
+      editor = await createConfigEditor(content);
+      // A reload may have updated `content` while the async language
+      // import was in flight; resync the fresh editor if they diverged.
+      const created = editor.state.doc.toString();
+      if (created !== content) {
+        editor.dispatch({
+          changes: { from: 0, to: created.length, insert: content },
+        });
+      }
+    })();
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload);
       appState.config_dirty = false;
+      editor?.destroy();
     };
   });
 </script>
@@ -449,94 +307,14 @@
         <div
           class="relative flex-1 min-h-0 overflow-hidden bg-background focus-within:shadow-[inset_0_0_0_1px_var(--color-ring)]"
         >
-          {#if currentLine}
-            <div
-              class="absolute left-12 right-0 h-6 pointer-events-none {currentLine ===
-              errorLine
-                ? 'bg-error/10'
-                : 'bg-primary/10'}"
-              style:top={`${16 + (currentLine - 1) * lineHeight - scrollTop}px`}
-            ></div>
-          {/if}
-          {#if errorLine && errorLine !== currentLine}
-            <div
-              class="absolute left-12 right-0 h-6 bg-error/10 pointer-events-none"
-              style:top={`${16 + (errorLine - 1) * lineHeight - scrollTop}px`}
-            ></div>
-          {/if}
-
-          <div
-            class="absolute inset-y-0 left-12 right-0 overflow-hidden pointer-events-none font-mono text-sm leading-6"
-            aria-hidden="true"
-          >
-            <pre
-              class="min-w-full w-max p-4 text-foreground"
-              style:transform={`translate(${-scrollLeft}px, ${-scrollTop}px)`}>{#each highlightedLines as tokens, index (index)}<span
-                  class="block h-6 min-w-full"
-                  >{#each tokens as token, tokenIndex (`${tokenIndex}:${token.text}`)}<span
-                      class={token.className}>{token.text}</span
-                    >{/each}</span
-                >{/each}</pre>
-          </div>
-
-          <textarea
-            bind:this={textareaRef}
-            bind:value={content}
-            wrap="off"
-            oninput={(event) => {
-              saveError = null;
-              updateCursor(event.currentTarget);
-            }}
-            onkeyup={(event) => updateCursor(event.currentTarget)}
-            onclick={(event) => updateCursor(event.currentTarget)}
-            onselect={(event) => updateCursor(event.currentTarget)}
-            onscroll={(event) => syncScroll(event.currentTarget)}
-            onkeydown={handleKeydown}
-            class="absolute inset-y-0 left-12 right-0 w-[calc(100%-3rem)] h-full resize-none border-0 bg-transparent p-4 font-mono text-sm leading-6 text-transparent caret-foreground selection:bg-primary/20 focus-visible:outline-none"
-            spellcheck={false}
-            aria-label="Config TOML"
-          ></textarea>
-
-          <div
-            class="absolute inset-y-0 left-0 z-10 w-12 overflow-hidden border-r border-border bg-muted/30 pt-4 font-mono text-xs leading-6 text-muted-foreground"
-            aria-hidden="true"
-          >
-            <div style:transform={`translateY(${-scrollTop}px)`}>
-              {#each lines as _, index (index)}
-                <button
-                  type="button"
-                  tabindex="-1"
-                  onclick={() => jumpToLine(index + 1)}
-                  class="block h-6 w-full pr-2 text-right hover:text-foreground {index +
-                    1 ===
-                  errorLine
-                    ? 'bg-error/10 text-error'
-                    : index + 1 === currentLine
-                      ? 'bg-primary/10 text-primary'
-                      : ''}"
-                >
-                  {index + 1}
-                </button>
-              {/each}
-            </div>
-          </div>
+          <div bind:this={container} class="absolute inset-0"></div>
         </div>
 
         {#if saveError}
           <button
             type="button"
-            onfocus={() => {
-              if (saveError?.line) {
-                jumpToLine(saveError.line, saveError.column ?? 1);
-              }
-            }}
-            onclick={() => {
-              if (saveError?.line) {
-                jumpToLine(saveError.line, saveError.column ?? 1);
-              } else {
-                textareaRef?.focus();
-              }
-            }}
+            onfocus={jumpToDiagnostic}
+            onclick={jumpToDiagnostic}
             class="flex w-full shrink-0 items-start gap-2 border-t border-error/30 bg-error/10 px-3 py-2 text-left text-xs text-error"
           >
             <AlertCircle class="mt-0.5 h-3.5 w-3.5 shrink-0" />

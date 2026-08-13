@@ -1,8 +1,8 @@
 import { basicSetup, EditorView } from "codemirror";
-import { oneDark } from "@codemirror/theme-one-dark";
 import { keymap } from "@codemirror/view";
 
 import { type Extension } from "@codemirror/state";
+import { appSyntaxHighlighting, appTheme } from "./theme";
 
 const langCache = new Map<string, Extension>();
 
@@ -13,6 +13,18 @@ export async function loadLanguage(
   if (!ext) return null;
 
   if (langCache.has(ext)) return langCache.get(ext) ?? null;
+
+  // TOML has no Lezer grammar; the official approach is the ported
+  // stream mode from @codemirror/legacy-modes.
+  if (ext === "toml") {
+    const [{ StreamLanguage }, { toml }] = await Promise.all([
+      import("@codemirror/language"),
+      import("@codemirror/legacy-modes/mode/toml"),
+    ]);
+    const lang = StreamLanguage.define(toml);
+    langCache.set(ext, lang);
+    return lang;
+  }
 
   let mod: { [key: string]: () => Extension };
   switch (ext) {
@@ -92,24 +104,27 @@ export async function loadLanguage(
 export interface EditorConfig {
   doc: string;
   filename: string;
-  theme: "light" | "dark";
   onChange?: (value: string) => void;
   onSave?: (value: string) => void;
   onKeymap?: Record<string, (view: EditorView) => boolean>;
+  extensions?: Extension[];
 }
 
 export async function createEditor(
   parent: HTMLElement,
   config: EditorConfig,
 ): Promise<EditorView> {
-  const extensions = [basicSetup];
+  // Chrome and syntax colors come from the app's semantic CSS variables
+  // (editor/theme.ts), so editors follow light/dark and custom palettes.
+  const extensions = [
+    basicSetup,
+    appTheme,
+    appSyntaxHighlighting,
+    ...(config.extensions ?? []),
+  ];
 
   const lang = await loadLanguage(config.filename);
   if (lang) extensions.push(lang);
-
-  if (config.theme === "dark") {
-    extensions.push(oneDark);
-  }
 
   if (config.onChange) {
     extensions.push(

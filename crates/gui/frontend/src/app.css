@@ -230,6 +230,11 @@ body.pet-window {
   border-radius: 0.5rem;
 }
 
+/* CodeMirror: line flagged by a config save diagnostic (lib/editor/error-line.ts). */
+.cm-error-line {
+  background-color: hsl(var(--error) / 0.12);
+}
+
 /* ── Yomi signature elements ────────────────────────────────────────── */
 
 /* Mono micro-label: the house style for metadata, section headers, and
