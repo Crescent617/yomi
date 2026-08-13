@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.76] - 2026-08-13
+
+### Changed
+- 设置中的 Kernel 配置编辑器重做:配色跟随应用主题(亮/暗与自定义主题实时生效),并支持撤销/重做(Cmd+Z / Cmd+Shift+Z)、搜索替换(Cmd+F)、括号匹配与多光标编辑。
+- 文件编辑器配色同样跟随应用主题,不再固定为深色配色。
+
+### Fixed
+- 修复 macOS 上编辑器内 Cmd+Z 撤销无效的问题(快捷键此前被系统菜单栏拦截,现在正常送达编辑器)。
+
 ## [0.7.75] - 2026-08-13
 
 ### Added
