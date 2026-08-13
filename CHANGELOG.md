@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.75] - 2026-08-13
+
+### Added
+- 配置新增 `[agent]` 下的 `name` 项（默认 `"Yomi"`）：自定义 agent 身份名，系统提示与自定义 `system_prompt` 中的 `{{name}}` 占位符会被替换为该名字。
+
 ## [0.7.74] - 2026-08-12
 
 ### Changed
