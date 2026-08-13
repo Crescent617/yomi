@@ -138,6 +138,46 @@ jobs:
           name: gui-dmg
           path: ${{ steps.sha.outputs.dmg }}
 
+  # ==================== Docker 镜像 (GHCR) ====================
+  build-docker:
+    name: Build & Push Docker Image
+    needs: check-precondition
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Build image tarball
+        run: nix build .#dockerImage --print-build-logs
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Load, tag & push
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          OWNER="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          IMAGE="ghcr.io/${OWNER}/yomi"
+
+          docker load < result
+          docker tag "yomi:${VERSION}" "${IMAGE}:${VERSION}"
+          docker tag "yomi:${VERSION}" "${IMAGE}:latest"
+          docker push "${IMAGE}:${VERSION}"
+          docker push "${IMAGE}:latest"
+
   # ==================== 创建 GitHub Release ====================
   release:
     needs: [build-tui, build-gui]
