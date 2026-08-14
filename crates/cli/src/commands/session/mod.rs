@@ -5,7 +5,6 @@ use comfy_table::{ContentArrangement, Table};
 pub mod cancel;
 pub mod cat;
 pub mod send;
-pub mod stop;
 
 /// Resolve a session ID from CLI arg or the current directory's last session.
 pub async fn resolve_session_id(global: &GlobalArgs, session: Option<String>) -> Result<String> {

@@ -74,12 +74,6 @@ enum SessionsCommands {
         #[arg(short, long)]
         session: Option<String>,
     },
-    /// Shutdown a running session (remove from daemon memory)
-    Stop {
-        /// Session ID to stop (defaults to current directory's last session)
-        #[arg(short, long)]
-        session: Option<String>,
-    },
     /// Send a message to a session (requires the daemon; queues if the agent is busy)
     Send {
         /// Message text (reads from stdin when omitted)
@@ -103,8 +97,6 @@ enum SessionsCommands {
         #[arg(long)]
         tools: bool,
     },
-    /// Manage checkpoints for a session
-    Checkpoint(SessionCheckpointArgs),
 }
 
 #[derive(Parser)]
@@ -120,45 +112,6 @@ struct SkillArgs {
 enum SkillsCommands {
     /// List all available skills
     List,
-}
-
-#[derive(Parser)]
-struct SessionCheckpointArgs {
-    #[command(flatten)]
-    global: GlobalArgs,
-
-    #[command(subcommand)]
-    command: SessionCheckpointCommands,
-}
-
-#[derive(Subcommand)]
-enum SessionCheckpointCommands {
-    /// List checkpoints for a session
-    List {
-        /// Session ID (defaults to current directory's session)
-        #[arg(short, long)]
-        session: Option<String>,
-    },
-    /// Rewind to a checkpoint (shows what would happen, use TUI for actual rewind)
-    Rewind {
-        /// Message ID of the checkpoint
-        message_id: String,
-        /// Only restore conversation (not files)
-        #[arg(long, group = "target")]
-        conversation: bool,
-        /// Only restore files (not conversation)
-        #[arg(long, group = "target")]
-        files: bool,
-        /// Dry run - show what would happen
-        #[arg(long)]
-        dry_run: bool,
-    },
-    /// Clean up orphaned backup files
-    Cleanup {
-        /// Actually delete files (dry-run by default)
-        #[arg(short, long)]
-        yes: bool,
-    },
 }
 
 #[derive(Parser)]
@@ -388,9 +341,6 @@ async fn run_session(args: SessionArgs) -> Result<()> {
         SessionsCommands::Cancel { session } => {
             commands::session::cancel::run(&args.global, session).await
         }
-        SessionsCommands::Stop { session } => {
-            commands::session::stop::run(&args.global, session).await
-        }
         SessionsCommands::Send {
             message,
             session,
@@ -401,35 +351,6 @@ async fn run_session(args: SessionArgs) -> Result<()> {
             raw,
             tools,
         } => commands::session::cat::run(&args.global, session, raw, tools).await,
-        SessionsCommands::Checkpoint(cp_args) => run_session_checkpoint(cp_args).await,
-    }
-}
-
-async fn run_session_checkpoint(args: SessionCheckpointArgs) -> Result<()> {
-    use kernel::checkpoint::RewindTarget;
-
-    match args.command {
-        SessionCheckpointCommands::List { session } => {
-            commands::checkpoint::list(&args.global, session).await
-        }
-        SessionCheckpointCommands::Rewind {
-            message_id,
-            conversation,
-            files,
-            dry_run,
-        } => {
-            let target = if conversation {
-                RewindTarget::Conversation
-            } else if files {
-                RewindTarget::Files
-            } else {
-                RewindTarget::Both
-            };
-            commands::checkpoint::rewind(&args.global, message_id, target, dry_run).await
-        }
-        SessionCheckpointCommands::Cleanup { yes } => {
-            commands::checkpoint::cleanup(&args.global, !yes).await
-        }
     }
 }
 
