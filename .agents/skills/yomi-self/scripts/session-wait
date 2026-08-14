@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# session-wait — poll a yomi session until it is fully quiescent:
+# phase == idle, no running subagents, no background shell tasks.
+#
+# Usage: session-wait <session_id>   (polls every 10s, waits forever)
+#
+# Exit codes: 0 quiescent · 2 usage error / first probe failed
+# (bad session id or daemon down).
+#
+# State comes from `yomi rpc` (daemon must be running):
+#   get_session            → phase
+#   list_subagents         → is_running children
+#   list_running_sessions  → background_shells of this session (idle
+#                            sessions with bg tasks still appear there)
+#
+# Note: mailbox queue length is not observable via rpc — a queued but
+# not-yet-consumed message is outside the quiescence check.
+
+set -u
+
+prog=${0##*/}
+interval=10
+sid=${1:-}
+
+case "$sid" in
+  -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
+esac
+if [[ -z "$sid" || "$sid" == -* ]]; then
+  echo "usage: $prog <session_id>" >&2
+  exit 2
+fi
+
+# One quiescence probe; prints "phase subagents shells" or nothing when the
+# session query itself fails.
+probe() {
+  local session phase subagents shells
+  if ! session=$(yomi rpc get_session "{\"session_id\":\"$sid\"}" 2>/dev/null); then
+    return 1
+  fi
+  phase=$(jq -r '.phase // "unknown"' <<<"$session")
+
+  subagents=$(yomi rpc list_subagents "{\"parent_session_id\":\"$sid\"}" 2>/dev/null \
+    | jq '[.[] | select(.is_running)] | length' 2>/dev/null)
+  [[ "$subagents" =~ ^[0-9]+$ ]] || subagents=1  # query failed → assume busy
+
+  shells=$(yomi rpc list_running_sessions 2>/dev/null \
+    | jq --arg sid "$sid" \
+      '[.[] | select(.id == $sid) | .background_shells | length] | add // 0' 2>/dev/null)
+  [[ "$shells" =~ ^[0-9]+$ ]] || shells=1
+
+  echo "$phase $subagents $shells"
+}
+
+start=$(date +%s)
+reachable_once=false
+last_line=""
+
+while true; do
+  if state=$(probe); then
+    reachable_once=true
+  elif $reachable_once; then
+    state="unreachable 1 1"  # transient (daemon restarting?) — keep waiting
+  else
+    echo "$prog: cannot query session $sid (bad session id or daemon down)" >&2
+    exit 2
+  fi
+
+  if [[ "$state" == "idle 0 0" ]]; then
+    # Confirm once more after 1s: a turn boundary can read as idle for a
+    # split second while the agent pulls the next mailbox item.
+    sleep 1
+    if state=$(probe) && [[ "$state" == "idle 0 0" ]]; then
+      echo "$prog: $sid quiescent (idle, no running subagents, no shell tasks) after $(( $(date +%s) - start ))s"
+      exit 0
+    fi
+  fi
+
+  line="phase=${state%% *} subagents_running=$(cut -d' ' -f2 <<<"$state") bg_shells=${state##* }"
+  if [[ "$line" != "$last_line" ]]; then
+    echo "$prog: [$(( $(date +%s) - start ))s] $line"
+    last_line=$line
+  fi
+
+  sleep "$interval"
+done
