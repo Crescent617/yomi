@@ -181,6 +181,10 @@ jobs:
 
       - name: Build & push
         uses: docker/build-push-action@v6
+        env:
+          # 不上传 buildx 构建记录 artifact（0 字节、无法解 zip，
+          # 会把 release job 的全量 artifact 下载搞挂）
+          DOCKER_BUILD_RECORD_UPLOAD: 'false'
         with:
           context: docker
           push: true
