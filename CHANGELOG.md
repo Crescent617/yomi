@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.78] - 2026-08-14
+
+### Changed
+- Docker 镜像改由发布产物直接打包：构建显著提速，基底切换为 debian（trixie-slim），镜像内工具集（bash、git、tmux、python3 等）不变。
+
 ## [0.7.77] - 2026-08-14
 
 ### Added
