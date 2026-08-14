@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.77] - 2026-08-14
+
+### Added
+- 飞书状态卡片在耗时较长的任务（如 shell 命令）执行期间每 5 秒自动刷新，耗时与阶段标题不再定格；卡片更新连续失败时自动停止刷新，避免无效重试。
+
+### Removed
+- 移除 `yomi session stop` 命令（此前实际效果等同 `session cancel`；同类操作可用 `yomi rpc` 完成）。
+- 移除 `yomi session checkpoint` 命令组（查看列表可用 `yomi rpc get_checkpoints`，回滚请使用 TUI 内的 `/rewind`）。
+
+### Changed
+- 维护者 skill `yomi-cli` 更名重构为 `yomi-self`：定位为 agent 自我管理手册，并新增 `session-wait` 脚本——每 10 秒轮询，直到会话空闲（无运行中的子代理、无后台 shell 任务）。
+
 ## [0.7.76] - 2026-08-13
 
 ### Changed
