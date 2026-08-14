@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.80] - 2026-08-14
+
+### Changed
+- cron 表达式的星期字段改为 UNIX 标准约定：0 或 7 表示周日，1 表示周一（此前为 1 表示周日的约定；建议用 `mon-fri` 这类英文缩写写法，不受编号影响）。秒字段仍为可选。
+
+### Fixed
+- 修复飞书状态卡片的 trace 偶尔整段变成纯文本（标签显示为字面量）的问题：动态内容里的特殊字符或未闭合标记会撑破卡片渲染，现在渲染时自动转义。
+
 ## [0.7.79] - 2026-08-14
 
 ### Changed
