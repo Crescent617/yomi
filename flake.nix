@@ -192,6 +192,67 @@
           };
 
           default = self.packages.${system}.yomi-cli;
+        }
+        // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          # yomi 的 docker 镜像：yomi + 基础工具链，无配置无密钥。
+          # nix build .#dockerImage && docker load < result  →  yomi:<version>
+          dockerImage =
+            let
+              yomi = self.packages.${system}.yomi-cli;
+            in
+            pkgs.dockerTools.buildLayeredImage {
+              name = "yomi";
+              tag = version;
+
+              # 基础工具链 + 常规 unix 用户态；node 等可选工具链由 agent 运行时自装
+              contents = with pkgs; [
+                yomi
+                bashInteractive
+                coreutils
+                curl
+                diffutils
+                findutils
+                gawk
+                git
+                gnugrep
+                gnused
+                gnutar
+                gzip
+                jq
+                ncurses # tmux 需要 terminfo
+                openssh
+                procps
+                python3
+                ripgrep
+                tmux
+                which
+                xz
+                # FHS 兼容件：/bin/sh、/usr/bin/env、CA bundle、/etc/passwd
+                dockerTools.binSh
+                dockerTools.usrBinEnv
+                dockerTools.caCertificates
+                dockerTools.fakeNss
+              ];
+
+              extraCommands = ''
+                mkdir -p home/yomi
+                install -d -m 1777 tmp
+              '';
+
+              config = {
+                Entrypoint = [ "${yomi}/bin/yomi" "daemon" "start" ];
+                WorkingDir = "/home/yomi";
+                Env = [
+                  "HOME=/home/yomi"
+                  "PATH=/bin:/usr/bin"
+                  "LANG=C.UTF-8"
+                  "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                  "NIX_SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                  "GIT_SSL_CAINFO=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                  "TERMINFO_DIRS=${pkgs.ncurses}/share/terminfo"
+                ];
+              };
+            };
         };
 
         devShells = {
