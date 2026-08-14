@@ -187,7 +187,6 @@ one fact per line, keep the index lean.
 - **建单走脚本，状态流转直接改文件**（2026-08-14 精简，原 `set` 子命令移除）：`ticket.sh new` 强制 id/slug/时间戳/frontmatter 合规——格式失败模式集中在建单（id 不合规、日期格式错、YAML 未闭合）；状态流转只是改 `status:` 行 ± `owner_session_id` 行 + 追加 Result 段/备注行，模型直接编辑文件即可，脚本包装徒增"先定位 skill 路径才能调用"的摩擦。状态机规则（`pending→claimed→done|blocked`、`blocked→claimed` 复工、`claimed→pending` 重置、done 终态）由 skill 文档承载。聚合用 grep、归档用 `mv`，同样不值得包脚本；
 - **派活为主**：协调者建派工单（一个任务一个文件），spawn 子 agent 时在 prompt 里指明任务文件路径；"自主认领"降级为边缘场景（跨 session 捡活）；
 - 执行者先签收再动手（`claimed` + 自己的 session id）；完成置 `done` 写 Result，卡壳置 `blocked` 写明原因；
-- 僵尸回收约定：`claimed` 但 mtime 超 30 分钟未更新 → 可重置 `pending`（利用文件 mtime，零机制）；
 - 父 agent 聚合进度用 glob + grep，不逐个问；验收可派 `verifier` 模板；
 - Ralph 式外循环可直接组合：cron 定时 steer 父 session"看 `.yomi/tickets/`，把 pending 派出去" ≈ 极简版 Gas Town Mayor。
 
