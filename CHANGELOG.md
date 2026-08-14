@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.79] - 2026-08-14
+
+### Changed
+- `yomi rpc create_session` 的 `auto_approve_level` 参数改为可选：缺省时使用配置项 `auto_approve`（默认 `"safe"`）。
+
+### Fixed
+- 修复 macOS 中文输入法下，在 GUI 输入框按方向键可能插入不可见字符（显示为方框）的问题。
+
 ## [0.7.78] - 2026-08-14
 
 ### Changed
