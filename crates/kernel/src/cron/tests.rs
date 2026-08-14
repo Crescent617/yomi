@@ -33,6 +33,49 @@ mod tests {
     }
 
     #[test]
+    fn test_cron_schedule_day_of_week_convention() {
+        // 星期字段约定（Quartz 派，cron crate 源码实锤）：1=周日 … 7=周六。
+        // 经典 Vixie cron 的 0 不合法；周一至周五是 2-6，不是 1-5。
+        use chrono::{Datelike, TimeZone, Weekday};
+
+        // 锚点：2026-08-14 周五 10:00（本地）
+        let from = chrono::Local
+            .with_ymd_and_hms(2026, 8, 14, 10, 0, 0)
+            .unwrap()
+            .with_timezone(&Utc);
+
+        // "1" = 周日 → 下一次落在 8-16（周日）
+        let next = CronSchedule::parse("0 0 9 * * 1")
+            .unwrap()
+            .next_after(from)
+            .unwrap()
+            .with_timezone(&chrono::Local);
+        assert_eq!(next.weekday(), Weekday::Sun);
+        assert_eq!(next.day(), 16);
+
+        // "2-6" = 周一至周五 → 下一次落在 8-17（周一）
+        let next = CronSchedule::parse("0 0 9 * * 2-6")
+            .unwrap()
+            .next_after(from)
+            .unwrap()
+            .with_timezone(&chrono::Local);
+        assert_eq!(next.weekday(), Weekday::Mon);
+        assert_eq!(next.day(), 17);
+
+        // 经典 Unix 的 0 在这里不合法
+        assert!(CronSchedule::parse("0 0 9 * * 0").is_err());
+
+        // 英文缩写同样可用：fri = 周五 → 下一次落在 8-21
+        let next = CronSchedule::parse("0 0 9 * * fri")
+            .unwrap()
+            .next_after(from)
+            .unwrap()
+            .with_timezone(&chrono::Local);
+        assert_eq!(next.weekday(), Weekday::Fri);
+        assert_eq!(next.day(), 21);
+    }
+
+    #[test]
     fn test_cron_schedule_upcoming() {
         let schedule = CronSchedule::parse("0 0 9 * * *").unwrap();
         let now = Utc::now();

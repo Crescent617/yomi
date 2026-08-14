@@ -473,7 +473,7 @@ impl Tool for CronTool {
     fn desc(&self) -> &'static str {
         r"Manage cron jobs: scheduled tasks that send a message to a session (waking its agent) or run a shell command on a cron schedule.
 Actions: list, create, update, delete, trigger (run once immediately, for testing).
-Schedule is a cron expression with 5 fields ('0 9 * * 1-5' = weekdays 09:00) or 6 fields with leading seconds, interpreted in the machine's LOCAL timezone.
+Schedule is a cron expression with 5 fields ('0 9 * * 2-6' = Mon–Fri 09:00) or 6 fields with leading seconds, interpreted in the machine's LOCAL timezone. Day-of-week: 1=Sunday … 7=Saturday (0 is invalid); English abbreviations (mon/tue/wed/thu/fri/sat/sun) are also accepted.
 For send_message jobs: pass session_id to target an existing session (e.g. the current conversation); omit it to create a dedicated new session that every run reuses (the new session inherits the current working directory and project; model stays default).
 Use update with status active/paused to resume/pause a job; pass null (or 0 for max_runs, the zero timestamp for expires_at) to clear those limits. Job type cannot be changed after creation.
 Job names are unique: creating with an existing name returns the existing job unchanged (created=false) instead of failing — safe to call create without checking first; use update to modify an existing job."
@@ -508,7 +508,7 @@ Job names are unique: creating with an existing name returns the existing job un
                 },
                 "schedule": {
                     "type": "string",
-                    "description": "Cron expression in local timezone, e.g. '0 9 * * 1-5' (weekdays 09:00) or 6-field '0 0 9 * * 1-5'. Required for create"
+                    "description": "Cron expression in local timezone, e.g. '0 9 * * 2-6' (Mon–Fri 09:00) or 6-field '0 0 9 * * 2-6'. Day-of-week: 1=Sunday … 7=Saturday. Required for create"
                 },
                 "type": {
                     "type": "string",

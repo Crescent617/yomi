@@ -79,7 +79,8 @@ impl CronJobStatus {
 pub struct CronJob {
     pub id: CronJobId,
     pub name: String,
-    /// cron 表达式，如 "0 0 9 * * 1-5"（工作日 9:00，按本地时区解释）
+    /// cron 表达式，如 "0 0 9 * * 2-6"（工作日 9:00，按本地时区解释；
+    /// 星期字段 1=周日 … 7=周六，也接受 mon/tue/... 英文缩写）
     pub schedule: String,
     pub action: CronAction,
     pub status: CronJobStatus,
