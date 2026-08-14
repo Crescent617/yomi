@@ -79,8 +79,8 @@ impl CronJobStatus {
 pub struct CronJob {
     pub id: CronJobId,
     pub name: String,
-    /// cron 表达式，如 "0 0 9 * * 2-6"（工作日 9:00，按本地时区解释；
-    /// 星期字段 1=周日 … 7=周六，也接受 mon/tue/... 英文缩写）
+    /// cron 表达式，如 "0 0 9 * * 1-5"（工作日 9:00，按本地时区解释；
+    /// 星期字段为 UNIX 约定：0 或 7=周日，1=周一 … 6=周六，也接受 mon/tue/... 缩写）
     pub schedule: String,
     pub action: CronAction,
     pub status: CronJobStatus,
@@ -152,26 +152,19 @@ pub struct UpdateCronJobInput {
 
 /// Cron 表达式封装
 pub struct CronSchedule {
-    schedule: cron::Schedule,
+    schedule: croner::Cron,
     source: String,
 }
 
 impl CronSchedule {
     pub fn parse(expression: &str) -> Result<Self, CronError> {
         let trimmed = expression.trim();
-        let parts: Vec<&str> = trimmed.split_whitespace().collect();
 
-        // cron 0.15 requires 6 fields (seconds minutes hours days months weekdays).
-        // Standard Unix cron uses 5 fields. Auto-prefix "0" for seconds when 5 fields are given.
-        let expression = if parts.len() == 5 {
-            format!("0 {trimmed}")
-        } else {
-            trimmed.to_string()
-        };
-
-        let schedule: cron::Schedule = expression
-            .parse()
-            .map_err(|e: cron::error::Error| CronError::InvalidSchedule(e.to_string()))?;
+        // croner 默认解析器：秒/年字段可选（5/6 段通吃），星期字段为
+        // POSIX/UNIX 约定（0 或 7=周日，1=周一 … 6=周六）。
+        let schedule = trimmed
+            .parse::<croner::Cron>()
+            .map_err(|e: croner::errors::CronError| CronError::InvalidSchedule(e.to_string()))?;
         Ok(Self {
             schedule,
             source: trimmed.to_string(),
@@ -181,24 +174,21 @@ impl CronSchedule {
     /// 计算下一次触发时间（从 from 之后开始）。
     ///
     /// cron 表达式按**本地时区**解释（如 `0 0 9 * * *` = 本地 9:00），
-    /// 返回值统一转换为 UTC 便于存储与比较。不存在的本地时间（DST 春拨）
-    /// 会被跳过。
+    /// 返回值统一转换为 UTC 便于存储与比较。false = 不含 from 本身，
+    /// 语义等价于"严格晚于 from"。
     pub fn next_after(&self, from: DateTime<Utc>) -> Option<DateTime<Utc>> {
         self.schedule
-            .after(&from.with_timezone(&Local))
+            .find_next_occurrence(&from.with_timezone(&Local), false)
+            .ok()
             .map(|dt| dt.with_timezone(&Utc))
-            // DST 秋拨时 cron 会把歧义 wall time 解析为 earlier occurrence，
-            // 其绝对时间可能早于 from；过滤掉这些“过去”的结果。
-            .find(|dt| *dt > from)
     }
 
     /// 计算 upcoming N 次触发时间（本地时区解释，返回 UTC）
     pub fn upcoming(&self, from: DateTime<Utc>, n: usize) -> Vec<DateTime<Utc>> {
         self.schedule
-            .after(&from.with_timezone(&Local))
-            .map(|dt| dt.with_timezone(&Utc))
-            .filter(|dt| *dt > from)
+            .iter_after(from.with_timezone(&Local))
             .take(n)
+            .map(|dt| dt.with_timezone(&Utc))
             .collect()
     }
 

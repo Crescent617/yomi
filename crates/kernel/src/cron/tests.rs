@@ -34,8 +34,8 @@ mod tests {
 
     #[test]
     fn test_cron_schedule_day_of_week_convention() {
-        // 星期字段约定（Quartz 派，cron crate 源码实锤）：1=周日 … 7=周六。
-        // 经典 Vixie cron 的 0 不合法；周一至周五是 2-6，不是 1-5。
+        // 星期字段采用 UNIX/Vixie 约定：0 或 7=周日，1=周一 … 6=周六；
+        // 英文缩写同样可用。周一至周五 = 1-5。
         use chrono::{Datelike, TimeZone, Weekday};
 
         // 锚点：2026-08-14 周五 10:00（本地）
@@ -43,36 +43,47 @@ mod tests {
             .with_ymd_and_hms(2026, 8, 14, 10, 0, 0)
             .unwrap()
             .with_timezone(&Utc);
+        let next = |expr: &str| {
+            CronSchedule::parse(expr)
+                .unwrap()
+                .next_after(from)
+                .unwrap()
+                .with_timezone(&chrono::Local)
+        };
 
-        // "1" = 周日 → 下一次落在 8-16（周日）
-        let next = CronSchedule::parse("0 0 9 * * 1")
-            .unwrap()
-            .next_after(from)
-            .unwrap()
-            .with_timezone(&chrono::Local);
-        assert_eq!(next.weekday(), Weekday::Sun);
-        assert_eq!(next.day(), 16);
+        // 0 与 7 都是周日 → 8-16
+        let t = next("0 0 9 * * 0");
+        assert_eq!((t.weekday(), t.day()), (Weekday::Sun, 16));
+        let t = next("0 0 9 * * 7");
+        assert_eq!((t.weekday(), t.day()), (Weekday::Sun, 16));
 
-        // "2-6" = 周一至周五 → 下一次落在 8-17（周一）
-        let next = CronSchedule::parse("0 0 9 * * 2-6")
-            .unwrap()
-            .next_after(from)
-            .unwrap()
-            .with_timezone(&chrono::Local);
-        assert_eq!(next.weekday(), Weekday::Mon);
-        assert_eq!(next.day(), 17);
+        // 1=周一 → 8-17；6=周六 → 8-15
+        let t = next("0 0 9 * * 1");
+        assert_eq!((t.weekday(), t.day()), (Weekday::Mon, 17));
+        let t = next("0 0 9 * * 6");
+        assert_eq!((t.weekday(), t.day()), (Weekday::Sat, 15));
 
-        // 经典 Unix 的 0 在这里不合法
-        assert!(CronSchedule::parse("0 0 9 * * 0").is_err());
+        // 1-5 = 周一至周五 → 8-17（周一）
+        let t = next("0 0 9 * * 1-5");
+        assert_eq!((t.weekday(), t.day()), (Weekday::Mon, 17));
+        // 2-6 = 周二至周六 → 8-15（周六）
+        let t = next("0 0 9 * * 2-6");
+        assert_eq!((t.weekday(), t.day()), (Weekday::Sat, 15));
 
-        // 英文缩写同样可用：fri = 周五 → 下一次落在 8-21
-        let next = CronSchedule::parse("0 0 9 * * fri")
-            .unwrap()
-            .next_after(from)
-            .unwrap()
-            .with_timezone(&chrono::Local);
-        assert_eq!(next.weekday(), Weekday::Fri);
-        assert_eq!(next.day(), 21);
+        // 跨界区间 5-7 = 五六日 → 8-15（周六）
+        let t = next("0 0 9 * * 5-7");
+        assert_eq!((t.weekday(), t.day()), (Weekday::Sat, 15));
+        // 步进 */2 = UNIX {日,二,四,六} → 8-15（周六）
+        let t = next("0 0 9 * * */2");
+        assert_eq!((t.weekday(), t.day()), (Weekday::Sat, 15));
+
+        // 英文缩写不变：fri → 8-21（周五）
+        let t = next("0 0 9 * * fri");
+        assert_eq!((t.weekday(), t.day()), (Weekday::Fri, 21));
+
+        // 越界报错
+        assert!(CronSchedule::parse("0 0 9 * * 8").is_err());
+        assert!(CronSchedule::parse("0 0 9 * * 1/0").is_err());
     }
 
     #[test]

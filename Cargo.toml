@@ -78,7 +78,7 @@ urlencoding = "2.1"
 dashmap = "6.1"
 nucleo = "0.5"
 tokio-tungstenite = "0.29"
-cron = "0.16"
+croner = "3"
 duckduckgo = { version = "0.3", default-features = false }
 mime_guess = "2"
 teloxide-core = "0.10"
