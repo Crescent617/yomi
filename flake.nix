@@ -196,6 +196,8 @@
         // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
           # yomi 的 docker 镜像：yomi + 基础工具链，无配置无密钥。
           # nix build .#dockerImage && docker load < result  →  yomi:<version>
+          # （本地/复现路径；CI 发版镜像走 docker/Dockerfile + 预编译二进制，
+          #   两边工具集保持一致，改动时同步）
           dockerImage =
             let
               yomi = self.packages.${system}.yomi-cli;
