@@ -111,6 +111,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            crates/gui/package-lock.json
+            crates/gui/frontend/package-lock.json
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -121,8 +125,8 @@ jobs:
       - name: Build & Sign DMG
         working-directory: crates/gui
         run: |
-          cd frontend && npm install
-          cd .. && npm install
+          cd frontend && npm ci
+          cd .. && npm ci
           npx tauri build
           bash ../../scripts/fix-dmg-signature.sh
 
@@ -141,7 +145,8 @@ jobs:
   # ==================== Docker 镜像 (GHCR) ====================
   build-docker:
     name: Build & Push Docker Image
-    needs: check-precondition
+    # 复用 build-tui 的 linux 二进制直接打包，不再用 nix 从头编译（编译曾是本 job 的大头）
+    needs: [check-precondition, build-tui]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -150,13 +155,22 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: cachix/install-nix-action@v31
+      - uses: actions/download-artifact@v6
         with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
+          name: x86_64-unknown-linux-gnu
 
-      - name: Build image tarball
-        run: nix build .#dockerImage --print-build-logs
+      - name: Prepare build context
+        run: |
+          set -euo pipefail
+          tar xzf yomi-*-x86_64-unknown-linux-gnu.tar.gz
+          cp yomi-*-x86_64-unknown-linux-gnu/yomi docker/yomi
+
+          VERSION="${GITHUB_REF_NAME#v}"
+          OWNER="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/${OWNER}/yomi" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -165,18 +179,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Load, tag & push
-        run: |
-          set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
-          OWNER="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
-          IMAGE="ghcr.io/${OWNER}/yomi"
-
-          docker load < result
-          docker tag "yomi:${VERSION}" "${IMAGE}:${VERSION}"
-          docker tag "yomi:${VERSION}" "${IMAGE}:latest"
-          docker push "${IMAGE}:${VERSION}"
-          docker push "${IMAGE}:latest"
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: docker
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ env.VERSION }}
+            ${{ env.IMAGE }}:latest
+          # apt 工具链层跨 run 缓存；yomi 层每次新发
+          cache-from: type=gha,scope=yomi-docker
+          cache-to: type=gha,mode=max,scope=yomi-docker
 
   # ==================== 创建 GitHub Release ====================
   release:
