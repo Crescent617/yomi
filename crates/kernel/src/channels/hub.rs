@@ -2803,7 +2803,7 @@ async fn get_or_create_session(
         .create_session(CreateSessionInput {
             project_id: None,
             working_dir: None,
-            auto_approve_level: crate::permission::Level::Dangerous,
+            auto_approve_level: Some(crate::permission::Level::Dangerous),
             tool_blocklist: vec![crate::tools::ask_user::ASK_USER_TOOL_NAME.to_string()],
             model_key,
         })

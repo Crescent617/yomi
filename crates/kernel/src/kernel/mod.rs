@@ -29,7 +29,9 @@ pub struct ModelInfo {
 pub struct CreateSessionInput {
     pub project_id: Option<ProjectId>,
     pub working_dir: Option<std::path::PathBuf>,
-    pub auto_approve_level: Level,
+    /// `None` 在创建时回落到配置的 `auto_approve`（创建时定型存储，
+    /// 之后修改配置不影响已建会话）。
+    pub auto_approve_level: Option<Level>,
     pub tool_blocklist: Vec<String>,
     /// Initial model key persisted for this session. When absent, runtime
     /// model resolution falls back to `agent.default_model` without storing it.
@@ -679,12 +681,17 @@ impl Kernel {
 
         let id = SessionId::new();
 
+        // 未指定审批级别时回落到配置 auto_approve
+        let auto_approve_level = input
+            .auto_approve_level
+            .unwrap_or(self.agent_shared.config_auto_approve);
+
         self.session_store()
             .await
             .create(crate::storage::NewSession {
                 project_id: input.project_id.clone(),
                 working_dir,
-                auto_approve_level: Some(input.auto_approve_level.as_str().to_string()),
+                auto_approve_level: Some(auto_approve_level.as_str().to_string()),
                 model_key: input.model_key.clone(),
                 ..crate::storage::NewSession::new(id.clone())
             })

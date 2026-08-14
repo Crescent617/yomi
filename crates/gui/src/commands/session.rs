@@ -71,7 +71,7 @@ pub async fn create_session(
     let input = kernel::CreateSessionInput {
         project_id: project_id.map(kernel::types::ProjectId::from),
         working_dir: working_dir.map(std::path::PathBuf::from),
-        auto_approve_level: level,
+        auto_approve_level: Some(level),
         tool_blocklist: vec![],
         model_key,
     };

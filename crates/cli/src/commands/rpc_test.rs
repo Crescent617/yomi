@@ -125,6 +125,28 @@ fn help_optional_fields_are_not_required() {
 }
 
 #[test]
+fn create_session_auto_approve_level_is_optional() {
+    // schema 里不再必填（缺省时内核回落配置 auto_approve）；
+    // create_session 的所有参数都可选，required 可能整个缺省
+    let schema = resolved_method_schema("create_session").unwrap();
+    let required = schema["required"].as_array();
+    assert!(
+        !required.is_some_and(|r| r.contains(&serde_json::json!("auto_approve_level"))),
+        "auto_approve_level should not be required: {schema}"
+    );
+
+    // 缺省 JSON 能正常反序列化
+    let m = build_method("create_session", Some(r#"{"working_dir":"/tmp"}"#)).unwrap();
+    let ReqMethod::CreateSession {
+        auto_approve_level, ..
+    } = m
+    else {
+        panic!("expected create_session");
+    };
+    assert!(auto_approve_level.is_none());
+}
+
+#[test]
 fn help_enum_params_show_variants() {
     // `$ref`s to shared types (Level) are inlined for self-contained output.
     // (Doc-commented enums render as oneOf/const branches, not a flat enum.)

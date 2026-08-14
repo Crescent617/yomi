@@ -978,7 +978,7 @@ async fn bind_command_show_adopt_and_guards() {
         .create_session(crate::kernel::CreateSessionInput {
             project_id: None,
             working_dir: None,
-            auto_approve_level: crate::permission::Level::Dangerous,
+            auto_approve_level: Some(crate::permission::Level::Dangerous),
             tool_blocklist: vec![],
             model_key: None,
         })
@@ -1094,7 +1094,7 @@ async fn bind_command_move_and_bind_back() {
     let new_session = || crate::kernel::CreateSessionInput {
         project_id: None,
         working_dir: None,
-        auto_approve_level: crate::permission::Level::Dangerous,
+        auto_approve_level: Some(crate::permission::Level::Dangerous),
         tool_blocklist: vec![],
         model_key: None,
     };

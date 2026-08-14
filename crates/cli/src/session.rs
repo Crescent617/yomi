@@ -110,7 +110,7 @@ pub async fn resolve_session(
     let new_session_input = move || CreateSessionInput {
         project_id: None,
         working_dir: Some(working_dir.to_path_buf()),
-        auto_approve_level,
+        auto_approve_level: Some(auto_approve_level),
         tool_blocklist: vec![],
         model_key,
     };

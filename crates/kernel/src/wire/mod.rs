@@ -52,7 +52,8 @@ pub enum ReqMethod {
     CreateSession {
         project_id: Option<String>,
         working_dir: Option<String>,
-        auto_approve_level: Level,
+        /// 缺省时走配置 `auto_approve`
+        auto_approve_level: Option<Level>,
         model_key: Option<String>,
     },
     RestoreSession {
