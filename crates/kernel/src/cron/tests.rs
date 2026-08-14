@@ -87,6 +87,40 @@ mod tests {
     }
 
     #[test]
+    fn test_cron_schedule_seconds_optional() {
+        // 秒字段可选：5 段秒省略为 0，6 段首字段为秒——位置语义与旧版一致，
+        // 无需任何兼容/迁移处理。
+        use chrono::{TimeZone, Timelike};
+
+        let from = chrono::Local
+            .with_ymd_and_hms(2026, 8, 14, 0, 0, 0)
+            .unwrap()
+            .with_timezone(&Utc);
+
+        // 5 段与 6 段（显式 0 秒）等价：下一次都是本地 09:00:00
+        for expr in ["0 9 * * *", "0 0 9 * * *"] {
+            let next = CronSchedule::parse(expr)
+                .unwrap()
+                .next_after(from)
+                .unwrap()
+                .with_timezone(&chrono::Local);
+            assert_eq!(
+                (next.hour(), next.minute(), next.second()),
+                (9, 0, 0),
+                "{expr}"
+            );
+        }
+
+        // 显式秒：09:00:30
+        let next = CronSchedule::parse("30 0 9 * * *")
+            .unwrap()
+            .next_after(from)
+            .unwrap()
+            .with_timezone(&chrono::Local);
+        assert_eq!((next.hour(), next.minute(), next.second()), (9, 0, 30));
+    }
+
+    #[test]
     fn test_cron_schedule_upcoming() {
         let schedule = CronSchedule::parse("0 0 9 * * *").unwrap();
         let now = Utc::now();
