@@ -61,6 +61,7 @@ python scripts/bump-version.py --level minor
 1. **先核对覆盖度**：`git log v<上个版本>..HEAD --oneline`，确保新条目覆盖本次发布包含的**全部**提交；若发现上个版本的条目漏写了已发布的内容，先补写再写新条目。
 2. **写法遵循 `CHANGELOG.md` 顶部的《编写要求》**：面向用户、一条一行一句话、不写内部实现、配置与命令点名。不要写成长段从句。
 3. **写完检查结构**：`grep -n '^## \[' CHANGELOG.md`，确认每个版本只有一个标题、版本号严格倒序、没有内容串到别的版本下。
+4. **这段就是 release note**：release.yml 会自动把本版本 section 抽取为 GitHub Release 的 release note，无需也不应手动在 GitHub 上编辑 release 内容。
 
 ### 6. 打 tag
 
@@ -76,4 +77,12 @@ git tag -a "v${RELEASE_VERSION}" -m "Release v${RELEASE_VERSION}"
 ```bash
 git push origin main
 git push origin "v${RELEASE_VERSION}"
+```
+
+### 8. 验证 release note
+
+CI（release.yml）跑完后，确认 GitHub Release 带上了本版本的 release note（内容与 CHANGELOG 一致）：
+
+```bash
+gh release view "v${RELEASE_VERSION}" --json body --jq .body
 ```

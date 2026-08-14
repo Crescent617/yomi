@@ -203,6 +203,29 @@ jobs:
       contents: write
 
     steps:
+      - uses: actions/checkout@v6
+
+      # 从 CHANGELOG.md 抽取本版本 section 作为 GitHub Release 的 release note
+      - name: Extract release notes from CHANGELOG
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VERSION" '
+            /^## \[/ {
+              if (found) exit
+              if (index($0, "## [" ver "]") == 1) found=1
+              next
+            }
+            found && !started && /^[[:space:]]*$/ { next }
+            found { started=1; out = out $0 "\n" }
+            END { sub(/\n+$/, "", out); if (out != "") print out }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::warning::CHANGELOG.md 中未找到 [${VERSION}] 的条目，Release 将没有 release note"
+          fi
+          cat release-notes.md
+
       - uses: actions/download-artifact@v6
         with:
           path: artifacts
@@ -211,6 +234,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**
+          body_path: release-notes.md
 
   # ==================== 更新 Homebrew Formula (TUI) ====================
   brew-tui:
