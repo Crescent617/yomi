@@ -18,7 +18,7 @@
 | 0 | cron job name 唯一 + create ensure 语义 | 内核 | 已完成（schema v19） | ✅ 已落地 |
 | 1 | Agent Templates（subagent SP 模板） | 文件资产 + 少量内核（desc 自足，无 skill） | `agent` 工具加 `template` 参数 + conductor resolve | ✅ 已落地（schema v20；内置 planner/verifier/explorer/reviewer；发现靠 desc + 目录直读） |
 | 1.5 | 记忆层 `.agents/memory/`（agent 自写笔记，**仅项目层**） | 文件资产 + SP 门控指针（已落地） | 二期：索引装配（loader+截断+git-root）；全局层暂缓 | 一期已落地 |
-| 2 | 工单 tickets `.yomi/tickets/` | 文件约定 + task-tickets skill + `ticket.sh` 脚本 | **零** | ✅ 文件+skill+脚本已落地；GUI 投影曾实现并 e2e 验证，后按决策撤下（先验证好用再上展示，wire 保持 23 未升） |
+| 2 | 工单 tickets `.yomi/tickets/` | 文件约定 + task-tickets skill + `ticket.sh` 建单脚本 | **零** | ✅ 文件+skill+脚本已落地；GUI 投影曾实现并 e2e 验证，后按决策撤下（先验证好用再上展示，wire 保持 23 未升） |
 | 3 | Janitor 后台策展循环 | janitor skill + daemon ensure cron | 小：daemon 按项目 ensure + config 开关 | **暂缓**（2026-08，见 P3 暂缓说明） |
 | 4 | tickets 内核化 / GUI 看板 / agent discovery | — | 条件触发，见"观望清单" | 观望 |
 
@@ -184,7 +184,7 @@ one fact per line, keep the index lean.
 
 ### 协议（task-tickets skill + `scripts/ticket.sh` 承载，2026-08 改为派单模型）
 
-- **建单与状态流转走脚本**（`ticket.sh new|set`）：id/slug/时间戳/frontmatter 合规与状态机校验由脚本强制，模型只出内容——从根上消掉手写 frontmatter 的失败模式（id 不合规、日期格式错、YAML 未闭合）。聚合用 grep、归档用 `mv`，不值得包脚本；
+- **建单走脚本，状态流转直接改文件**（2026-08-14 精简，原 `set` 子命令移除）：`ticket.sh new` 强制 id/slug/时间戳/frontmatter 合规——格式失败模式集中在建单（id 不合规、日期格式错、YAML 未闭合）；状态流转只是改 `status:` 行 ± `owner_session_id` 行 + 追加 Result 段/备注行，模型直接编辑文件即可，脚本包装徒增"先定位 skill 路径才能调用"的摩擦。状态机规则（`pending→claimed→done|blocked`、`blocked→claimed` 复工、`claimed→pending` 重置、done 终态）由 skill 文档承载。聚合用 grep、归档用 `mv`，同样不值得包脚本；
 - **派活为主**：协调者建派工单（一个任务一个文件），spawn 子 agent 时在 prompt 里指明任务文件路径；"自主认领"降级为边缘场景（跨 session 捡活）；
 - 执行者先签收再动手（`claimed` + 自己的 session id）；完成置 `done` 写 Result，卡壳置 `blocked` 写明原因；
 - 僵尸回收约定：`claimed` 但 mtime 超 30 分钟未更新 → 可重置 `pending`（利用文件 mtime，零机制）；
