@@ -163,3 +163,20 @@ export function focusAndSelect(node: HTMLInputElement) {
   node.focus();
   node.select();
 }
+
+/**
+ * 拦截输入框里的私用区字符（U+E000–U+F8FF）。
+ * macOS 输入法怪癖：方向键/功能键的键码（U+F700–U+F704）可能经由
+ * `insertText` 漏进 textarea，显示为豆腐块。私用区没有任何合法输入内容，
+ * 直接拒掉。（输入法正常组字走 insertCompositionText，不受影响。）
+ */
+export function blockPuaInput(e: InputEvent) {
+  if (e.inputType !== "insertText" || !e.data) return;
+  for (const ch of e.data) {
+    const cp = ch.codePointAt(0)!;
+    if (cp >= 0xe000 && cp <= 0xf8ff) {
+      e.preventDefault();
+      return;
+    }
+  }
+}
