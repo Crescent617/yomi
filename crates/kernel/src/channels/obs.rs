@@ -1005,7 +1005,9 @@ fn render_running(s: &ObsCardState) -> String {
 
 /// Single-line whisper tail for the card body (≤ [`STATUS_TEXT_MAX_CHARS`]).
 fn whisper_snippet(whisper: &str) -> String {
-    let flat = reply::flatten_ws(whisper);
+    // whisper 只用于 markdown 渲染（外层包 font 标签）：内容原文里的结构
+    // 字符先全角化，防止撑破卡片 markdown（详见 reply::md_safe）。
+    let flat = reply::md_safe(&reply::flatten_ws(whisper));
     if flat.chars().count() > STATUS_TEXT_MAX_CHARS {
         format!("…{}", tail_by_chars(&flat, STATUS_TEXT_MAX_CHARS - 1))
     } else {

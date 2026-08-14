@@ -24,6 +24,43 @@ fn into_reply_promotes_last_text_to_body() {
 }
 
 #[test]
+fn trace_markdown_sanitizes_structural_chars_in_dynamic_text() {
+    // 未闭合的反引号/星号/尖括号会撑破飞书卡片的 markdown（整个元素按
+    // 纯文本回退、标签漏成字面量）：动态文本在 markdown 渲染时全角化，
+    // 纯文本路径保留原文。
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("核心是 `CronSchedule::parse` 和 `Option<Level>`，还有 `0/7 未闭合");
+    buf.record_tool_start(
+        "t1",
+        "shell",
+        Some(r#"{"command":"echo `whoami` **x** <b>"}"#),
+    );
+    buf.record_tool_end("t1", 10, false);
+
+    let joined = buf.trace_preview_lines(10).join("\n");
+    // 渲染方加的结构标记保持原样
+    assert!(joined.contains("<font color='grey'>💬 "), "{joined}");
+    assert!(joined.contains("**shell**"), "{joined}");
+    // 内容里的结构字符已全角化
+    assert!(joined.contains("｀CronSchedule::parse｀"), "{joined}");
+    assert!(joined.contains("＜Level＞"), "{joined}");
+    assert!(joined.contains("｀whoami｀"), "{joined}");
+    assert!(joined.contains("＊＊x＊＊"), "{joined}");
+    assert!(joined.contains("＜b＞"), "{joined}");
+    // 全文只剩工具摘要那对外层行内码反引号
+    assert_eq!(
+        joined.matches('`').count(),
+        2,
+        "only the tool-summary wrapper backticks: {joined}"
+    );
+
+    // 纯文本路径保留原文
+    let plain = trace_lines(&buf.entries, false).join("\n");
+    assert!(plain.contains("`CronSchedule::parse`"), "{plain}");
+    assert!(plain.contains("**x**"), "{plain}");
+}
+
+#[test]
 fn into_reply_strips_attachments_block_from_body() {
     let mut buf = RunReplyBuffer::new();
     buf.record_model_end("report done\n\n<yomi_attachments>\nout.pdf\n</yomi_attachments>");

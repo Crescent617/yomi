@@ -442,7 +442,10 @@ fn trace_lines(entries: &[TraceEntry], markdown: bool) -> Vec<String> {
             TraceEntry::Narration(text) => {
                 let snippet = truncate_by_chars(&flatten_ws(text), NARRATION_MAX_CHARS, "…");
                 if markdown {
-                    lines.push(format!("<font color='grey'>💬 {snippet}</font>"));
+                    lines.push(format!(
+                        "<font color='grey'>💬 {}</font>",
+                        md_safe(&snippet)
+                    ));
                 } else {
                     lines.push(format!("💬 {snippet}"));
                 }
@@ -463,7 +466,7 @@ fn trace_lines(entries: &[TraceEntry], markdown: bool) -> Vec<String> {
                 if !tool.arg_summary.is_empty() {
                     let summary = &tool.arg_summary;
                     if markdown {
-                        let _ = write!(line, " · `{summary}`");
+                        let _ = write!(line, " · `{}`", md_safe(summary));
                     } else {
                         let _ = write!(line, " · {summary}");
                     }
@@ -505,6 +508,18 @@ fn extract_arg_text(tool_name: &str, arguments: Option<&str>) -> String {
 /// Collapse all whitespace runs (including newlines) into single spaces.
 pub(crate) fn flatten_ws(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// 把动态文本里的 markdown 结构字符换成全角：narration / 工具摘要 /
+/// whisper 的内容原文可能带 `` ` ``、`**`、`<`，截断也可能把成对标记
+/// 切成未闭合——任一情况都会让飞书把整个元素按纯文本回退（所有标签
+/// 漏成字面量）。仅在 markdown 渲染时调用；结构性标记（font、加粗、
+/// 行内码）由渲染方自己加，不受影响。
+pub(crate) fn md_safe(text: &str) -> String {
+    text.replace('<', "＜")
+        .replace('>', "＞")
+        .replace('`', "｀")
+        .replace('*', "＊")
 }
 
 fn fmt_tool_elapsed(ms: u64) -> String {
