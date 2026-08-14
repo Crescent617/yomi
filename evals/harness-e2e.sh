@@ -67,15 +67,17 @@ out=$(cd /tmp && "$YOMI" run --yolo --timeout 90 \
 echo "$out" | grep -q "没有" \
   && ok "memory 门控反例（/tmp）" || bad "memory 门控反例（/tmp）" "$out"
 
-# ── 5. ticket.sh 状态机 ──
+# ── 5. ticket.sh 仅建单；状态流转为文件直改约定（见工单内嵌规则）──
 T=$(mktemp -d)
 F=$(cd "$T" && "$TICKET_SH" new --title "e2e" --body "验收用")
-"$TICKET_SH" set "$F" claimed --by sess_eval >/dev/null
-"$TICKET_SH" set "$F" done --result "ok" >/dev/null
-grep -q '^status: done' "$F" && ok "ticket 正常流转" || bad "ticket 正常流转" "$(cat "$F")"
-G=$(cd "$T" && "$TICKET_SH" new --title "e2e-2")
-"$TICKET_SH" set "$G" done >/dev/null 2>&1 \
-  && bad "ticket 非法流转拒绝" "pending->done 被放行" || ok "ticket 非法流转拒绝"
+if [ -f "$F" ] && grep -q '^status: pending' "$F" && grep -q '^created_at:' "$F"; then
+  ok "ticket 建单形状（.yomi/tickets 落盘、pending、created_at）"
+else
+  bad "ticket 建单形状" "$(cat "$F" 2>/dev/null)"
+fi
+# set 子命令已移除：流转直改工单文件，脚本必须拒绝 set
+"$TICKET_SH" set "$F" claimed >/dev/null 2>&1 \
+  && bad "ticket.sh 仅建单" "set 被放行" || ok "ticket.sh 仅建单（set 拒绝）"
 rm -rf "$T"
 
 echo
