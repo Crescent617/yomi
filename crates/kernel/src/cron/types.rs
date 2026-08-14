@@ -174,21 +174,25 @@ impl CronSchedule {
     /// 计算下一次触发时间（从 from 之后开始）。
     ///
     /// cron 表达式按**本地时区**解释（如 `0 0 9 * * *` = 本地 9:00），
-    /// 返回值统一转换为 UTC 便于存储与比较。false = 不含 from 本身，
-    /// 语义等价于"严格晚于 from"。
+    /// 返回值统一转换为 UTC 便于存储与比较。
     pub fn next_after(&self, from: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        // `dt > from` 过滤是承重的：DST 秋拨的重叠小时里，croner 会把
+        // 歧义 wall time 解析为 earliest（其绝对时间可能早于 from），
+        // 不滤掉 scheduler 会认为任务"已到期"而热重跑。
         self.schedule
-            .find_next_occurrence(&from.with_timezone(&Local), false)
-            .ok()
+            .iter_after(from.with_timezone(&Local))
             .map(|dt| dt.with_timezone(&Utc))
+            .find(|dt| *dt > from)
     }
 
     /// 计算 upcoming N 次触发时间（本地时区解释，返回 UTC）
     pub fn upcoming(&self, from: DateTime<Utc>, n: usize) -> Vec<DateTime<Utc>> {
         self.schedule
             .iter_after(from.with_timezone(&Local))
-            .take(n)
             .map(|dt| dt.with_timezone(&Utc))
+            // 同 next_after：过滤 DST 秋拨歧义产生的"过去"结果
+            .filter(|dt| *dt > from)
+            .take(n)
             .collect()
     }
 

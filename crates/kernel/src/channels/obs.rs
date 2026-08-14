@@ -303,9 +303,11 @@ impl Settle {
 /// Truncated one-line error summary for card bodies — the single truncation
 /// budget shared by the morphed-card notice and the terminal card.
 fn error_line(error: &str) -> String {
+    // 动态错误文本全角化（md_safe）：错误内容常带命令/反引号，截断也可能
+    // 切断成对标记——未闭合会撑破整张卡的 markdown。
     format!(
         "**Error**  {}",
-        truncate_by_chars(error, ERROR_MAX_CHARS, "…")
+        reply::md_safe(&truncate_by_chars(error, ERROR_MAX_CHARS, "…"))
     )
 }
 

@@ -1486,6 +1486,19 @@ fn whisper_snippet_caps_at_100_chars() {
     assert_eq!(whisper_snippet("line one\nline two"), "line one line two");
 }
 
+#[test]
+fn whisper_snippet_sanitizes_markdown_structural_chars() {
+    // 未闭合的反引号/星号/尖括号会撑破卡片 markdown（整元素纯文本回退），
+    // whisper 渲染前全角化（与 reply::md_safe 同一约定）。
+    let out = whisper_snippet("a `code` **bold** <tag> 还有 `未闭合");
+    assert!(out.contains("｀code｀"), "{out}");
+    assert!(out.contains("＊＊bold＊＊"), "{out}");
+    assert!(out.contains("＜tag＞"), "{out}");
+    assert!(out.contains("｀未闭合"), "{out}");
+    assert!(!out.contains('`'), "{out}");
+    assert!(!out.contains('*'), "{out}");
+}
+
 #[tokio::test]
 async fn trace_inline_arg_summary_is_capped() {
     let tracker = ObsTracker::with_patch_interval(Duration::ZERO);

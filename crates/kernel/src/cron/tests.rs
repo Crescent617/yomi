@@ -121,6 +121,28 @@ mod tests {
     }
 
     #[test]
+    fn test_cron_schedule_next_after_is_strictly_after() {
+        // 不变量：next_after 严格晚于 from。DST 秋拨的重叠小时里 croner
+        // 会把歧义 wall time 解析到绝对时间的"过去"（earliest），
+        // `dt > from` 过滤是防热重跑的承重墙。
+        use chrono::TimeZone;
+        let from = chrono::Local
+            .with_ymd_and_hms(2026, 8, 14, 10, 0, 0)
+            .unwrap()
+            .with_timezone(&Utc);
+        for expr in ["* * * * * *", "0 9 * * *", "0 0 9 * * 1-5", "30 0 9 * * *"] {
+            let next = CronSchedule::parse(expr).unwrap().next_after(from).unwrap();
+            assert!(next > from, "{expr} -> {next} !> {from}");
+        }
+        // upcoming 同样不含"过去"
+        let ups = CronSchedule::parse("* * * * * *")
+            .unwrap()
+            .upcoming(from, 3);
+        assert_eq!(ups.len(), 3);
+        assert!(ups.iter().all(|dt| *dt > from));
+    }
+
+    #[test]
     fn test_cron_schedule_upcoming() {
         let schedule = CronSchedule::parse("0 0 9 * * *").unwrap();
         let now = Utc::now();
