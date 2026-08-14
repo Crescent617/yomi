@@ -168,7 +168,7 @@ one fact per line, keep the index lean.
 
 - id：7 位随机字母数字串（如 `t3m9q2x`），`ticket.sh` 铸造——kernel 投影取文件名第一个 `-` 前为 id、其余为 title 兜底（规则刻意无脑，可预期优先）；
 - frontmatter（snake_case）：`title`（可省，缺省从 slug 推导）、`status: pending|claimed|done|blocked`、`owner_session_id`、`created_at`；**不写 `updated_at`**——由文件 mtime 派生；
-- body：任务描述 + 验收标准；完成后追加标题恰为 `## Result` 的结果段；
+- body：顶部规则块（建单脚本注入的精简状态机/编辑规则，没装 skill 的执行者也能照章编辑——工单自解释）+ 任务描述与验收标准；完成后追加标题恰为 `## Result` 的结果段；
 - 完结归档进 `.yomi/tickets/archive/`（子目录不计入活跃板）。
 - **已知限制**：tickets 按 `working_dir`（cwd）定位，从子目录启动的 session 会看不到仓库根的 tickets——git-root resolve 推广见开放问题。
 
