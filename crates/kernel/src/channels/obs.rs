@@ -54,6 +54,11 @@ use super::PlatformAdapter;
 
 /// Minimum interval between two in-place card updates (low-frequency updates).
 const PATCH_MIN_INTERVAL: Duration = Duration::from_secs(3);
+
+/// Consecutive heartbeat-patch failures before the breaker trips
+/// (`send_failed`): a PATCH that keeps failing (card deleted remotely, API
+/// down) must not be stormed every heartbeat.
+const PATCH_FAILURE_LIMIT: u32 = 3;
 /// Trace entries shown live on the status card (most recent kept).
 const STATUS_TRACE_MAX_ENTRIES: usize = 10;
 /// Error summary truncation on terminal cards.
@@ -158,6 +163,9 @@ struct ObsCardState {
     /// Set when the materialize send failed — no more attempts this run
     /// (card APIs are best-effort; don't storm a struggling API endpoint).
     send_failed: bool,
+    /// Consecutive heartbeat-patch failures; reaching
+    /// [`PATCH_FAILURE_LIMIT`] trips `send_failed` for the rest of the run.
+    patch_failures: u32,
 }
 
 impl ObsCardState {
@@ -181,6 +189,7 @@ impl ObsCardState {
             token_footer: None,
             last_patch_at: now,
             send_failed: false,
+            patch_failures: 0,
         }
     }
 
@@ -718,6 +727,55 @@ impl ObsTracker {
         }
     }
 
+    /// Heartbeat refresh for live cards: re-render and PATCH any running
+    /// card whose last update is older than `max_age`. Event-driven updates
+    /// stop during long tool calls (no events between tool start and end),
+    /// freezing the card — elapsed time and idle titles stuck at the last
+    /// patch. Cheap state scan per call; only stale cards get patched.
+    pub(crate) async fn refresh_stale(&self, max_age: Duration) {
+        // Collect first: never hold a DashMap shard lock across an await.
+        let mut patches = Vec::new();
+        for mut entry in self.states.iter_mut() {
+            let sid = entry.key().clone();
+            let s = entry.value_mut();
+            if s.status_msg_id.is_empty() || s.send_failed {
+                continue;
+            }
+            if s.last_patch_at.elapsed() < max_age {
+                continue;
+            }
+            s.last_patch_at = Instant::now();
+            patches.push((
+                sid,
+                render_running(s),
+                s.status_msg_id.clone(),
+                Arc::clone(&s.adapter),
+            ));
+        }
+        for (sid, card, msg_id, adapter) in patches {
+            let ok = send_card_patch(&*adapter, &msg_id, &card).await;
+            let Some(mut entry) = self.states.get_mut(&sid) else {
+                continue; // settled while the PATCH was in flight
+            };
+            let s = entry.value_mut();
+            if ok {
+                s.patch_failures = 0;
+            } else {
+                s.patch_failures += 1;
+                if s.patch_failures >= PATCH_FAILURE_LIMIT {
+                    // Trip the breaker for the rest of the run (mirrors
+                    // materialize's one-shot send_failed): the event-driven
+                    // path still patches on real events, rate-limited by
+                    // the throttle, and acts as the recovery probe.
+                    s.send_failed = true;
+                    tracing::info!(
+                        "obs heartbeat disabled after {PATCH_FAILURE_LIMIT} patch failures"
+                    );
+                }
+            }
+        }
+    }
+
     /// Settle the status card and clear the run's receipts. Returns the
     /// reply back when nothing was settled (no run state existed, or the
     /// settle send failed), so the caller can fall back to a plain send.
@@ -888,10 +946,12 @@ impl Default for ObsTracker {
 // ── Rendering ───────────────────────────────────────────────────────
 
 /// PATCH a card message in place; failures only warn (the next PATCH heals).
-async fn send_card_patch(adapter: &dyn PlatformAdapter, message_id: &str, card_json: &str) {
+async fn send_card_patch(adapter: &dyn PlatformAdapter, message_id: &str, card_json: &str) -> bool {
     if let Err(e) = adapter.update_card(message_id, card_json).await {
         warn!(error = %e, "obs status card patch failed");
+        return false;
     }
+    true
 }
 
 fn render_running(s: &ObsCardState) -> String {

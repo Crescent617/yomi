@@ -17,6 +17,8 @@ struct MockAdapter {
     counter: AtomicUsize,
     fail_send_cards: std::sync::atomic::AtomicBool,
     send_card_attempts: AtomicUsize,
+    fail_patches: std::sync::atomic::AtomicBool,
+    patch_attempts: AtomicUsize,
 }
 
 impl MockAdapter {
@@ -30,6 +32,8 @@ impl MockAdapter {
             counter: AtomicUsize::new(0),
             fail_send_cards: std::sync::atomic::AtomicBool::new(false),
             send_card_attempts: AtomicUsize::new(0),
+            fail_patches: std::sync::atomic::AtomicBool::new(false),
+            patch_attempts: AtomicUsize::new(0),
         })
     }
 }
@@ -80,6 +84,10 @@ impl PlatformAdapter for MockAdapter {
     }
 
     async fn update_card(&self, message_id: &str, card_json: &str) -> Result<(), ChannelError> {
+        self.patch_attempts.fetch_add(1, Ordering::Relaxed);
+        if self.fail_patches.load(Ordering::Relaxed) {
+            return Err(ChannelError::Platform("mock patch failure".into()));
+        }
         self.patches
             .lock()
             .await
@@ -335,6 +343,100 @@ async fn tool_events_patch_card_with_stats() {
         patches[1].1
     );
     assert_eq!(mock.cards.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn refresh_stale_patches_frozen_card() {
+    // A huge patch interval suppresses event-driven PATCHes: after the
+    // tool starts the card would stay frozen without the heartbeat.
+    let tracker = ObsTracker::with_patch_interval(Duration::from_hours(1));
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &tool_start("bash"))
+        .await;
+    assert_eq!(mock.patches.lock().await.len(), 0);
+
+    // The heartbeat refreshes the frozen card, showing the in-flight tool.
+    tracker.refresh_stale(Duration::ZERO).await;
+    {
+        let patches = mock.patches.lock().await;
+        assert_eq!(patches.len(), 1);
+        assert!(patches[0].1.contains("bash"), "patch: {}", patches[0].1);
+    }
+
+    // A just-refreshed card is not stale: a huge threshold suppresses it.
+    tracker.refresh_stale(Duration::from_hours(1)).await;
+    assert_eq!(mock.patches.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn refresh_stale_ignores_settled_card() {
+    let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    tracker
+        .handle_event(
+            &adapter,
+            &sid,
+            "chat-1",
+            None,
+            &stopped(StopReason::Completed {
+                finish_reason: None,
+            }),
+        )
+        .await;
+    let before = mock.patches.lock().await.len() + mock.cards.lock().await.len();
+
+    // The settled run left the states map: the heartbeat finds nothing.
+    tracker.refresh_stale(Duration::ZERO).await;
+    let after = mock.patches.lock().await.len() + mock.cards.lock().await.len();
+    assert_eq!(before, after);
+}
+
+#[tokio::test]
+async fn refresh_stale_breaker_trips_after_consecutive_patch_failures() {
+    let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &tool_start("bash"))
+        .await;
+    assert_eq!(mock.patch_attempts.load(Ordering::Relaxed), 1);
+
+    // Two consecutive failures, then a success resets the counter.
+    mock.fail_patches.store(true, Ordering::Relaxed);
+    tracker.refresh_stale(Duration::ZERO).await;
+    tracker.refresh_stale(Duration::ZERO).await;
+    mock.fail_patches.store(false, Ordering::Relaxed);
+    tracker.refresh_stale(Duration::ZERO).await;
+    assert_eq!(mock.patch_attempts.load(Ordering::Relaxed), 4);
+
+    // LIMIT consecutive failures trip the breaker: later heartbeats
+    // don't even attempt the PATCH.
+    mock.fail_patches.store(true, Ordering::Relaxed);
+    for _ in 0..super::PATCH_FAILURE_LIMIT {
+        tracker.refresh_stale(Duration::ZERO).await;
+    }
+    let attempts = mock.patch_attempts.load(Ordering::Relaxed);
+    assert_eq!(attempts, 4 + super::PATCH_FAILURE_LIMIT as usize);
+    tracker.refresh_stale(Duration::ZERO).await;
+    assert_eq!(mock.patch_attempts.load(Ordering::Relaxed), attempts);
 }
 
 #[tokio::test]

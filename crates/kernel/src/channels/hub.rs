@@ -23,6 +23,11 @@ const STATUS_ERROR: u8 = 3;
 /// Watchdog sweep interval for dead-session status cards.
 const WATCHDOG_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_mins(1);
 
+/// Heartbeat interval for refreshing live status cards. Long tool calls
+/// emit no events, so event-driven PATCHes stop and the card looks frozen
+/// (elapsed stuck at the last patch) — this keeps it visibly alive.
+const LIVE_CARD_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// A running channel instance.
 struct ChannelInstance {
     config: ChannelConfig,
@@ -408,6 +413,8 @@ impl ChannelHub {
             });
             let mut watchdog = tokio::time::interval(WATCHDOG_SWEEP_INTERVAL);
             watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut live_refresh = tokio::time::interval(LIVE_CARD_REFRESH_INTERVAL);
+            live_refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
             // Per-session run reply buffers: assistant texts and tool calls
             // accumulate during a run; only the last text becomes a message
@@ -421,6 +428,11 @@ impl ChannelHub {
                 tokio::select! {
                     biased;
                     () = token.cancelled() => break,
+                    _ = live_refresh.tick() => {
+                        // Live-card heartbeat: re-render + PATCH cards that
+                        // haven't updated within the interval (long tool).
+                        obs.refresh_stale(LIVE_CARD_REFRESH_INTERVAL).await;
+                    }
                     _ = watchdog.tick() => {
                         // Kernel gone = shutting down; nothing to settle.
                         if let Some(k) = kernel.upgrade() {
