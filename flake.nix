@@ -47,7 +47,7 @@
         };
 
         # 前端 npm 依赖 hash（基于 crates/gui/frontend/package-lock.json 计算）
-        npmDepsHash = "sha256-MdtbTb7jlF9XMaWumKGIXfaTc7vjLTncNR4OFKdX7+A=";
+        npmDepsHash = pkgs.lib.fakeHash;
 
         commonNativeBuildInputs = with pkgs; [
           pkg-config
