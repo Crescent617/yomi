@@ -8,6 +8,22 @@ use std::sync::Arc;
 
 pub const TODO_TOOL_NAME: &str = "todo";
 
+/// Hard cap on todo items per write/update call. Guards against runaway
+/// generation (degenerate models repeating array elements) and keeps the
+/// list at a size the model can reliably re-emit.
+const MAX_TODO_ITEMS: usize = 50;
+
+fn check_max_items(items: &[Value]) -> Result<()> {
+    if items.len() > MAX_TODO_ITEMS {
+        return Err(KernelError::tool(format!(
+            "too many todo items: {} exceeds max {MAX_TODO_ITEMS}; \
+             keep the list focused — drop completed items or split the work into phases",
+            items.len()
+        )));
+    }
+    Ok(())
+}
+
 /// `TodoTool` - Unified todo list management tool
 /// Supports read, write (full replace), and update (partial batch) operations
 pub struct TodoTool {
@@ -36,6 +52,8 @@ impl TodoTool {
         // Lock on session_id to prevent concurrent todo modifications
         let _lock =
             g_lock_timeout(format!("todo-{}", ctx.session_id), DEFAULT_LOCK_TIMEOUT).await?;
+
+        check_max_items(todos_array)?;
 
         // Validate todo items
         if todos_array.iter().any(|item| {
@@ -76,6 +94,8 @@ impl TodoTool {
         // Lock on session_id to prevent concurrent todo modifications
         let _lock =
             g_lock_timeout(format!("todo-{}", ctx.session_id), DEFAULT_LOCK_TIMEOUT).await?;
+
+        check_max_items(updates_array)?;
 
         // Load current todos
         let mut todos: Value = match self.storage.load(&ctx.session_id).await? {
@@ -167,7 +187,8 @@ Guidelines:
                 },
                 "todos": {
                     "type": "array",
-                    "description": "Required for write/update. For write: full todo list with all fields. For update: items with id + fields to change",
+                    "maxItems": 50,
+                    "description": "Required for write/update. For write: full todo list with all fields. For update: items with id + fields to change. At most 50 items per call.",
                     "items": {
                         "type": "object",
                         "required": ["id"],

@@ -378,3 +378,69 @@ async fn test_todo_update_ignores_blank_optional_fields() {
     assert_eq!(loaded_json["todos"][0]["content"], "Task 1");
     assert_eq!(loaded_json["todos"][0]["status"], "pending");
 }
+
+#[tokio::test]
+async fn test_todo_write_rejects_over_max_items() {
+    let (storage, _temp) = create_test_storage().await;
+    let tool = TodoTool::new(storage.clone());
+
+    let todos: Vec<Value> = (1..=51)
+        .map(|i| json!({"id": i, "content": format!("Task {i}"), "status": "pending"}))
+        .collect();
+    let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
+    let result = tool
+        .exec(json!({"action": "write", "todos": todos}), ctx)
+        .await;
+
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("too many todo items"));
+    // Nothing should be persisted
+    assert!(storage.load("test-session").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn test_todo_update_rejects_over_max_items() {
+    let (storage, _temp) = create_test_storage().await;
+    let tool = TodoTool::new(storage.clone());
+
+    let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
+    tool.exec(
+        json!({"action": "write", "todos": [{"id": 1, "content": "Task 1", "status": "pending"}]}),
+        ctx,
+    )
+    .await
+    .unwrap();
+
+    let updates: Vec<Value> = (1..=51).map(|i| json!({"id": i})).collect();
+    let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
+    let result = tool
+        .exec(json!({"action": "update", "todos": updates}), ctx)
+        .await;
+
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("too many todo items"));
+}
+
+#[tokio::test]
+async fn test_todo_write_accepts_max_items() {
+    let (storage, _temp) = create_test_storage().await;
+    let tool = TodoTool::new(storage.clone());
+
+    let todos: Vec<Value> = (1..=50)
+        .map(|i| json!({"id": i, "content": format!("Task {i}"), "status": "pending"}))
+        .collect();
+    let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
+    tool.exec(json!({"action": "write", "todos": todos}), ctx)
+        .await
+        .unwrap();
+
+    let loaded = storage.load("test-session").await.unwrap().unwrap();
+    let loaded_json: Value = serde_json::from_str(&loaded).unwrap();
+    assert_eq!(loaded_json["todos"].as_array().unwrap().len(), 50);
+}
