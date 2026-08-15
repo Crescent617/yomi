@@ -942,6 +942,21 @@ pub trait PlatformAdapter: Send + Sync {
         None
     }
 
+    /// Build a user-clickable link that jumps to a chat itself (Feishu
+    /// applink) — the fallback when a session has no message to anchor
+    /// to. Default: unsupported — `None`.
+    async fn chat_link(&self, _chat_id: &str) -> Option<String> {
+        None
+    }
+
+    /// Build a user-clickable link that jumps to the thread containing
+    /// `message_id` (no in-thread position — just the conversation).
+    /// May cost one platform API call (the thread id is read off the
+    /// message). Default: unsupported — `None`.
+    async fn thread_link(&self, _chat_id: &str, _message_id: &str) -> Option<String> {
+        None
+    }
+
     /// Fetch a chat's display name (for human-friendly notification
     /// text). Best-effort; default: unsupported — `None`.
     async fn fetch_chat_name(&self, _chat_id: &str) -> Option<String> {

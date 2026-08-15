@@ -1263,6 +1263,38 @@ impl PlatformAdapter for FeishuAdapter {
         None
     }
 
+    /// The plain chat applink — no API call, the construction is the one
+    /// `message_link`'s chat branch uses.
+    async fn chat_link(&self, chat_id: &str) -> Option<String> {
+        Some(format!(
+            "https://applink.feishu.cn/client/chat/open?openChatId={chat_id}"
+        ))
+    }
+
+    /// The position-less thread applink (jumps to the thread, not a
+    /// specific message): the thread id is read off any message in the
+    /// thread (one fetch; a thread's root has it backfilled).
+    async fn thread_link(&self, chat_id: &str, message_id: &str) -> Option<String> {
+        let token = self.get_token().await.ok()?;
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.api_get(
+                &token,
+                &format!("{}/open-apis/im/v1/messages/{message_id}", self.base_url),
+                &[],
+            ),
+        )
+        .await
+        .map_err(|_| warn!(message_id, "thread_link fetch timed out"))
+        .ok()?
+        .map_err(|e| warn!(error = %e, message_id, "thread_link fetch failed"))
+        .ok()?;
+        let thread_id = resp["data"]["items"].as_array()?.first()?["thread_id"].as_str()?;
+        Some(format!(
+            "https://applink.feishu.cn/client/thread/open?open_chat_id={chat_id}&open_thread_id={thread_id}&openchatid={chat_id}&openthreadid={thread_id}"
+        ))
+    }
+
     /// The chat's display name for notification text; p2p chats have no
     /// name (the caller falls back to a generic wording).
     async fn fetch_chat_name(&self, chat_id: &str) -> Option<String> {

@@ -1576,6 +1576,23 @@ async fn handle_incoming_message(
             "Usage: `/threads` to show the current setting; `/threads on|off|reset` to change it (admin)."
                 .to_string(),
         )),
+        ChannelCommand::Sessions(offset) => {
+            handle_sessions_command(
+                channel_name,
+                config,
+                store,
+                &kernel,
+                adapter,
+                &msg,
+                reply_msg_id.clone(),
+                offset,
+            )
+            .await
+        }
+        ChannelCommand::InvalidSessionsCommand => Ok(Some(
+            "Usage: `/sessions` for the 10 most recent sessions; `/sessions <offset>` for the next page (admin)."
+                .to_string(),
+        )),
         ChannelCommand::Info => {
             // Chat-level messages show the chat session, in-thread ones
             // the thread's. Read-only: never creates a session or mapping.
@@ -2085,6 +2102,312 @@ async fn handle_threads_command(
             ))
         }
     }
+}
+
+/// Page size for `/sessions` (and the scan chunk when filtering to
+/// channel-routed sessions).
+const SESSIONS_PAGE_SIZE: usize = 10;
+const SESSIONS_SCAN_LIMIT: usize = 50;
+
+/// `/sessions [offset]` (admin): this channel's most recent sessions,
+/// each with a click-to-jump link into its thread or chat. Offset pages
+/// through the list (`/sessions 20` skips the first 20 matches).
+/// Card-capable platforms get a fancy card (reply is `None`); everyone
+/// else gets a plain text list.
+async fn handle_sessions_command(
+    channel_name: &str,
+    config: &ChannelConfig,
+    store: &Arc<dyn ChannelStore>,
+    kernel: &Arc<Kernel>,
+    adapter: &Arc<dyn PlatformAdapter>,
+    msg: &ChannelMessage,
+    reply_msg_id: Option<String>,
+    offset: usize,
+) -> Result<Option<String>> {
+    if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
+        return Ok(Some(deny));
+    }
+    // Channel-routed sessions only — a jump needs a delivery target.
+    let routed: std::collections::HashSet<String> = store
+        .list_mappings(channel_name)
+        .await?
+        .into_iter()
+        .map(|(_, sid)| sid.0.to_string())
+        .collect();
+
+    // Sessions paginate by cursor (updated_at desc); offset pages over
+    // the *routed* matches.
+    let mut picked: Vec<crate::storage::session::SessionInfo> = Vec::new();
+    let mut skipped = 0usize;
+    let mut before = None;
+    let mut has_more = false;
+    'scan: loop {
+        let page = kernel
+            .list_sessions(
+                None,
+                crate::storage::session::SessionListScope::All,
+                before,
+                SESSIONS_SCAN_LIMIT,
+            )
+            .await?;
+        let page_has_more = page.next_cursor.is_some();
+        let Some(last) = page.sessions.last() else {
+            break;
+        };
+        before = Some(last.updated_at);
+        for info in page.sessions {
+            if info.id.0.starts_with("sub_") || !routed.contains(info.id.0.as_str()) {
+                continue;
+            }
+            if skipped < offset {
+                skipped += 1;
+                continue;
+            }
+            if picked.len() < SESSIONS_PAGE_SIZE {
+                picked.push(info);
+            } else {
+                has_more = true;
+                break 'scan;
+            }
+        }
+        if !page_has_more {
+            break;
+        }
+    }
+
+    if picked.is_empty() {
+        return Ok(Some(if offset == 0 {
+            "This channel has no sessions yet.".to_string()
+        } else {
+            format!("No more sessions beyond offset {offset}.")
+        }));
+    }
+
+    // One call for the whole page: "active" = running or holding
+    // background tasks (the same semantics as `list_running_sessions`).
+    let running: std::collections::HashSet<String> = kernel
+        .list_running_sessions()
+        .await?
+        .into_iter()
+        .map(|s| s.id.0.to_string())
+        .collect();
+
+    let mut entries = Vec::with_capacity(picked.len());
+    let now = chrono::Utc::now();
+    // Fetch all jump links concurrently — a serial loop would stall the
+    // channel's single dispatch loop for one API call per row.
+    let links = futures::future::join_all(
+        picked
+            .iter()
+            .map(|info| session_jump_link(store, adapter, &info.id)),
+    )
+    .await;
+    for (info, link) in picked.iter().zip(links) {
+        let active = running.contains(info.id.0.as_str());
+        let marker = if active {
+            "⚡"
+        } else if link.as_ref().is_some_and(|(_, is_thread)| *is_thread) {
+            "🧵"
+        } else {
+            "💬"
+        };
+        entries.push(SessionEntry {
+            marker,
+            title: session_link_title(info),
+            bucket: session_time_bucket(info.updated_at, now),
+            link: link.map(|(url, _thread)| url),
+        });
+    }
+
+    // Card-capable platforms get the fancy card; everyone else gets the
+    // plain text list. Doc-comment commands have no chat to card into.
+    if msg.doc_comment.is_none() && adapter.supports_status_card() {
+        let card = sessions_card(offset, &entries, has_more);
+        adapter
+            .send_card(&msg.external_chat_id, &card, reply_msg_id.as_deref())
+            .await?;
+        return Ok(None);
+    }
+    Ok(Some(sessions_text(offset, &entries, has_more)))
+}
+
+/// One `/sessions` row: type/status marker, display title, recency
+/// bucket (drives the divider labels), and the jump link (if any).
+struct SessionEntry {
+    marker: &'static str,
+    title: String,
+    bucket: usize,
+    link: Option<String>,
+}
+
+/// Recency buckets for `/sessions` divider labels: 0 = 最近 6 小时,
+/// 1 = 6 小时前, 2 = 一天前, 3 = 一周前.
+fn session_time_bucket(
+    updated: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> usize {
+    let age = now.signed_duration_since(updated);
+    if age < chrono::Duration::hours(6) {
+        0
+    } else if age < chrono::Duration::hours(24) {
+        1
+    } else if age < chrono::Duration::days(7) {
+        2
+    } else {
+        3
+    }
+}
+
+const SESSION_BUCKET_LABELS: [&str; 4] = ["", "6 小时前", "一天前", "一周前"];
+
+/// The plain-text rendering of `/sessions` (fallback for platforms
+/// without cards).
+fn sessions_text(offset: usize, entries: &[SessionEntry], has_more: bool) -> String {
+    let mut lines = vec![format!(
+        "Recent sessions ({}–{}):",
+        offset + 1,
+        offset + entries.len()
+    )];
+    let mut bucket = None;
+    for (i, e) in entries.iter().enumerate() {
+        if bucket != Some(e.bucket) {
+            bucket = Some(e.bucket);
+            if e.bucket > 0 {
+                lines.push(format!("── {} ──", SESSION_BUCKET_LABELS[e.bucket]));
+            }
+        }
+        lines.push(match &e.link {
+            Some(link) => format!(
+                "{}. {} <a href=\"{link}\">{}</a>",
+                offset + i + 1,
+                e.marker,
+                e.title
+            ),
+            None => format!("{}. {} {}", offset + i + 1, e.marker, e.title),
+        });
+    }
+    if has_more {
+        lines.push(format!(
+            "Next page → `/sessions {}`",
+            offset + SESSIONS_PAGE_SIZE
+        ));
+    }
+    lines.join("\n")
+}
+
+/// The card rendering of `/sessions`: colored header, one row per
+/// session (marker + bold linked title), recency dividers between
+/// buckets, and a muted next-page hint when there is more.
+fn sessions_card(offset: usize, entries: &[SessionEntry], has_more: bool) -> String {
+    let mut elements: Vec<serde_json::Value> = Vec::new();
+    let mut bucket = None;
+    for e in entries {
+        if bucket != Some(e.bucket) {
+            bucket = Some(e.bucket);
+            if e.bucket > 0 {
+                if !elements.is_empty() {
+                    elements.push(serde_json::json!({ "tag": "hr" }));
+                }
+                elements.push(serde_json::json!({
+                    "tag": "markdown", "text_size": "notation",
+                    "content": SESSION_BUCKET_LABELS[e.bucket]
+                }));
+            }
+        }
+        let title_md = match &e.link {
+            Some(link) => format!("{} [**{}**]({link})", e.marker, e.title),
+            None => format!("{} **{}**", e.marker, e.title),
+        };
+        elements.push(serde_json::json!({ "tag": "markdown", "content": title_md }));
+    }
+    if has_more {
+        elements.push(serde_json::json!({ "tag": "hr" }));
+        elements.push(serde_json::json!({
+            "tag": "markdown", "text_size": "notation",
+            "content": format!("下一页 → `/sessions {}`", offset + SESSIONS_PAGE_SIZE)
+        }));
+    }
+    serde_json::json!({
+        "schema": "2.0",
+        "config": { "width_mode": "compact" },
+        "header": {
+            "template": "blue",
+            "title": {"tag": "plain_text",
+                "content": format!("📋 Recent sessions ({}–{})", offset + 1, offset + entries.len())},
+        },
+        "body": { "elements": elements },
+    })
+    .to_string()
+}
+
+/// The display title for a `/sessions` line: sanitized (see
+/// [`sanitize_session_title`]) and capped.
+fn session_link_title(info: &crate::storage::session::SessionInfo) -> String {
+    sanitize_session_title(info.title.as_deref().unwrap_or(""))
+}
+
+/// Sanitize a session title for `/sessions` rendering: titles are
+/// user-influenceable (first message, `/thread <topic>`, LLM titles,
+/// rename API), and raw metacharacters would break the markup or inject
+/// a foreign link. `<a href>` is the text-path markup and `[**..**](..)`
+/// the card-path one, so both angle brackets and lark_md metacharacters
+/// are full-width'd. Empty → `(untitled)`; capped at 30 chars.
+fn sanitize_session_title(raw: &str) -> String {
+    let title = raw.trim();
+    if title.is_empty() {
+        return "(untitled)".to_string();
+    }
+    let title: String = title
+        .chars()
+        .map(|c| match c {
+            '<' => '＜',
+            '>' => '＞',
+            '[' => '［',
+            ']' => '］',
+            '(' => '（',
+            ')' => '）',
+            '*' => '＊',
+            '`' => '｀',
+            '~' => '～',
+            _ => c,
+        })
+        .collect();
+    let truncated: String = title.chars().take(30).collect();
+    if title.chars().count() > 30 {
+        format!("{truncated}…")
+    } else {
+        truncated
+    }
+}
+
+/// The jump link for one `/sessions` entry and whether it points into a
+/// thread: anchored at the session's latest routed message (in-thread
+/// when the session lives in a thread), falling back to the root message
+/// the session keys by, then to a plain chat link. `None` for doc-comment
+/// sessions (no chat target) or unsupported platforms.
+async fn session_jump_link(
+    store: &Arc<dyn ChannelStore>,
+    adapter: &Arc<dyn PlatformAdapter>,
+    sid: &SessionId,
+) -> Option<(String, bool)> {
+    let routing = store.find_routing_by_session(sid).await.ok()??;
+    if routing.doc_comment.is_some() {
+        return None;
+    }
+    if let Some(target) = routing.reply_msg_id.as_deref().or_else(|| {
+        routing
+            .mapping_key
+            .starts_with("om_")
+            .then_some(routing.mapping_key.as_str())
+    }) {
+        if let Some(link) = adapter.thread_link(&routing.external_chat_id, target).await {
+            return Some((link, true));
+        }
+    }
+    adapter
+        .chat_link(&routing.external_chat_id)
+        .await
+        .map(|link| (link, false))
 }
 
 /// Advance the container's history cursor to a processed message's
@@ -2921,6 +3244,7 @@ const CMD_UNSUBSCRIBE: &str = "/unsubscribe";
 const CMD_MENTION: &str = "/mention";
 const CMD_THREADS: &str = "/threads";
 const CMD_BIND: &str = "/bind";
+const CMD_SESSIONS: &str = "/sessions";
 /// Max chars for the subscription notify card's quote line (ellipsis
 /// included — see `notify_quote_snippet`).
 const NOTIFY_QUOTE_MAX_CHARS: usize = 50;
@@ -2944,6 +3268,7 @@ const COMMANDS: &[(&str, &[&str])] = &[
     (CMD_MENTION, &[]),
     (CMD_THREADS, &[]),
     (CMD_BIND, &[]),
+    (CMD_SESSIONS, &[]),
     (CMD_PERMITS, &[]),
     (CMD_APPROVE, &[]),
     (CMD_DENY, &[]),
@@ -2968,6 +3293,7 @@ const HELP_TEXT: &str = "\
 `/mention` — show the @-requirement here; `/mention on|off|reset` to override it (admin)
 `/threads` — show reply-in-thread mode for this chat; `/threads on|off|reset` to override it (admin)
 `/bind` — show this conversation's session id; `/bind <session_id>` to retarget it (admin)
+`/sessions` — recent 10 sessions of this channel with jump links; `/sessions <offset>` for the next page (admin)
 `/permits` — list pending doc-permission requests (admin)
 `/approve <id> [perm]` — approve a doc-permission request (admin)
 `/deny <id>` — deny a doc-permission request (admin)
@@ -3045,6 +3371,10 @@ enum ChannelCommand {
     Threads(Option<OverrideMode>),
     /// A malformed `/threads` command.
     InvalidThreadsCommand,
+    /// List this channel's recent sessions (admin), with the page offset.
+    Sessions(usize),
+    /// A malformed `/sessions` command.
+    InvalidSessionsCommand,
     /// Command-shaped (`/word`) but matches no known command or alias.
     Unknown(String),
     /// Not a command.
@@ -3199,6 +3529,14 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
             (None, None) => ChannelCommand::Bind(None),
             (Some(id), None) => ChannelCommand::Bind(Some(id.to_string())),
             _ => ChannelCommand::InvalidBindCommand,
+        },
+        CMD_SESSIONS => match (parts.next(), parts.next()) {
+            (None, None) => ChannelCommand::Sessions(0),
+            (Some(n), None) => n
+                .parse::<usize>()
+                .map(ChannelCommand::Sessions)
+                .unwrap_or(ChannelCommand::InvalidSessionsCommand),
+            _ => ChannelCommand::InvalidSessionsCommand,
         },
         _ => ChannelCommand::None,
     }

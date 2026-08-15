@@ -1357,6 +1357,23 @@ async fn message_link_builds_applink() {
     assert!(adapter.message_link("oc_1", "om_unknown").await.is_none());
 }
 
+/// `thread_link`: any message in a thread yields the position-less
+/// thread applink; threadless messages and unknown ids yield `None`.
+#[tokio::test]
+async fn thread_link_builds_position_less_applink() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+
+    let link = adapter.thread_link("oc_1", "om_threaded").await.unwrap();
+    assert_eq!(
+        link,
+        "https://applink.feishu.cn/client/thread/open?open_chat_id=oc_1&open_thread_id=omt_9&openchatid=oc_1&openthreadid=omt_9"
+    );
+
+    assert!(adapter.thread_link("oc_1", "om_pos").await.is_none());
+    assert!(adapter.thread_link("oc_1", "om_unknown").await.is_none());
+}
+
 #[tokio::test]
 async fn card_action_payload_is_forwarded() {
     // Real card.action.trigger callbacks arrive as a v2 envelope.

@@ -31,6 +31,10 @@ pub struct MockAdapter {
     pub thread_root_calls: tokio::sync::Mutex<Vec<String>>,
     /// Successful-lookup cache for `thread_root_id`.
     thread_root_cache: tokio::sync::Mutex<std::collections::HashMap<String, String>>,
+    /// Cards sent: (chat, card json, reply anchor).
+    pub cards: tokio::sync::Mutex<Vec<(String, String, Option<String>)>>,
+    /// Gates `supports_status_card` (default false → text fallback).
+    pub status_card_ok: std::sync::atomic::AtomicBool,
 }
 
 impl MockAdapter {
@@ -46,6 +50,8 @@ impl MockAdapter {
             thread_roots: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             thread_root_calls: tokio::sync::Mutex::new(Vec::new()),
             thread_root_cache: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            cards: tokio::sync::Mutex::new(Vec::new()),
+            status_card_ok: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -118,6 +124,37 @@ impl PlatformAdapter for MockAdapter {
                 .insert(thread_id.to_string(), root.clone());
         }
         Ok(root)
+    }
+
+    async fn message_link(&self, chat_id: &str, message_id: &str) -> Option<String> {
+        Some(format!("link://{chat_id}/{message_id}"))
+    }
+
+    async fn chat_link(&self, chat_id: &str) -> Option<String> {
+        Some(format!("link://chat/{chat_id}"))
+    }
+
+    async fn thread_link(&self, chat_id: &str, message_id: &str) -> Option<String> {
+        Some(format!("link://thread/{chat_id}/{message_id}"))
+    }
+
+    fn supports_status_card(&self) -> bool {
+        self.status_card_ok
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    async fn send_card(
+        &self,
+        external_chat_id: &str,
+        card_json: &str,
+        reply_msg_id: Option<&str>,
+    ) -> std::result::Result<Option<String>, crate::channels::ChannelError> {
+        self.cards.lock().await.push((
+            external_chat_id.to_string(),
+            card_json.to_string(),
+            reply_msg_id.map(str::to_string),
+        ));
+        Ok(Some("card-1".to_string()))
     }
 
     async fn download_message_image(
@@ -6078,4 +6115,283 @@ fn notify_quote_snippet_normalizes_and_caps() {
     // Non-message text passes through; empty stays empty.
     assert_eq!(notify_quote_snippet("[图片]"), "[图片]");
     assert_eq!(notify_quote_snippet("  "), "");
+}
+
+#[test]
+fn sessions_command_parse() {
+    assert!(matches!(
+        parse_channel_command(Some("/sessions")),
+        ChannelCommand::Sessions(0)
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/sessions 20")),
+        ChannelCommand::Sessions(20)
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/sessions x")),
+        ChannelCommand::InvalidSessionsCommand
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/sessions 1 2")),
+        ChannelCommand::InvalidSessionsCommand
+    ));
+    assert!(HELP_TEXT.contains("/sessions"));
+}
+
+/// `/sessions` (admin): lists the channel's recent sessions with jump
+/// links, pages via offset; non-admins are refused.
+#[tokio::test]
+async fn sessions_command_lists_recent_with_links_and_pages() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "fake".into(),
+            app_secret: "fake".into(),
+        },
+        require_mention: false,
+        admin_users: vec!["ou_admin".to_string()],
+        ..Default::default()
+    };
+    let base = |msg_id: &str, user: &str, raw: &str| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: user.to_string(),
+        external_message_id: Some(msg_id.to_string()),
+        is_mention: true,
+        raw_text: Some(raw.to_string()),
+        content: vec![ContentBlock::Text {
+            text: raw.to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: true,
+        create_time: None,
+        doc_comment: None,
+    };
+    let handle = |m: ChannelMessage| {
+        handle_incoming_message(
+            "mock",
+            &config,
+            &store,
+            Arc::clone(&kernel),
+            m,
+            &obs,
+            &adapter,
+        )
+    };
+
+    // Two sessions: a chat-level one and a `/thread` one (titled).
+    assert_eq!(handle(base("m1", "ou_1", "你好")).await.unwrap(), None);
+    assert_eq!(
+        handle(base("m2", "ou_1", "/thread 话题讨论"))
+            .await
+            .unwrap(),
+        None
+    );
+    let sid = store
+        .find_mapping("mock", "m2")
+        .await
+        .unwrap()
+        .expect("thread session");
+    assert_eq!(wait_for_title(&kernel, &sid).await, "话题讨论");
+
+    // Admin: both sessions listed, newest page header, jump links.
+    let reply = handle(base("m3", "ou_admin", "/sessions"))
+        .await
+        .unwrap()
+        .expect("a list reply");
+    assert!(reply.contains("Recent sessions (1–2)"), "{reply}");
+    assert!(reply.contains("话题讨论"), "{reply}");
+    assert!(reply.contains("link://thread/"), "{reply}");
+    assert!(!reply.contains("💤"), "{reply}");
+
+    // Offset pages: one entry on page 2, then exhaustion.
+    let reply = handle(base("m4", "ou_admin", "/sessions 1"))
+        .await
+        .unwrap()
+        .expect("page 2");
+    assert!(reply.contains("(2–2)"), "{reply}");
+    assert!(!reply.contains("Next page"), "{reply}");
+    let reply = handle(base("m5", "ou_admin", "/sessions 9"))
+        .await
+        .unwrap()
+        .expect("beyond the end");
+    assert!(reply.contains("No more sessions"), "{reply}");
+
+    // Non-admin is refused.
+    let reply = handle(base("m6", "ou_1", "/sessions"))
+        .await
+        .unwrap()
+        .expect("refusal");
+    assert!(reply.contains("admin_users"), "{reply}");
+}
+
+/// `/sessions` on card-capable platforms: a fancy card (header, column
+/// rows, links), no text reply.
+#[tokio::test]
+async fn sessions_command_card_rendering() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    mock.status_card_ok
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "fake".into(),
+            app_secret: "fake".into(),
+        },
+        require_mention: false,
+        admin_users: vec!["ou_admin".to_string()],
+        ..Default::default()
+    };
+    let base = |msg_id: &str, user: &str, raw: &str| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: user.to_string(),
+        external_message_id: Some(msg_id.to_string()),
+        is_mention: true,
+        raw_text: Some(raw.to_string()),
+        content: vec![ContentBlock::Text {
+            text: raw.to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: true,
+        create_time: None,
+        doc_comment: None,
+    };
+    let handle = |m: ChannelMessage| {
+        handle_incoming_message(
+            "mock",
+            &config,
+            &store,
+            Arc::clone(&kernel),
+            m,
+            &obs,
+            &adapter,
+        )
+    };
+
+    assert_eq!(
+        handle(base("m1", "ou_1", "/thread 话题讨论"))
+            .await
+            .unwrap(),
+        None
+    );
+    let sid = store
+        .find_mapping("mock", "m1")
+        .await
+        .unwrap()
+        .expect("session created");
+    assert_eq!(wait_for_title(&kernel, &sid).await, "话题讨论");
+
+    let reply = handle(base("m2", "ou_admin", "/sessions")).await.unwrap();
+    assert_eq!(reply, None, "card path sends no text reply");
+
+    let cards = mock.cards.lock().await;
+    let (chat, card, anchor) = cards.last().expect("a card was sent");
+    assert_eq!(chat, "oc_1");
+    assert_eq!(anchor, &None, "rit=off: unanchored, same as the text path");
+    assert!(card.contains("📋 Recent sessions (1–1)"), "{card}");
+    assert!(card.contains("🧵"), "{card}");
+    assert!(card.contains("[**话题讨论**](link://thread/"), "{card}");
+}
+
+/// `/sessions` recency dividers: rows group under 6 小时前 / 一天前 /
+/// 一周前 labels (card + text alike); the current bucket gets no label.
+#[test]
+fn sessions_render_groups_by_time_bucket() {
+    let entry = |marker: &'static str, title: &str, bucket: usize| SessionEntry {
+        marker,
+        title: title.to_string(),
+        bucket,
+        link: Some("link://x".to_string()),
+    };
+    let entries = vec![
+        entry("⚡", "a", 0),
+        entry("🧵", "b", 1),
+        entry("🧵", "c", 2),
+        entry("💬", "d", 3),
+    ];
+
+    let card = sessions_card(0, &entries, true);
+    for label in ["6 小时前", "一天前", "一周前", "下一页"] {
+        assert!(card.contains(label), "{label} in {card}");
+    }
+    let text = sessions_text(0, &entries, true);
+    for label in ["── 6 小时前 ──", "── 一天前 ──", "── 一周前 ──"]
+    {
+        assert!(text.contains(label), "{label} in {text}");
+    }
+
+    // All-fresh page: no divider labels anywhere.
+    let fresh = sessions_card(0, &[entry("⚡", "a", 0), entry("🧵", "b", 0)], false);
+    for label in ["6 小时前", "一天前", "一周前"] {
+        assert!(!fresh.contains(label), "{label} unexpected in {fresh}");
+    }
+}
+
+/// Bucket boundaries: <6h → 0, <24h → 1, <7d → 2, older → 3.
+#[test]
+fn session_time_bucket_boundaries() {
+    let now = chrono::Utc::now();
+    let at = |secs_ago: i64| now - chrono::Duration::seconds(secs_ago);
+    assert_eq!(session_time_bucket(at(0), now), 0);
+    assert_eq!(session_time_bucket(at(6 * 3600 - 1), now), 0);
+    assert_eq!(session_time_bucket(at(6 * 3600), now), 1);
+    assert_eq!(session_time_bucket(at(24 * 3600 - 1), now), 1);
+    assert_eq!(session_time_bucket(at(24 * 3600), now), 2);
+    assert_eq!(session_time_bucket(at(7 * 24 * 3600 - 1), now), 2);
+    assert_eq!(session_time_bucket(at(7 * 24 * 3600), now), 3);
+}
+
+/// Title sanitization for `/sessions`: lark_md metacharacters are
+/// full-width'd (a crafted title must not break the card markup or
+/// inject a foreign link), empties fall back, 30-char cap applies.
+#[test]
+fn sanitize_session_title_neutralizes_markup() {
+    // The review's injection example: no clickable remnants.
+    assert_eq!(
+        sanitize_session_title("x](https://evil.com/#)[y"),
+        "x］（https://evil.com/#）［y"
+    );
+    assert_eq!(
+        sanitize_session_title("**bold** `code` ~~strike~~"),
+        "＊＊bold＊＊ ｀code｀ ～～strike～～"
+    );
+    assert_eq!(sanitize_session_title("<a href>"), "＜a href＞");
+    assert_eq!(sanitize_session_title("   "), "(untitled)");
+
+    let long = "长".repeat(40);
+    let out = sanitize_session_title(&long);
+    assert_eq!(out.chars().count(), 31);
+    assert!(out.ends_with('…'));
 }
