@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.83] - 2026-08-15
+
 ### Changed
 - **（非兼容）** `yomi session list` 默认列出全部会话（原默认仅当前目录）；仅显式 `-d/--dir <目录>` 时按 session 工作目录过滤；`-a/--all` 参数保留但已无作用（noop）。
 - 飞书 `/thread` 话题中的追问不再另起新会话：话题内消息统一归属话题根消息对应的会话，私聊与群聊行为一致。
