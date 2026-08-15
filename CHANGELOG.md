@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.82] - 2026-08-15
+
+### Changed
+- cron 工具说明补充 shell 任务的自我完成约定：脚本以退出码 42 退出即标记任务完成、不再调度（此前仅在 CLI 帮助中可见）。
+
 ## [0.7.81] - 2026-08-15
 
 ### Changed
