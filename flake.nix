@@ -46,9 +46,6 @@
               !isJunk && pkgs.lib.cleanSourceFilter path type;
         };
 
-        # 前端 npm 依赖 hash（基于 crates/gui/frontend/package-lock.json 计算）
-        npmDepsHash = "sha256-e2ywhVCB2yhL6GRwJITYJA6yrhYp/5cGSiVc6nU9Q/w=";
-
         commonNativeBuildInputs = with pkgs; [
           pkg-config
           cmake
@@ -120,16 +117,13 @@
             # buildAndTestSubdir 仅用于构建/测试阶段的 pushd，不影响 cargoDeps 生成。
             buildAndTestSubdir = "crates/gui";
 
-            # 前端 npm 依赖（package-lock.json 在 crates/gui/frontend/）
-            npmDeps = pkgs.fetchNpmDeps {
-              src = ./crates/gui/frontend;
-              hash = npmDepsHash;
-            };
+            # 前端 npm 依赖（直接读取 crates/gui/frontend/package-lock.json，无需维护 hash）
+            npmDeps = pkgs.importNpmLock { npmRoot = ./crates/gui/frontend; };
 
             nativeBuildInputs = with pkgs; [
               cargo-tauri.hook
               nodejs
-              npmHooks.npmConfigHook
+              importNpmLock.npmConfigHook
               pkg-config
               wrapGAppsHook4
               makeWrapper
