@@ -38,7 +38,7 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 ## cron（自己的闹钟）
 
 - `cron list|get|create|update|pause|resume|delete`；`cron trigger <id>` 立即手动触发一次，调试任务时用。
-- shell 类 job 的脚本以退出码 **42** 退出 = 自我完成：调度器把 job 标记 `Completed`，不再调度（记录保留，等同退役）；仅调度执行兑现，手动 `trigger` 只报告不生效。适合"条件满足即退役"的盯梢/一次性提醒任务。
+- shell 类 job 脚本退出码 **42** = 自我完成：标记 `Completed` 不再调度（仅调度执行兑现，手动 `trigger` 不生效）。
 
 ## 清理（自己的数据）
 
