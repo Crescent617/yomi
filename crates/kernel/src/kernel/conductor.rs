@@ -307,6 +307,13 @@ impl Conductor {
                     .clone();
 
                 Self::push_to_mailbox(&mb, input).await;
+                // User activity (message/steer/queue): refresh the session's
+                // recency so session lists order by real use, not creation.
+                if let Some(store) = &self.agent_shared.session_store {
+                    if let Err(e) = store.touch(&sid).await {
+                        tracing::warn!("failed to touch session={sid}: {e}");
+                    }
+                }
                 self.wake_agent(&sid, mb).await;
             }
         }

@@ -6395,3 +6395,87 @@ fn sanitize_session_title_neutralizes_markup() {
     assert_eq!(out.chars().count(), 31);
     assert!(out.ends_with('…'));
 }
+
+/// User activity touches the session: an incoming trigger refreshes
+/// `updated_at`, so session lists order by real recency.
+#[tokio::test]
+async fn trigger_touches_session_recency() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+    // The conductor loop consumes the input bus (and touches the session
+    // per dispatched input) — it only runs after `start`.
+    kernel.start();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "fake".into(),
+            app_secret: "fake".into(),
+        },
+        require_mention: false,
+        ..Default::default()
+    };
+    let base = |msg_id: &str, raw: &str| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: "ou_1".to_string(),
+        external_message_id: Some(msg_id.to_string()),
+        is_mention: true,
+        raw_text: Some(raw.to_string()),
+        content: vec![ContentBlock::Text {
+            text: raw.to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: true,
+        create_time: None,
+        doc_comment: None,
+    };
+    let handle = |m: ChannelMessage| {
+        handle_incoming_message(
+            "mock",
+            &config,
+            &store,
+            Arc::clone(&kernel),
+            m,
+            &obs,
+            &adapter,
+        )
+    };
+
+    assert_eq!(handle(base("m1", "你好")).await.unwrap(), None);
+    let sid = store
+        .find_mapping("mock", "oc_1")
+        .await
+        .unwrap()
+        .expect("session created");
+    let t0 = kernel.get_session(&sid).await.unwrap().updated_at;
+
+    // A second trigger (crossing a second boundary) must refresh
+    // updated_at. The touch lands in the conductor's spawned task, so
+    // poll briefly instead of reading immediately.
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    assert_eq!(handle(base("m2", "在吗")).await.unwrap(), None);
+    let mut t1 = t0;
+    for _ in 0..40 {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        t1 = kernel.get_session(&sid).await.unwrap().updated_at;
+        if t1 != t0 {
+            break;
+        }
+    }
+    assert!(t1 > t0, "updated_at not refreshed: {t0} -> {t1}");
+    kernel.stop();
+}

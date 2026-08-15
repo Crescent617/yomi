@@ -123,6 +123,10 @@ pub trait SessionStore: Send + Sync {
     /// Update message count for a session
     async fn update_message_count(&self, id: &SessionId, count: i64) -> Result<()>;
 
+    /// Touch a session (refresh `updated_at` to now) — called on user
+    /// activity so session lists order by real recency.
+    async fn touch(&self, id: &SessionId) -> Result<()>;
+
     /// Update session title
     async fn update_title(&self, id: &SessionId, title: &str) -> Result<()>;
 

@@ -173,6 +173,15 @@ impl SessionStore for SqliteSessionStore {
         Ok(())
     }
 
+    async fn touch(&self, id: &SessionId) -> Result<()> {
+        sqlx::query("UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+            .bind(&*id.0)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| storage_err(format!("failed to touch session: {e}")))?;
+        Ok(())
+    }
+
     async fn update_title(&self, id: &SessionId, title: &str) -> Result<()> {
         let result = sqlx::query(
             "UPDATE sessions SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",

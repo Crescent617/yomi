@@ -605,3 +605,23 @@ async fn test_list_excludes_subagent_sessions() {
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].id.0, parent_id.0);
 }
+
+#[tokio::test]
+async fn test_touch_refreshes_updated_at() {
+    let store = create_test_store().await;
+
+    let id = SessionId::new();
+    store.create(NewSession::new(id.clone())).await.unwrap();
+    // Backdate, then touch: updated_at must be refreshed to ~now.
+    sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-1 day') WHERE id = ?")
+        .bind(&*id.0)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+    store.touch(&id).await.unwrap();
+
+    let info = store.get(&id).await.unwrap().unwrap();
+    let age = chrono::Utc::now().signed_duration_since(info.updated_at);
+    assert!(age.num_minutes() < 1, "updated_at not refreshed: {age}");
+}

@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- 发消息现在会刷新会话的 `updated_at`：`session list` 与飞书 `/sessions` 按真实活跃时间排序（此前只随创建/改标题等少数操作更新）。
+
 ## [0.7.83] - 2026-08-15
 
 ### Changed
