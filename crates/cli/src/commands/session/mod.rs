@@ -6,6 +6,10 @@ pub mod cancel;
 pub mod cat;
 pub mod send;
 
+#[cfg(test)]
+#[path = "list_test.rs"]
+mod list_test;
+
 /// Resolve a session ID from CLI arg or the current directory's last session.
 pub async fn resolve_session_id(global: &GlobalArgs, session: Option<String>) -> Result<String> {
     match session {
@@ -23,14 +27,30 @@ pub async fn resolve_session_id(global: &GlobalArgs, session: Option<String>) ->
     }
 }
 
+/// Filter sessions to a working directory (`-d/--dir` given), capped at
+/// 50 rows; `None` passes the full list through (the default).
+fn filter_by_dir(
+    sessions: Vec<kernel::storage::session::SessionInfo>,
+    dir: Option<&std::path::Path>,
+) -> Vec<kernel::storage::session::SessionInfo> {
+    let Some(dir) = dir else {
+        return sessions;
+    };
+    let dir_str = dir.to_string_lossy();
+    sessions
+        .into_iter()
+        .filter(|s| s.working_dir.as_ref().is_some_and(|wd| wd == &dir_str))
+        .take(50)
+        .collect()
+}
+
 pub async fn list(global: &GlobalArgs, all: bool) -> Result<()> {
+    // `-a/--all` is a deprecated no-op: listing now defaults to all
+    // sessions; only an explicit -d/--dir filters by working directory.
+    let _ = all;
     let storage = crate::utils::open_storage(global).await?;
 
-    // Get current working directory
-    let current_dir = std::env::current_dir()?;
-    let current_dir_str = current_dir.to_string_lossy().to_string();
-
-    // List sessions: by default only current working dir, with --all list all
+    // List sessions: all by default, filtered only with an explicit -d/--dir.
     let (sessions, _) = storage
         .session_store()
         .list(
@@ -41,28 +61,17 @@ pub async fn list(global: &GlobalArgs, all: bool) -> Result<()> {
         )
         .await?;
 
-    let sessions: Vec<_> = if all {
-        sessions
-    } else {
-        sessions
-            .into_iter()
-            .filter(|s| {
-                s.working_dir
-                    .as_ref()
-                    .is_some_and(|wd| wd == &current_dir_str)
-            })
-            .take(50)
-            .collect()
+    let filter_dir = match &global.dir {
+        Some(dir) => Some(dir.canonicalize()?),
+        None => None,
     };
-
-    if !all && sessions.is_empty() {
-        println!("No sessions found for current directory: {current_dir_str}");
-        println!("Use --all to list all sessions.");
-        return Ok(());
-    }
+    let sessions = filter_by_dir(sessions, filter_dir.as_deref());
 
     if sessions.is_empty() {
-        println!("No sessions found.");
+        match &filter_dir {
+            Some(dir) => println!("No sessions found for directory: {}", dir.display()),
+            None => println!("No sessions found."),
+        }
         return Ok(());
     }
 

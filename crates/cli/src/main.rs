@@ -62,9 +62,9 @@ struct SessionArgs {
 
 #[derive(Subcommand)]
 enum SessionsCommands {
-    /// List sessions (default: current directory only)
+    /// List sessions (all by default; -d/--dir filters to a directory)
     List {
-        /// List all sessions, not just current directory
+        /// Deprecated no-op: listing now defaults to all sessions
         #[arg(short, long)]
         all: bool,
     },
