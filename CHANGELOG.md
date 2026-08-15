@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.81] - 2026-08-15
+
+### Changed
+- todo 工具单次写入或更新最多 50 条待办（此前无上限）：超出时返回错误并提示精简列表，防止模型异常时无限重复生成条目。
+
+### Fixed
+- 修复 `yomi daemon start -c/--config` 指定的配置文件被静默忽略的问题：现在会实际加载指定配置，且 daemon 自行重启后沿用同一配置。
+
 ## [0.7.80] - 2026-08-14
 
 ### Changed
