@@ -1349,7 +1349,8 @@ async fn handle_incoming_message(
     let chat_id = msg.external_chat_id.clone();
     let rit = resolve_reply_in_thread(store, config, &chat_id).await;
     let reply_msg_id = reply_anchor(&msg, rit);
-    let mapping_key = effective_mapping_key(store, channel_name, &msg, &chat_id, rit).await?;
+    let mapping_key =
+        effective_mapping_key(store, adapter, channel_name, &msg, &chat_id, rit).await?;
     tracing::debug!(
         channel = %channel_name,
         chat_id = %chat_id,
@@ -1659,7 +1660,7 @@ async fn handle_incoming_message(
                 ));
             }
             let scope_key =
-                subscription_scope_key(store, channel_name, &msg, &chat_id, rit)
+                subscription_scope_key(store, adapter, channel_name, &msg, &chat_id, rit)
                     .await?;
             store
                 .save_run_subscription(
@@ -1699,7 +1700,7 @@ async fn handle_incoming_message(
                 ));
             }
             let scope_key =
-                subscription_scope_key(store, channel_name, &msg, &chat_id, rit)
+                subscription_scope_key(store, adapter, channel_name, &msg, &chat_id, rit)
                     .await?;
             let removed = store
                 .remove_run_subscription(channel_name, &scope_key, &msg.external_user_id)
@@ -2338,7 +2339,7 @@ async fn prepare_trigger(
         TriggerKind::Normal => {
             let rit = resolve_reply_in_thread(store, config, &msg.external_chat_id).await;
             (
-                effective_mapping_key(store, channel_name, msg, &chat_id, rit).await?,
+                effective_mapping_key(store, adapter, channel_name, msg, &chat_id, rit).await?,
                 reply_anchor(msg, rit),
             )
         }
@@ -2643,16 +2644,26 @@ async fn record_passive_receipt(
         return;
     }
     let rit = resolve_reply_in_thread(store, config, &msg.external_chat_id).await;
-    let Ok(mapping_key) =
-        effective_mapping_key(store, channel_name, msg, &msg.external_chat_id, rit).await
-    else {
-        return;
-    };
+    // Passive path: never resolve roots via the platform (that would
+    // cost an API lookup for chatter the bot wasn't even addressed in).
+    // The plain key resolves rit=on threads (key == root); for other
+    // shapes a present `root_id` is a free database-only fallback.
+    let mapping_key = session_mapping_key(&msg, &msg.external_chat_id, rit);
     // A top-level group message in reply_in_thread mode keys by its own
     // id — never mapped, never a mid-run post (it doesn't interleave
     // with any thread's run).
-    let Ok(Some(sid)) = store.find_mapping(channel_name, &mapping_key).await else {
-        return;
+    let sid = match store.find_mapping(channel_name, &mapping_key).await {
+        Ok(Some(sid)) => sid,
+        Ok(None) => {
+            let Some(root_id) = msg.root_id.as_deref().filter(|r| *r != mapping_key) else {
+                return;
+            };
+            match store.find_mapping(channel_name, root_id).await {
+                Ok(Some(sid)) => sid,
+                _ => return,
+            }
+        }
+        Err(_) => return,
     };
     if !is_running(&sid) {
         return;
@@ -2716,31 +2727,57 @@ fn session_mapping_key(msg: &ChannelMessage, chat_id: &str, reply_in_thread: boo
     }
 }
 
-/// The session mapping key with `/thread` adoption: a thread opened by
-/// the one-shot command keeps its session under the thread's root
-/// message id (the trigger's own key under the forced flag, see
-/// [`session_mapping_key`]); follow-ups in such a thread adopt that
-/// session instead of starting a fresh thread-id-keyed one. With
-/// `reply_in_thread` on, in-thread keying already roots at the same
-/// id — nothing to adopt.
+/// The canonical session mapping key: a message inside a thread keys by
+/// the thread's ROOT message, one conversation per thread — regardless
+/// of chat type (group or private), of `reply_in_thread` mode, and of
+/// how the thread started (`/thread` one-shots key by the command
+/// message, which IS the future root, so follow-ups resolve to the same
+/// key with no special-casing).
+///
+/// Events don't always carry `root_id` (private chats, older shapes);
+/// the root is then resolved from the platform (cached by the adapter —
+/// see [`PlatformAdapter::thread_root_id`]). Resolution failure falls
+/// back to the plain key (a fresh thread-id-keyed session, the pre-fix
+/// behavior) — never an error.
 async fn effective_mapping_key(
     store: &Arc<dyn ChannelStore>,
+    adapter: &Arc<dyn PlatformAdapter>,
     channel_name: &str,
     msg: &ChannelMessage,
     chat_id: &str,
     reply_in_thread: bool,
 ) -> Result<String> {
     let key = session_mapping_key(msg, chat_id, reply_in_thread);
-    if reply_in_thread || msg.thread_id.is_none() {
+    if msg.thread_id.is_none() {
         return Ok(key);
     }
-    let Some(root_id) = msg.root_id.as_deref() else {
+    // Fast path: this thread already maps to a session under the
+    // computed key.
+    if store.find_mapping(channel_name, &key).await?.is_some() {
+        return Ok(key);
+    }
+    // Canonical key: the thread's root message.
+    let root_id = match msg.root_id.as_deref() {
+        Some(r) => Some(r.to_string()),
+        None => adapter
+            .thread_root_id(msg.thread_id.as_deref().unwrap_or_default())
+            .await
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "thread root lookup failed, starting a fresh session");
+                None
+            }),
+    };
+    let Some(root_id) = root_id.filter(|r| *r != key) else {
         return Ok(key);
     };
-    if store.find_mapping(channel_name, &key).await?.is_none()
-        && store.find_mapping(channel_name, root_id).await?.is_some()
-    {
-        return Ok(root_id.to_string());
+    if store.find_mapping(channel_name, &root_id).await?.is_some() {
+        info!(
+            channel = %channel_name,
+            thread_id = msg.thread_id.as_deref().unwrap_or(""),
+            root_id,
+            "thread resolves to the root message's session"
+        );
+        return Ok(root_id);
     }
     Ok(key)
 }
@@ -2759,13 +2796,14 @@ fn is_chat_level_message(msg: &ChannelMessage, reply_in_thread: bool) -> bool {
 /// own session), the thread's mapping key inside a thread.
 async fn subscription_scope_key(
     store: &Arc<dyn ChannelStore>,
+    adapter: &Arc<dyn PlatformAdapter>,
     channel_name: &str,
     msg: &ChannelMessage,
     chat_id: &str,
     reply_in_thread: bool,
 ) -> Result<String> {
     if msg.thread_id.is_some() {
-        effective_mapping_key(store, channel_name, msg, chat_id, reply_in_thread).await
+        effective_mapping_key(store, adapter, channel_name, msg, chat_id, reply_in_thread).await
     } else {
         Ok(chat_id.to_string())
     }

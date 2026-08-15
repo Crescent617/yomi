@@ -71,6 +71,9 @@ struct TokenCache {
 const DEDUP_CAP: NonZeroUsize = NonZeroUsize::new(4096).unwrap();
 /// Cap for the sent-card text cache (see [`FeishuAdapter::cache_card_text`]).
 const SENT_TEXT_CAP: NonZeroUsize = DEDUP_CAP;
+/// Cap for the thread-root cache (thread_id → root message id). Threads
+/// are few and long-lived; a miss just costs one API re-fetch.
+const THREAD_ROOT_CAP: NonZeroUsize = DEDUP_CAP;
 /// KV namespace and retention for the sent-card text cache: quoting a
 /// reply happens in the same conversation arc, so a week is ample.
 const SENT_TEXT_NS: &str = "feishu_sent_card_text";
@@ -95,6 +98,9 @@ pub struct FeishuAdapter {
     kv: Option<std::sync::Arc<crate::kv_cache::KvCache>>,
     /// Last `sent_texts` prune time (throttled, see PRUNE_INTERVAL).
     last_prune: tokio::sync::Mutex<Option<std::time::Instant>>,
+    /// Thread id → root message id, filled by `thread_root_id`. Memory
+    /// only: a cold cache after restart costs one refetch per thread.
+    thread_roots: tokio::sync::Mutex<LruCache<String, String>>,
 }
 
 impl FeishuAdapter {
@@ -113,6 +119,7 @@ impl FeishuAdapter {
             sent_texts: Mutex::new(LruCache::new(SENT_TEXT_CAP)),
             kv: None,
             last_prune: tokio::sync::Mutex::new(None),
+            thread_roots: tokio::sync::Mutex::new(LruCache::new(THREAD_ROOT_CAP)),
         }
     }
 
@@ -1096,6 +1103,44 @@ impl PlatformAdapter for FeishuAdapter {
         // The API returns newest-first; assemble chronologically.
         out.reverse();
         Ok(out)
+    }
+
+    /// refer: <https://open.feishu.cn/document/server-docs/im-v1/message/list>
+    /// The thread's root is its earliest message — one ascending fetch,
+    /// cached per thread so repeat calls are free.
+    async fn thread_root_id(&self, thread_id: &str) -> Result<Option<String>, ChannelError> {
+        if let Some(root) = self.thread_roots.lock().await.get(thread_id) {
+            return Ok(Some(root.clone()));
+        }
+        let token = self.get_token().await?;
+        let query = [
+            ("container_id_type", "thread".to_string()),
+            ("container_id", thread_id.to_string()),
+            ("sort_type", "ByCreateTimeAsc".to_string()),
+            ("page_size", "1".to_string()),
+        ];
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.api_get(
+                &token,
+                &format!("{}/open-apis/im/v1/messages", self.base_url),
+                &query,
+            ),
+        )
+        .await
+        .map_err(|_| ChannelError::Platform("thread root fetch timed out".into()))??;
+        let root = resp["data"]["items"]
+            .as_array()
+            .and_then(|items| items.first())
+            .and_then(|m| m["message_id"].as_str())
+            .map(str::to_string);
+        if let Some(root) = &root {
+            self.thread_roots
+                .lock()
+                .await
+                .put(thread_id.to_string(), root.clone());
+        }
+        Ok(root)
     }
 
     /// refer: <https://open.feishu.cn/document/server-docs/im-v1/message/get>

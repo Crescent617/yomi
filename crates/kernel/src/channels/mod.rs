@@ -925,6 +925,16 @@ pub trait PlatformAdapter: Send + Sync {
         Ok(None)
     }
 
+    /// The root message id of a platform thread (the message the thread
+    /// hangs off). Resolves the canonical thread key (see
+    /// `effective_mapping_key`) when the event payload doesn't carry
+    /// `root_id`. Implementations should cache successful lookups —
+    /// callers may invoke this once per in-thread message. Default:
+    /// unsupported (no threads).
+    async fn thread_root_id(&self, _thread_id: &str) -> Result<Option<String>, ChannelError> {
+        Ok(None)
+    }
+
     /// Build a user-clickable link that jumps to a message in the client
     /// (Feishu applink). May cost one platform API call (the jump link
     /// needs the message's position). Default: unsupported — `None`.

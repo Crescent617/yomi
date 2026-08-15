@@ -24,6 +24,13 @@ pub struct MockAdapter {
     pub image_download_ok: tokio::sync::Mutex<bool>,
     /// Doc-comment replies sent: (`comment_id`, chunk text).
     pub comment_replies: tokio::sync::Mutex<Vec<(String, String)>>,
+    /// Thread id → root message id, returned by `thread_root_id`.
+    pub thread_roots: tokio::sync::Mutex<std::collections::HashMap<String, String>>,
+    /// `thread_root_id` backing-lookup call log (cache hits are not
+    /// logged, mirroring the real adapter's caching contract).
+    pub thread_root_calls: tokio::sync::Mutex<Vec<String>>,
+    /// Successful-lookup cache for `thread_root_id`.
+    thread_root_cache: tokio::sync::Mutex<std::collections::HashMap<String, String>>,
 }
 
 impl MockAdapter {
@@ -36,6 +43,9 @@ impl MockAdapter {
             quoted_calls: tokio::sync::Mutex::new(Vec::new()),
             image_download_ok: tokio::sync::Mutex::new(false),
             comment_replies: tokio::sync::Mutex::new(Vec::new()),
+            thread_roots: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            thread_root_calls: tokio::sync::Mutex::new(Vec::new()),
+            thread_root_cache: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 }
@@ -87,6 +97,27 @@ impl PlatformAdapter for MockAdapter {
             return Ok(Some(m.clone()));
         }
         Ok(self.quoted.lock().await.clone())
+    }
+
+    async fn thread_root_id(
+        &self,
+        thread_id: &str,
+    ) -> std::result::Result<Option<String>, crate::channels::ChannelError> {
+        if let Some(root) = self.thread_root_cache.lock().await.get(thread_id) {
+            return Ok(Some(root.clone()));
+        }
+        self.thread_root_calls
+            .lock()
+            .await
+            .push(thread_id.to_string());
+        let root = self.thread_roots.lock().await.get(thread_id).cloned();
+        if let Some(root) = &root {
+            self.thread_root_cache
+                .lock()
+                .await
+                .insert(thread_id.to_string(), root.clone());
+        }
+        Ok(root)
     }
 
     async fn download_message_image(
@@ -1349,8 +1380,8 @@ async fn test_thread_command_one_shot_and_adoption() {
         .unwrap()
         .expect("thread session under the root key");
 
-    // A follow-up inside the opened thread adopts the root-keyed
-    // session — no fresh thread-id-keyed session appears.
+    // A follow-up inside the opened thread resolves to the root-keyed
+    // session — no thread-keyed row appears at all.
     let mut follow_up = base("m2", "继续");
     follow_up.thread_id = Some("omt_1".to_string());
     follow_up.root_id = Some("m1".to_string());
@@ -1359,12 +1390,201 @@ async fn test_thread_command_one_shot_and_adoption() {
     assert_eq!(reply, None);
     assert!(
         store.find_mapping("mock", "omt_1").await.unwrap().is_none(),
-        "adoption must not spawn a thread-keyed session"
+        "no thread-keyed mapping row (unified root key)"
     );
     assert_eq!(
         store.find_mapping("mock", "m1").await.unwrap(),
         Some(sid),
         "the follow-up kept the /thread session"
+    );
+}
+
+/// Private chat: in-thread follow-ups carry no `root_id` at all — the
+/// thread's root is fetched from the platform once (cached), and the
+/// follow-up resolves to the `/thread` session under the canonical
+/// root key. No thread-keyed mapping row is ever written.
+#[tokio::test]
+async fn test_thread_followup_without_root_id_resolves_root() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "fake".into(),
+            app_secret: "fake".into(),
+        },
+        require_mention: false,
+        ..Default::default()
+    };
+    let base = |msg_id: &str, raw: &str| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: "ou_1".to_string(),
+        external_message_id: Some(msg_id.to_string()),
+        is_mention: true,
+        raw_text: Some(raw.to_string()),
+        content: vec![ContentBlock::Text {
+            text: raw.to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: false,
+        create_time: None,
+        doc_comment: None,
+    };
+    let handle = |m: ChannelMessage| {
+        handle_incoming_message(
+            "mock",
+            &config,
+            &store,
+            Arc::clone(&kernel),
+            m,
+            &obs,
+            &adapter,
+        )
+    };
+
+    // One-shot `/thread`: session keyed by the command's message id.
+    let reply = handle(base("m1", "/thread 看看这个")).await.unwrap();
+    assert_eq!(reply, None);
+    let sid = store
+        .find_mapping("mock", "m1")
+        .await
+        .unwrap()
+        .expect("thread session under the root key");
+
+    // The platform knows the root; the event doesn't carry it.
+    mock.thread_roots
+        .lock()
+        .await
+        .insert("omt_1".to_string(), "m1".to_string());
+
+    let mut follow_up = base("m2", "继续");
+    follow_up.thread_id = Some("omt_1".to_string());
+    let reply = handle(follow_up).await.unwrap();
+    assert_eq!(reply, None);
+    assert!(
+        store.find_mapping("mock", "omt_1").await.unwrap().is_none(),
+        "no thread-keyed mapping row (unified root key)"
+    );
+    assert_eq!(
+        store.find_mapping("mock", "m1").await.unwrap(),
+        Some(sid.clone()),
+        "the follow-up resolved to the /thread session"
+    );
+    assert_eq!(
+        mock.thread_root_calls.lock().await.len(),
+        1,
+        "the root lookup runs once per fresh thread"
+    );
+
+    // Later messages hit the adapter's cache — no further backing
+    // lookup even if the backing source forgets the root.
+    mock.thread_roots.lock().await.clear();
+    let mut follow_up2 = base("m3", "再继续");
+    follow_up2.thread_id = Some("omt_1".to_string());
+    let _ = handle(follow_up2).await.unwrap();
+    assert_eq!(
+        mock.thread_root_calls.lock().await.len(),
+        1,
+        "the root cache must skip the backing lookup"
+    );
+    assert!(
+        store.find_mapping("mock", "omt_1").await.unwrap().is_none(),
+        "still no thread-keyed row"
+    );
+    assert_eq!(
+        store.find_mapping("mock", "m1").await.unwrap(),
+        Some(sid),
+        "still the /thread session"
+    );
+}
+
+/// An in-thread trigger whose root has no session starts a fresh
+/// thread-keyed session (a human-created thread the bot never joined).
+#[tokio::test]
+async fn test_thread_followup_without_root_mapping_starts_fresh() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "fake".into(),
+            app_secret: "fake".into(),
+        },
+        require_mention: false,
+        ..Default::default()
+    };
+    mock.thread_roots
+        .lock()
+        .await
+        .insert("omt_9".to_string(), "om_stranger".to_string());
+
+    let msg = ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: "ou_1".to_string(),
+        external_message_id: Some("m1".to_string()),
+        is_mention: true,
+        raw_text: Some("看看".to_string()),
+        content: vec![ContentBlock::Text {
+            text: "看看".to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: Some("omt_9".to_string()),
+        root_id: None,
+        parent_id: None,
+        is_group: false,
+        create_time: None,
+        doc_comment: None,
+    };
+    let reply = handle_incoming_message(
+        "mock",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        msg,
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert_eq!(reply, None);
+    assert!(
+        store.find_mapping("mock", "omt_9").await.unwrap().is_some(),
+        "a fresh session keys by the thread id"
+    );
+    assert!(
+        store
+            .find_mapping("mock", "om_stranger")
+            .await
+            .unwrap()
+            .is_none(),
+        "nothing keys by the unmapped root"
     );
 }
 
@@ -1764,7 +1984,10 @@ async fn test_thread_command_private_chat_and_platform_gate() {
     .await
     .unwrap();
     assert_eq!(reply, None);
-    assert!(store.find_mapping("mock", "omt_1").await.unwrap().is_none());
+    assert!(
+        store.find_mapping("mock", "omt_1").await.unwrap().is_none(),
+        "no thread-keyed mapping row (unified root key)"
+    );
     assert_eq!(store.find_mapping("mock", "m1").await.unwrap(), Some(sid));
 
     // Telegram group: no thread support.
