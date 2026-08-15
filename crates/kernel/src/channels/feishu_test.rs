@@ -1374,6 +1374,28 @@ async fn thread_link_builds_position_less_applink() {
     assert!(adapter.thread_link("oc_1", "om_unknown").await.is_none());
 }
 
+/// `thread_root_id`: the earliest thread message is the root; successful
+/// lookups are cached (no second fetch for the same thread).
+#[tokio::test]
+async fn thread_root_id_fetches_first_message_and_caches() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+
+    let root = adapter.thread_root_id("omt_x").await.unwrap();
+    assert_eq!(root.as_deref(), Some("m3"));
+    let root2 = adapter.thread_root_id("omt_x").await.unwrap();
+    assert_eq!(root2.as_deref(), Some("m3"));
+
+    let fetches = stub
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, p, _)| m == "GET" && p.starts_with("/open-apis/im/v1/messages?"))
+        .count();
+    assert_eq!(fetches, 1, "the second call must hit the cache");
+}
+
 #[tokio::test]
 async fn card_action_payload_is_forwarded() {
     // Real card.action.trigger callbacks arrive as a v2 envelope.

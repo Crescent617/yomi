@@ -2277,12 +2277,9 @@ fn sessions_text(offset: usize, entries: &[SessionEntry], has_more: bool) -> Str
             }
         }
         lines.push(match &e.link {
-            Some(link) => format!(
-                "{}. {} <a href=\"{link}\">{}</a>",
-                offset + i + 1,
-                e.marker,
-                e.title
-            ),
+            // [title](url) is valid in both Telegram MarkdownV2 and
+            // lark_md — `<a href>` would render literally on text paths.
+            Some(link) => format!("{}. {} [{}]({link})", offset + i + 1, e.marker, e.title),
             None => format!("{}. {} {}", offset + i + 1, e.marker, e.title),
         });
     }
