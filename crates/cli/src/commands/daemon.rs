@@ -1,3 +1,4 @@
+use crate::args::GlobalArgs;
 use anyhow::Result;
 use clap::Subcommand;
 use std::sync::Arc;
@@ -18,7 +19,7 @@ pub enum DaemonCommands {
     Status,
 }
 
-pub async fn run(cmd: DaemonCommands) -> Result<()> {
+pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
     const IDLE_CHECK_INTERVAL: Duration = Duration::from_mins(1);
     const DAEMON_IDLE_TIMEOUT_SECS: u64 = 300;
     const SHUTDOWN_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -46,9 +47,19 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
                 tracing::info!("Stale PID file, cleaning up");
             }
 
-            let (kernel, config, config_file) = kernel::init_kernel(None, true).await?;
+            if let Some(config_path) = &global.config {
+                // Honor -c/--config; also persist it to the env so a
+                // self-respawn after a restart request (which inherits env
+                // but not CLI args) loads the same config file.
+                std::env::set_var(kernel::config::env_names::CONFIG, config_path);
+            }
+            let (kernel, config, config_file) =
+                kernel::init_kernel(global.config.as_ref(), true).await?;
             let config_file = config_file.or_else(|| Some(kernel::config::Config::write_path()));
             let _log_guard = kernel::utils::logging::init_logging(&config, "daemon", true)?;
+            if let Some(path) = &config_file {
+                tracing::info!("Loaded config from {}", path.display());
+            }
 
             let addr = crate::daemon::socket_addr();
 

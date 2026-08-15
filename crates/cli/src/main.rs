@@ -330,7 +330,7 @@ async fn main() -> Result<()> {
             println!("v{}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        Some(Commands::Daemon(cmd)) => commands::daemon::run(cmd).await,
+        Some(Commands::Daemon(cmd)) => commands::daemon::run(cmd, &args.tui.global).await,
         None => tui::run(args.tui).await,
     }
 }
