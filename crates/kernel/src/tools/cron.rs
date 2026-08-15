@@ -476,7 +476,8 @@ Actions: list, create, update, delete, trigger (run once immediately, for testin
 Schedule is a cron expression with 5 fields ('0 9 * * 1-5' = Mon–Fri 09:00) or 6 fields with leading seconds, interpreted in the machine's LOCAL timezone. Day-of-week: 0 or 7=Sunday, 1=Monday … 6=Saturday; English abbreviations (mon/tue/...) are also accepted.
 For send_message jobs: pass session_id to target an existing session (e.g. the current conversation); omit it to create a dedicated new session that every run reuses (the new session inherits the current working directory and project; model stays default).
 Use update with status active/paused to resume/pause a job; pass null (or 0 for max_runs, the zero timestamp for expires_at) to clear those limits. Job type cannot be changed after creation.
-Job names are unique: creating with an existing name returns the existing job unchanged (created=false) instead of failing — safe to call create without checking first; use update to modify an existing job."
+Job names are unique: creating with an existing name returns the existing job unchanged (created=false) instead of failing — safe to call create without checking first; use update to modify an existing job.
+Shell jobs self-retire by exiting with code 42: the scheduler marks the job completed (honored on scheduled runs only, not on manual trigger)."
     }
 
     fn schema(&self) -> Value {
