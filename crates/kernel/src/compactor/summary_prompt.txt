@@ -14,7 +14,7 @@ The summary must:
 3. Preserve important technical concepts, constraints, assumptions, and design decisions.
 4. List relevant files, functions, signatures, and concise code excerpts needed to continue the work.
 5. Record meaningful errors, failed approaches, and fixes without inventing details.
-6. Include only user messages that materially affect requirements, decisions, corrections, constraints, feedback, or pending tasks; do not copy every user message.
+6. Preserve user messages as evidence of intent: quote direction-changing ones verbatim (requirement changes, corrections, constraints, decisions, latest 1-2); paraphrase the rest chronologically — later corrections override earlier ones; omit acknowledgements (e.g. "1", "好的") unless they carried a decision.
 7. Distinguish completed work from explicitly pending tasks.
 8. Describe the exact current work state, last concrete action and result, and remaining verification.
 9. Include an optional next step only when it directly follows from unfinished work; do not invent scope.
