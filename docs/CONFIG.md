@@ -1,215 +1,156 @@
 # Config
 
-支持 TOML 配置文件和环境变量两种配置方式。默认从 `~/.yomi/config.toml` 读取，或通过 `--config` 指定路径。
+支持 TOML 配置文件和环境变量两种方式。默认读取 `~/.yomi/config.toml`，可用 `--config` 或 `YOMI_CONFIG` 指定路径。
 
-## Schema 验证
-
-配置文件支持 JSON Schema 验证，可在 `config.toml` 文件顶部添加 schema 指令：
+文件顶部可加 schema 指令以获得编辑器校验与补全：
 
 ```toml
 #:schema https://raw.githubusercontent.com/Crescent617/yomi/main/docs/config-schema.json
 ```
 
-VS Code 用户可安装 [Even Better TOML](https://marketplace.visualstudio.com/items?itemName=tamasfe.even-better-toml) 扩展以获得自动补全和校验支持。
-
-## 完整配置示例
+## 配置示例
 
 ```toml
-#:schema https://raw.githubusercontent.com/Crescent617/yomi/main/docs/config-schema.json
-
 auto_approve = "safe"
 data_dir = "~/.yomi"
-skill_folders = ["~/.yomi/skills"]
-max_checkpoints = 5
 
 [[models]]
 name = "default"
 provider = "anthropic"
-model_id = "claude-3-5-sonnet-20241022"
+model_id = "claude-sonnet-4-5"
 endpoint = "https://api.anthropic.com"
 api_key = "sk-..."
-max_tokens = 4096
-temperature = 0.7
-
-[models.thinking]
-enabled = true
-budget_tokens = 16000
 
 [agent]
 default_model = "default"
 max_iterations = 100
-enable_subagent = true
-
-[agent.compactor]
-micro_compact_enabled = false
-threshold_ratio = 0.8
 
 [env]
 KIMI_AGENT_API_KEY = "sk-..."
-SERPER_API_KEY = "..."
-
-[tasks]
-fast_model = "default"
-
-[gc]
-retention_days = 90
-auto = false
 ```
 
 ---
 
-### `[[models]]` — 多模型配置
+## `[[models]]` — 模型
 
-至少配置一个模型。运行时通过 `default_model` 或会话切换选择。
+至少一个模型，运行时经 `agent.default_model` 选择。
 
 | 字段 | 类型 | 说明 | 默认值 |
 |---|---|---|---|
-| `name` | string | 模型标识名，如 `default`、`gpt4o` | `"default"` |
+| `name` | string | 模型标识名 | `"default"` |
 | `provider` | string | `openai` / `anthropic` / `openai_response` | `"openai"` |
-| `model_id` | string | 实际 API 模型 ID | 必填 |
-| `endpoint` | string | API 基础地址 | 必填 |
-| `api_key` | string | API 密钥 | 必填 |
+| `model_id` | string | 实际 API 模型 ID | 空（需配置） |
+| `endpoint` | string | API 基础地址 | 空（需配置） |
+| `api_key` | string | API 密钥 | 空（需配置） |
 | `max_tokens` | integer | 单次最大输出 token | — |
-| `temperature` | float | 温度 (0.0–2.0) | — |
+| `temperature` | float | 温度 | — |
 | `fallback_model_id` | string | 降级模型 ID | — |
 | `sse_timeout_secs` | integer | SSE 流超时（秒） | `30` |
 | `context_window` | integer | 上下文窗口大小 | `131072` |
 | `headers` | object | 额外 HTTP 请求头 | `{}` |
 
-**Provider 说明：**
-
 | provider | 说明 |
 |---|---|
-| `openai` | Chat Completions API (`/chat/completions`)，兼容 Kimi 等 OpenAI 协议服务 |
-| `openai_response` | Responses API (`/responses`)，适用于 GPT-5 / o 系列推理模型（也接受 `openai-response`） |
-| `anthropic` | Messages API (`/messages`) |
+| `openai` | Chat Completions API，兼容 Kimi 等 OpenAI 协议服务 |
+| `openai_response` | Responses API，适用 GPT-5 / o 系列推理模型 |
+| `anthropic` | Messages API |
 
-`openai_response` 示例：
+**Thinking（按模型配置，块为 `[models.thinking]`）：**
 
-```toml
-[[models]]
-name = "gpt5"
-provider = "openai_response"
-model_id = "gpt-5"
-endpoint = "https://api.openai.com/v1"
-api_key = "sk-..."
-context_window = 272000
-
-[models.thinking]
-enabled = true
-effort = "medium"  # low | medium | high
-```
-
-> 注意：`thinking.enabled = true` 时不会发送 `temperature`（推理模型不支持）。
-
-**Thinking 配置（按模型）：**
-
-| 字段 | 说明 | 适用模型 |
+| 字段 | 说明 | 适用 |
 |---|---|---|
-| `enabled` | 启用 thinking | Claude / o1 / o3 |
-| `budget_tokens` | Thinking token 预算 | Claude 系列 |
-| `effort` | Reasoning effort：`low`/`medium`/`high` | o1 / o3 系列 |
+| `enabled` | 启用 thinking | Claude / o 系列 |
+| `budget_tokens` | thinking token 预算 | Claude |
+| `effort` | `low` / `medium` / `high` | o 系列 |
+
+> `openai_response` 在 `thinking.enabled = true` 时不发送 `temperature`（推理模型不支持）；其余 provider 原样发送。
 
 ---
 
-### `[agent]` — Agent 行为
+## `[agent]` — Agent 行为
 
 | 字段 | 类型 | 说明 | 默认值 |
 |---|---|---|---|
-| `name` | string | Agent 身份名，替换 `system_prompt` 中的 `{{name}}` 占位符 | `"Yomi"` |
+| `name` | string | Agent 身份名，替换 system prompt 的 `{{name}}` | `"Yomi"` |
 | `default_model` | string | 默认模型标识名 | `"default"` |
-| `max_iterations` | integer | 单次会话最大迭代次数 | `100` |
+| `max_iterations` | integer | 单轮最大迭代次数 | `100` |
 | `enable_subagent` | boolean | 允许 spawn 子 agent | `true` |
-| `system_prompt` | string | 自定义系统提示，支持 `{{name}}` 占位符；省略则用内置默认 | 内置 |
+| `system_prompt` | string | 自定义系统提示（支持 `{{name}}`） | 内置 |
 | `tool_blocklist` | string[] | 工具禁用列表（正则） | `[]` |
-| `max_tool_output_length` | integer | 最大工具输出长度（字节） | `40000` |
+| `max_tool_output_length` | integer | 最大工具输出（字节） | `40000` |
 
 **`[agent.compactor]` — 上下文压缩：**
 
 | 字段 | 类型 | 说明 | 默认值 |
 |---|---|---|---|
-| `micro_compact_enabled` | boolean | 是否在全量压缩前尝试微压缩；启用后会改写旧工具结果，影响 prompt cache | `false` |
-| `threshold_ratio` | float | 触发压缩的上下文比例 (0.0–1.0) | `0.8` |
-| `keep_recent_messages` | integer | 全量压缩时保留的最近消息数 | `0` |
-| `keep_recent_tool_results` | integer | 微压缩时保留的最近工具结果数 | `5` |
-| `summary_max_tokens` | integer | 全量压缩摘要的 token 上限 | `8192` |
+| `micro_compact_enabled` | boolean | 全量压缩前先微压缩（改写旧工具结果，影响 prompt cache） | `false` |
+| `threshold_ratio` | float | 触发压缩的上下文比例 | `0.9` |
+| `keep_recent_messages` | integer | 全量压缩保留的最近消息数 | `0` |
+| `keep_recent_tool_results` | integer | 微压缩保留的最近工具结果数 | `5` |
+| `summary_max_tokens` | integer | 压缩摘要 token 上限 | `10240` |
 
 ---
 
-### 顶层字段
+## 顶层字段
 
 | 字段 | 类型 | 说明 | 默认值 |
 |---|---|---|---|
-| `auto_approve` | string | 自动批准级别：`safe` / `caution` / `dangerous` | `"safe"` |
-| `data_dir` | string | 数据目录，支持 `~` 展开 | `"~/.yomi"` |
-| `log_dir` | string | 日志目录，省略则 `<data_dir>/logs` | — |
-| `skill_folders` | string[] | 技能文件夹路径 | 标准路径 |
-| `max_checkpoints` | integer | 每会话保留的最大检查点数量 | `5` |
+| `auto_approve` | string | `safe` / `caution` / `dangerous` | `"safe"` |
+| `data_dir` | string | 数据目录（支持 `~`） | `"~/.yomi"` |
+| `log_dir` | string | 日志目录 | `<data_dir>/logs` |
+| `skill_folders` | string[] | 技能目录 | `<data_dir>/skills`、`~/.agents/skills` |
+| `max_checkpoints` | integer | 每会话检查点上限 | `5` |
 
 ---
 
-### `[gc]` — 垃圾回收策略
-
-回收过期会话的全部资源（sqlite 行、消息历史、todos、goals、file states、检查点目录、未引用资产）。`token_usage` 统计表永远不会被清理。
+## `[gc]` — 会话回收
 
 | 字段 | 类型 | 说明 | 默认值 |
 |---|---|---|---|
-| `retention_days` | integer | 会话保留天数：`updated_at` 超过该天数后被回收（最小 1） | `90` |
+| `retention_days` | integer | 会话保留天数（按 `updated_at`） | `90` |
 | `keep_pinned` | boolean | 跳过置顶会话 | `true` |
-| `sweep_orphans` | boolean | 清扫孤儿文件（会话已不存在的残留文件、过期 `.tmp`、未引用资产） | `true` |
-| `vacuum` | boolean | 删除后对 sqlite 执行 `VACUUM` + WAL truncate | `false` |
-| `auto` | boolean | daemon 启动时执行一次（弥补停机错过的档期），之后每天本地时间 0 点执行（真实删除，需显式开启） | `false` |
+| `sweep_orphans` | boolean | 清扫孤儿文件 | `true` |
+| `vacuum` | boolean | 删除后执行 VACUUM | `false` |
+| `auto` | boolean | daemon 启动时 + 每日 0 点自动执行（真实删除） | `false` |
 
-`yomi gc` 命令行参数未指定时回落到这里的配置；`dry_run` 只能由 CLI `--yes` 控制，不可配置。
+`yomi gc` 命令行参数未指定时回落到此配置。
 
 ---
 
-### `[env]` — 通用环境变量注入
+## `[env]` — 环境变量注入
 
-在应用启动时注入到进程环境。键名**不需要** `YOMI_` 前缀，按原样写入。仅当主机环境变量不存在时注入。
+启动时注入进程环境（键名按原样写入，**覆盖**主机同名变量）：
 
 ```toml
 [env]
 KIMI_AGENT_API_KEY = "sk-..."
-SERPER_API_KEY = "..."
 ```
 
 ---
 
-### `[tasks]` — 轻量任务配置
+## `[tasks]` — 轻量任务
 
-用于自动标题生成等后台轻量任务。
+| 字段 | 说明 |
+|---|---|
+| `fast_model` | 后台轻量任务（如标题生成）用的模型标识名，省略则用会话当前模型 |
 
-| 字段 | 类型 | 说明 |
+---
+
+## `[features]` — 实验特性
+
+| 字段 | 说明 | 默认值 |
 |---|---|---|
-| `fast_model` | string | 轻量任务模型标识名，省略则使用会话当前模型 |
+| `all` | 开启所有未被单项覆盖的 feature | `false` |
+| `update_session_title` | 模型自动生成会话标题 | 继承 `all` |
+| `cron_tool` | 暴露 cron 工具（定时任务） | 继承 `all` |
+| `todo_tool` | 暴露 todo 工具 + 提醒拦截器 | 继承 `all` |
+| `attachments` | 教 agent `<yomi_attachments>` 附件语法 | `true`（不受 `all` 影响） |
 
 ---
 
-### `[features]` — 实验特性
-
-| 字段 | 类型 | 说明 | 默认值 |
-|---|---|---|---|
-| `all` | boolean | 开启所有未被单项显式覆盖的 feature | `false` |
-| `update_session_title` | boolean | 使用模型自动生成会话标题（首条消息 fallback 标题不受影响） | 继承 `all` |
-| `cron_tool` | boolean | 向 agent 暴露 cron 工具（创建/列出/更新/删除/触发定时任务） | 继承 `all` |
-| `todo_tool` | boolean | 向 agent 暴露 todo 工具（任务清单跟踪），同时启用 todo 提醒拦截器 | 继承 `all` |
-
----
-
-### `[[channels]]` — 外部平台集成
-
-配置 Telegram、飞书等外部通道，使 Agent 可通过消息平台接收和发送消息。
+## `[[channels]]` — IM 通道
 
 ```toml
-[[channels]]
-name = "telegram-bot"
-enabled = true
-
-[channels.platform]
-type = "telegram"
-token = "..."
-
 [[channels]]
 name = "feishu-bot"
 enabled = true
@@ -220,109 +161,81 @@ app_id = "..."
 app_secret = "..."
 ```
 
-| 字段 | 类型 | 说明 | 默认值 |
-|---|---|---|---|
-| `name` | string | 通道名称 | 必填 |
-| `enabled` | boolean | 是否启用 | `false` |
-| `platform` | object | 平台配置 | 必填 |
-| `allowed_chats` | string[] | 允许的聊天 ID；列表外聊天中 @ 机器人会收到 🙏 婉拒表情，不会得到回复 | `[]` |
-| `allowed_users` | string[] | 允许的用户 ID；列表外用户 @ 机器人会收到 🙏 婉拒表情，不会得到回复 | `[]` |
-| `blocked_chats` | string[] | 屏蔽的聊天 ID；被屏蔽对象完全静默处理（无任何反馈） | `[]` |
-| `blocked_users` | string[] | 屏蔽的用户 ID；被屏蔽对象完全静默处理（无任何反馈） | `[]` |
-| `require_mention` | boolean | 是否需要 @ 触发 | `true` |
-| `reply_in_thread` | boolean | 群聊中回复是否锚定到触发消息的 thread（Feishu 话题回复，Telegram 引用回复）；私聊不受影响。关闭时也可在飞书（群聊或私聊）对单条消息用 `/thread <文本>` 命令一次性让回复开新话题；运行中可用 `/threads on\|off\|reset` 命令按群覆盖此默认值（admin） | `false` |
-| `auto_approve_level` | string | 通道级别自动批准：`safe`/`caution`/`dangerous` | `safe` |
-| `observability` | boolean | 运行可观测性（状态卡片 + 运行回执记录）；关闭后退回"收到确认 + 最终回复"的旧行为 | `true` |
-| `tool_trace` | boolean | 最终回复气泡附带运行轨迹（工具调用 + 中间过程文本）：卡片平台（Feishu，需客户端 V7.9+）以可折叠面板呈现，其他平台以纯文本行附在正文后；关闭后最终回复仅为纯文本 | `true` |
-| `mid_run_split` | boolean | run 期间用户又发消息时：状态卡原地冻结为终态凭据（header + 统计行），回复卡（正文 + 轨迹面板）沉底发新消息；关闭后总是原地 morph（一 run 一消息，答案停在 run 起点） | `true` |
-| `history_context` | number | 群聊中触发时注入的最近聊天记录条数上限（拉取当前话题/频道自上次触发以来的消息作为上下文；0 关闭；平台单页上限 50） | `20` |
-| `approval_chat_id` | string | 飞书云文档权限申请的通知目标群 `chat_id`；未配置时改为私聊通知 `admin_users` 中的每位管理员；两者都未配置则该功能关闭（申请仅记录日志，可用 `/permits` 查询）。**注意**：云文档事件为两级订阅，除开发者后台添加 `drive.file.permission_member_applied_v1` 事件外，还需对每个文档调用一次文件级订阅 API（`POST /open-apis/drive/v1/files/{token}/subscribe?file_type=docx`，body `{"event_type":"drive.file.permission_member_applied_v1"}`），否则服务端不生成事件 | 无 |
-| `admin_users` | string[] | 有文档权限审批权的管理员 `open_id` 列表（卡片按钮与 `/permits` `/approve` `/deny` `/restart` 命令均校验）；未配置 `approval_chat_id` 时同时作为私聊通知的收件人 | `[]` |
-| `disabled_events` | string[] | 运行时停用的平台事件功能（词表按平台：飞书目前支持 `doc_comment` = 文档评论触发；未知名字启动时仅告警）。事件推送本身需控制台订阅，此开关用于免去控制台往返的临时停用；缺省全部启用 | `[]` |
+| 字段 | 说明 | 默认值 |
+|---|---|---|
+| `name` | 通道名称 | 必填 |
+| `enabled` | 是否启用 | 必填 |
+| `platform` | 平台配置：`telegram` 需 `token`；`feishu` 需 `app_id` + `app_secret` | 必填 |
+| `allowed_chats` / `allowed_users` | 允许名单；名单外 @ 机器人收到 🙏 婉拒，无回复 | `[]` |
+| `blocked_chats` / `blocked_users` | 屏蔽名单；完全静默 | `[]` |
+| `require_mention` | 群聊需 @ 触发 | `true` |
+| `reply_in_thread` | 群聊回复锚定触发消息的 thread（飞书话题 / Telegram 引用） | `false` |
+| `auto_approve_level` | 通道级自动批准：`safe`/`caution`/`dangerous` | `safe` |
+| `observability` | 状态卡片 + 运行回执 | `true` |
+| `tool_trace` | 最终回复附运行轨迹（飞书可折叠面板，其他平台纯文本行） | `true` |
+| `history_context` | 触发时注入的最近聊天记录条数（0 关闭） | `20` |
+| `admin_users` | 管理员 `open_id` 列表（`/restart`、`/permits` 等命令与审批按钮鉴权） | `[]` |
+| `approval_chat_id` | 飞书云文档权限申请的通知群；未配置则私聊 `admin_users` | — |
+| `disabled_events` | 运行时停用的平台事件（飞书支持 `doc_comment`） | `[]` |
 
-**飞书文档评论触发**：在开发者后台为应用订阅事件 `drive.notice.comment_add_v1`（长连接）并授予 `docs:document.comment:read`、`docs:document.comment:create`（或 `write_only`）权限后，用户在云文档评论中 @ 机器人即可触发 agent——评论（含划词引用原文）会作为 user 消息注入会话，meta 头标注文档与评论标识（`[doc: 类型:token]`、`[comment_id]` 等）；agent 的回复直接投递为文档内的评论回复。每个评论组（comment thread）独立一个会话。仅 @ 机器人的评论触发；评论者维度复用 `allowed_users`/`blocked_users` 名单；`disabled_events = ["doc_comment"]` 可运行时停用。详见 `docs/archive/feishu-doc-comment.md`。
+运行期命令：`/thread <文本>` 一次性开话题回复；`/threads on|off|reset` 按群覆盖 `reply_in_thread`（admin）。
 
-**Platform 配置：**
-
-| 类型 | 必需字段 |
-|---|---|
-| `telegram` | `token` |
-| `feishu` | `app_id`, `app_secret` |
+飞书云文档评论触发（评论 @ 机器人即起会话、回复投递为评论回复）等进阶玩法见 `docs/archive/feishu-doc-comment.md`。
 
 ---
 
 ## 环境变量
 
-所有 `YOMI_` 前缀变量在应用启动时覆盖配置文件中的对应值。此外支持部分无前缀的 provider 特定变量和搜索变量。
+`YOMI_` 前缀变量启动时覆盖配置文件对应值。
 
-### 模型配置
+### 模型
 
-| 变量 | 说明 | 示例 |
-|------|------|------|
-| `YOMI_PROVIDER` | 模型提供商 | `openai` / `anthropic` |
-| `YOMI_API_KEY` | 通用 API 密钥 | `sk-...` |
-| `YOMI_MODEL` | 模型 ID | `claude-3-5-sonnet` |
-| `YOMI_API_BASE` | 自定义 API 地址 | `https://...` |
-| `YOMI_MAX_TOKENS` | 最大输出 token | `4096` |
-| `YOMI_TEMPERATURE` | 温度 | `0.7` |
+| 变量 | 说明 |
+|---|---|
+| `YOMI_PROVIDER` | 模型提供商 |
+| `YOMI_API_KEY` | 通用 API 密钥 |
+| `YOMI_MODEL` | 模型 ID |
+| `YOMI_API_BASE` | 自定义 API 地址 |
+| `YOMI_MAX_TOKENS` | 最大输出 token |
+| `YOMI_TEMPERATURE` | 温度 |
+| `YOMI_THINKING` / `YOMI_THINKING_BUDGET` / `YOMI_THINKING_EFFORT` | thinking 开关 / 预算 / effort |
 
-### 应用配置
+### 应用
 
 | 变量 | 说明 | 默认值 |
-|------|------|--------|
+|---|---|---|
+| `YOMI_CONFIG` | 配置文件路径 | — |
 | `YOMI_DATA_DIR` | 数据目录 | `~/.yomi` |
 | `YOMI_AUTO_APPROVE` | 自动批准级别 | `safe` |
 | `YOMI_MAX_ITERATIONS` | 最大迭代次数 | `100` |
 | `YOMI_ENABLE_SUB_AGENTS` | 启用子 agent | `true` |
-| `YOMI_CONTEXT_WINDOW` | 上下文窗口 | `128k` |
-| `YOMI_COMPACTOR_RATIO` | 压缩阈值比例 | `0.8` |
+| `YOMI_CONTEXT_WINDOW` | 上下文窗口 | `131072` |
+| `YOMI_COMPACTOR_RATIO` | 压缩阈值比例 | `0.9` |
 | `YOMI_MAX_TOOL_OUTPUT_LENGTH` | 最大工具输出（字节） | `40000` |
 | `YOMI_MAX_CHECKPOINTS` | 最大检查点数 | `5` |
-| `YOMI_GC_RETENTION_DAYS` | gc 回收的会话保留天数 | `90` |
-| `YOMI_GC_AUTO` | daemon 自动执行 gc（每天一次） | `false` |
 | `YOMI_TOOL_BLOCKLIST` | 工具禁用列表（逗号分隔正则） | — |
-| `YOMI_LOG_DIR` | 日志目录 | — |
 | `YOMI_DEFAULT_MODEL` | 默认模型标识名 | — |
-| `YOMI_SKILL_FOLDERS` | 技能文件夹（逗号分隔） | — |
-| `YOMI_STREAM_MAX_RETRIES` | 单轮 streaming 重试上限（指数退避 + `Retry-After`） | `20` |
+| `YOMI_SKILL_FOLDERS` | 技能目录（逗号分隔） | — |
+| `YOMI_STREAM_MAX_RETRIES` | 单轮 streaming 重试上限 | `20` |
+| `YOMI_SOCKET` | daemon socket 地址 | — |
+| `YOMI_GC_RETENTION_DAYS` / `YOMI_GC_AUTO` | 同 `[gc]` 配置 | — |
+| `RUST_LOG` | 日志级别 | — |
 
-### 搜索
-
-搜索环境变量**不需要** `YOMI_` 前缀。
-
-| 变量 | 说明 | 示例 |
-|------|------|------|
-| `SEARXNG_URL` | SearXNG 实例地址 | `http://127.0.0.1:8080` |
-| `KIMI_AGENT_API_KEY` | Kimi Search API 密钥 | `sk-...` |
-| `KIMI_SEARCH_ENDPOINT` | Kimi Search 端点覆盖（可选） | `https://...` |
-| `SERPER_API_KEY` | Serper.dev API 密钥 | `sk-...` |
-| `BRAVE_API_KEY` | Brave Search API 密钥 | `...` |
-
-### 日志
+### 搜索（无前缀）
 
 | 变量 | 说明 |
-|------|------|
-| `RUST_LOG` | 日志级别：`error`/`warn`/`info`/`debug`/`trace` |
-| `YOMI_LOG_DIR` | 日志目录 |
-
-### Thinking / Reasoning
-
-| 变量 | 说明 | 适用模型 |
-|------|------|----------|
-| `YOMI_THINKING` | 启用 thinking | Claude / o1 / o3 |
-| `YOMI_THINKING_BUDGET` | Thinking token 预算 | Claude 系列 |
-| `YOMI_THINKING_EFFORT` | Reasoning effort：`low`/`medium`/`high` | o1 / o3 系列 |
+|---|---|
+| `SEARXNG_URL` | SearXNG 实例地址 |
+| `KIMI_AGENT_API_KEY` / `KIMI_SEARCH_ENDPOINT` | Kimi Search 密钥 / 端点覆盖 |
+| `SERPER_API_KEY` | Serper.dev 密钥 |
+| `BRAVE_API_KEY` | Brave Search 密钥 |
 
 ---
 
 ## 优先级
 
-`YOMI_XXX` > 配置文件 > 默认值
-
----
+`YOMI_XXX` 环境变量 > 配置文件 > 默认值
 
 ## `.env` 文件
 
-GUI 启动时会自动加载 `~/.env`（Windows 为 `%USERPROFILE%\.env`），方便桌面端配置环境变量。
-
-修改后重启 GUI 生效。
+GUI 启动时自动加载 `~/.env`（Windows 为 `%USERPROFILE%\.env`），修改后重启 GUI 生效。
