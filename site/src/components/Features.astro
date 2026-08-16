@@ -1,0 +1,56 @@
+---
+import Icon from './Icon.astro';
+
+const features = [
+  {
+    icon: 'terminal',
+    title: 'Terminal-first TUI',
+    desc: 'A minimalist terminal interface for seamless interaction, plus a Tauri desktop app for a richer experience.',
+  },
+  {
+    icon: 'wrench',
+    title: 'Full toolbelt',
+    desc: 'Built-in file read/write/edit, glob & grep, shell execution, web search, and more — everything an agent needs.',
+  },
+  {
+    icon: 'plug',
+    title: 'Any provider',
+    desc: 'OpenAI, Anthropic, or any OpenAI-compatible endpoint. Configurable context window and agent tools.',
+  },
+  {
+    icon: 'shield',
+    title: 'Safe by default',
+    desc: 'Read-only tool tiers, git-aware file walking, and confirmation for every mutation — unless you opt into YOLO mode.',
+  },
+  {
+    icon: 'gauge',
+    title: 'Rust performance',
+    desc: 'Single binary, instant startup, built on Tokio. No Electron, no runtime tax.',
+  },
+  {
+    icon: 'search',
+    title: 'Pluggable search',
+    desc: 'Web search via SearXNG, Kimi, Serper, Brave, or free DuckDuckGo/Bing fallbacks.',
+  },
+] as const;
+---
+
+<section id="features" class="border-t border-line/70">
+  <div class="mx-auto max-w-5xl px-6 py-24">
+    <p class="micro-label text-primary">Features</p>
+    <h2 class="mt-3 text-3xl font-bold tracking-tight">
+      Everything you need, nothing you don't
+    </h2>
+    <div class="mt-12 grid gap-x-8 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
+      {
+        features.map(({ icon, title, desc }) => (
+          <div>
+            <Icon name={icon} class="h-5 w-5 text-primary" />
+            <h3 class="mt-3 font-semibold">{title}</h3>
+            <p class="mt-2 text-sm leading-relaxed text-muted">{desc}</p>
+          </div>
+        ))
+      }
+    </div>
+  </div>
+</section>

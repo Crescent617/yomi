@@ -1,0 +1,62 @@
+---
+const blocks = [
+  { title: 'CLI + TUI', code: 'brew install crescent617/tap/yomi' },
+  { title: 'Desktop GUI', code: 'brew install crescent617/tap/yomi-app' },
+  { title: 'Both', code: 'brew install crescent617/tap/yomi crescent617/tap/yomi-app' },
+];
+
+const envs = [
+  ['OpenAI', 'export OPENAI_API_KEY=sk-...'],
+  ['Anthropic', 'export ANTHROPIC_AUTH_TOKEN=sk-...\nexport YOMI_PROVIDER=anthropic'],
+];
+---
+
+<section id="install" class="border-t border-line/70 bg-card/50">
+  <div class="mx-auto max-w-5xl px-6 py-24">
+    <p class="micro-label text-primary">Install</p>
+    <h2 class="mt-3 text-3xl font-bold tracking-tight">Up and running in a minute</h2>
+    <p class="mt-4 max-w-2xl text-muted">
+      Prebuilt binaries via Homebrew, or grab a
+      <code class="font-mono text-fg">.dmg</code> from the
+      <a
+        class="text-primary hover:underline"
+        href="https://github.com/crescent617/yomi/releases"
+        target="_blank"
+        rel="noopener">releases page</a
+      >. Requires
+      <code class="font-mono text-fg">ripgrep</code> for file search.
+    </p>
+
+    <div class="mt-10 grid gap-4 sm:grid-cols-3">
+      {
+        blocks.map(({ title, code }) => (
+          <div class="rounded-xl border border-line bg-bg p-5">
+            <h3 class="micro-label text-muted">{title}</h3>
+            <pre class="mt-3 overflow-x-auto font-mono text-sm"><code><span class="text-muted">$ </span>{code}</code></pre>
+          </div>
+        ))
+      }
+    </div>
+
+    <h3 class="mt-14 text-xl font-semibold">Configure a provider</h3>
+    <div class="mt-6 grid gap-4 sm:grid-cols-2">
+      {
+        envs.map(([title, code]) => (
+          <div class="rounded-xl border border-line bg-code p-5">
+            <h4 class="micro-label text-muted">{title}</h4>
+            <pre class="mt-3 overflow-x-auto font-mono text-sm"><code>{code}</code></pre>
+          </div>
+        ))
+      }
+    </div>
+    <p class="mt-6 text-sm text-muted">
+      Full configuration reference:
+      <a
+        class="text-primary hover:underline"
+        href="https://github.com/crescent617/yomi/blob/main/docs/CONFIG.md"
+        target="_blank"
+        rel="noopener">docs/CONFIG.md</a
+      >
+    </p>
+  </div>
+</section>

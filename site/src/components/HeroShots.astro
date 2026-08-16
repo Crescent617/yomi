@@ -1,0 +1,75 @@
+---
+import { Image } from 'astro:assets';
+import tuiImg from '../assets/tui-demo1.png';
+import guiImg from '../assets/gui-demo1.png';
+---
+
+<div class="shots relative mx-auto max-w-xl lg:max-w-none">
+  <div
+    class="absolute -inset-10 -z-10 rounded-full opacity-70 blur-3xl"
+    style="background: radial-gradient(ellipse at 60% 40%, color-mix(in srgb, var(--primary) 17%, transparent), transparent 65%)"
+  >
+  </div>
+
+  <figure class="shot shot-gui relative overflow-hidden rounded-xl border border-line shadow-2xl">
+    <Image src={guiImg} alt="Yomi GUI — Tauri desktop app" class="w-full" />
+    <figcaption class="micro-label absolute right-3 top-3 rounded border border-line/70 bg-bg/70 px-2 py-1 text-muted backdrop-blur">
+      GUI
+    </figcaption>
+  </figure>
+
+  <figure
+    class="shot shot-tui absolute -bottom-10 -left-4 w-3/5 overflow-hidden rounded-xl border border-line shadow-2xl sm:-left-10"
+  >
+    <Image src={tuiImg} alt="Yomi TUI — minimalist terminal interface" class="w-full" />
+    <figcaption class="micro-label absolute right-3 top-3 rounded border border-line/70 bg-bg/70 px-2 py-1 text-muted backdrop-blur">
+      TUI
+    </figcaption>
+  </figure>
+</div>
+
+<style>
+  .shot {
+    transition: transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .shot-gui {
+    transform: perspective(1400px) rotateY(-7deg) rotateX(2deg);
+    animation:
+      rise 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.1s backwards,
+      float 8s ease-in-out 1.2s infinite;
+  }
+  .shot-tui {
+    transform: perspective(1200px) rotateY(5deg) rotateX(1deg);
+    animation:
+      rise 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.35s backwards,
+      float 9.5s ease-in-out 1.8s infinite;
+  }
+  .shots:hover .shot-gui {
+    transform: perspective(1400px) rotateY(-2.5deg) rotateX(0.5deg);
+  }
+  .shots:hover .shot-tui {
+    transform: perspective(1200px) rotateY(1.5deg);
+  }
+
+  @keyframes rise {
+    from {
+      opacity: 0;
+      translate: 0 28px;
+    }
+  }
+  @keyframes float {
+    0%,
+    100% {
+      translate: 0 0;
+    }
+    50% {
+      translate: 0 -9px;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .shot-gui,
+    .shot-tui {
+      animation: none;
+    }
+  }
+</style>

@@ -1,0 +1,96 @@
+---
+import Icon from './Icon.astro';
+import catLight from '../assets/yomi-light.png';
+import catDark from '../assets/yomi-dark.png';
+import { Image } from 'astro:assets';
+
+const points = [
+  {
+    icon: 'plug',
+    title: 'Feishu & Telegram channels',
+    desc: 'Run yomi as a daemon and it joins your chats — full agent capability over IM with rich interactive cards.',
+  },
+  {
+    icon: 'terminal',
+    title: 'Thread-bound sessions',
+    desc: 'Every IM thread maps to its own agent session, with jump links straight back into the conversation.',
+  },
+  {
+    icon: 'shield',
+    title: 'Approve from anywhere',
+    desc: 'Tool confirmations and approvals land in your pocket — say yes from your phone, keep momentum.',
+  },
+  {
+    icon: 'gauge',
+    title: 'Cron automations',
+    desc: 'Scheduled jobs report back to the chat and self-retire when their work is done.',
+  },
+] as const;
+
+const checks = ['cron ensure', 'verifier anchor', 'memory gate ×2', 'ticket flow ×2'];
+---
+
+<section class="border-t border-line/70">
+  <div class="mx-auto grid max-w-5xl items-center gap-12 px-6 py-24 lg:grid-cols-2">
+    <div>
+      <p class="micro-label text-primary">Beyond the terminal</p>
+      <h2 class="mt-3 text-3xl font-bold tracking-tight">
+        Your agent, one message away
+      </h2>
+      <div class="mt-10 space-y-7">
+        {
+          points.map(({ icon, title, desc }) => (
+            <div class="flex gap-4">
+              <Icon name={icon} class="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+              <div>
+                <h3 class="font-semibold">{title}</h3>
+                <p class="mt-1 text-sm leading-relaxed text-muted">{desc}</p>
+              </div>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+
+    {/* Feishu chat mock */}
+    <div class="relative">
+      <div
+        class="absolute -inset-6 -z-10 rounded-[2rem] opacity-50 blur-3xl"
+        style="background: radial-gradient(ellipse at center, color-mix(in srgb, var(--primary) 14%, transparent), transparent 65%)"
+      >
+      </div>
+      <div class="overflow-hidden rounded-xl border border-line bg-card shadow-2xl">
+        <div class="flex items-center gap-2.5 border-b border-line px-4 py-3">
+          <Image src={catLight} alt="Yomi bot" class="h-7 w-7 dark:hidden" />
+          <Image src={catDark} alt="Yomi bot" class="hidden h-7 w-7 dark:block" />
+          <span class="text-sm font-semibold">Yomi</span>
+          <span class="micro-label rounded border border-line px-1.5 py-0.5 text-muted">bot</span>
+        </div>
+        <div class="space-y-4 p-4">
+          <div class="flex justify-end">
+            <p class="max-w-56 rounded-lg rounded-br-sm bg-primary px-3 py-2 text-sm text-on-primary">
+              Run the regression before release
+            </p>
+          </div>
+          <div class="max-w-full overflow-hidden rounded-lg border border-line bg-bg">
+            <div class="border-b border-line px-3.5 py-2.5">
+              <p class="text-sm font-semibold">harness-e2e · 11 checks</p>
+            </div>
+            <div class="space-y-1.5 px-3.5 py-3 font-mono text-xs">
+              {checks.map((c) => <p class="text-muted">✓ {c} — pass</p>)}
+              <p class="pt-1 text-fg">All checks passed. Ready to ship.</p>
+            </div>
+            <div class="flex gap-2 border-t border-line px-3.5 py-2.5">
+              <span class="rounded-md border border-line bg-card px-3 py-1.5 text-xs font-medium">
+                View run
+              </span>
+              <span class="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-on-primary">
+                Deploy
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

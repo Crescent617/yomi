@@ -1,0 +1,60 @@
+---
+import { Image } from 'astro:assets';
+import Icon from './Icon.astro';
+import catLight from '../assets/yomi-light.png';
+import catDark from '../assets/yomi-dark.png';
+
+const links = [
+  { href: '#features', label: 'Features' },
+  { href: '#install', label: 'Install' },
+];
+---
+
+<header class="sticky top-0 z-50 border-b border-line/70 bg-bg/80 backdrop-blur">
+  <nav class="mx-auto flex h-14 max-w-5xl items-center justify-between px-6">
+    <a href="#" class="flex items-center gap-2.5 font-mono text-lg font-bold tracking-tight">
+      <Image src={catLight} alt="yomi" class="h-7 w-7 dark:hidden" />
+      <Image src={catDark} alt="yomi" class="hidden h-7 w-7 dark:block" />
+      yomi
+    </a>
+    <div class="flex items-center gap-5">
+      <ul class="flex items-center gap-5 text-sm text-muted">
+        {
+          links.map(({ href, label }) => (
+            <li>
+              <a href={href} class="transition-colors hover:text-fg">
+                {label}
+              </a>
+            </li>
+          ))
+        }
+        <li>
+          <a
+            href="https://github.com/crescent617/yomi"
+            target="_blank"
+            rel="noopener"
+            aria-label="GitHub"
+            class="flex items-center transition-colors hover:text-fg"
+          >
+            <Icon name="github" class="h-4.5 w-4.5" />
+          </a>
+        </li>
+      </ul>
+      <button
+        id="theme-toggle"
+        aria-label="Toggle theme"
+        class="flex h-8 w-8 items-center justify-center rounded-md border border-line text-muted transition-colors hover:text-fg"
+      >
+        <Icon name="sun" class="h-4 w-4 dark:hidden" />
+        <Icon name="moon" class="hidden h-4 w-4 dark:block" />
+      </button>
+    </div>
+  </nav>
+</header>
+
+<script is:inline>
+  document.getElementById('theme-toggle').addEventListener('click', () => {
+    const dark = document.documentElement.classList.toggle('dark');
+    localStorage.setItem('theme', dark ? 'dark' : 'light');
+  });
+</script>

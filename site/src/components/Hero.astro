@@ -1,0 +1,45 @@
+---
+import Icon from './Icon.astro';
+import HeroShots from './HeroShots.astro';
+---
+
+<section class="mx-auto max-w-6xl px-6 pb-28 pt-16 sm:pt-24">
+  <div class="grid items-center gap-16 lg:grid-cols-[1.05fr_1fr]">
+    <div class="max-w-xl">
+      <p class="micro-label text-primary">Rust · TUI + GUI · AGPL-3.0</p>
+      <h1 class="mt-4 text-4xl font-bold tracking-tight sm:text-5xl xl:text-6xl">
+        A minimalist AI coding assistant
+      </h1>
+      <p class="mt-6 text-lg leading-relaxed text-muted">
+        Built in Rust, living in your terminal — with a desktop app when you
+        want one. Fast, scriptable, and safe by default.
+      </p>
+      <div class="mt-9 flex flex-wrap items-center gap-4">
+        <a
+          href="#install"
+          class="rounded-lg bg-primary px-5 py-2.5 font-medium text-on-primary transition-opacity hover:opacity-90"
+        >
+          Get Started
+        </a>
+        <a
+          href="https://github.com/crescent617/yomi"
+          target="_blank"
+          rel="noopener"
+          class="flex items-center gap-2 rounded-lg border border-line px-5 py-2.5 font-medium transition-colors hover:border-fg/40"
+        >
+          <Icon name="github" class="h-4 w-4" />
+          View on GitHub
+        </a>
+      </div>
+      <div
+        class="mt-9 inline-block rounded-lg border border-line bg-code px-5 py-3"
+      >
+        <code class="font-mono text-sm">
+          <span class="text-muted">$</span>
+          <span> brew install crescent617/tap/yomi</span>
+        </code>
+      </div>
+    </div>
+    <HeroShots />
+  </div>
+</section>
