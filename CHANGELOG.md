@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.85] - 2026-08-17
+
+### Added
+- 回复中 @ 人：agent 写出 `<@用户ID>` 即会在飞书/Telegram 渲染为真实提及并通知对方；用户 ID 可在消息元信息与群聊上下文中获取。要展示该语法本身，用代码块包起来即可。
+
+### Changed
+- 压缩摘要更忠实保留用户原话：改变方向的指令类原话逐字引用，其余按时间序转述且"后者覆盖前者"，无信息量的附和（如"1"、"好的"）不再写入摘要。
+
+## [0.7.84] - 2026-08-15
+
 ### Fixed
 - 发消息现在会刷新会话的 `updated_at`：`session list` 与飞书 `/sessions` 按真实活跃时间排序（此前只随创建/改标题等少数操作更新）。
 
