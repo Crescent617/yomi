@@ -1,38 +1,44 @@
 ---
 import Icon from './Icon.astro';
 
-const features = [
+interface Feature {
+  icons: string[];
+  title: string;
+  desc: string;
+}
+
+const features: Feature[] = [
   {
-    icon: 'terminal',
-    title: 'Terminal-first TUI',
-    desc: 'A minimalist terminal interface for seamless interaction, plus a Tauri desktop app when you want one.',
+    icons: ['terminal'],
+    title: 'Terminal-first, GUI when you want it',
+    desc: 'A minimalist TUI, plus a Tauri desktop app with a usage panel and a desktop pet that mirrors agent mood.',
   },
   {
-    icon: 'wrench',
+    icons: ['wrench'],
     title: 'Full toolbelt',
     desc: 'File read/write/edit, glob & grep, shell execution, web search — everything an agent needs, built in.',
   },
   {
-    icon: 'plug',
+    icons: ['plug'],
     title: 'Any provider',
     desc: 'OpenAI, Anthropic, or any OpenAI-compatible endpoint. Configurable context window and agent tools.',
   },
   {
-    icon: 'shield',
+    icons: ['shield'],
     title: 'Safe by default',
     desc: 'Read-only tool tiers, git-aware file walking, and confirmation for every mutation — unless you go YOLO.',
   },
   {
-    icon: 'smartphone',
+    icons: ['wifi'],
     title: 'Remote control',
-    desc: 'Run the daemon anywhere and steer it from Feishu or Telegram — work continues away from the keyboard.',
+    desc: 'Attach the GUI or CLI to a daemon running anywhere — YOMI_SOCKET speaks unix sockets, TCP, and WebSockets.',
   },
   {
-    icon: 'server',
-    title: 'Docker-ready daemon',
-    desc: 'The official image boots straight into daemon mode with batteries included: git, ripgrep, tmux, and more.',
+    icons: ['bot'],
+    title: 'IM bot',
+    desc: 'Your agent joins Feishu and Telegram chats — threads map to sessions, approvals land in your pocket.',
   },
-] as const;
+];
 ---
 
 <section id="features" class="border-t border-line/70">
@@ -43,9 +49,13 @@ const features = [
     </h2>
     <div class="mt-12 grid gap-x-8 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
       {
-        features.map(({ icon, title, desc }) => (
+        features.map(({ icons, title, desc }) => (
           <div>
-            <Icon name={icon} class="h-5 w-5 text-primary" />
+            <div class="flex items-center gap-2.5 text-primary">
+              {icons.map((icon) => (
+                <Icon name={icon} class="h-5 w-5" />
+              ))}
+            </div>
             <h3 class="mt-3 font-semibold">{title}</h3>
             <p class="mt-2 text-sm leading-relaxed text-muted">{desc}</p>
           </div>

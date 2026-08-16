@@ -1,7 +1,23 @@
 ---
 import { Image } from 'astro:assets';
 import tuiImg from '../assets/tui-demo1.png';
-import guiImg from '../assets/gui-demo1.png';
+import guiWelcome from '../assets/gui-demo1.png';
+import guiUsage from '../assets/gui-usage.png';
+import guiAutomation from '../assets/gui-automation.png';
+import guiTemplates from '../assets/gui-templates.png';
+import guiThemes from '../assets/gui-themes.png';
+
+const slides = [
+  { img: guiWelcome, alt: 'Yomi GUI — welcome', label: 'Welcome' },
+  { img: guiUsage, alt: 'Yomi GUI — usage stats', label: 'Usage' },
+  { img: guiAutomation, alt: 'Yomi GUI — automation tasks', label: 'Automation' },
+  { img: guiTemplates, alt: 'Yomi GUI — agent templates', label: 'Templates' },
+  { img: guiThemes, alt: 'Yomi GUI — color themes', label: 'Themes' },
+];
+const step = 6; // seconds per slide
+const cycle = slides.length * step;
+const slideStyle = (i: number) =>
+  `animation: crossfade ${cycle}s ease-in-out ${i * step}s infinite`;
 ---
 
 <div class="shots relative mx-auto max-w-xl lg:max-w-none">
@@ -12,9 +28,30 @@ import guiImg from '../assets/gui-demo1.png';
   </div>
 
   <figure class="shot shot-gui relative overflow-hidden rounded-xl border border-line shadow-2xl">
-    <Image src={guiImg} alt="Yomi GUI — Tauri desktop app" class="w-full" />
-    <figcaption class="micro-label absolute right-3 top-3 rounded border border-line/70 bg-bg/70 px-2 py-1 text-muted backdrop-blur">
-      GUI
+    {
+      slides.map(({ img, alt }, i) => (
+        <Image
+          src={img}
+          alt={alt}
+          class:list={[
+            'slide w-full',
+            i === 0 ? 'relative' : 'absolute inset-0 h-full object-cover',
+          ]}
+          style={slideStyle(i)}
+        />
+      ))
+    }
+    <figcaption class="micro-label absolute right-3 top-3 z-10 rounded border border-line/70 bg-bg/70 px-2 py-1 text-muted backdrop-blur">
+      GUI ·
+      <span class="labels relative ml-1 inline-block w-20 overflow-hidden align-bottom">
+        {
+          slides.map(({ label }, i) => (
+            <span class="label absolute left-0" style={slideStyle(i)}>
+              {label}
+            </span>
+          ))
+        }
+      </span>
     </figcaption>
   </figure>
 
@@ -29,6 +66,37 @@ import guiImg from '../assets/gui-demo1.png';
 </div>
 
 <style>
+  /* GUI frame: layered crossfade carousel — opacity only, no motion */
+  .slide:not(:first-child) {
+    opacity: 0;
+  }
+  @keyframes crossfade {
+    0% {
+      opacity: 0;
+    }
+    4%,
+    20% {
+      opacity: 1;
+    }
+    24%,
+    100% {
+      opacity: 0;
+    }
+  }
+
+  /* Caption labels cycle in sync */
+  .labels {
+    height: 1em;
+  }
+  .label {
+    opacity: 0;
+  }
+
+  .shots:hover .slide,
+  .shots:hover .label {
+    animation-play-state: paused;
+  }
+
   .shot {
     transition: transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
   }
@@ -69,6 +137,14 @@ import guiImg from '../assets/gui-demo1.png';
   @media (prefers-reduced-motion: reduce) {
     .shot-gui,
     .shot-tui {
+      animation: none;
+    }
+    .slide:first-child {
+      opacity: 1;
+      animation: none;
+    }
+    .label:first-child {
+      opacity: 1;
       animation: none;
     }
   }

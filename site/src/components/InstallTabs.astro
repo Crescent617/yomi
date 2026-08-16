@@ -1,5 +1,5 @@
 ---
-import CodeBlock from './CodeBlock.astro';
+import Icon from './Icon.astro';
 
 const tabs = [
   { id: 'tui', label: 'CLI + TUI', code: 'brew install crescent617/tap/yomi' },
@@ -10,8 +10,8 @@ const tabs = [
 const configUrl = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/docs/config`;
 ---
 
-<div class="install-tabs mt-9 max-w-lg" id="get-started">
-  <div role="tablist" class="inline-flex gap-1 rounded-lg border border-line bg-card p-1">
+<div class="install-tabs mt-9 max-w-lg overflow-hidden rounded-xl border border-line bg-code">
+  <div role="tablist" class="flex gap-1 border-b border-line p-1.5">
     {
       tabs.map(({ id, label }, i) => (
         <button
@@ -27,29 +27,50 @@ const configUrl = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/docs/config`;
   </div>
   {
     tabs.map(({ id, code }, i) => (
-      <div role="tabpanel" data-panel={id} class:list={['mt-3', i !== 0 && 'hidden']}>
-        <CodeBlock code={code} class="px-5 py-3 pr-12" />
+      <div role="tabpanel" data-panel={id} class:list={['relative', i !== 0 && 'hidden']}>
+        <pre class="overflow-x-auto px-5 py-4 font-mono text-sm"><code>{code}</code></pre>
+        <button
+          class="copy-btn absolute right-3 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md border border-line bg-bg text-muted transition-colors hover:text-fg"
+          data-code={code}
+          aria-label="Copy to clipboard"
+        >
+          <Icon name="copy" class="h-3.5 w-3.5" />
+        </button>
       </div>
     ))
   }
-  <p class="mt-4 text-sm text-muted">
-    Also as <code class="font-mono text-fg">.dmg</code> on the
-    <a
-      class="text-primary hover:underline"
-      href="https://github.com/crescent617/yomi/releases"
-      target="_blank"
-      rel="noopener">releases page</a
-    > · needs <code class="font-mono text-fg">ripgrep</code> · provider setup →
-    <a class="text-primary hover:underline" href={configUrl}>Config</a>
-  </p>
 </div>
+<p class="mt-4 text-sm text-muted">
+  .dmg on
+  <a
+    class="text-primary hover:underline"
+    href="https://github.com/crescent617/yomi/releases"
+    target="_blank"
+    rel="noopener">releases</a
+  > · needs <code class="font-mono text-fg">ripgrep</code> · setup →
+  <a class="text-primary hover:underline" href={configUrl}>Config</a>
+</p>
 
 <script is:inline>
-  document.addEventListener('click', (e) => {
+  document.addEventListener('click', async (e) => {
     const tab = e.target.closest('[role="tab"]');
-    if (!tab) return;
-    const root = tab.closest('.install-tabs');
-    root.querySelectorAll('[role="tab"]').forEach((t) => t.setAttribute('aria-selected', String(t === tab)));
-    root.querySelectorAll('[role="tabpanel"]').forEach((p) => p.classList.toggle('hidden', p.dataset.panel !== tab.dataset.tab));
+    if (tab) {
+      const root = tab.closest('.install-tabs');
+      root.querySelectorAll('[role="tab"]').forEach((t) => t.setAttribute('aria-selected', String(t === tab)));
+      root.querySelectorAll('[role="tabpanel"]').forEach((p) => p.classList.toggle('hidden', p.dataset.panel !== tab.dataset.tab));
+      return;
+    }
+    const btn = e.target.closest('.copy-btn');
+    if (!btn) return;
+    await navigator.clipboard.writeText(btn.dataset.code);
+    btn.classList.add('text-primary');
+    const icon = btn.firstElementChild;
+    const prev = icon.outerHTML;
+    icon.outerHTML =
+      '<svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+    setTimeout(() => {
+      btn.firstElementChild.outerHTML = prev;
+      btn.classList.remove('text-primary');
+    }, 1500);
   });
 </script>
