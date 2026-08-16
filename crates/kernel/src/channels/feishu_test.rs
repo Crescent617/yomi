@@ -1688,3 +1688,11 @@ async fn e2e_fetch_message_round_trip() {
         .expect("v1 message found");
     assert_eq!(fetched.text, marker);
 }
+
+#[test]
+fn build_card_rewrites_mentions() {
+    // `<@USER_ID>` contract → feishu <at>; inline code untouched.
+    let card = super::FeishuAdapter::build_card("cc <@ou_abc>，示例：`<@ou_x>`");
+    assert!(card.contains("<at id=ou_abc></at>"), "{card}");
+    assert!(card.contains("`<@ou_x>`"), "{card}");
+}

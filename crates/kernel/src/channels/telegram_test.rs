@@ -76,3 +76,17 @@ fn cap_message_length_truncates_utf16_safely() {
     assert!(capped.ends_with("...(内容已截断)"));
     assert!(capped.encode_utf16().count() <= super::MAX_MESSAGE_UTF16_UNITS);
 }
+
+#[test]
+fn telegram_mention_renders_numeric_id_as_link() {
+    assert_eq!(
+        super::telegram_mention("123456"),
+        "[123456](tg://user?id=123456)"
+    );
+}
+
+#[test]
+fn telegram_mention_leaves_foreign_id_as_is() {
+    // feishu open_id 之类非数字 id 不重写（MarkdownV2 特殊字符会搞挂整条发送）
+    assert_eq!(super::telegram_mention("ou_abc123"), "<@ou_abc123>");
+}

@@ -23,6 +23,12 @@ const SKILL_SECTION_HEADER: &str = "# Skills\nIMPORTANT: before replying, you mu
 /// sub-agent's parent decides what becomes an attachment.
 pub(crate) const ATTACHMENTS_SECTION: &str = "# Attachments\nTo attach files to your reply, include an attachments block, one path per line (absolute, or relative to the workspace) — each is delivered to the user as an attachment alongside your message:\n\n<yomi_attachments>\noutput/report.pdf\n</yomi_attachments>\n\nTo show this syntax to the user instead of attaching files, wrap it in a fenced code block.";
 
+/// Mention contract for channel sessions: `<@USER_ID>` in a reply is
+/// rewritten by each platform adapter into its native mention (feishu
+/// `<at id=…>`, telegram `tg://user?id=…`). Sub-agents never get it —
+/// their output never leaves the parent.
+pub(crate) const MENTIONS_SECTION: &str = "# Mentions\nTo mention a user in your reply, write `<@USER_ID>` — the platform renders it as a real mention with notification.";
+
 /// Memory library pointer, injected only when a memory index actually exists
 /// (project `.agents/memory/MEMORY.md` and/or global `~/.agents/memory/MEMORY.md`).
 /// The convention lives in the system prompt; the facts live in the files —

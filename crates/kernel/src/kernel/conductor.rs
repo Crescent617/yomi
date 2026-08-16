@@ -518,12 +518,12 @@ impl Conductor {
         // outright.
         let base_prompt = match &template {
             Some(t) => t.body.clone(),
-            None if !is_sub_agent && self.agent_config.enable_attachments => {
-                format!(
-                    "{}\n\n{}",
-                    self.base_prompt,
-                    crate::prompt::ATTACHMENTS_SECTION
-                )
+            None if !is_sub_agent => {
+                let mut prompt = self.base_prompt.clone();
+                if self.agent_config.enable_attachments {
+                    prompt = format!("{prompt}\n\n{}", crate::prompt::ATTACHMENTS_SECTION);
+                }
+                format!("{prompt}\n\n{}", crate::prompt::MENTIONS_SECTION)
             }
             None => self.base_prompt.clone(),
         };

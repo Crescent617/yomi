@@ -4,6 +4,55 @@
 #[allow(clippy::duration_suboptimal_units)]
 pub(crate) const MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(300);
 
+/// Rewrite the platform-neutral `<@USER_ID>` mention contract (see the
+/// agent prompt's Mentions section) into native syntax via `render`.
+/// Fenced code blocks and inline code spans are left untouched so the
+/// agent can show the syntax literally. The id pattern is bounded
+/// (`{1,64}`) — feishu open_ids run ~36 chars, telegram ids are numeric —
+/// so a runaway `<@...>` never matches.
+pub(crate) fn rewrite_mentions(text: &str, render: &dyn Fn(&str) -> String) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut fenced = false;
+    for line in text.split_inclusive('\n') {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            out.push_str(line);
+            continue;
+        }
+        if fenced {
+            out.push_str(line);
+            continue;
+        }
+        // Split inline code spans on backticks; rewrite only outside spans.
+        let mut in_code = false;
+        for (i, segment) in line.split('`').enumerate() {
+            if i > 0 {
+                out.push('`');
+                in_code = !in_code;
+            }
+            if in_code {
+                out.push_str(segment);
+            } else {
+                rewrite_mention_segment(segment, render, &mut out);
+            }
+        }
+    }
+    out
+}
+
+fn rewrite_mention_segment(segment: &str, render: &dyn Fn(&str) -> String, out: &mut String) {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r"<@([A-Za-z0-9_\-]{1,64})>").unwrap());
+    let mut last = 0;
+    for cap in re.captures_iter(segment) {
+        let m = cap.get(0).unwrap();
+        out.push_str(&segment[last..m.start()]);
+        out.push_str(&render(cap.get(1).unwrap().as_str()));
+        last = m.end();
+    }
+    out.push_str(&segment[last..]);
+}
+
 /// A file read and validated for platform upload (see [`read_upload`]).
 pub(crate) struct UploadFile {
     pub bytes: Vec<u8>,
@@ -53,3 +102,7 @@ pub(crate) async fn read_upload(
         is_image,
     })
 }
+
+#[cfg(test)]
+#[path = "utils_test.rs"]
+mod tests;

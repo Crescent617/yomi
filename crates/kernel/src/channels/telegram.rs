@@ -306,6 +306,18 @@ async fn send_one_file(
 /// not chars, so non-BMP text (emoji) can't slip past the cap.
 const MAX_MESSAGE_UTF16_UNITS: usize = 4000;
 
+/// Telegram render for the `<@USER_ID>` mention contract. User ids are
+/// numeric; anything else (e.g. a feishu open_id seen in history) is left
+/// as-is — a `[text](url)` body with unescaped MarkdownV2 specials would
+/// fail the whole send into plain-text fallback.
+fn telegram_mention(id: &str) -> String {
+    if id.bytes().all(|b| b.is_ascii_digit()) {
+        format!("[{id}](tg://user?id={id})")
+    } else {
+        format!("<@{id}>")
+    }
+}
+
 fn cap_message_length(text: &str) -> String {
     crate::utils::strs::truncate_by_utf16(text, MAX_MESSAGE_UTF16_UNITS, "\n\n...(内容已截断)")
 }
@@ -451,6 +463,8 @@ impl PlatformAdapter for TelegramAdapter {
         if text.is_empty() {
             return Ok(None);
         }
+        // Platform-neutral `<@USER_ID>` contract → tg://user?id= link.
+        let text = super::utils::rewrite_mentions(&text, &telegram_mention);
         let text = cap_message_length(&text);
 
         let recipient = Recipient::Id(ChatId(chat_id));

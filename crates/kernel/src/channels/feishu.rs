@@ -1757,6 +1757,8 @@ impl FeishuAdapter {
     }
 
     fn build_card(text: &str) -> String {
+        // Platform-neutral `<@USER_ID>` contract → feishu <at> syntax.
+        let text = super::utils::rewrite_mentions(text, &|id| format!("<at id={id}></at>"));
         json!({
             "schema": "2.0",
             "body": {

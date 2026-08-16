@@ -470,3 +470,13 @@ fn render_plain_flattens_multiline_args() {
     assert!(out.contains("✅ shell · a b · 5ms"));
     assert!(!out.contains('↳'));
 }
+
+#[test]
+fn render_card_rewrites_mentions() {
+    // `<@USER_ID>` contract → feishu <at>；行内 code 里的不动。
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("cc <@ou_abc>，示例：`<@ou_x>`");
+    let card = render_card(&buf.into_reply(), None).unwrap();
+    assert!(card.contains("<at id=ou_abc></at>"), "{card}");
+    assert!(card.contains("`<@ou_x>`"), "{card}");
+}
