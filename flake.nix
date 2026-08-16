@@ -164,6 +164,12 @@
             # Tauri 构建在 sandbox 中无法运行测试（需要显示/WebKit），且 workspace 测试依赖外部命令
             doCheck = false;
 
+            # 复用同一 target dir 顺带编译 CLI：deps（kernel 等）已为本包编译过，
+            # 增量构建 -p cli 只需编译 cli crate 本身，几乎零成本
+            postBuild = ''
+              cargo build --release -p cli
+            '';
+
             postFixup = ''
               # 确保前端产物在 store 中的正确位置
               mkdir -p $out/frontend
@@ -177,6 +183,9 @@
                   --chdir "$out" \
                   --inherit-argv0
               fi
+
+              # 随 app 一并分发 CLI（postBuild 已编译），放在 GTK wrap 之后避免被 wrapGAppsHook 包装
+              install -Dm755 target/release/yomi $out/bin/yomi
             '';
 
             meta = commonMeta // {
