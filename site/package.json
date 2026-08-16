@@ -2,6 +2,7 @@
   "name": "yomi-site",
   "type": "module",
   "private": true,
+  "packageManager": "pnpm@10.28.0",
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
