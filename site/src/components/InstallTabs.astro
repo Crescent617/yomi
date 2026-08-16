@@ -1,0 +1,55 @@
+---
+import CodeBlock from './CodeBlock.astro';
+
+const tabs = [
+  { id: 'tui', label: 'CLI + TUI', code: 'brew install crescent617/tap/yomi' },
+  { id: 'gui', label: 'Desktop GUI', code: 'brew install crescent617/tap/yomi-app' },
+  { id: 'docker', label: 'Docker daemon', code: 'docker run -d --name yomi ghcr.io/crescent617/yomi' },
+];
+
+const configUrl = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/docs/config`;
+---
+
+<div class="install-tabs mt-9 max-w-lg" id="get-started">
+  <div role="tablist" class="inline-flex gap-1 rounded-lg border border-line bg-card p-1">
+    {
+      tabs.map(({ id, label }, i) => (
+        <button
+          role="tab"
+          aria-selected={i === 0}
+          data-tab={id}
+          class="rounded-md px-3 py-1.5 font-mono text-xs text-muted transition-colors aria-selected:bg-bg aria-selected:text-fg"
+        >
+          {label}
+        </button>
+      ))
+    }
+  </div>
+  {
+    tabs.map(({ id, code }, i) => (
+      <div role="tabpanel" data-panel={id} class:list={['mt-3', i !== 0 && 'hidden']}>
+        <CodeBlock code={code} class="px-5 py-3 pr-12" />
+      </div>
+    ))
+  }
+  <p class="mt-4 text-sm text-muted">
+    Also as <code class="font-mono text-fg">.dmg</code> on the
+    <a
+      class="text-primary hover:underline"
+      href="https://github.com/crescent617/yomi/releases"
+      target="_blank"
+      rel="noopener">releases page</a
+    > · needs <code class="font-mono text-fg">ripgrep</code> · provider setup →
+    <a class="text-primary hover:underline" href={configUrl}>Config</a>
+  </p>
+</div>
+
+<script is:inline>
+  document.addEventListener('click', (e) => {
+    const tab = e.target.closest('[role="tab"]');
+    if (!tab) return;
+    const root = tab.closest('.install-tabs');
+    root.querySelectorAll('[role="tab"]').forEach((t) => t.setAttribute('aria-selected', String(t === tab)));
+    root.querySelectorAll('[role="tabpanel"]').forEach((p) => p.classList.toggle('hidden', p.dataset.panel !== tab.dataset.tab));
+  });
+</script>

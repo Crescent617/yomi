@@ -5,11 +5,6 @@ import catLight from '../assets/yomi-light.png';
 import catDark from '../assets/yomi-dark.png';
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
-const links = [
-  { href: `${base}/#features`, label: 'Features' },
-  { href: `${base}/#install`, label: 'Install' },
-  { href: `${base}/docs/config`, label: 'Docs' },
-];
 ---
 
 <header class="sticky top-0 z-50 border-b border-line/70 bg-bg/80 backdrop-blur">
@@ -20,28 +15,15 @@ const links = [
       yomi
     </a>
     <div class="flex items-center gap-5">
-      <ul class="flex items-center gap-5 text-sm text-muted">
-        {
-          links.map(({ href, label }) => (
-            <li>
-              <a href={href} class="transition-colors hover:text-fg">
-                {label}
-              </a>
-            </li>
-          ))
-        }
-        <li>
-          <a
-            href="https://github.com/crescent617/yomi"
-            target="_blank"
-            rel="noopener"
-            aria-label="GitHub"
-            class="flex items-center transition-colors hover:text-fg"
-          >
-            <Icon name="github" class="h-4.5 w-4.5" />
-          </a>
-        </li>
-      </ul>
+      <a
+        href="https://github.com/crescent617/yomi"
+        target="_blank"
+        rel="noopener"
+        aria-label="GitHub"
+        class="flex items-center text-muted transition-colors hover:text-fg"
+      >
+        <Icon name="github" class="h-4.5 w-4.5" />
+      </a>
       <button
         id="theme-toggle"
         aria-label="Toggle theme"
