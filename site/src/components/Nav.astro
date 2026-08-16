@@ -4,15 +4,17 @@ import Icon from './Icon.astro';
 import catLight from '../assets/yomi-light.png';
 import catDark from '../assets/yomi-dark.png';
 
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const links = [
-  { href: '#features', label: 'Features' },
-  { href: '#install', label: 'Install' },
+  { href: `${base}/#features`, label: 'Features' },
+  { href: `${base}/#install`, label: 'Install' },
+  { href: `${base}/docs/config`, label: 'Docs' },
 ];
 ---
 
 <header class="sticky top-0 z-50 border-b border-line/70 bg-bg/80 backdrop-blur">
   <nav class="mx-auto flex h-14 max-w-5xl items-center justify-between px-6">
-    <a href="#" class="flex items-center gap-2.5 font-mono text-lg font-bold tracking-tight">
+    <a href={`${base}/`} class="flex items-center gap-2.5 font-mono text-lg font-bold tracking-tight">
       <Image src={catLight} alt="yomi" class="h-7 w-7 dark:hidden" />
       <Image src={catDark} alt="yomi" class="hidden h-7 w-7 dark:block" />
       yomi

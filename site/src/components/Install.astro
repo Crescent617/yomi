@@ -1,4 +1,6 @@
 ---
+import CodeBlock from './CodeBlock.astro';
+
 const blocks = [
   { title: 'CLI + TUI', code: 'brew install crescent617/tap/yomi' },
   { title: 'Desktop GUI', code: 'brew install crescent617/tap/yomi-app' },
@@ -9,6 +11,8 @@ const envs = [
   ['OpenAI', 'export OPENAI_API_KEY=sk-...'],
   ['Anthropic', 'export ANTHROPIC_AUTH_TOKEN=sk-...\nexport YOMI_PROVIDER=anthropic'],
 ];
+
+const configUrl = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/docs/config`;
 ---
 
 <section id="install" class="border-t border-line/70 bg-card/50">
@@ -28,35 +32,16 @@ const envs = [
     </p>
 
     <div class="mt-10 grid gap-4 sm:grid-cols-3">
-      {
-        blocks.map(({ title, code }) => (
-          <div class="rounded-xl border border-line bg-bg p-5">
-            <h3 class="micro-label text-muted">{title}</h3>
-            <pre class="mt-3 overflow-x-auto font-mono text-sm"><code><span class="text-muted">$ </span>{code}</code></pre>
-          </div>
-        ))
-      }
+      {blocks.map(({ title, code }) => <CodeBlock label={title} code={code} class="bg-bg" />)}
     </div>
 
     <h3 class="mt-14 text-xl font-semibold">Configure a provider</h3>
     <div class="mt-6 grid gap-4 sm:grid-cols-2">
-      {
-        envs.map(([title, code]) => (
-          <div class="rounded-xl border border-line bg-code p-5">
-            <h4 class="micro-label text-muted">{title}</h4>
-            <pre class="mt-3 overflow-x-auto font-mono text-sm"><code>{code}</code></pre>
-          </div>
-        ))
-      }
+      {envs.map(([title, code]) => <CodeBlock label={title} code={code} />)}
     </div>
     <p class="mt-6 text-sm text-muted">
       Full configuration reference:
-      <a
-        class="text-primary hover:underline"
-        href="https://github.com/crescent617/yomi/blob/main/docs/CONFIG.md"
-        target="_blank"
-        rel="noopener">docs/CONFIG.md</a
-      >
+      <a class="text-primary hover:underline" href={configUrl}>Config</a>
     </p>
   </div>
 </section>

@@ -1,0 +1,40 @@
+---
+import Icon from './Icon.astro';
+
+interface Props {
+  code: string;
+  label?: string;
+  class?: string;
+}
+
+const { code, label, class: cls } = Astro.props;
+---
+
+<div class:list={['codeblock relative rounded-xl border border-line bg-code p-5', cls]}>
+  {label && <h3 class="micro-label text-muted">{label}</h3>}
+  <pre class:list={['overflow-x-auto font-mono text-sm', label && 'mt-3']}><code>{code}</code></pre>
+  <button
+    class="copy-btn absolute right-3 top-3 flex h-7 w-7 items-center justify-center rounded-md border border-line bg-bg text-muted transition-colors hover:text-fg"
+    data-code={code}
+    aria-label="Copy to clipboard"
+  >
+    <Icon name="copy" class="h-3.5 w-3.5" />
+  </button>
+</div>
+
+<script is:inline>
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.copy-btn');
+    if (!btn) return;
+    await navigator.clipboard.writeText(btn.dataset.code);
+    btn.classList.add('text-primary');
+    const icon = btn.firstElementChild;
+    const prev = icon.outerHTML;
+    icon.outerHTML =
+      '<svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+    setTimeout(() => {
+      btn.firstElementChild.outerHTML = prev;
+      btn.classList.remove('text-primary');
+    }, 1500);
+  });
+</script>

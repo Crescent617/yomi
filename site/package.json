@@ -5,13 +5,16 @@
   "packageManager": "pnpm@10.28.0",
   "scripts": {
     "dev": "astro dev",
+    "predev": "node scripts/sync-docs.mjs",
     "build": "astro build",
+    "prebuild": "node scripts/sync-docs.mjs",
     "preview": "astro preview"
   },
   "dependencies": {
     "astro": "^5.13.0"
   },
   "devDependencies": {
+    "@tailwindcss/typography": "^0.5.20",
     "@tailwindcss/vite": "^4.1.0",
     "sharp": "^0.35.3",
     "tailwindcss": "^4.1.0"

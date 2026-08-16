@@ -1,0 +1,28 @@
+---
+import { getCollection, render } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import Nav from '../../components/Nav.astro';
+import Footer from '../../components/Footer.astro';
+
+export async function getStaticPaths() {
+  const docs = await getCollection('docs');
+  return docs.map((doc) => ({ params: { id: doc.id }, props: { doc } }));
+}
+
+const { doc } = Astro.props;
+const { Content } = await render(doc);
+const title = doc.data.title as string | undefined;
+---
+
+<Base
+  title={`${title ?? doc.id} — Yomi`}
+  description="Yomi configuration reference."
+>
+  <Nav />
+  <main class="mx-auto max-w-3xl px-6 py-16">
+    <article class="prose">
+      <Content />
+    </article>
+  </main>
+  <Footer />
+</Base>

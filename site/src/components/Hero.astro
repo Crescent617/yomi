@@ -1,6 +1,7 @@
 ---
 import Icon from './Icon.astro';
 import HeroShots from './HeroShots.astro';
+import CodeBlock from './CodeBlock.astro';
 ---
 
 <section class="mx-auto max-w-6xl px-6 pb-28 pt-16 sm:pt-24">
@@ -11,8 +12,8 @@ import HeroShots from './HeroShots.astro';
         A minimalist AI coding assistant
       </h1>
       <p class="mt-6 text-lg leading-relaxed text-muted">
-        Built in Rust, living in your terminal — with a desktop app when you
-        want one. Fast, scriptable, and safe by default.
+        Built in Rust — at home in your terminal, on your desktop, and one
+        message away in your chats. Fast, scriptable, and safe by default.
       </p>
       <div class="mt-9 flex flex-wrap items-center gap-4">
         <a
@@ -31,14 +32,10 @@ import HeroShots from './HeroShots.astro';
           View on GitHub
         </a>
       </div>
-      <div
-        class="mt-9 inline-block rounded-lg border border-line bg-code px-5 py-3"
-      >
-        <code class="font-mono text-sm">
-          <span class="text-muted">$</span>
-          <span> brew install crescent617/tap/yomi</span>
-        </code>
-      </div>
+      <CodeBlock
+        code="brew install crescent617/tap/yomi"
+        class="mt-9 inline-block rounded-lg px-5 py-3 pr-12"
+      />
     </div>
     <HeroShots />
   </div>
