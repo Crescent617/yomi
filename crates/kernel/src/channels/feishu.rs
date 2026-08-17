@@ -1900,7 +1900,10 @@ impl FeishuAdapter {
             match self.fetch_message(&msg_id).await {
                 Ok(Some(h)) if !h.text.is_empty() => h.text,
                 Ok(_) => {
-                    debug!(chat_id, msg_id, "card body empty on fetch, using placeholder");
+                    debug!(
+                        chat_id,
+                        msg_id, "card body empty on fetch, using placeholder"
+                    );
                     "[interactive]".to_string()
                 }
                 Err(e) => {
