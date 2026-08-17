@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.87] - 2026-08-17
+
+### Added
+- 中断标记：任务被取消或 daemon 重启打断后，会话历史中会出现一条中断分割线（GUI）/提示行（TUI），agent 也能感知此前的中断、不再误续被打断的工作。
+- GUI 会话内渲染中断分割线。
+
+### Fixed
+- 修复 daemon 重启后，被打断的工具调用可能被静默重复执行的问题（副作用命令可能跑两遍）。
+
 ## [0.7.86] - 2026-08-17
 
 ### Changed
