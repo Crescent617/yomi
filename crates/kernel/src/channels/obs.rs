@@ -212,6 +212,13 @@ impl ObsCardState {
         }
     }
 
+    /// The session's model key: shown on the live stats line and mirrored
+    /// into the trace buffer so the terminal trace title carries it too.
+    fn assign_model(&mut self, model: String) {
+        self.trace.set_model(model.clone());
+        self.model = Some(model);
+    }
+
     /// Estimated output tokens of the in-flight response.
     fn current_out_estimate(&self) -> u32 {
         (self.out_text_bytes.div_ceil(4) + self.out_json_bytes.div_ceil(2)) as u32
@@ -393,7 +400,7 @@ impl ObsTracker {
     /// the first `Running` materializes the state.
     pub(crate) fn set_model(&self, session_id: &SessionId, model: String) {
         if let Some(mut entry) = self.states.get_mut(session_id) {
-            entry.value_mut().model = Some(model);
+            entry.value_mut().assign_model(model);
         } else {
             self.pending_models.insert(session_id.clone(), model);
         }
@@ -459,7 +466,9 @@ impl ObsTracker {
                     return;
                 }
                 let mut state = ObsCardState::new(Arc::clone(adapter), chat_id, reply_msg_id);
-                state.model = self.pending_models.remove(session_id).map(|(_, m)| m);
+                if let Some((_, model)) = self.pending_models.remove(session_id) {
+                    state.assign_model(model);
+                }
                 self.states.insert(session_id.clone(), state);
                 self.materialize_card(session_id).await;
             }
@@ -622,9 +631,12 @@ impl ObsTracker {
                 context_window,
                 ..
             }) => {
-                let footer = format!("ctx: {} / {}", fmt_k(*total_tokens), fmt_k(*context_window));
-                self.update_running(session_id, |s| s.token_footer = Some(footer))
-                    .await;
+                let (total, window) = (*total_tokens, *context_window);
+                self.update_running(session_id, |s| {
+                    s.token_footer = Some(reply::ctx_footer(total, window));
+                    s.trace.set_ctx_footer(total, window);
+                })
+                .await;
             }
             // Other events carry no card-visible state.
             _ => {}
@@ -1073,11 +1085,11 @@ fn render_running(s: &ObsCardState) -> String {
             &reply::render_trace_title(&reply::TraceTitle {
                 steps: s.trace.step_count(),
                 tools: s.tool_count as usize,
+                failed: s.trace.failed_count(),
                 elapsed: s.started_at.elapsed(),
                 model: s.model.as_deref(),
                 ctx_footer: s.token_footer.as_deref(),
                 out_estimate: s.out_estimate(),
-                ..Default::default()
             }),
         )]
     };

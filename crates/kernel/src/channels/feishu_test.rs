@@ -828,16 +828,16 @@ fn extract_history_content_hides_yomi_trace_panel() {
     let item = json!({
         "msg_type": "interactive",
         "body": { "content": r#"{"schema":"2.0","body":{"elements":[
-            {"tag":"markdown","content":"✅ **Done** — ⏱ 6s · 1 steps"},
+            {"tag":"markdown","content":"✅ **Done** — ⏱ 6s · 💬 1"},
             {"tag":"collapsible_panel","expanded":false,
-             "header":{"title":{"tag":"markdown","content":"<font color='grey'>🐾 Trace · 1 steps · 1 tools</font>"}},
+             "header":{"title":{"tag":"markdown","content":"<font color='grey'>🐾 Trace · 💬 1 · 🔧 1</font>"}},
              "elements":[{"tag":"markdown","text_size":"notation","content":"🔧 shell: cargo test\n✅ done"}]}
         ]}}"# }
     });
 
     let (text, _) = super::FeishuAdapter::extract_history_content(&item);
 
-    assert_eq!(text, "✅ **Done** — ⏱ 6s · 1 steps");
+    assert_eq!(text, "✅ **Done** — ⏱ 6s · 💬 1");
     for leaked in ["Trace", "shell", "cargo test", "🐾"] {
         assert!(
             !text.contains(leaked),

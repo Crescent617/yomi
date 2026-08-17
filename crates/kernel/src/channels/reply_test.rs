@@ -141,7 +141,63 @@ fn tool_call_only_turns_count_as_steps() {
 
     let reply = buf.into_reply();
     let out = render_plain(&reply);
-    assert!(out.contains("🐾 0s · 2 steps · 1 tools"), "out: {out}");
+    assert!(out.contains("🐾 0s · 💬 2 · 🔧 1"), "out: {out}");
+}
+
+/// 标题段统一：model / ctx / failed 设置后出现在 full trace 标题上——
+/// live 卡、终态收据、回复卡三面共用同一套段落规则（仅 out 估算是
+/// live-only，按"缺失即省略"规则不出现在终态）。
+#[test]
+fn trace_title_carries_model_ctx_and_failed_when_set() {
+    let mut buf = buffer_with_run();
+    buf.record_tool_start("t3", "shell", None);
+    buf.record_tool_end("t3", 5, true);
+    buf.set_model("k3-hs".to_string());
+    buf.set_ctx_footer(12_345, 128_000);
+
+    let Some((_, title)) = buf.full_trace_render() else {
+        panic!("expected a trace");
+    };
+    assert_eq!(
+        title, "🐾 0s · 💬 2 · 🔧 3 · ❌ 1 · k3-hs · 12.3k/128.0k",
+        "title: {title}"
+    );
+
+    // into_reply（回复卡路径）带出同样的段。
+    let card = render_card(&buf.into_reply(), None).unwrap();
+    assert!(
+        card.contains("🐾 0s · 💬 2 · 🔧 3 · ❌ 1 · k3-hs · 12.3k/128.0k"),
+        "card: {card}"
+    );
+}
+
+/// tools/failed 是增量计数器：老条目被 buffer cap 挤掉后，标题总数
+/// 仍然真实（按条目数统计会悄悄缩水）。
+#[test]
+fn title_counters_survive_buffer_cap() {
+    let mut buf = RunReplyBuffer::new();
+    // 100 条 cap：先 90 条 narration，再 20 个 tool（10 失败）——
+    // 最终条目里只剩 10 个 tool，但标题要显示全部 20 / 10。
+    for i in 0..90 {
+        buf.record_model_end(&format!("text {i}"));
+    }
+    for i in 0..20 {
+        buf.record_tool_start(&format!("t{i}"), "shell", None);
+        buf.record_tool_end(&format!("t{i}"), 5, i % 2 == 0);
+    }
+    assert!(buf.entries.len() <= 100);
+
+    let Some((_, title)) = buf.full_trace_render() else {
+        panic!("expected a trace");
+    };
+    assert!(
+        title.contains("🔧 20"),
+        "all tools counted despite cap: {title}"
+    );
+    assert!(
+        title.contains("❌ 10"),
+        "all failures counted despite cap: {title}"
+    );
 }
 
 #[test]
@@ -154,7 +210,7 @@ fn full_trace_render_keeps_every_entry_and_empty_is_none() {
     };
     // Unlike into_reply, the final text stays a narration — the terminal
     // receipt card shows the whole run, the reply text lands separately.
-    assert!(title.starts_with("🐾 0s · 2 steps · 2 tools"), "{title}");
+    assert!(title.starts_with("🐾 0s · 💬 2 · 🔧 2"), "{title}");
     let joined = lines.join("\n");
     assert!(joined.contains("💬 Let me look at the code."), "{joined}");
     assert!(joined.contains("✅ **read**"), "{joined}");
@@ -188,7 +244,7 @@ fn tool_end_matches_by_tool_id() {
     let card = render_card(&reply, None).unwrap();
     assert!(card.contains("❌"));
     assert!(card.contains("⏳"), "t2 is still pending");
-    assert!(card.contains("1 failed"));
+    assert!(card.contains("❌ 1"));
 }
 
 #[test]
@@ -207,10 +263,7 @@ fn render_card_structure() {
     assert_eq!(panel["tag"], "collapsible_panel");
     assert_eq!(panel["expanded"], false);
     let title = panel["header"]["title"]["content"].as_str().unwrap();
-    assert!(
-        title.contains("🐾 0s · 2 steps · 2 tools"),
-        "title: {title}"
-    );
+    assert!(title.contains("🐾 0s · 💬 2 · 🔧 2"), "title: {title}");
 
     let body = panel["elements"][0]["content"].as_str().unwrap();
     assert!(body.contains("💬 Let me look at the code."));
@@ -297,7 +350,7 @@ fn render_plain_appends_trace_without_markup() {
     let reply = buffer_with_run().into_reply();
     let out = render_plain(&reply);
     assert!(out.starts_with("All tests pass."));
-    assert!(out.contains("🐾 0s · 2 steps · 2 tools"));
+    assert!(out.contains("🐾 0s · 💬 2 · 🔧 2"));
     assert!(out.contains("💬 Let me look at the code."));
     assert!(out.contains("✅ shell · cargo test -p kernel · 1m05s"));
     assert!(!out.contains("<font"), "no Feishu markup in plain fallback");

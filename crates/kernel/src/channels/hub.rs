@@ -565,10 +565,13 @@ impl ChannelHub {
                                 // per run; a gone kernel just skips it).
                                 if observability && !is_doc_comment && !obs.has_state(&session_id) {
                                     if let Some(k) = kernel.upgrade() {
-                                        obs.set_model(
-                                            &session_id,
-                                            k.get_session_model(&session_id).await,
-                                        );
+                                        let model = k.get_session_model(&session_id).await;
+                                        obs.set_model(&session_id, model.clone());
+                                        // The reply buffer renders the same
+                                        // title on the settled reply card.
+                                        if let Some(buf) = reply_buffers.get_mut(&session_id) {
+                                            buf.set_model(model);
+                                        }
                                     }
                                 }
                             }
@@ -580,6 +583,17 @@ impl ChannelHub {
                                     .entry(session_id.clone())
                                     .or_default()
                                     .record_model_end(&text);
+                            }
+                            Event::Model(ModelEvent::TokenUsage {
+                                total_tokens,
+                                context_window,
+                                ..
+                            }) => {
+                                // Real usage rides the settled reply card's
+                                // trace title, same segment as the live card.
+                                if let Some(buf) = reply_buffers.get_mut(&session_id) {
+                                    buf.set_ctx_footer(*total_tokens, *context_window);
+                                }
                             }
                             Event::Tool(ToolEvent::Start {
                                 tool_id,

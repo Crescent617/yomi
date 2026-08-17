@@ -90,6 +90,16 @@ pub(crate) struct RunReplyBuffer {
     /// Completed model responses (`ModelEvent::End` count) — the run's
     /// steps, including tool-call-only turns that produced no text.
     steps: usize,
+    /// Tool calls / failed tool calls so far, counted incrementally so the
+    /// title totals stay true even after old entries hit the buffer cap
+    /// (entry-derived counts would silently shrink).
+    tools: usize,
+    failed: usize,
+    /// Session model / latest real token usage, mirrored into the trace
+    /// title so every surface (live card, terminal receipt, reply card)
+    /// renders the same summary segments.
+    model: Option<String>,
+    ctx_footer: Option<String>,
     /// Attachment paths declared via `<yomi_attachments>` blocks in
     /// assistant texts. Blocks are stripped at record time so the XML
     /// never renders on the platform (trace snippets, live card preview,
@@ -106,10 +116,29 @@ impl RunReplyBuffer {
         Self {
             entries: Vec::new(),
             steps: 0,
+            tools: 0,
+            failed: 0,
+            model: None,
+            ctx_footer: None,
             attachments: Vec::new(),
             dropped: 0,
             started_at: Instant::now(),
         }
+    }
+
+    /// The session's model key, shown in the trace title.
+    pub(crate) fn set_model(&mut self, model: String) {
+        self.model = Some(model);
+    }
+
+    /// Real token usage at response end (title's ctx segment).
+    pub(crate) fn set_ctx_footer(&mut self, total_tokens: u32, context_window: u32) {
+        self.ctx_footer = Some(ctx_footer(total_tokens, context_window));
+    }
+
+    /// Failed tool calls so far (title's ❌ segment).
+    pub(crate) fn failed_count(&self) -> usize {
+        self.failed
     }
 
     /// Record a completed model response (`ModelEvent::End`) — one step of
@@ -134,6 +163,7 @@ impl RunReplyBuffer {
         tool_name: &str,
         arguments: Option<&str>,
     ) {
+        self.tools += 1;
         self.push_entry(TraceEntry::Tool(ToolTrace {
             tool_id: tool_id.to_string(),
             tool_name: tool_name.to_string(),
@@ -148,6 +178,9 @@ impl RunReplyBuffer {
     }
 
     pub(crate) fn record_tool_end(&mut self, tool_id: &str, elapsed_ms: u64, is_error: bool) {
+        if is_error {
+            self.failed += 1;
+        }
         if let Some(TraceEntry::Tool(tool)) = self
             .entries
             .iter_mut()
@@ -186,6 +219,10 @@ impl RunReplyBuffer {
         FinalReply {
             text,
             steps: self.steps,
+            tools: self.tools,
+            failed: self.failed,
+            model: self.model,
+            ctx_footer: self.ctx_footer,
             attachments: self.attachments,
             entries,
             dropped_entries: self.dropped,
@@ -215,9 +252,16 @@ impl RunReplyBuffer {
         }
         Some(render_trace_parts(
             &self.entries,
-            self.steps,
+            &TraceTitle {
+                steps: self.steps,
+                tools: self.tools,
+                failed: self.failed,
+                elapsed: self.started_at.elapsed(),
+                model: self.model.as_deref(),
+                ctx_footer: self.ctx_footer.as_deref(),
+                ..Default::default()
+            },
             self.dropped,
-            self.started_at.elapsed(),
             true,
         ))
     }
@@ -241,6 +285,14 @@ pub(crate) struct FinalReply {
     /// Completed model responses this run (`ModelEvent::End` count) — the
     /// step count shown in the trace title.
     steps: usize,
+    /// Tool calls / failed tool calls this run (title counters, survive
+    /// the buffer cap).
+    tools: usize,
+    failed: usize,
+    /// Title tail segments mirrored from the run state (absent when the
+    /// forwarder never learned them — e.g. plain platforms).
+    model: Option<String>,
+    ctx_footer: Option<String>,
     /// Attachment paths collected from `<yomi_attachments>` blocks in the
     /// run's assistant texts (blocks already stripped from the recorded
     /// texts).
@@ -389,9 +441,16 @@ fn trace_panel(lines: &[String], title: &str, expanded: bool) -> serde_json::Val
 fn render_trace(reply: &FinalReply, markdown: bool) -> (Vec<String>, String) {
     render_trace_parts(
         &reply.entries,
-        reply.steps,
+        &TraceTitle {
+            steps: reply.steps,
+            tools: reply.tools,
+            failed: reply.failed,
+            elapsed: reply.elapsed,
+            model: reply.model.as_deref(),
+            ctx_footer: reply.ctx_footer.as_deref(),
+            ..Default::default()
+        },
         reply.dropped_entries,
-        reply.elapsed,
         markdown,
     )
 }
@@ -412,19 +471,20 @@ pub(crate) struct TraceTitle<'a> {
 }
 
 /// Build the ordered summary segments, split into the always-dark head
-/// (`N steps`, `M tools`, `F failed`) and the technical tail (model, ctx,
-/// live out estimate) that callers may grey out. Zero/absent parts omitted;
-/// the elapsed prefix is left to the caller (its icon differs per surface).
+/// (icon-tagged counts: 💬 steps, 🔧 tools, ❌ failed) and the technical
+/// tail (model, ctx, live out estimate) that callers may grey out.
+/// Zero/absent parts omitted; the elapsed prefix is left to the caller
+/// (its icon differs per surface).
 pub(crate) fn summary_segments(t: &TraceTitle<'_>) -> (Vec<String>, Vec<String>) {
     let mut head = Vec::new();
     if t.steps > 0 {
-        head.push(format!("{} steps", t.steps));
+        head.push(format!("💬 {}", t.steps));
     }
     if t.tools > 0 {
-        head.push(format!("{} tools", t.tools));
+        head.push(format!("🔧 {}", t.tools));
     }
     if t.failed > 0 {
-        head.push(format!("{} failed", t.failed));
+        head.push(format!("❌ {}", t.failed));
     }
     let mut tail = Vec::new();
     if let Some(m) = t.model {
@@ -454,24 +514,15 @@ pub(crate) fn render_trace_title(t: &TraceTitle<'_>) -> String {
 /// [`RunReplyBuffer::full_trace_render`].
 fn render_trace_parts(
     entries: &[TraceEntry],
-    steps: usize,
+    title: &TraceTitle<'_>,
     dropped_entries: usize,
-    elapsed: Duration,
     markdown: bool,
 ) -> (Vec<String>, String) {
-    let stats = trace_stats(entries);
     let mut lines = trace_lines(entries, markdown);
     if dropped_entries > 0 {
         lines.insert(0, dropped_marker(dropped_entries));
     }
-    let title = render_trace_title(&TraceTitle {
-        steps,
-        tools: stats.tools,
-        failed: stats.failed,
-        elapsed,
-        ..Default::default()
-    });
-    (lines, title)
+    (lines, render_trace_title(title))
 }
 
 /// The marker line noting trace entries dropped at the buffer/display cap.
@@ -479,25 +530,10 @@ fn dropped_marker(dropped: usize) -> String {
     format!("··· and {dropped} earlier entries")
 }
 
-/// Totals over the whole trace (title summary), independent of how many
-/// entries end up rendered.
-fn trace_stats(entries: &[TraceEntry]) -> TraceStats {
-    let mut stats = TraceStats::default();
-    for entry in entries {
-        if let TraceEntry::Tool(tool) = entry {
-            stats.tools += 1;
-            if tool.is_error {
-                stats.failed += 1;
-            }
-        }
-    }
-    stats
-}
-
-#[derive(Default)]
-struct TraceStats {
-    tools: usize,
-    failed: usize,
+/// Real token usage as the title's ctx segment (`45.2k/128k`), shared by
+/// the live stats line and the trace title on every surface.
+pub(crate) fn ctx_footer(total_tokens: u32, context_window: u32) -> String {
+    format!("{}/{}", fmt_k(total_tokens), fmt_k(context_window))
 }
 
 fn trace_lines(entries: &[TraceEntry], markdown: bool) -> Vec<String> {

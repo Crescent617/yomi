@@ -337,7 +337,7 @@ async fn tool_events_patch_card_with_stats() {
     // end2 (the Running event sent the card instead).
     assert_eq!(patches.len(), 4);
     let last = &patches[3].1;
-    assert!(last.contains("2 tools"), "tools summary: {last}");
+    assert!(last.contains("🔧 2"), "tools summary: {last}");
     // The title drops back to a thinking title after the tool ends.
     assert!(
         super::THINKING_TITLES.iter().any(|t| last.contains(t)),
@@ -1057,6 +1057,64 @@ async fn mid_run_compact_only_flips_phase_and_ignores_compacted() {
 }
 
 #[tokio::test]
+async fn terminal_receipt_title_matches_live_segments() {
+    let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    // Live run with model/usage/failure: the settled receipt's trace
+    // title must render the very same segments the live card showed
+    // (only expand differs; out ~ is the live-only estimate).
+    tracker.set_model(&sid, "k3-hs".to_string());
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &tool_start("bash"))
+        .await;
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &tool_end("bash", 100, true))
+        .await;
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &end_without_text())
+        .await;
+    tracker
+        .handle_event(
+            &adapter,
+            &sid,
+            "chat-1",
+            None,
+            &token_usage_event(12_345, 200_000),
+        )
+        .await;
+
+    let patches = mock.patches.lock().await;
+    let live = patches.last().unwrap().1.clone();
+    assert!(
+        live.contains("🐾 0s · 💬 1 · 🔧 1 · ❌ 1 · k3-hs · 12.3k/200.0k"),
+        "live title: {live}"
+    );
+    drop(patches);
+
+    tracker
+        .freeze_stopped(
+            &sid,
+            &StopReason::Completed {
+                finish_reason: None,
+            },
+            true,
+        )
+        .await;
+    let patches = mock.patches.lock().await;
+    let terminal = &patches.last().unwrap().1;
+    assert!(
+        terminal.contains("🐾 0s · 💬 1 · 🔧 1 · ❌ 1 · k3-hs · 12.3k/200.0k"),
+        "terminal title matches live: {terminal}"
+    );
+}
+
+#[tokio::test]
 async fn compacting_inactive_without_state_is_noop() {
     let tracker = ObsTracker::new();
     let mock = MockAdapter::new();
@@ -1229,7 +1287,7 @@ async fn token_usage_adds_footer() {
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 2);
     let last = &patches.last().unwrap().1;
-    assert!(last.contains("ctx: 12.3k / 200.0k"), "{last}");
+    assert!(last.contains("12.3k/200.0k"), "{last}");
 }
 
 // ── Live output estimate ────────────────────────────────────────────
@@ -1306,7 +1364,7 @@ async fn thinking_only_stream_shows_estimate_on_placeholder_card() {
     let last = patches.last().unwrap().1.clone();
     assert!(last.contains("⏱"), "stats joined the placeholder: {last}");
     assert!(last.contains("out ~100"), "live estimate: {last}");
-    assert!(!last.contains("ctx:"), "no real usage yet: {last}");
+    assert!(!last.contains("12.3k"), "no real usage yet: {last}");
 }
 
 #[tokio::test]
@@ -1433,7 +1491,7 @@ async fn estimate_accumulates_across_the_run() {
         .await;
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
-    assert!(last.contains("ctx: 12.3k / 200.0k"), "real usage: {last}");
+    assert!(last.contains("12.3k/200.0k"), "real usage: {last}");
     assert!(last.contains("out ~20"), "run-cumulative estimate: {last}");
 }
 
@@ -1615,7 +1673,7 @@ async fn stats_line_omits_model_when_unknown() {
         .as_str()
         .unwrap();
     // No model, no tokens yet: the stats line carries no grey tail at all.
-    assert!(stats.contains("1 tools"), "stats: {stats}");
+    assert!(stats.contains("🔧 1"), "stats: {stats}");
     // The only grey wrapper is the panel title's own; no nested tail font.
     assert_eq!(stats.matches("<font").count(), 1, "stats: {stats}");
 }
@@ -1789,10 +1847,8 @@ async fn terminal_card_freezes_without_whisper() {
     let terminal = &patches.last().unwrap().1;
     assert!(terminal.contains("✅ **Done**"));
     assert!(!terminal.contains("💬"), "terminal drops the whisper");
-    assert!(
-        !terminal.contains("🔧"),
-        "terminal drops the last-tool line"
-    );
+    // …while the title's tools counter survives on the receipt.
+    assert!(terminal.contains("🔧 1"), "tools counter: {terminal}");
     assert!(terminal.contains("collapsible_panel"), "{terminal}");
     assert!(terminal.contains("⏳ **bash**"), "{terminal}");
 }
@@ -2344,8 +2400,8 @@ async fn stats_line_shows_steps_after_first_model_end() {
     // only, no steps.
     let patches = mock.patches.lock().await;
     let first = patches[0].1.clone();
-    assert!(first.contains("1 tools"));
-    assert!(!first.contains("step"), "no steps yet: {first}");
+    assert!(first.contains("🔧 1"));
+    assert!(!first.contains("💬"), "no steps yet: {first}");
     drop(patches);
 
     // First completed model response: the stats line gains a step.
@@ -2354,7 +2410,7 @@ async fn stats_line_shows_steps_after_first_model_end() {
         .await;
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
-    assert!(last.contains("1 steps"), "one step: {last}");
+    assert!(last.contains("💬 1"), "one step: {last}");
     drop(patches);
 
     // The in-progress text of the next turn is not a step yet.
@@ -2363,7 +2419,7 @@ async fn stats_line_shows_steps_after_first_model_end() {
         .await;
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
-    assert!(last.contains("1 steps"), "still one step: {last}");
+    assert!(last.contains("💬 1"), "still one step: {last}");
 }
 
 #[tokio::test]
@@ -2388,7 +2444,7 @@ async fn stats_line_counts_textless_model_end_as_step() {
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
     assert!(
-        last.contains("1 steps"),
+        last.contains("💬 1"),
         "tool-call-only turn is a step: {last}"
     );
 }
