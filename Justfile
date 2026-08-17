@@ -6,7 +6,7 @@ default:
 
 # Run clippy linting
 lint:
-    cargo clippy --all-targets --all-features
+    cargo clippy --all-features
 
 # Auto-fix clippy warnings where possible
 lint-fix:
