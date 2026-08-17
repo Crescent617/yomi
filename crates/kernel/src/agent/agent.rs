@@ -356,7 +356,6 @@ impl Agent {
                 // Handle state transition after execution
                 if let Err(e) = result {
                     if e.is_shutdown() {
-                        self.mark_interrupted("daemon restarting — outcome of interrupted work unknown");
                         break;
                     }
                     tracing::warn!("error in main loop: {}", e);
@@ -393,7 +392,7 @@ impl Agent {
     /// Handle cancellation - sends Cancelled event, transitions state, returns Ok(())
     async fn handle_cancel(&mut self, context: &str) -> Result<(), AgentError> {
         tracing::info!("{} cancelled", context);
-        self.mark_interrupted("cancelled");
+        self.mark_interrupted("cancelled").await;
         // Emit cancellation event with operation name
         self.emit_operation_cancelled(context);
         self.context.transition_to(AgentState::Idle);
@@ -404,15 +403,26 @@ impl Agent {
     /// 同款 `[Request interrupted by user]`): after an abort the model must
     /// not assume its last actions completed. The marker also trips the
     /// has_user_after guard in `pending_tool_calls`, so an interrupted tool
-    /// batch is never silently re-executed after a respawn. Metadata flags
-    /// it for UIs to render as a system line rather than a user bubble.
-    fn mark_interrupted(&mut self, reason: &str) {
+    /// batch is never silently re-executed after a respawn.
+    ///
+    /// Persistence is a direct store append, not the MessageAdded event
+    /// bus: on the daemon-shutdown path the conductor (the bus's only
+    /// persister) is already torn down when agents observe the cancel, so a
+    /// bus-published marker would be lost on exactly the path it exists
+    /// for. The buffer is updated in place to avoid a double persist.
+    /// Metadata flags it for UIs to render as a divider/system line.
+    async fn mark_interrupted(&mut self, reason: &str) {
         let mut msg = Message::user(format!("[interrupted: {reason}]"));
         msg.metadata = Some(std::collections::HashMap::from([(
             crate::types::INTERRUPTED_META_KEY.to_string(),
             "true".to_string(),
         )]));
-        self.push_message(msg);
+        if let Some(store) = &self.shared.message_store {
+            if let Err(e) = store.append(&self.session_id.0, &[msg.clone()]).await {
+                tracing::warn!("failed to persist interruption marker: {e}");
+            }
+        }
+        self.message_buffer.push_arc(Arc::new(msg));
     }
 
     /// Complete current turn if transitioning from non-Idle to Idle.
@@ -551,12 +561,13 @@ impl Agent {
     /// Start a new turn if not already in one.
     async fn start_turn_if_needed(&mut self) {
         if self.current_turn.is_none() {
-            if let Some(msg) = self
-                .message_buffer
-                .messages()
-                .iter()
-                .rfind(|m| m.role == crate::types::Role::User)
-            {
+            if let Some(msg) = self.message_buffer.messages().iter().rfind(|m| {
+                m.role == crate::types::Role::User
+                    && !m
+                        .metadata
+                        .as_ref()
+                        .is_some_and(|meta| meta.contains_key(crate::types::INTERRUPTED_META_KEY))
+            }) {
                 // Extract summary from user message content
                 let summary = Self::extract_summary(&msg.content);
                 let turn = Arc::new(super::turn::Turn::new(

@@ -644,6 +644,12 @@ async fn interrupted_marker_closes_pending_tool_batch() {
             ..ModelConfig::default()
         },
     );
+    let store_dir = tempfile::tempdir().unwrap();
+    let message_store: Arc<dyn crate::storage::MessageStore> =
+        Arc::new(crate::storage::message::jsonl::JsonlMessageStore::new(
+            store_dir.path().to_path_buf(),
+            store_dir.path().to_path_buf(),
+        ));
     let shared = Arc::new(AgentShared::new(
         Arc::new(models),
         "test".to_string(),
@@ -651,7 +657,7 @@ async fn interrupted_marker_closes_pending_tool_batch() {
         None,
         None,
         None,
-        None,
+        Some(message_store),
         Some(usage_store),
         None,
         Vec::new(),
@@ -695,7 +701,29 @@ async fn interrupted_marker_closes_pending_tool_batch() {
 
     // 打断前有 pending；标记后收口。
     assert!(agent.pending_tool_calls().is_some());
-    agent.mark_interrupted("daemon restarting — outcome of interrupted work unknown");
+    agent
+        .mark_interrupted("daemon restarting — outcome of interrupted work unknown")
+        .await;
+
+    // 直写落盘：store 里能读回（不依赖事件总线）。
+    let sid = agent.session_id.0.clone();
+    let persisted = shared
+        .message_store
+        .as_ref()
+        .unwrap()
+        .get(&sid)
+        .await
+        .unwrap();
+    let marker = persisted.last().expect("marker persisted");
+    assert_eq!(marker.role, Role::User);
+    assert_eq!(
+        marker
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get(crate::types::INTERRUPTED_META_KEY))
+            .map(String::as_str),
+        Some("true")
+    );
 
     let messages = agent.message_buffer.messages();
     let last = messages.last().unwrap();

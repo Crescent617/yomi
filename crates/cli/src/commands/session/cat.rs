@@ -126,6 +126,13 @@ fn format_transcript(messages: Vec<Message>, data_dir: &Path, show_tools: bool) 
                     &render_blocks(&m.content, data_dir),
                 );
             }
+            SessionMessage::Interrupted(m) => {
+                section(
+                    "interrupted",
+                    m.created_at,
+                    &render_blocks(&m.content, data_dir),
+                );
+            }
             SessionMessage::Assistant(m) => {
                 section(
                     "assistant",

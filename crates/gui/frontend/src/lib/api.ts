@@ -469,6 +469,14 @@ export interface SessionMessageSteer {
   created_at: string;
 }
 
+// 中断标记（kernel mark_interrupted）：渲染为分割线，不是用户气泡
+export interface SessionMessageInterrupted {
+  kind: "interrupted";
+  id: string;
+  content: TaggedContentBlock[];
+  created_at: string;
+}
+
 export interface SessionMessageAssistant {
   kind: "assistant";
   id: string;
@@ -498,6 +506,7 @@ export interface SessionMessageTool {
 export type SessionMessage =
   | SessionMessageUser
   | SessionMessageSteer
+  | SessionMessageInterrupted
   | SessionMessageAssistant
   | SessionMessageTool;
 

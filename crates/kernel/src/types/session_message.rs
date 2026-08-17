@@ -11,6 +11,8 @@ use crate::types::{ContentBlock, FinishReason, Message, MessageId, MessageTokenU
 pub enum SessionMessage {
     User(UserMsg),
     Steer(UserMsg),
+    /// 中断标记（`Agent::mark_interrupted`）：GUI 渲染为分割线而非用户气泡
+    Interrupted(UserMsg),
     Assistant(AssistantMsg),
     Tool(ToolMsg),
 }
@@ -94,7 +96,14 @@ impl SessionMessage {
                         .as_ref()
                         .and_then(|meta| meta.get(crate::types::IS_STEER_META_KEY))
                         .is_some_and(|value| value == "true");
-                    result.push(if is_steer {
+                    let interrupted = msg
+                        .metadata
+                        .as_ref()
+                        .and_then(|meta| meta.get(crate::types::INTERRUPTED_META_KEY))
+                        .is_some_and(|value| value == "true");
+                    result.push(if interrupted {
+                        SessionMessage::Interrupted(user_msg)
+                    } else if is_steer {
                         SessionMessage::Steer(user_msg)
                     } else {
                         SessionMessage::User(user_msg)
@@ -157,6 +166,7 @@ impl SessionMessage {
     pub fn text_content(&self) -> String {
         match self {
             SessionMessage::User(msg) | SessionMessage::Steer(msg) => msg.text_content(),
+            SessionMessage::Interrupted(msg) => msg.text_content(),
             SessionMessage::Assistant(msg) => msg.text_content(),
             SessionMessage::Tool(msg) => msg.text_content(),
         }

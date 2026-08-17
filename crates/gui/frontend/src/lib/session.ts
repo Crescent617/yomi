@@ -451,6 +451,15 @@ export function loadSessionMessages(
         });
         break;
       }
+      case "interrupted": {
+        parsedMessages.push({
+          id: m.id,
+          type: "interrupted",
+          content: m.content ?? [],
+          created_at: m.created_at,
+        });
+        break;
+      }
       case "assistant": {
         parsedMessages.push({
           id: m.id,

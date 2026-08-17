@@ -288,6 +288,11 @@ export interface SteerMessage extends BaseMessage {
   content: TaggedContentBlock[];
 }
 
+export interface InterruptedMessage extends BaseMessage {
+  type: "interrupted";
+  content: TaggedContentBlock[];
+}
+
 export interface BotMessage extends BaseMessage {
   type: "assistant";
   content: TaggedContentBlock[];
@@ -320,6 +325,7 @@ export interface ErrorMessage extends BaseMessage {
 export type Message =
   | UserMessage
   | SteerMessage
+  | InterruptedMessage
   | BotMessage
   | ToolMessage
   | ErrorMessage;

@@ -1593,6 +1593,13 @@ impl ChatViewComponent {
                     self.component.add_steer_message(steer_msg.content.clone());
                 }
             }
+            SessionMessage::Interrupted(marker_msg) => {
+                // 中断标记在 TUI 历史里呈现为一条 notice 行（分割线语义）
+                let text = marker_msg.text_content();
+                if !text.is_empty() {
+                    self.component.add_notice(text);
+                }
+            }
             SessionMessage::Assistant(assistant_msg) => {
                 let content = assistant_msg.text_content();
                 let thinking = assistant_msg.thinking_content();

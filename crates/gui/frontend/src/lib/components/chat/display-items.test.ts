@@ -448,3 +448,33 @@ test("uses occurrence keys without coupling identity to absolute position", () =
   ]);
   expect(after.slice(1)).toEqual(before);
 });
+
+test("interrupted message flushes group and renders standalone like user", () => {
+  const assistant = {
+    id: "a1",
+    type: "assistant",
+    content: [],
+    created_at: "",
+  };
+  const tool = {
+    id: "t1",
+    type: "tool",
+    tool_call_id: "x",
+    tool_name: "shell",
+    status: "completed",
+    arguments: "",
+    result: [],
+    created_at: "",
+  };
+  const interrupted = {
+    id: "i1",
+    type: "interrupted",
+    content: [{ type: "text", text: "[interrupted: cancelled]" }],
+    created_at: "",
+  };
+  // @ts-expect-error minimal fixtures
+  const items = buildDisplayItems([assistant, tool, interrupted], false);
+  const last = items[items.length - 1];
+  expect(last.type).toBe("message");
+  if (last.type === "message") expect(last.message.id).toBe("i1");
+});

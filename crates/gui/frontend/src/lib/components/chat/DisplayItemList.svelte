@@ -4,6 +4,7 @@
   import type { DisplayItem } from "./display-items";
   import { keyDisplayItems, liveActivityIndex } from "./display-items";
   import UserBubble from "./UserBubble.svelte";
+  import InterruptDivider from "./InterruptDivider.svelte";
   import AssistantBubble from "./AssistantBubble.svelte";
   import SteerBlock from "./SteerBlock.svelte";
   import ErrorBubble from "./ErrorBubble.svelte";
@@ -76,6 +77,8 @@
           content={textFromBlocks(msg.content)}
           created_at={msg.created_at}
         />
+      {:else if msg.type === "interrupted"}
+        <InterruptDivider text={textFromBlocks(msg.content)} />
       {:else if msg.type === "assistant"}
         <AssistantBubble
           message={msg}

@@ -75,3 +75,19 @@ fn legacy_message_without_model_id_deserializes() {
 
     assert_eq!(parsed.model_id, None);
 }
+
+#[test]
+fn from_storage_classifies_marked_user_message_as_interrupted() {
+    let mut message = Message::user("[interrupted: cancelled]");
+    message.metadata = Some(HashMap::from([(
+        crate::types::INTERRUPTED_META_KEY.to_string(),
+        "true".to_string(),
+    )]));
+
+    let messages = SessionMessage::from_storage(vec![message]);
+
+    assert!(matches!(
+        messages.as_slice(),
+        [SessionMessage::Interrupted(_)]
+    ));
+}

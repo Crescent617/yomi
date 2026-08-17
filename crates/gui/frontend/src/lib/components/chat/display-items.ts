@@ -58,7 +58,11 @@ export function buildDisplayItems(
 
     flushErrors();
 
-    if (message.type === "user" || message.type === "steer") {
+    if (
+      message.type === "user" ||
+      message.type === "steer" ||
+      message.type === "interrupted"
+    ) {
       flush();
       items.push({ type: "message", message, isStreaming: false });
       continue;
@@ -98,7 +102,12 @@ export function buildDisplayItems(
 
 /** Whether processing this message leaves no group open for a later message. */
 function isClosedAfter(message: Message): boolean {
-  if (message.type === "user" || message.type === "steer") return true;
+  if (
+    message.type === "user" ||
+    message.type === "steer" ||
+    message.type === "interrupted"
+  )
+    return true;
   if (message.type === "error" || message.type === "tool") return false;
 
   // An assistant message closes its group only when it carries text. Text-less
