@@ -760,7 +760,7 @@
                 </span>
                 {#if session?.project_id}
                   <span
-                    class="max-w-[6rem] shrink-0 truncate text-[10px] text-foreground"
+                    class="max-w-[6rem] shrink-0 truncate text-[10px] text-muted-foreground"
                     >{projectName(session.project_id)}</span
                   >
                 {/if}
@@ -946,7 +946,7 @@
             {#if group.label}
               <h3
                 id={`session-group-${group.label.replaceAll(" ", "-").toLowerCase()}`}
-                class="sticky -top-1 z-10 flex items-center justify-center gap-2 bg-card/95 px-3 py-1 text-[10px] font-medium leading-none text-foreground backdrop-blur-sm"
+                class="sticky -top-1 z-10 flex items-center justify-center gap-2 bg-card/95 px-3 py-1 text-[10px] font-medium leading-none text-muted-foreground backdrop-blur-sm"
               >
                 <span class="h-px w-8 bg-border" aria-hidden="true"></span>
                 <span class="shrink-0">{group.label}</span>
@@ -990,7 +990,7 @@
                           {session.alias ?? "Untitled"}
                         </span>
                         <span
-                          class="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] text-foreground"
+                          class="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground"
                         >
                           {#if session.project_id}
                             <span class="truncate"
@@ -1118,7 +1118,7 @@
         {/each}
 
         {#if allSessionsLoading}
-          <div class="px-3 py-3 text-center text-xs text-foreground">
+          <div class="px-3 py-3 text-center text-xs text-muted-foreground">
             Loading sessions...
           </div>
         {:else if allSessionsError}
@@ -1132,9 +1132,9 @@
           </button>
         {:else if allSessionsLoaded && allSessions.length === 0}
           <div class="px-3 py-6 text-center">
-            <MessageSquare size={18} class="mx-auto mb-2 text-foreground" />
+            <MessageSquare size={18} class="mx-auto mb-2 text-muted-foreground" />
             <p class="text-xs font-medium text-foreground">No sessions yet</p>
-            <p class="mt-0.5 text-[11px] text-foreground">
+            <p class="mt-0.5 text-[11px] text-muted-foreground">
               Start a new chat to see it here.
             </p>
           </div>
