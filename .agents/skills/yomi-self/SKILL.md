@@ -15,6 +15,7 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 
 - `yomi daemon status` / `restart` / `stop`；`start` 仅供内部调用。
 - 重启等效路径：CLI `restart`、IM 通道 `/restart`（限 `admin_users`）、GUI 改配置自动重启。会话数据在 sqlite，重启不丢；**进行中的 run 会被打断**——重启前先 `rpc list_running_sessions` 确认没在跑。
+- **自杀式重启**（agent 在 daemon 里重启自己）：命令必须**立即 exit 0**，绝不在同一条里 `sleep`+验证——restart 生效时本进程即死，后续验证必然以"失败"误报，诱导重试跑两遍。正确姿势：`nohup sh -c 'sleep 8; yomi daemon restart' >/dev/null 2>&1 &` 后直接结束，**验证留给下一轮**。
 - 日志在 `~/.yomi/logs/daemon.<date>.log`（`tui.`/`run.` 前缀同理）——行为异常先看这里。
 - `session`/`cron`/`events`/`rpc` 等 daemon-only 命令**不会自动 spawn daemon**，连不上即报 "Is it running?"。
 

@@ -13,6 +13,10 @@ pub const CRON_PREFIX: &str = "cron_";
 pub const EVT_PREFIX: &str = "evt_";
 pub const IS_STEER_META_KEY: &str = "is_steer";
 
+/// Metadata flag on the user-role interruption marker appended after an
+/// aborted turn (see `Agent::mark_interrupted`).
+pub const INTERRUPTED_META_KEY: &str = "interrupted";
+
 // ─── Macro: generate a distinct newtype for each ID ───────────────────────
 
 macro_rules! define_id {

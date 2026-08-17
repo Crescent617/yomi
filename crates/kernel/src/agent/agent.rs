@@ -356,6 +356,7 @@ impl Agent {
                 // Handle state transition after execution
                 if let Err(e) = result {
                     if e.is_shutdown() {
+                        self.mark_interrupted("daemon restarting — outcome of interrupted work unknown");
                         break;
                     }
                     tracing::warn!("error in main loop: {}", e);
@@ -390,12 +391,28 @@ impl Agent {
     }
 
     /// Handle cancellation - sends Cancelled event, transitions state, returns Ok(())
-    async fn handle_cancel(&self, context: &str) -> Result<(), AgentError> {
+    async fn handle_cancel(&mut self, context: &str) -> Result<(), AgentError> {
         tracing::info!("{} cancelled", context);
+        self.mark_interrupted("cancelled");
         // Emit cancellation event with operation name
         self.emit_operation_cancelled(context);
         self.context.transition_to(AgentState::Idle);
         Ok(())
+    }
+
+    /// Append a user-role interruption marker to the history (Claude Code
+    /// 同款 `[Request interrupted by user]`): after an abort the model must
+    /// not assume its last actions completed. The marker also trips the
+    /// has_user_after guard in `pending_tool_calls`, so an interrupted tool
+    /// batch is never silently re-executed after a respawn. Metadata flags
+    /// it for UIs to render as a system line rather than a user bubble.
+    fn mark_interrupted(&mut self, reason: &str) {
+        let mut msg = Message::user(format!("[interrupted: {reason}]"));
+        msg.metadata = Some(std::collections::HashMap::from([(
+            crate::types::INTERRUPTED_META_KEY.to_string(),
+            "true".to_string(),
+        )]));
+        self.push_message(msg);
     }
 
     /// Complete current turn if transitioning from non-Idle to Idle.

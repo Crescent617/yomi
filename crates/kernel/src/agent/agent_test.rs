@@ -612,3 +612,105 @@ async fn retrying_event_carries_retry_after_wait() {
     // `Retry-After: 1` + up to 25% jitter.
     assert!((1000..=1250).contains(&wait_ms), "wait_ms: {wait_ms}");
 }
+
+/// 中断标记（mark_interrupted）：落库为带 metadata 的 user 消息，且通过
+/// has_user_after guard 使 pending_tool_calls 收口为 None——被打断的工具
+/// 批不会在重生后被静默重跑。
+#[tokio::test]
+async fn interrupted_marker_closes_pending_tool_batch() {
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs};
+    use crate::provider::ModelConfig;
+    use crate::storage::UsageStore;
+    use crate::types::{Message, Role, SessionId, ToolCall};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    crate::storage::migrations::run_migrations(&pool)
+        .await
+        .unwrap();
+    let usage_store: Arc<dyn UsageStore> = Arc::new(crate::storage::SqliteUsageStore::new(pool));
+
+    let mut models = BTreeMap::new();
+    models.insert(
+        "test".to_string(),
+        ModelConfig {
+            name: "test".to_string(),
+            model_id: "test-id".to_string(),
+            ..ModelConfig::default()
+        },
+    );
+    let shared = Arc::new(AgentShared::new(
+        Arc::new(models),
+        "test".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(usage_store),
+        None,
+        Vec::new(),
+        None,
+        None,
+    ));
+
+    // 历史：一个被打断的工具批（assistant 带 tool_calls、无结果）。
+    let call = ToolCall {
+        id: "call-1".to_string(),
+        name: "shell".to_string(),
+        arguments: serde_json::json!({"command": "brew upgrade yomi"}),
+    };
+    let history = vec![
+        Arc::new(Message::user("升级一下")),
+        Arc::new(Message {
+            role: Role::Assistant,
+            tool_calls: Some(vec![call]),
+            ..Default::default()
+        }),
+    ];
+
+    let working_dir = tempfile::tempdir().unwrap();
+    let args = AgentSpawnArgs {
+        base_prompt: "test".to_string(),
+        skills: Vec::new(),
+        history,
+        session_id: SessionId::new().to_string(),
+        parent_session_id: None,
+        max_iterations: 1,
+        working_dir: working_dir.path().to_path_buf(),
+        cancel_token: None,
+        tool_flags: crate::tools::ToolFlags::new(false),
+        file_state_store: None,
+        tool_blocklist: Vec::new(),
+        max_tool_output_length: 1024,
+        mailbox: Arc::new(crate::comms::Mailbox::new()),
+        input_bus: None,
+    };
+    let mut agent = Agent::new(&shared, args).await;
+
+    // 打断前有 pending；标记后收口。
+    assert!(agent.pending_tool_calls().is_some());
+    agent.mark_interrupted("daemon restarting — outcome of interrupted work unknown");
+
+    let messages = agent.message_buffer.messages();
+    let last = messages.last().unwrap();
+    assert_eq!(last.role, Role::User);
+    let text = match &last.content[0] {
+        crate::types::ContentBlock::Text { text } => text.as_str(),
+        other => panic!("expected text block, got {other:?}"),
+    };
+    assert!(text.contains("interrupted: daemon restarting"));
+    assert_eq!(
+        last.metadata
+            .as_ref()
+            .and_then(|m| m.get(crate::types::INTERRUPTED_META_KEY))
+            .map(String::as_str),
+        Some("true")
+    );
+    assert!(agent.pending_tool_calls().is_none());
+}
