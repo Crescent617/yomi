@@ -1199,7 +1199,14 @@ async fn deliver_reply(
         _ => Vec::new(),
     };
     let reply_msg_id = if observability && adapter.supports_status_card() {
-        if mid_run_split && obs.has_mid_run_posts(session_id) {
+        // A mention forces the split even in a quiet chat: card patches
+        // never notify (feishu), so the only way an @ pings is a new
+        // message carrying the reply — same landing path as mid-run posts.
+        let has_mention = reply
+            .as_ref()
+            .and_then(|r| r.text())
+            .is_some_and(super::utils::contains_mention);
+        if (mid_run_split && obs.has_mid_run_posts(session_id)) || has_mention {
             // The reply lands as a new message below the user's mid-run
             // posts, carrying the run trace; the status card then freezes
             // in place as a terminal receipt. Flush first and freeze with

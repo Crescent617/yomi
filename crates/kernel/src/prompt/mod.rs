@@ -27,7 +27,7 @@ pub(crate) const ATTACHMENTS_SECTION: &str = "# Attachments\nTo attach files to 
 /// is rewritten by each platform adapter into its native mention (feishu
 /// `<at id=…>`, telegram `tg://user?id=…`). Sub-agents and local sessions
 /// never get it — no platform is there to render it.
-pub(crate) const MENTIONS_SECTION: &str = "# Mentions\nTo mention a user in your reply, write `<@USER_ID>` — the platform renders it as a real mention with notification.";
+pub(crate) const MENTIONS_SECTION: &str = "# Mentions\nTo mention a user in your reply, write `<@USER_ID>` — the platform renders it as a real mention with notification. Use it only when warranted: the user asked you to @ someone, or you are addressing a bot — in that case the mention is required (it won't receive your message otherwise). Never @ any human gratuitously.";
 
 /// Contract sections appended after the base prompt for non-sub-agent
 /// sessions (the caller owns that gate): attachment syntax when the

@@ -2630,7 +2630,7 @@ async fn deliver_reply_freezes_card_and_flushes_new_message_on_mid_run_posts() {
     // no trace panel (the reply message carries it now) …
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 1);
-    assert!(patches[0].1.contains("✅ Done"), "frozen terminal card");
+    assert!(patches[0].1.contains("✅ **Done**"), "frozen terminal card");
     assert!(
         !patches[0].1.contains("collapsible_panel"),
         "stats-only receipt: the trace rides the reply message"
@@ -2683,7 +2683,7 @@ async fn deliver_reply_mid_run_without_text_keeps_trace_on_frozen_card() {
 
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 1);
-    assert!(patches[0].1.contains("✅ Done"), "frozen terminal card");
+    assert!(patches[0].1.contains("✅ **Done**"), "frozen terminal card");
     assert!(
         patches[0].1.contains("collapsible_panel") && patches[0].1.contains("Trace ·"),
         "no reply to carry the trace — the card keeps it"
@@ -2799,7 +2799,7 @@ async fn deliver_reply_mid_run_trace_disabled_keeps_panel_on_card() {
 
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 1);
-    assert!(patches[0].1.contains("✅ Done"));
+    assert!(patches[0].1.contains("✅ **Done**"));
     assert!(
         patches[0].1.contains("collapsible_panel"),
         "trace stays on the card: {patches:?}"
@@ -2882,7 +2882,7 @@ async fn deliver_reply_mid_run_flush_failure_keeps_trace_on_card() {
 
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 1, "frozen in place");
-    assert!(patches[0].1.contains("✅ Done"));
+    assert!(patches[0].1.contains("✅ **Done**"));
     assert!(
         patches[0].1.contains("collapsible_panel") && patches[0].1.contains("Trace ·"),
         "flush failed — trace stays on the card: {patches:?}"

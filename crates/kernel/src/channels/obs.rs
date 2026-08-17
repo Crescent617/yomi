@@ -1018,18 +1018,16 @@ fn whisper_snippet(whisper: &str) -> String {
 }
 
 fn render_terminal(s: &ObsCardState, settle: &Settle, keep_trace: bool) -> String {
-    let elapsed = fmt_elapsed(s.started_at.elapsed());
-    let (template, title) = match settle {
-        Settle::Completed => (
-            "green",
-            format!("✅ Done · {} tools · {elapsed}", s.tool_count),
-        ),
-        Settle::Failed(_) => ("red", "❌ Failed".to_string()),
-        Settle::Cancelled => ("grey", "⏹ Stopped".to_string()),
-        Settle::MaxIterations(reached) => ("red", format!("❌ Max iterations ({reached})")),
-        Settle::Timeout => ("grey", "⏰ Timed out".to_string()),
+    let (emoji, verb) = match settle {
+        Settle::Completed => ("✅", "Done".to_string()),
+        Settle::Failed(_) => ("❌", "Failed".to_string()),
+        Settle::Cancelled => ("⏹", "Stopped".to_string()),
+        Settle::MaxIterations(reached) => ("❌", format!("Max iterations ({reached})")),
+        Settle::Timeout => ("⏰", "Timed out".to_string()),
     };
-    let mut lines = vec![stats_line(s)];
+    // One quiet line, no header/template: the reply message below carries
+    // the content; this card is only the run's receipt.
+    let mut lines = vec![format!("{emoji} **{verb}** — {}", stats_line(s))];
     if let Settle::Failed(error) = settle {
         lines.push(error_line(error));
     }
@@ -1043,7 +1041,12 @@ fn render_terminal(s: &ObsCardState, settle: &Settle, keep_trace: bool) -> Strin
             elements.push(reply::trace_panel_element(&trace_lines, &trace_title));
         }
     }
-    card_json_elements(template, &title, &elements)
+    json!({
+        "schema": "2.0",
+        "config": { "width_mode": "compact" },
+        "body": { "elements": elements }
+    })
+    .to_string()
 }
 
 fn card_json(template: &str, title: &str, body_md: &str) -> String {

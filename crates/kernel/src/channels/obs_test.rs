@@ -250,7 +250,7 @@ async fn no_tool_run_settles_card_in_place_and_sends_no_reactions() {
     assert_eq!(mock.cards.lock().await.len(), 1);
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 1);
-    assert!(patches[0].1.contains("✅ Done"));
+    assert!(patches[0].1.contains("✅ **Done**"));
     drop(patches);
     assert!(mock.reactions_added.lock().await.is_empty());
     assert!(!tracker.has_mid_run_posts(&sid));
@@ -551,8 +551,12 @@ async fn settle_completed_freezes_card_and_sends_no_reactions() {
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 2);
     let terminal = &patches.last().unwrap().1;
-    assert!(terminal.contains("green"));
-    assert!(terminal.contains("✅ Done"));
+    let card: serde_json::Value = serde_json::from_str(terminal).unwrap();
+    assert!(
+        card.get("header").is_none(),
+        "terminal receipt has no header"
+    );
+    assert!(terminal.contains("✅ **Done**"));
     drop(patches);
 
     // No reactions at settlement; receipts cleared.
@@ -588,7 +592,7 @@ async fn settle_cancelled_freezes_card_and_sends_no_reactions() {
 
     let patches = mock.patches.lock().await;
     assert!(patches[0].1.contains("grey"));
-    assert!(patches[0].1.contains("⏹ Stopped"));
+    assert!(patches[0].1.contains("⏹ **Stopped**"));
     drop(patches);
 
     assert!(mock.reactions_added.lock().await.is_empty());
@@ -621,8 +625,12 @@ async fn settle_failed_shows_error_summary() {
         .await;
 
     let patches = mock.patches.lock().await;
-    assert!(patches[0].1.contains("red"));
-    assert!(patches[0].1.contains("❌ Failed"));
+    let card: serde_json::Value = serde_json::from_str(&patches[0].1).unwrap();
+    assert!(
+        card.get("header").is_none(),
+        "terminal receipt has no header"
+    );
+    assert!(patches[0].1.contains("❌ **Failed**"));
     assert!(patches[0].1.contains("provider exploded"));
 }
 
@@ -658,8 +666,12 @@ async fn failed_settle_without_tools_patches_terminal_card() {
     drop(cards);
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 1);
-    assert!(patches[0].1.contains("red"));
-    assert!(patches[0].1.contains("❌ Failed"));
+    let card: serde_json::Value = serde_json::from_str(&patches[0].1).unwrap();
+    assert!(
+        card.get("header").is_none(),
+        "terminal receipt has no header"
+    );
+    assert!(patches[0].1.contains("❌ **Failed**"));
     assert!(patches[0].1.contains("provider exploded"));
 }
 
@@ -782,7 +794,7 @@ async fn watchdog_settles_dead_session_card_and_clears_receipts() {
 
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 1);
-    assert!(patches[0].1.contains("⏰ Timed out"));
+    assert!(patches[0].1.contains("⏰ **Timed out**"));
     drop(patches);
 
     // Timeout settle sends no reactions and clears the run's receipts (so a
@@ -808,7 +820,7 @@ async fn watchdog_settles_contentless_card_as_timed_out() {
 
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 1);
-    assert!(patches[0].1.contains("⏰ Timed out"));
+    assert!(patches[0].1.contains("⏰ **Timed out**"));
 }
 
 #[tokio::test]
@@ -1454,7 +1466,7 @@ async fn terminal_card_freezes_without_whisper() {
 
     let patches = mock.patches.lock().await;
     let terminal = &patches.last().unwrap().1;
-    assert!(terminal.contains("✅ Done"));
+    assert!(terminal.contains("✅ **Done**"));
     assert!(!terminal.contains("💬"), "terminal drops the whisper");
     assert!(
         !terminal.contains("🔧"),
@@ -2201,8 +2213,12 @@ async fn freeze_stopped_patches_terminal_receipt_without_trace() {
 
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 1, "frozen in place");
-    assert!(patches[0].1.contains("green"));
-    assert!(patches[0].1.contains("✅ Done"));
+    let card: serde_json::Value = serde_json::from_str(&patches[0].1).unwrap();
+    assert!(
+        card.get("header").is_none(),
+        "terminal receipt has no header"
+    );
+    assert!(patches[0].1.contains("✅ **Done**"));
     assert!(
         !patches[0].1.contains("collapsible_panel"),
         "stats-only receipt: {patches:?}"
@@ -2232,7 +2248,7 @@ async fn freeze_stopped_keep_trace_true_keeps_panel() {
 
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 1);
-    assert!(patches[0].1.contains("✅ Done"));
+    assert!(patches[0].1.contains("✅ **Done**"));
     assert!(
         patches[0].1.contains("collapsible_panel") && patches[0].1.contains("Trace ·"),
         "no reply to carry the trace — the card keeps it: {patches:?}"
@@ -2271,8 +2287,12 @@ async fn freeze_stopped_failed_without_card_sends_terminal_card() {
 
     let cards = mock.cards.lock().await;
     assert_eq!(cards.len(), 1, "terminal card sent as a new message");
-    assert!(cards[0].1.contains("red"));
-    assert!(cards[0].1.contains("❌ Failed"));
+    let card: serde_json::Value = serde_json::from_str(&cards[0].1).unwrap();
+    assert!(
+        card.get("header").is_none(),
+        "terminal receipt has no header"
+    );
+    assert!(cards[0].1.contains("❌ **Failed**"));
     assert!(cards[0].1.contains("collapsible_panel"));
     assert!(mock.patches.lock().await.is_empty());
 }
@@ -2315,7 +2335,7 @@ async fn freeze_timeout_patches_terminal_card_and_clears_receipts() {
 
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 1);
-    assert!(patches[0].1.contains("⏰ Timed out"));
+    assert!(patches[0].1.contains("⏰ **Timed out**"));
     assert!(patches[0].1.contains("collapsible_panel"));
     drop(patches);
     assert!(!tracker.has_mid_run_posts(&sid));

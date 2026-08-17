@@ -74,3 +74,11 @@ fn multiline_outside_fences_all_rewritten() {
     let out = rewrite_mentions(text, &feishu_render);
     assert_eq!(out, "第一行 <at id=ou_a></at>\n第二行 <at id=ou_b></at>\n");
 }
+
+#[test]
+fn contains_mention_detects_real_and_ignores_examples() {
+    assert!(super::contains_mention("cc <@ou_a>"));
+    assert!(!super::contains_mention("语法是 `<@ou_a>`"));
+    assert!(!super::contains_mention("```\n<@ou_a>\n```"));
+    assert!(!super::contains_mention("没有提及"));
+}

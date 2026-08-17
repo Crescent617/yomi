@@ -44,6 +44,18 @@ fn rewrite_mention_segment(segment: &str, render: &dyn Fn(&str) -> String, out: 
     out.push_str(&segment[last..]);
 }
 
+/// Whether `text` carries a `<@USER_ID>` mention — same fence/inline-code
+/// skipping as the rewrite (an example in a code block does not count).
+pub(crate) fn contains_mention(text: &str) -> bool {
+    let found = std::cell::Cell::new(false);
+    let mark = |_: &str| {
+        found.set(true);
+        String::new()
+    };
+    let _ = rewrite_mentions(text, &mark);
+    found.get()
+}
+
 /// A file read and validated for platform upload (see [`read_upload`]).
 pub(crate) struct UploadFile {
     pub bytes: Vec<u8>,
