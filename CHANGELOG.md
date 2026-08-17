@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.91] - 2026-08-17
+
+### Changed
+- GUI 列表字重统一：会话/收藏/定时任务列表项与侧边栏小标签改为常规字重（不再加粗），聊天标题保留 medium。
+
 ## [0.7.90] - 2026-08-17
 
 ### Changed
