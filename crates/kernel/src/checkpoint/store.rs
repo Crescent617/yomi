@@ -496,15 +496,10 @@ impl crate::checkpoint::CheckpointStore for FilesystemCheckpointStore {
         for (path, info) in file_states {
             match info.op {
                 crate::checkpoint::FileOp::Create if info.hash == "NULL" => {
-                    // TEMP-REVERT
-                    let in_target = self
-                        .checkpoint_dir(session_id, &target_cp.message_id)
-                        .join("objects")
-                        .join(&info.hash[..2])
-                        .join(&info.hash)
-                        .exists();
-
-                    if !in_target && path.exists() {
+                    // Created files have no backup (NULL is a sentinel, never
+                    // an objects/ hash): rewinding to before their turn means
+                    // they should not exist, so remove whatever is on disk.
+                    if path.exists() {
                         fs::remove_file(&path).await.map_err(|e| {
                             KernelError::io(format!(
                                 "Failed to remove file {}: {e}",
