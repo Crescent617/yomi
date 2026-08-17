@@ -1132,7 +1132,10 @@
           </button>
         {:else if allSessionsLoaded && allSessions.length === 0}
           <div class="px-3 py-6 text-center">
-            <MessageSquare size={18} class="mx-auto mb-2 text-muted-foreground" />
+            <MessageSquare
+              size={18}
+              class="mx-auto mb-2 text-muted-foreground"
+            />
             <p class="text-xs font-medium text-foreground">No sessions yet</p>
             <p class="mt-0.5 text-[11px] text-muted-foreground">
               Start a new chat to see it here.

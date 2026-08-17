@@ -277,13 +277,15 @@
       {#if connInfo?.mode === "remote"}
         <Globe class="w-3 h-3" />
         <span class="micro-label text-info">REMOTE</span>
-        <span class="max-w-32 truncate font-mono text-[10px] text-muted-foreground"
+        <span
+          class="max-w-32 truncate font-mono text-[10px] text-muted-foreground"
           >{remoteHostLabel(connInfo.addr)}</span
         >
       {:else if connInfo && isWsAddr(connInfo.addr)}
         <Globe class="w-3 h-3" />
         <span class="micro-label">REMOTE</span>
-        <span class="max-w-32 truncate font-mono text-[10px] text-muted-foreground"
+        <span
+          class="max-w-32 truncate font-mono text-[10px] text-muted-foreground"
           >{remoteHostLabel(connInfo.addr)}</span
         >
       {:else}

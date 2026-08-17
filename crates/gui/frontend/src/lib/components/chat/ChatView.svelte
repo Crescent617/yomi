@@ -841,7 +841,8 @@
                 {/snippet}
                 <div class="space-y-1.5">
                   <div class="flex items-center gap-1.5">
-                    <span class="micro-label w-24 shrink-0 text-muted-foreground"
+                    <span
+                      class="micro-label w-24 shrink-0 text-muted-foreground"
                       >Permission</span
                     >
                     <span
@@ -856,7 +857,8 @@
                     </span>
                   </div>
                   <div class="flex items-center gap-1.5">
-                    <span class="micro-label w-24 shrink-0 text-muted-foreground"
+                    <span
+                      class="micro-label w-24 shrink-0 text-muted-foreground"
                       >Directory</span
                     >
                     <span
@@ -867,7 +869,8 @@
                     </span>
                   </div>
                   <div class="flex items-center gap-1.5">
-                    <span class="micro-label w-24 shrink-0 text-muted-foreground"
+                    <span
+                      class="micro-label w-24 shrink-0 text-muted-foreground"
                       >ID</span
                     >
                     <button
@@ -949,7 +952,8 @@
                     </div>
                   {/if}
                   <div class="flex items-center gap-1.5">
-                    <span class="micro-label w-24 shrink-0 text-muted-foreground"
+                    <span
+                      class="micro-label w-24 shrink-0 text-muted-foreground"
                       >Updated</span
                     >
                     <span class="min-w-0 text-foreground">

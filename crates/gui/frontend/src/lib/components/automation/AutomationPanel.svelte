@@ -163,7 +163,9 @@
       <div
         class="flex h-10 shrink-0 items-center justify-between border-b border-border px-4 text-xs text-muted-foreground"
       >
-        <span class="font-normal uppercase tracking-wide text-muted-foreground">Tasks</span>
+        <span class="font-normal uppercase tracking-wide text-muted-foreground"
+          >Tasks</span
+        >
         <span>{automationStore.jobs.length}</span>
       </div>
 
