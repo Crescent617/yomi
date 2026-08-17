@@ -839,22 +839,13 @@
                     {activeSession.phase}
                   </span>
                 {/snippet}
-                <div class="grid grid-cols-2 gap-2">
-                  <div class="rounded-sm bg-secondary/35 px-2 py-1.5">
-                    <div class="micro-label text-muted-foreground">
-                      Messages
-                    </div>
-                    <div class="mt-0.5 font-semibold text-foreground">
-                      {activeSession.message_count ??
-                        activeSession.messages.length}
-                    </div>
-                  </div>
-                  <div class="rounded-sm bg-secondary/35 px-2 py-1.5">
-                    <div class="micro-label text-muted-foreground">
-                      Permission
-                    </div>
-                    <div
-                      class="mt-0.5 font-semibold capitalize {activeSession.permission_level ===
+                <div class="space-y-1.5">
+                  <div class="flex items-center gap-1.5">
+                    <span class="micro-label w-24 shrink-0 text-muted-foreground"
+                      >Permission</span
+                    >
+                    <span
+                      class="capitalize {activeSession.permission_level ===
                       'safe'
                         ? 'text-success'
                         : activeSession.permission_level === 'dangerous'
@@ -862,22 +853,23 @@
                           : 'text-warning'}"
                     >
                       {activeSession.permission_level || "Caution"}
-                    </div>
+                    </span>
                   </div>
-                </div>
-                <div class="space-y-1.5">
-                  <div class="micro-label text-muted-foreground">
-                    Working directory
-                  </div>
-                  <div
-                    class="rounded-sm bg-code-bg px-2 py-1.5 font-mono text-foreground break-all"
-                  >
-                    {activeSession.project_path || "N/A"}
-                  </div>
-                </div>
-                <div class="space-y-1.5">
                   <div class="flex items-center gap-1.5">
-                    <span class="shrink-0 text-muted-foreground">ID</span>
+                    <span class="micro-label w-24 shrink-0 text-muted-foreground"
+                      >Directory</span
+                    >
+                    <span
+                      class="min-w-0 truncate rounded-sm bg-code-bg px-1.5 py-0.5 font-mono text-foreground"
+                      title={activeSession.project_path}
+                    >
+                      {activeSession.project_path || "N/A"}
+                    </span>
+                  </div>
+                  <div class="flex items-center gap-1.5">
+                    <span class="micro-label w-24 shrink-0 text-muted-foreground"
+                      >ID</span
+                    >
                     <button
                       type="button"
                       class="flex min-w-0 items-center gap-1.5 rounded-sm bg-code-bg px-1.5 py-0.5 font-mono text-foreground transition-colors hover:bg-secondary/70"
@@ -899,7 +891,10 @@
                   </div>
                   {#if activeSession.parent_session_id}
                     <div class="flex items-center gap-1.5">
-                      <span class="shrink-0 text-muted-foreground">Parent</span>
+                      <span
+                        class="micro-label w-24 shrink-0 text-muted-foreground"
+                        >Parent</span
+                      >
                       <button
                         type="button"
                         class="flex min-w-0 items-center gap-1.5 rounded-sm bg-code-bg px-1.5 py-0.5 font-mono text-foreground transition-colors hover:bg-secondary/70"
@@ -925,26 +920,12 @@
                       </button>
                     </div>
                   {/if}
-                  <div class="flex items-center gap-1.5">
-                    <span class="shrink-0 text-muted-foreground">Updated</span>
-                    <span class="min-w-0 text-foreground">
-                      {new Date(activeSession.updated_at).toLocaleString()}
-                    </span>
-                  </div>
-                  {#if activeSession.created_at ?? sessionDetail.created_at}
-                    <div class="flex items-center gap-1.5">
-                      <span class="shrink-0 text-muted-foreground">Created</span
-                      >
-                      <span class="min-w-0 text-foreground">
-                        {new Date(
-                          sessionDetail.created_at ?? activeSession.created_at!,
-                        ).toLocaleString()}
-                      </span>
-                    </div>
-                  {/if}
                   {#if activeSession.model_key}
                     <div class="flex items-center gap-1.5">
-                      <span class="shrink-0 text-muted-foreground">Model</span>
+                      <span
+                        class="micro-label w-24 shrink-0 text-muted-foreground"
+                        >Model</span
+                      >
                       <span
                         class="min-w-0 truncate rounded-sm bg-code-bg px-1.5 py-0.5 font-mono text-foreground"
                         title={activeSession.model_key}
@@ -955,7 +936,8 @@
                   {/if}
                   {#if sessionDetail.template}
                     <div class="flex items-center gap-1.5">
-                      <span class="shrink-0 text-muted-foreground"
+                      <span
+                        class="micro-label w-24 shrink-0 text-muted-foreground"
                         >Template</span
                       >
                       <span
@@ -963,6 +945,27 @@
                         title={sessionDetail.template}
                       >
                         {sessionDetail.template}
+                      </span>
+                    </div>
+                  {/if}
+                  <div class="flex items-center gap-1.5">
+                    <span class="micro-label w-24 shrink-0 text-muted-foreground"
+                      >Updated</span
+                    >
+                    <span class="min-w-0 text-foreground">
+                      {new Date(activeSession.updated_at).toLocaleString()}
+                    </span>
+                  </div>
+                  {#if activeSession.created_at ?? sessionDetail.created_at}
+                    <div class="flex items-center gap-1.5">
+                      <span
+                        class="micro-label w-24 shrink-0 text-muted-foreground"
+                        >Created</span
+                      >
+                      <span class="min-w-0 text-foreground">
+                        {new Date(
+                          sessionDetail.created_at ?? activeSession.created_at!,
+                        ).toLocaleString()}
                       </span>
                     </div>
                   {/if}

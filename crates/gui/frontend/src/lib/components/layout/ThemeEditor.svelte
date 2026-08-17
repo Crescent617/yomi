@@ -113,7 +113,7 @@
       >
         {#each PALETTE_GROUPS as group (group.id)}
           <h3
-            class="mb-1 mt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground first:mt-0"
+            class="mb-1 mt-2 text-[10px] font-normal uppercase tracking-wide text-muted-foreground first:mt-0"
           >
             {group.label}
           </h3>

@@ -162,7 +162,7 @@
           event.stopPropagation();
           void openSessions(session.project_id ?? selectedProjectId);
         }}
-        class="flex min-w-0 max-w-64 items-center gap-1 rounded-sm px-1 py-0.5 font-semibold text-foreground transition-colors hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        class="flex min-w-0 max-w-64 items-center gap-1 rounded-sm px-1 py-0.5 font-normal text-foreground transition-colors hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         aria-expanded={menu === "session"}
         title="Switch session"
       >
