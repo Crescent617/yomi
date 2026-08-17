@@ -456,10 +456,13 @@ impl crate::checkpoint::CheckpointStore for FilesystemCheckpointStore {
             }
         }
 
-        // Then, iterate from newest to target+1 to override with later changes
-        for info in manifest.checkpoints.iter().rev() {
+        // Then merge checkpoints after the target, oldest first: each file's
+        // earliest post-target backup is its content at target time, so the
+        // first entry must win (or_insert). Iterating newest-first here would
+        // restore an intermediate version instead of undoing fully.
+        for info in &manifest.checkpoints {
             if info.sequence <= target_sequence {
-                break;
+                continue;
             }
 
             let meta_path = self
@@ -476,7 +479,7 @@ impl crate::checkpoint::CheckpointStore for FilesystemCheckpointStore {
                 .map_err(|e| KernelError::io(format!("Failed to parse meta: {e}")))?;
 
             for file in meta.files {
-                // Later changes override earlier ones
+                // Earliest post-target backup wins (state at target time).
                 file_states.entry(file.path.clone()).or_insert(file);
             }
         }
