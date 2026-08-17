@@ -1899,7 +1899,14 @@ impl FeishuAdapter {
             }
             match self.fetch_message(&msg_id).await {
                 Ok(Some(h)) if !h.text.is_empty() => h.text,
-                _ => "[interactive]".to_string(),
+                Ok(_) => {
+                    debug!(chat_id, msg_id, "card body empty on fetch, using placeholder");
+                    "[interactive]".to_string()
+                }
+                Err(e) => {
+                    warn!(chat_id, msg_id, error = %e, "card fetch failed, using placeholder");
+                    "[interactive]".to_string()
+                }
             }
         } else {
             text

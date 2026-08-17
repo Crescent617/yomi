@@ -1303,7 +1303,7 @@
                     <div class="flex shrink-0 items-center gap-1.5">
                       {#if session.updated_at}
                         <span
-                          class="text-[10px] text-foreground"
+                          class="text-[10px] text-muted-foreground"
                           title={new Date(session.updated_at).toLocaleString()}
                         >
                           {formatTimeAgo(session.updated_at, clock.now)}
