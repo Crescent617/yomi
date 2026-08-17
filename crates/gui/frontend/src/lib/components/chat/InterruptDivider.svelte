@@ -14,7 +14,7 @@
   aria-label="interrupted"
 >
   <div class="h-px flex-1 bg-subtle"></div>
-  <span class="text-[10px] uppercase leading-none text-muted-foreground/55"
+  <span class="text-[10px] uppercase leading-none text-muted-foreground"
     >interrupted · {label}</span
   >
   <div class="h-px flex-1 bg-subtle"></div>
