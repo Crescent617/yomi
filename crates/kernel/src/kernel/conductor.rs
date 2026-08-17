@@ -509,25 +509,23 @@ impl Conductor {
             None
         };
 
-        // Every non-sub-agent session learns the attachment syntax when the
-        // feature is on: declared files reach the user alongside the message
-        // (channels deliver them, the app shows clickable items). The
-        // mention syntax only makes sense where a platform can render it:
-        // channel-routed sessions. Sub-agents get neither — their output
-        // never leaves the parent. Note the narrower predicate than the
-        // ask_user blocklist above, which covers every sub-agent outright.
+        // Every non-sub-agent session learns the platform contracts: the
+        // attachment syntax when the feature is on (declared files reach
+        // the user alongside the message), the mention syntax only where a
+        // platform can render it (channel-routed sessions). Sub-agents get
+        // neither — their output never leaves the parent. Note the narrower
+        // predicate than the ask_user blocklist above, which covers every
+        // sub-agent outright.
         let base_prompt = match &template {
             Some(t) => t.body.clone(),
-            None if !is_sub_agent => {
-                let mut prompt = self.base_prompt.clone();
-                if self.agent_config.enable_attachments {
-                    prompt = format!("{prompt}\n\n{}", crate::prompt::ATTACHMENTS_SECTION);
-                }
-                if self.is_channel_routed(sid, session_info.as_ref()).await {
-                    prompt = format!("{prompt}\n\n{}", crate::prompt::MENTIONS_SECTION);
-                }
-                prompt
-            }
+            None if !is_sub_agent => format!(
+                "{}{}",
+                self.base_prompt,
+                crate::prompt::contract_sections(
+                    self.agent_config.enable_attachments,
+                    self.is_channel_routed(sid, session_info.as_ref()).await,
+                )
+            ),
             None => self.base_prompt.clone(),
         };
 

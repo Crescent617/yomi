@@ -42,3 +42,32 @@ async fn memory_pointer_absent_without_project_index() {
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn contract_sections_matrix() {
+    // (attachments on, channel-routed) → 两段都在
+    let both = contract_sections(true, true);
+    assert!(both.contains("# Attachments"));
+    assert!(both.contains("# Mentions"));
+
+    // 本地会话：只有 attachments
+    let local = contract_sections(true, false);
+    assert!(local.contains("# Attachments"));
+    assert!(!local.contains("# Mentions"));
+
+    // attachments feature 关闭：channel 会话只有 mentions
+    let no_attach = contract_sections(false, true);
+    assert!(!no_attach.contains("# Attachments"));
+    assert!(no_attach.contains("# Mentions"));
+
+    // 全关：空
+    assert_eq!(contract_sections(false, false), "");
+}
+
+#[test]
+fn contract_sections_append_verbatim() {
+    // 每段自带前导空行，直接拼在 base 后即为合法 prompt
+    let prompt = format!("base{}", contract_sections(true, true));
+    assert!(prompt.starts_with("base\n\n# Attachments"));
+    assert!(prompt.contains("\n\n# Mentions"));
+}

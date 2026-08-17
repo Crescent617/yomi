@@ -29,6 +29,22 @@ pub(crate) const ATTACHMENTS_SECTION: &str = "# Attachments\nTo attach files to 
 /// never get it — no platform is there to render it.
 pub(crate) const MENTIONS_SECTION: &str = "# Mentions\nTo mention a user in your reply, write `<@USER_ID>` — the platform renders it as a real mention with notification.";
 
+/// Contract sections appended after the base prompt for non-sub-agent
+/// sessions (the caller owns that gate): attachment syntax when the
+/// feature is on, mention syntax when a platform is there to render it
+/// (channel-routed sessions). Each enabled section leads with a blank
+/// line, so the result appends to the base prompt verbatim.
+pub(crate) fn contract_sections(enable_attachments: bool, channel_routed: bool) -> String {
+    let mut sections = String::new();
+    if enable_attachments {
+        sections = format!("{sections}\n\n{ATTACHMENTS_SECTION}");
+    }
+    if channel_routed {
+        sections = format!("{sections}\n\n{MENTIONS_SECTION}");
+    }
+    sections
+}
+
 /// Memory library pointer, injected only when a memory index actually exists
 /// (project `.agents/memory/MEMORY.md` and/or global `~/.agents/memory/MEMORY.md`).
 /// The convention lives in the system prompt; the facts live in the files —
