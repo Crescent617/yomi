@@ -1515,7 +1515,25 @@ impl FeishuAdapter {
     /// v1 cards keep their real text there). With `card_msg_content_type`
     /// the API echoes the real schema 2.0 body; without it the echo degrades
     /// to the "upgrade client" notice, which must not leak into context.
+    /// The header title counts as readable text: for yomi's own status
+    /// cards it is the *only* transient signal — the live body rides
+    /// inside a collapsible panel (stripped here), so a running card
+    /// reads as e.g. "🐾 Typing…" instead of nothing.
     fn extract_card_text(content: &serde_json::Value) -> String {
+        let title = content["header"]["title"]["content"]
+            .as_str()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .unwrap_or("");
+        let with_title = |body: String| {
+            if title.is_empty() {
+                body
+            } else if body.is_empty() {
+                title.to_string()
+            } else {
+                format!("{title}\n{body}")
+            }
+        };
         let from_markdown = content["body"]["elements"]
             .as_array()
             .or_else(|| content["elements"].as_array())
@@ -1528,7 +1546,7 @@ impl FeishuAdapter {
             })
             .unwrap_or_default();
         if !from_markdown.is_empty() {
-            return rewrite_card_at_tags(&from_markdown);
+            return with_title(rewrite_card_at_tags(&from_markdown));
         }
         let from_runs = content["elements"]
             .as_array()
@@ -1550,7 +1568,7 @@ impl FeishuAdapter {
                     .join("\n")
             })
             .unwrap_or_default();
-        from_runs
+        with_title(from_runs)
     }
 
     /// Concatenate a post message's title and paragraph text runs (posts

@@ -846,35 +846,78 @@ fn extract_history_content_hides_yomi_trace_panel() {
     }
 }
 
-/// The **live mid-run** card: its streaming trace sits in a collapsible
-/// panel that starts *expanded* (so the human watches it), but a reading bot
-/// strips the panel all the same — `expanded` makes no difference to text
-/// extraction. Only the whisper survives; the stats line rides the panel's
-/// title, so it is stripped along with the trace.
+/// The **live mid-run** card: everything streaming — whisper tail, trace,
+/// stats — rides inside a collapsible panel that starts *expanded* (so the
+/// human watches it), and a reading bot strips the whole panel all the
+/// same (`expanded` makes no difference to extraction). What survives is
+/// the card **header title** — the fun phase line ("🐾 Typing…") is the
+/// one deliberate transient signal other bots get to see.
 #[test]
 fn extract_history_content_hides_midrun_trace_panel() {
-    // Mirrors render_running: top-level whisper (optional) + one expanded
-    // collapsible_panel carrying the stats line in its title and the trace
-    // in its body. No top-level stats element exists.
+    // Mirrors render_running: card header carries the phase title; the
+    // body is a single expanded collapsible_panel whose title rides the
+    // stats line and whose body leads with the whisper, then the trace.
     let item = json!({
         "msg_type": "interactive",
-        "body": { "content": r#"{"schema":"2.0","body":{"elements":[
-            {"tag":"markdown","text_size":"notation","content":"<font color='grey'>💬 查天气中</font>"},
+        "body": { "content": r#"{"schema":"2.0",
+            "header":{"title":{"tag":"plain_text","content":"🐾 Typing…"},"template":"blue"},
+            "body":{"elements":[
             {"tag":"collapsible_panel","expanded":true,
-             "header":{"title":{"tag":"markdown","content":"<font color='grey'>🐾 5s · 1 tools</font>"}},
-             "elements":[{"tag":"markdown","text_size":"notation","content":"✅ **web_fetch** · wttr.in · 1s"}]}
+             "header":{"title":{"tag":"markdown","content":"<font color='grey'>🐾 5s · k3-hs · out ~241</font>"}},
+             "elements":[{"tag":"markdown","text_size":"notation","content":"<font color='grey'>💬 写作中…</font>\n✅ **web_fetch** · wttr.in · 1s"}]}
         ]}}"# }
     });
 
     let (text, _) = super::FeishuAdapter::extract_history_content(&item);
 
-    assert_eq!(text, "<font color='grey'>💬 查天气中</font>");
-    for leaked in ["🐾 5s", "web_fetch", "wttr.in", "🐾"] {
+    assert_eq!(text, "🐾 Typing…");
+    for leaked in [
+        "💬",
+        "写作中",
+        "🐾 5s",
+        "k3-hs",
+        "out ~241",
+        "web_fetch",
+        "wttr.in",
+    ] {
         assert!(
             !text.contains(leaked),
-            "mid-run trace leaked: {leaked} in {text:?}"
+            "mid-run transient leaked: {leaked} in {text:?}"
         );
     }
+}
+
+/// The card header title is real content and is extracted as such: alone
+/// when the body strips to nothing, prepended when both exist.
+#[test]
+fn extract_card_text_includes_header_title() {
+    let card = |header: &str, body: &str| {
+        json!({
+            "msg_type": "interactive",
+            "body": { "content": format!(
+                r#"{{"schema":"2.0",{header}"body":{{"elements":[{body}]}}}}"#
+            ) }
+        })
+    };
+    let extract = |item: &serde_json::Value| super::FeishuAdapter::extract_history_content(item).0;
+
+    // Header + body → title line first.
+    let both = card(
+        r#""header":{"title":{"tag":"plain_text","content":"📦 Compacting context…"},"template":"blue"},"#,
+        r#"{"tag":"markdown","content":"正文"}"#,
+    );
+    assert_eq!(extract(&both), "📦 Compacting context…\n正文");
+
+    // Header only (body panel stripped) → title alone.
+    let title_only = card(
+        r#""header":{"title":{"tag":"plain_text","content":"🐹 Shell…"},"template":"blue"},"#,
+        r#"{"tag":"collapsible_panel","expanded":true,"elements":[{"tag":"markdown","content":"🔧 ls"}]}"#,
+    );
+    assert_eq!(extract(&title_only), "🐹 Shell…");
+
+    // No header → body unchanged.
+    let body_only = card("", r#"{"tag":"markdown","content":"正文"}"#);
+    assert_eq!(extract(&body_only), "正文");
 }
 
 #[test]
