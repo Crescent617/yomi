@@ -232,7 +232,7 @@
       <div
         class="flex h-10 shrink-0 items-center justify-between border-b border-border px-4 text-xs text-muted-foreground"
       >
-        <span class="font-medium uppercase tracking-wide">Answers</span>
+        <span class="font-normal uppercase tracking-wide text-muted-foreground">Answers</span>
         <span>{visibleItems.length}</span>
       </div>
 
@@ -246,7 +246,7 @@
             <Star class="size-5" />
           </div>
           <div>
-            <p class="text-sm font-medium">
+            <p class="text-sm font-normal">
               {query.trim() ? "No matches" : "No favorites yet"}
             </p>
             <p class="mt-1 max-w-56 text-xs text-muted-foreground">
@@ -278,7 +278,7 @@
                   class="size-3.5 shrink-0 text-warning"
                   fill="currentColor"
                 />
-                <span class="min-w-0 flex-1 truncate text-sm font-medium">
+                <span class="min-w-0 flex-1 truncate text-sm font-normal">
                   {item.note || firstLine(item)}
                 </span>
               </div>

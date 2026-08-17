@@ -163,7 +163,7 @@
       <div
         class="flex h-10 shrink-0 items-center justify-between border-b border-border px-4 text-xs text-muted-foreground"
       >
-        <span class="font-medium uppercase tracking-wide">Tasks</span>
+        <span class="font-normal uppercase tracking-wide text-muted-foreground">Tasks</span>
         <span>{automationStore.jobs.length}</span>
       </div>
 
@@ -223,7 +223,7 @@
                 ></span>
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center gap-2">
-                    <span class="min-w-0 flex-1 truncate text-sm font-medium"
+                    <span class="min-w-0 flex-1 truncate text-sm font-normal"
                       >{job.name}</span
                     >
                     <ChevronRight

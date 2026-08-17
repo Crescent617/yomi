@@ -733,7 +733,7 @@
       onscroll={closeMenus}
     >
       <div
-        class="flex items-center gap-1.5 px-2 py-1.5 text-xs font-semibold text-foreground uppercase tracking-wider"
+        class="flex items-center gap-1.5 px-2 py-1.5 text-xs font-normal text-muted-foreground uppercase tracking-wider"
       >
         <Pin size={12} />
         Pinned
@@ -753,7 +753,7 @@
                 onclick={() => activateSession(session_id)}
               >
                 <span
-                  class="flex-1 truncate text-sm font-medium"
+                  class="flex-1 truncate text-sm font-normal"
                   title={session?.alias ?? "Untitled"}
                 >
                   {session?.alias ?? "Untitled"}
@@ -984,7 +984,7 @@
                         onclick={() => activateSession(session.id)}
                       >
                         <span
-                          class="block truncate text-sm font-medium"
+                          class="block truncate text-sm font-normal"
                           title={session.alias ?? "Untitled"}
                         >
                           {session.alias ?? "Untitled"}
@@ -1297,7 +1297,7 @@
                     {:else}
                       <button
                         type="button"
-                        class="min-w-0 flex-1 truncate text-left text-sm font-medium focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        class="min-w-0 flex-1 truncate text-left text-sm font-normal focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                         title={session.alias ?? "Untitled"}
                         onclick={() => activateSession(session.id)}
                       >
