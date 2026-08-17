@@ -952,6 +952,45 @@ mod rewind_tests {
         );
     }
 
+    /// Files-only 回滚（TUI 可达）：只处理 checkpoint，对话上下文必须不动。
+    #[tokio::test]
+    async fn rewind_files_only_keeps_context() {
+        let m1 = Arc::new(Message::user("first"));
+        let target_id = m1.id.clone();
+        let mut harness = build(vec![m1]).await;
+        harness
+            .checkpoint_store
+            .create_checkpoint(&harness.session_id, target_id.as_str(), "turn one", vec![])
+            .await
+            .unwrap();
+        let before = harness.agent.message_buffer.len();
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        harness
+            .agent
+            .process_rewind(target_id.clone(), RewindTarget::Files, tx)
+            .await
+            .expect("files-only rewind should succeed");
+        rx.recv().await.expect("result sent").expect("ok result");
+
+        assert_eq!(harness.agent.message_buffer.len(), before);
+        assert!(
+            harness
+                .agent
+                .message_buffer
+                .messages()
+                .iter()
+                .any(|m| m.id == target_id),
+            "files-only rewind must not truncate the conversation"
+        );
+        let remaining = harness
+            .checkpoint_store
+            .get_session_checkpoints(&harness.session_id)
+            .await
+            .unwrap();
+        assert!(remaining.is_empty());
+    }
+
     /// 两边都没有这个 id：仍然报 not found。
     #[tokio::test]
     async fn rewind_unknown_id_still_errors() {

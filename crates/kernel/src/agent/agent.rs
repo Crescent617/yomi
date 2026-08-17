@@ -647,7 +647,7 @@ impl Agent {
             }
         }
 
-        if in_buffer {
+        if in_buffer && target.restore_conversation() {
             let truncated = self.truncate_at(&message_id);
             debug_assert!(truncated, "presence checked above");
         }
