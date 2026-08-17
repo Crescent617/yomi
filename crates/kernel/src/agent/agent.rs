@@ -1034,21 +1034,27 @@ impl Agent {
     pub async fn force_full_compact(&mut self) -> Result<String, String> {
         // Bracket the whole attempt (model resolution included) so every
         // manual compact — even one that fails up front — emits the event
-        // pair status cards materialize and settle on.
+        // pair status cards materialize and settle on. The agent state
+        // stays `Compacting` until the outcome is OUT: a standalone
+        // compact's prev state is Idle, and restoring early would let the
+        // channel watchdog sweep the live compact card as a false
+        // "session lost" timeout while result handling is still awaiting.
         let prev_state = self.begin_compaction();
         let (provider, model_config) = match self.resolve_model().await {
             Ok(resolved) => resolved,
             Err(e) => {
                 let error = format!("Model resolution failed: {e}");
-                self.end_compaction(prev_state);
+                self.emit_compaction_event(false);
                 self.emit_compacted(&Err(error.clone()));
+                self.restore_compaction_state(prev_state);
                 return Err(error);
             }
         };
         let Some(compactor) = self.shared.compactor.as_ref() else {
             let error = "No compactor configured".to_string();
-            self.end_compaction(prev_state);
+            self.emit_compaction_event(false);
             self.emit_compacted(&Err(error.clone()));
+            self.restore_compaction_state(prev_state);
             return Err(error);
         };
         let old_count = self.message_buffer.len();
@@ -1065,9 +1071,12 @@ impl Agent {
             .await
             .map(Some);
 
-        self.end_compaction(prev_state);
-        self.handle_compaction_result(result, old_count, &model_config)
-            .await
+        self.emit_compaction_event(false);
+        let outcome = self
+            .handle_compaction_result(result, old_count, &model_config)
+            .await;
+        self.restore_compaction_state(prev_state);
+        outcome
     }
 
     /// Transition into `Compacting` and emit the start event; returns the state
@@ -1081,15 +1090,23 @@ impl Agent {
         prev_state
     }
 
-    /// Restore the pre-compaction state and emit the end event.
+    /// Restore the pre-compaction state and emit the end event (auto
+    /// compaction mid-run: the restored state is non-Idle, so restoring
+    /// before result handling can't trip the channel watchdog).
     fn end_compaction(&self, prev_state: AgentState) {
+        self.restore_compaction_state(prev_state);
+        self.emit_compaction_event(false);
+    }
+
+    /// Restore the pre-compaction state without emitting — the event pair
+    /// was already completed.
+    fn restore_compaction_state(&self, prev_state: AgentState) {
         if !self.context.transition_to(prev_state) {
             tracing::warn!(
                 "Failed to transition back to {:?} from Compacting",
                 prev_state
             );
         }
-        self.emit_compaction_event(false);
     }
 
     /// Handle compaction result, persist every rewrite, and clear derived file state.

@@ -224,6 +224,18 @@ impl PlatformConfig {
         }
     }
 
+    /// Ack reaction for a `/queue`d message — "noted, queued for later".
+    /// Deliberately not the run-trigger ack: `OneSecond`/"👀" promises
+    /// imminent processing, which a queue makes no claim about. (Feishu
+    /// reaction candidates probed live: Hourglass/Bookmark/Pushpin/
+    /// InboxTray are all rejected as invalid `emoji_type`.)
+    pub(crate) fn queue_reaction(&self) -> &'static str {
+        match self {
+            Self::Feishu { .. } => "Get",
+            Self::Telegram { .. } => "👌",
+        }
+    }
+
     /// Reaction shown when an addressed message is rejected by the
     /// allowlist. A soft 🙏 ("sorry, no") rather than a harsh ✖/👎.
     pub(crate) fn access_denied_reaction(&self) -> &'static str {

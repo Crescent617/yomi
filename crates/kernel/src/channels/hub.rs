@@ -1314,7 +1314,20 @@ async fn gate_message(
         info!(channel = %config.name, chat_id = %msg.external_chat_id, "ignoring non-mention message");
         return (Gate::NotAddressed, None);
     }
-    (Gate::Allow, Some(config.platform.ack_reaction()))
+    (Gate::Allow, Some(ack_reaction_for(config, &msg)))
+}
+
+/// Pick the gate ack reaction: `/queue` messages get their own ("noted,
+/// queued") — the trigger ack would promise imminent processing.
+fn ack_reaction_for(config: &ChannelConfig, msg: &ChannelMessage) -> &'static str {
+    if matches!(
+        parse_channel_command(msg.raw_text.as_deref()),
+        ChannelCommand::Queue(_)
+    ) {
+        config.platform.queue_reaction()
+    } else {
+        config.platform.ack_reaction()
+    }
 }
 
 /// Best-effort gate reaction; needs an emoji and a message to target and

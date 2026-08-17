@@ -4554,6 +4554,36 @@ async fn gate_accepts_allowed_mention_with_ack_reaction() {
 }
 
 #[tokio::test]
+async fn gate_acks_queue_command_with_queue_reaction() {
+    // /q（与 /queue）排队消息用专属 ack："收到，排队候着"——OneSecond
+    // 承诺马上处理，队列不做这个承诺。无效 /q（无文本）没落队，仍
+    // 用普通 ack。
+    for (raw, want) in [
+        ("/q 排在后面", "Get"),
+        ("/queue 也排在后面", "Get"),
+        ("/q", "OneSecond"),
+        ("/steer 插一句", "OneSecond"),
+        ("普通消息", "OneSecond"),
+    ] {
+        let mock = Arc::new(MockAdapter::new("fs"));
+        let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+        let mut msg = channel_message(None, true, true);
+        msg.raw_text = Some(raw.to_string());
+
+        assert_eq!(
+            gate_with_reaction(&adapter, &feishu_gate_config(), &gate_store().await, &msg).await,
+            Gate::Allow
+        );
+        let reactions = mock.reactions.lock().await.clone();
+        assert_eq!(
+            reactions,
+            [("msg-1".to_string(), want.to_string())],
+            "raw: {raw}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn gate_denies_unlisted_user_with_denied_reaction() {
     let mock = Arc::new(MockAdapter::new("fs"));
     let adapter: Arc<dyn PlatformAdapter> = mock.clone();
