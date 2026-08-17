@@ -119,7 +119,7 @@
   {#if created_at}
     <time
       datetime={created_at}
-      class="ml-auto shrink-0 text-[10px] leading-4 tabular-nums text-muted-foreground/70"
+      class="ml-auto shrink-0 text-[10px] leading-4 tabular-nums text-muted-foreground"
     >
       {formatMessageTime(created_at)}
     </time>

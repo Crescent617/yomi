@@ -29,7 +29,7 @@
         {#if latest?.created_at}
           <time
             datetime={latest.created_at}
-            class="shrink-0 text-[10px] text-muted-foreground/60"
+            class="shrink-0 text-[10px] text-muted-foreground"
           >
             {formatMessageTime(latest.created_at)}
           </time>
@@ -48,7 +48,7 @@
               {#if message.created_at}
                 <time
                   datetime={message.created_at}
-                  class="w-10 shrink-0 pt-0.5 text-[10px] text-muted-foreground/60"
+                  class="w-10 shrink-0 pt-0.5 text-[10px] text-muted-foreground"
                 >
                   {formatMessageTime(message.created_at)}
                 </time>
@@ -76,7 +76,7 @@
       {#if latest.created_at}
         <time
           datetime={latest.created_at}
-          class="shrink-0 pt-0.5 text-[10px] text-muted-foreground/60"
+          class="shrink-0 pt-0.5 text-[10px] text-muted-foreground"
         >
           {formatMessageTime(latest.created_at)}
         </time>

@@ -263,7 +263,7 @@
       class="flex items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-secondary/70 {connInfo?.mode ===
       'remote'
         ? 'text-info'
-        : 'text-muted-foreground'}"
+        : 'text-foreground'}"
       aria-expanded={connOpen}
       title={connInfo
         ? connInfo.mode === "remote"
@@ -277,15 +277,13 @@
       {#if connInfo?.mode === "remote"}
         <Globe class="w-3 h-3" />
         <span class="micro-label text-info">REMOTE</span>
-        <span
-          class="max-w-32 truncate font-mono text-[10px] text-muted-foreground"
+        <span class="max-w-32 truncate font-mono text-[10px] text-foreground"
           >{remoteHostLabel(connInfo.addr)}</span
         >
       {:else if connInfo && isWsAddr(connInfo.addr)}
         <Globe class="w-3 h-3" />
         <span class="micro-label">REMOTE</span>
-        <span
-          class="max-w-32 truncate font-mono text-[10px] text-muted-foreground"
+        <span class="max-w-32 truncate font-mono text-[10px] text-foreground"
           >{remoteHostLabel(connInfo.addr)}</span
         >
       {:else}
@@ -301,7 +299,7 @@
         class="absolute bottom-full left-0 z-30 mb-1 w-80"
       >
         <div class="space-y-0.5">
-          <div class="micro-label text-muted-foreground">Current</div>
+          <div class="micro-label text-foreground">Current</div>
           <div class="flex items-center gap-1.5 text-xs">
             {#if connInfo?.mode === "remote"}
               <Globe class="h-3 w-3 shrink-0 text-info" />
@@ -316,7 +314,7 @@
           </div>
           {#if connInfo}
             <div
-              class="truncate font-mono text-[10px] text-muted-foreground"
+              class="truncate font-mono text-[10px] text-foreground"
               title={connInfo.addr}
             >
               {connInfo.addr}{#if connInfo.mode === "local" && isWsAddr(connInfo.addr)}
@@ -330,7 +328,7 @@
         <div class="space-y-1.5">
           <label
             for="remote-addr-input"
-            class="micro-label block text-muted-foreground"
+            class="micro-label block text-foreground"
           >
             Remote daemon URL
           </label>
@@ -343,7 +341,7 @@
             autocapitalize="off"
             autocorrect="off"
             spellcheck="false"
-            class="w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
+            class="w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs placeholder:text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
             onkeydown={(e: KeyboardEvent) => {
               if (e.key === "Enter" && !connBusy) void submitConnect();
             }}
@@ -396,7 +394,7 @@
         {#if streamingCount > 0}
           <span class="micro-label truncate">
             <span class="text-primary tabular-nums">{streamingCount}</span>
-            <span class="text-muted-foreground">
+            <span class="text-foreground">
               {streamingCount > 1 ? "agents" : "agent"}</span
             >
           </span>
@@ -407,14 +405,14 @@
         {#if shellCount > 0}
           <span class="micro-label truncate">
             <span class="text-primary tabular-nums">{shellCount}</span>
-            <span class="text-muted-foreground">
+            <span class="text-foreground">
               {shellCount > 1 ? "shells" : "shell"}</span
             >
           </span>
         {/if}
       </button>
     {:else}
-      <span class="micro-label text-muted-foreground">Ready</span>
+      <span class="micro-label text-foreground">Ready</span>
     {/if}
 
     {#if open}
@@ -438,7 +436,7 @@
               <span class="block truncate text-xs font-medium">
                 {sessionTitle(session)}
               </span>
-              <span class="block truncate text-[10px] text-muted-foreground">
+              <span class="block truncate text-[10px] text-foreground">
                 {session.phase.replaceAll("_", " ")}{#if project}
                   · {project}{/if}
               </span>
@@ -467,7 +465,7 @@
                 >
                   {item.shell.command}
                 </span>
-                <span class="block truncate text-[10px] text-muted-foreground">
+                <span class="block truncate text-[10px] text-foreground">
                   PID {item.shell.pid} · {elapsedLabel(
                     item.shell.started_at,
                     clock.now,
@@ -477,7 +475,7 @@
             </button>
             <button
               type="button"
-              class="inline-flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[10px] text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              class="inline-flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[10px] text-foreground transition-colors hover:bg-secondary hover:text-foreground"
               onclick={() => void copyOutputPath(item.shell.output_path)}
               title={`Copy log path: ${item.shell.output_path}`}
               aria-label={`Copy log path for ${item.shell.task_id}`}
@@ -507,7 +505,7 @@
       type="button"
       class="grid size-5 place-items-center rounded transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 {keepAwake
         ? 'text-primary'
-        : 'text-muted-foreground hover:text-foreground'}"
+        : 'text-foreground hover:text-foreground'}"
       title={keepAwake
         ? "Keep awake on — this device won't sleep while Yomi runs (the display may still turn off)"
         : "Keep awake off — click to prevent this device from sleeping"}
@@ -541,17 +539,17 @@
           >
             <div class="space-y-0.5">
               <div class="flex items-center justify-between gap-2 text-xs">
-                <span class="micro-label text-muted-foreground">Current</span>
+                <span class="micro-label text-foreground">Current</span>
                 <span class="font-mono text-[10px]">v{version}</span>
               </div>
               <div class="flex items-center justify-between gap-2 text-xs">
-                <span class="micro-label text-muted-foreground">Latest</span>
+                <span class="micro-label text-foreground">Latest</span>
                 <span class="font-mono text-[10px] text-primary">
                   v{updateVersion}
                 </span>
               </div>
               {#if updateCheckState.published_at}
-                <div class="text-[10px] text-muted-foreground">
+                <div class="text-[10px] text-foreground">
                   Published {new Date(
                     updateCheckState.published_at,
                   ).toLocaleDateString()}
@@ -585,7 +583,7 @@
     {#if version}
       <a
         href="https://github.com/Crescent617/yomi"
-        class="micro-label [font-family:var(--font-sans)] text-muted-foreground/70 hover:text-foreground flex items-center gap-0.5 transition-colors"
+        class="micro-label [font-family:var(--font-sans)] text-foreground hover:text-foreground flex items-center gap-0.5 transition-colors"
         title="Open Yomi on GitHub"
         onclick={(event) => {
           event.preventDefault();

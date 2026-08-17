@@ -66,14 +66,12 @@
         {preview}
       </span>
       <span
-        class="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70"
+        class="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground"
       >
         {tokenEstimate(content)} tokens
       </span>
       {#if elapsed_ms > 0}
-        <span
-          class="shrink-0 text-[11px] tabular-nums text-muted-foreground/70"
-        >
+        <span class="shrink-0 text-[11px] tabular-nums text-muted-foreground">
           {formatElapsed(elapsed_ms)}
         </span>
       {/if}

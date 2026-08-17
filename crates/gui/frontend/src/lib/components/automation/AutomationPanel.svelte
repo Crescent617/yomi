@@ -227,7 +227,7 @@
                       >{job.name}</span
                     >
                     <ChevronRight
-                      class="size-4 shrink-0 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5"
+                      class="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5"
                     />
                   </div>
                   <div

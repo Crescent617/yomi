@@ -166,7 +166,7 @@
             onclick={() => selectModel(model.name)}
           >
             <span class="truncate">{model.name} ({model.model_id})</span>
-            <span class="ml-auto shrink-0 text-muted-foreground/50"
+            <span class="ml-auto shrink-0 text-muted-foreground"
               >{formatTokens(model.context_window)} ctx</span
             >
           </button>

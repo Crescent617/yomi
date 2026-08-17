@@ -140,7 +140,7 @@
         </button>
       {:else}
         <div
-          class="flex items-center justify-center rounded-md border border-border/60 bg-secondary/20 text-muted-foreground/50 {imagePaths.length ===
+          class="flex items-center justify-center rounded-md border border-border/60 bg-secondary/20 text-muted-foreground {imagePaths.length ===
           1
             ? 'h-24'
             : 'aspect-[4/3]'}"
@@ -161,7 +161,7 @@
         type="button"
         disabled={downloading}
         class="inline-flex max-w-60 items-center gap-1.5 rounded-md border border-border bg-secondary/40 px-2 py-1 text-xs transition-colors {failed
-          ? 'text-muted-foreground/70 hover:bg-secondary/60'
+          ? 'text-muted-foreground hover:bg-secondary/60'
           : 'text-muted-foreground hover:bg-secondary hover:text-foreground'} disabled:opacity-70"
         title={failed
           ? `${path} (preview unavailable)`

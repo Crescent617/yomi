@@ -246,7 +246,7 @@
             bind:value={name}
             placeholder="Daily standup reminder"
             aria-invalid={attempted && Boolean(validationErrors.name)}
-            class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition-shadow placeholder:text-muted-foreground/60 focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"
+            class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition-shadow placeholder:text-muted-foreground focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"
           />
           {#if attempted && validationErrors.name}
             <p class="mt-1 text-xs text-error">{validationErrors.name}</p>
@@ -268,7 +268,7 @@
               placeholder="0 9 * * *"
               spellcheck={false}
               aria-invalid={(attempted || Boolean(schedule)) && !scheduleValid}
-              class="h-9 w-full rounded-md border border-input bg-background pl-9 pr-8 font-mono text-sm outline-none transition-shadow placeholder:text-muted-foreground/60 focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"
+              class="h-9 w-full rounded-md border border-input bg-background pl-9 pr-8 font-mono text-sm outline-none transition-shadow placeholder:text-muted-foreground focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"
             />
             {#if scheduleValid}
               <CheckCircle2
@@ -381,7 +381,7 @@
                   ? "Leave empty to create a new session"
                   : "Session ID"}
                 aria-invalid={attempted && Boolean(validationErrors.session_id)}
-                class="h-9 w-full rounded-md border border-input bg-background px-3 font-mono text-sm outline-none transition-shadow placeholder:text-muted-foreground/60 focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"
+                class="h-9 w-full rounded-md border border-input bg-background px-3 font-mono text-sm outline-none transition-shadow placeholder:text-muted-foreground focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"
               />
               {#if attempted && validationErrors.session_id}
                 <p class="mt-1 text-xs text-error">
@@ -433,7 +433,7 @@
               placeholder="Review today's tasks..."
               rows="4"
               aria-invalid={attempted && Boolean(validationErrors.content)}
-              class="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm outline-none transition-shadow placeholder:text-muted-foreground/60 focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"
+              class="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm outline-none transition-shadow placeholder:text-muted-foreground focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"
             ></textarea>
             <p
               class="mt-1 text-xs {attempted && validationErrors.content
@@ -460,7 +460,7 @@
               lang="en"
               spellcheck={false}
               aria-invalid={attempted && Boolean(validationErrors.command)}
-              class="w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-sm outline-none transition-shadow placeholder:text-muted-foreground/60 focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"
+              class="w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-sm outline-none transition-shadow placeholder:text-muted-foreground focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"
             ></textarea>
             {#if attempted && validationErrors.command}
               <p class="mt-1 text-xs text-error">{validationErrors.command}</p>
@@ -479,7 +479,7 @@
               type="text"
               bind:value={working_dir}
               placeholder="Use daemon working directory"
-              class="h-9 w-full rounded-md border border-input bg-background px-3 font-mono text-sm outline-none transition-shadow placeholder:text-muted-foreground/60 focus:ring-2 focus:ring-ring"
+              class="h-9 w-full rounded-md border border-input bg-background px-3 font-mono text-sm outline-none transition-shadow placeholder:text-muted-foreground focus:ring-2 focus:ring-ring"
             />
           </div>
         </div>
@@ -513,7 +513,7 @@
               min="1"
               step="1"
               aria-invalid={attempted && Boolean(validationErrors.max_runs)}
-              class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition-shadow placeholder:text-muted-foreground/60 focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"
+              class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition-shadow placeholder:text-muted-foreground focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"
             />
             <p
               class="mt-1 text-xs {attempted && validationErrors.max_runs

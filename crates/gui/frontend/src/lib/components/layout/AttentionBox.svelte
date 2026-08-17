@@ -227,7 +227,7 @@
                 </span>
                 <time
                   datetime={item.completedAt}
-                  class="shrink-0 text-[10px] tabular-nums text-muted-foreground/80"
+                  class="shrink-0 text-[10px] tabular-nums text-muted-foreground"
                   title={new Date(item.completedAt).toLocaleString()}
                 >
                   {relativeTime(item.completedAt, clock.now)}

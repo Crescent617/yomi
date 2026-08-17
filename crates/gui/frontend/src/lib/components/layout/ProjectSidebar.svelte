@@ -733,7 +733,7 @@
       onscroll={closeMenus}
     >
       <div
-        class="flex items-center gap-1.5 px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider"
+        class="flex items-center gap-1.5 px-2 py-1.5 text-xs font-semibold text-foreground uppercase tracking-wider"
       >
         <Pin size={12} />
         Pinned
@@ -745,7 +745,7 @@
             <div
               class="group flex w-full items-center gap-2 rounded-sm border-l-2 py-1 pl-3 pr-1 transition-colors {active
                 ? 'border-primary bg-primary/8 text-foreground'
-                : 'border-transparent text-muted-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground'}"
+                : 'border-transparent text-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground'}"
             >
               <button
                 type="button"
@@ -760,7 +760,7 @@
                 </span>
                 {#if session?.project_id}
                   <span
-                    class="max-w-[6rem] shrink-0 truncate text-[10px] text-muted-foreground"
+                    class="max-w-[6rem] shrink-0 truncate text-[10px] text-foreground"
                     >{projectName(session.project_id)}</span
                   >
                 {/if}
@@ -876,7 +876,7 @@
           class="relative z-10 flex min-w-0 items-center justify-center rounded-[4px] px-2 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring {sidebarView ===
           'sessions'
             ? 'text-foreground'
-            : 'text-muted-foreground hover:text-foreground'}"
+            : 'text-foreground hover:text-foreground'}"
           onclick={() => switchSidebarView("sessions")}
         >
           <MessageSquare size={15} />
@@ -889,7 +889,7 @@
           class="relative z-10 flex min-w-0 items-center justify-center rounded-[4px] px-2 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring {sidebarView ===
           'projects'
             ? 'text-foreground'
-            : 'text-muted-foreground hover:text-foreground'}"
+            : 'text-foreground hover:text-foreground'}"
           onclick={() => switchSidebarView("projects")}
         >
           <Folder size={15} />
@@ -909,7 +909,7 @@
         <div class="flex flex-col items-center gap-1">
           <!-- Project divider -->
           <div
-            class="w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold bg-transparent text-muted-foreground mt-1 mb-0.5"
+            class="w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold bg-transparent text-foreground mt-1 mb-0.5"
             title={project.name}
           >
             {project.name.slice(0, 2).toUpperCase()}
@@ -946,7 +946,7 @@
             {#if group.label}
               <h3
                 id={`session-group-${group.label.replaceAll(" ", "-").toLowerCase()}`}
-                class="sticky -top-1 z-10 flex items-center justify-center gap-2 bg-card/95 px-3 py-1 text-[10px] font-medium leading-none text-muted-foreground backdrop-blur-sm"
+                class="sticky -top-1 z-10 flex items-center justify-center gap-2 bg-card/95 px-3 py-1 text-[10px] font-medium leading-none text-foreground backdrop-blur-sm"
               >
                 <span class="h-px w-8 bg-border" aria-hidden="true"></span>
                 <span class="shrink-0">{group.label}</span>
@@ -959,7 +959,7 @@
                   class="group relative flex min-h-11 w-full items-center gap-2 rounded-sm border-l-2 py-1.5 pl-2 pr-0.5 transition-colors {session.id ===
                   sessionState.activeSessionId
                     ? 'border-primary bg-primary/8 text-foreground'
-                    : 'border-transparent text-muted-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground'}"
+                    : 'border-transparent text-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground'}"
                 >
                   <div class="min-w-0 flex-1">
                     {#if renamingSessionId === session.id}
@@ -990,7 +990,7 @@
                           {session.alias ?? "Untitled"}
                         </span>
                         <span
-                          class="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground"
+                          class="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] text-foreground"
                         >
                           {#if session.project_id}
                             <span class="truncate"
@@ -1118,7 +1118,7 @@
         {/each}
 
         {#if allSessionsLoading}
-          <div class="px-3 py-3 text-center text-xs text-muted-foreground">
+          <div class="px-3 py-3 text-center text-xs text-foreground">
             Loading sessions...
           </div>
         {:else if allSessionsError}
@@ -1132,12 +1132,9 @@
           </button>
         {:else if allSessionsLoaded && allSessions.length === 0}
           <div class="px-3 py-6 text-center">
-            <MessageSquare
-              size={18}
-              class="mx-auto mb-2 text-muted-foreground"
-            />
+            <MessageSquare size={18} class="mx-auto mb-2 text-foreground" />
             <p class="text-xs font-medium text-foreground">No sessions yet</p>
-            <p class="mt-0.5 text-[11px] text-muted-foreground">
+            <p class="mt-0.5 text-[11px] text-foreground">
               Start a new chat to see it here.
             </p>
           </div>
@@ -1146,7 +1143,7 @@
         {#if allSessionsCursor && !allSessionsLoading}
           <button
             type="button"
-            class="w-full rounded-sm px-3 py-2 text-center text-xs text-muted-foreground transition-colors hover:bg-secondary/40 hover:text-foreground"
+            class="w-full rounded-sm px-3 py-2 text-center text-xs text-foreground transition-colors hover:bg-secondary/40 hover:text-foreground"
             onclick={() => loadAllSessions(true)}
           >
             Load more
@@ -1173,7 +1170,7 @@
             <div
               class="flex items-center gap-1.5 w-full px-2 py-1.5 text-xs transition-colors select-none {isActive
                 ? 'text-foreground bg-secondary/35'
-                : 'text-muted-foreground hover:text-foreground hover:bg-secondary/25'}"
+                : 'text-foreground hover:text-foreground hover:bg-secondary/25'}"
             >
               <button
                 class="flex items-center gap-1.5 flex-1 min-w-0 text-left"
@@ -1186,14 +1183,14 @@
                     size={13}
                     class="shrink-0 {isActive
                       ? 'text-primary'
-                      : 'text-muted-foreground'}"
+                      : 'text-foreground'}"
                   />
                 {:else}
                   <Folder
                     size={13}
                     class="shrink-0 {isActive
                       ? 'text-primary'
-                      : 'text-muted-foreground'}"
+                      : 'text-foreground'}"
                   />
                 {/if}
                 {#if renamingProjectId === project.id}
@@ -1282,7 +1279,7 @@
                     class="group relative flex w-full items-center gap-2 rounded-sm border-l-2 py-1 pl-2 pr-0.5 transition-colors {session.id ===
                     sessionState.activeSessionId
                       ? 'border-primary bg-primary/8 text-foreground'
-                      : 'border-transparent text-muted-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground'}"
+                      : 'border-transparent text-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground'}"
                   >
                     {#if renamingSessionId === session.id}
                       <input
@@ -1310,7 +1307,7 @@
                     <div class="flex shrink-0 items-center gap-1.5">
                       {#if session.updated_at}
                         <span
-                          class="text-[10px] text-muted-foreground"
+                          class="text-[10px] text-foreground"
                           title={new Date(session.updated_at).toLocaleString()}
                         >
                           {formatTimeAgo(session.updated_at, clock.now)}
@@ -1417,12 +1414,12 @@
                   </div>
                 {/each}
                 {#if loading[project.id]}
-                  <div class="px-3 py-1.5 text-xs text-muted-foreground">
+                  <div class="px-3 py-1.5 text-xs text-foreground">
                     Loading...
                   </div>
                 {:else if getSessions(project.id).length === 0}
                   <button
-                    class="w-full text-left px-3 py-1.5 text-xs italic text-muted-foreground hover:text-foreground transition-colors"
+                    class="w-full text-left px-3 py-1.5 text-xs italic text-foreground hover:text-foreground transition-colors"
                     onclick={() => quickCreateSession(project.id)}
                     title="Create a session in this project"
                   >
@@ -1431,7 +1428,7 @@
                 {/if}
                 {#if project.id in sessionCursors}
                   <button
-                    class="w-full text-left px-3 py-1.5 text-xs italic text-muted-foreground hover:text-foreground transition-colors"
+                    class="w-full text-left px-3 py-1.5 text-xs italic text-foreground hover:text-foreground transition-colors"
                     onclick={() => loadSessions(project.id, true)}
                     disabled={Boolean(loading[project.id])}
                   >

@@ -144,7 +144,7 @@
       event.stopPropagation();
       menu = menu === "project" ? null : "project";
     }}
-    class="flex min-w-0 max-w-44 items-center gap-1 rounded-sm px-1 py-0.5 font-medium text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+    class="flex min-w-0 max-w-44 items-center gap-1 rounded-sm px-1 py-0.5 font-medium text-foreground transition-colors hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
     aria-expanded={menu === "project"}
     title="Switch project"
   >
@@ -154,9 +154,7 @@
   </button>
 
   {#each chain as item (item.id)}
-    <span class="px-0.5 text-xs text-muted-foreground/40" aria-hidden="true"
-      >/</span
-    >
+    <span class="px-0.5 text-xs text-foreground" aria-hidden="true">/</span>
     {#if item.id === session.id}
       <button
         type="button"
@@ -169,13 +167,13 @@
         title="Switch session"
       >
         <span class="truncate">{item.label}</span>
-        <ChevronDown class="size-3 shrink-0 text-muted-foreground" />
+        <ChevronDown class="size-3 shrink-0 text-foreground" />
       </button>
     {:else}
       <button
         type="button"
         onclick={() => selectSession(item.id)}
-        class="max-w-40 truncate rounded-sm px-1 py-0.5 text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+        class="max-w-40 truncate rounded-sm px-1 py-0.5 text-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
         title={`Open ${item.label}`}
       >
         {item.label}
@@ -188,7 +186,7 @@
       class="absolute left-0 top-full z-50 mt-1.5 w-64 overflow-hidden rounded-md border border-border bg-popover py-1 shadow-xl"
     >
       <div
-        class="px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+        class="px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-foreground"
       >
         Projects
       </div>
@@ -201,12 +199,12 @@
           }}
           class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-secondary/60"
         >
-          <Folder class="size-3.5 shrink-0 text-muted-foreground" />
+          <Folder class="size-3.5 shrink-0 text-foreground" />
           <span class="min-w-0 flex-1 truncate">{project.name}</span>
           {#if project.id === session.project_id}<Check
               class="size-3.5 text-primary"
             />{/if}
-          <ChevronRight class="size-3 text-muted-foreground/60" />
+          <ChevronRight class="size-3 text-foreground" />
         </button>
       {/each}
     </div>
@@ -217,7 +215,7 @@
       <div class="border-b border-border p-2">
         <div class="relative">
           <Search
-            class="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+            class="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-foreground"
           />
           <input
             bind:this={searchRef}
@@ -230,12 +228,12 @@
       <div class="max-h-72 overflow-y-auto py-1">
         {#if loading}
           <div
-            class="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground"
+            class="flex items-center justify-center gap-2 py-6 text-xs text-foreground"
           >
             <Loader2 class="size-3.5 animate-spin" />Loading sessions
           </div>
         {:else if filteredSessions.length === 0}
-          <div class="py-6 text-center text-xs text-muted-foreground">
+          <div class="py-6 text-center text-xs text-foreground">
             No sessions found
           </div>
         {:else}
@@ -248,9 +246,9 @@
               <span
                 class="min-w-0 flex-1 truncate text-xs {option.id === session.id
                   ? 'font-medium text-foreground'
-                  : 'text-muted-foreground'}">{option.title}</span
+                  : 'text-foreground'}">{option.title}</span
               >
-              <span class="shrink-0 text-[10px] text-muted-foreground/70"
+              <span class="shrink-0 text-[10px] text-foreground"
                 >{formatTimeAgo(option.updated_at)}</span
               >
               {#if option.id === session.id}<Check
@@ -290,7 +288,7 @@
                 renaming = true;
                 renameValue = session.alias ?? session.id.slice(-8);
               }}
-              class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+              class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs text-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
               ><Pencil class="size-3.5" />Rename current session</button
             >
           {/if}

@@ -128,7 +128,7 @@
         {/if}
         {#if stats.elapsedMs > 0}
           <span
-            class="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground/70"
+            class="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground"
             >{formatElapsed(stats.elapsedMs)}</span
           >
         {/if}

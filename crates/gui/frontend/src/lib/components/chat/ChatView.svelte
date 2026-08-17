@@ -1396,7 +1396,7 @@
                 disabled={submitting ||
                   !homeInput.trim() ||
                   selectedProjectId === ""}
-                class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background enabled:bg-primary enabled:text-primary-foreground enabled:hover:bg-primary/90 enabled:active:scale-95 disabled:cursor-not-allowed disabled:bg-secondary disabled:text-muted-foreground/60"
+                class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background enabled:bg-primary enabled:text-primary-foreground enabled:hover:bg-primary/90 enabled:active:scale-95 disabled:cursor-not-allowed disabled:bg-secondary disabled:text-muted-foreground"
                 aria-label="Send message"
                 title="Send message"
               >

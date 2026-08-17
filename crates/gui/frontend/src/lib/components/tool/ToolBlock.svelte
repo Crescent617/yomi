@@ -116,15 +116,13 @@
         {/if}
         {#if meta}
           <span
-            class="hidden shrink-0 text-[10px] text-muted-foreground/70 sm:inline"
+            class="hidden shrink-0 text-[10px] text-muted-foreground sm:inline"
           >
             {meta}
           </span>
         {/if}
         {#if tool.elapsed_ms && tool.elapsed_ms > 0}
-          <span
-            class="shrink-0 text-[11px] tabular-nums text-muted-foreground/70"
-          >
+          <span class="shrink-0 text-[11px] tabular-nums text-muted-foreground">
             {formatElapsed(tool.elapsed_ms)}
           </span>
         {/if}

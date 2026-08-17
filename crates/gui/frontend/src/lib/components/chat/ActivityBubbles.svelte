@@ -483,7 +483,7 @@
                       </span>
                     {:else}
                       <Circle
-                        class="mt-0.5 size-4 shrink-0 text-muted-foreground/60"
+                        class="mt-0.5 size-4 shrink-0 text-muted-foreground"
                       />
                     {/if}
                     <span

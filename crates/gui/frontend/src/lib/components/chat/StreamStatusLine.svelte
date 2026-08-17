@@ -175,7 +175,7 @@
 
 {#if visible}
   <div
-    class="relative pl-0.5 pr-1 text-[12px] font-normal text-muted-foreground/75"
+    class="relative pl-0.5 pr-1 text-[12px] font-normal text-muted-foreground"
     role="status"
     aria-live="polite"
     aria-atomic="true"
@@ -200,13 +200,13 @@
       {#if streamTokens}
         <span
           aria-hidden="true"
-          class="shrink-0 font-mono tabular-nums text-muted-foreground/60"
+          class="shrink-0 font-mono tabular-nums text-muted-foreground"
           >{streamTokens}</span
         >
       {/if}
       <span
         aria-hidden="true"
-        class="shrink-0 font-mono tabular-nums text-muted-foreground/60"
+        class="shrink-0 font-mono tabular-nums text-muted-foreground"
         >{formatTapeElapsed(elapsed)}</span
       >
     </div>

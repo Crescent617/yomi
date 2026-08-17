@@ -50,7 +50,7 @@
   <button
     type="button"
     onclick={() => copyText(key, text)}
-    class="inline-flex shrink-0 items-center rounded p-0.5 text-muted-foreground/70 transition-colors hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+    class="inline-flex shrink-0 items-center rounded p-0.5 text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
     title={copiedKey === key ? "Copied" : "Copy"}
     aria-label={copiedKey === key ? "Copied" : "Copy"}
   >
