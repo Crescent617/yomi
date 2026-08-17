@@ -872,10 +872,12 @@ fn token_footer_formats_compact() {
 }
 
 #[test]
-fn card_json_uses_compact_layout() {
+fn card_json_uses_default_width_layout() {
     let card = card_json("blue", "💭 Thinking…", "⏱ 0s");
     let v: serde_json::Value = serde_json::from_str(&card).unwrap();
-    assert_eq!(v["config"]["width_mode"], "compact");
+    // No width_mode override: the card uses the platform default width
+    // (600px, matching the reply card), not the narrow compact layout.
+    assert!(v["config"]["width_mode"].is_null());
     assert_eq!(v["header"]["padding"], "4px 12px 4px 12px");
     assert_eq!(v["body"]["padding"], "8px 12px 8px 12px");
     let elements = v["body"]["elements"].as_array().unwrap();
@@ -907,13 +909,12 @@ async fn token_usage_adds_footer() {
         )
         .await;
 
-    // Tokens merged into the ⏱ stats line (last patch — the tool start
-    // patched first).
+    // Tokens merged into the trace panel's title (last patch — the tool
+    // start patched first); the live card has no separate top stats line.
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 2);
     let last = &patches.last().unwrap().1;
-    assert!(last.contains("⏱"));
-    assert!(last.contains("ctx: 12.3k / 200.0k"));
+    assert!(last.contains("ctx: 12.3k / 200.0k"), "{last}");
 }
 
 // ── Live output estimate ────────────────────────────────────────────
@@ -1294,10 +1295,14 @@ async fn stats_line_omits_model_when_unknown() {
 
     let patches = mock.patches.lock().await;
     let body: serde_json::Value = serde_json::from_str(&patches.last().unwrap().1).unwrap();
-    let stats = body["body"]["elements"][0]["content"].as_str().unwrap();
+    // The stats line rides the trace panel's title now (no top-level stats).
+    let stats = body["body"]["elements"][0]["header"]["title"]["content"]
+        .as_str()
+        .unwrap();
     // No model, no tokens yet: the stats line carries no grey tail at all.
     assert!(stats.contains("1 tools"), "stats: {stats}");
-    assert!(!stats.contains("<font"), "no grey tail: {stats}");
+    // The only grey wrapper is the panel title's own; no nested tail font.
+    assert_eq!(stats.matches("<font").count(), 1, "stats: {stats}");
 }
 
 #[tokio::test]
@@ -1326,9 +1331,10 @@ async fn running_card_trace_caps_at_ten_entries() {
     let last = patches.last().unwrap();
     let body: serde_json::Value = serde_json::from_str(&last.1).unwrap();
     let elements = body["body"]["elements"].as_array().unwrap();
-    // Layout: stats, a divider, then the trace element.
-    assert_eq!(elements[1]["tag"], "hr");
-    let content = elements[2]["content"].as_str().unwrap();
+    // Layout (no whisper): just the live trace inside a (started-expanded)
+    // collapsible panel — reading bots strip it, the human still sees it.
+    assert_eq!(elements[0]["tag"], "collapsible_panel");
+    let content = elements[0]["elements"][0]["content"].as_str().unwrap();
     assert!(content.contains("··· and 2 earlier entries"));
     assert!(content.contains("cmd-11"), "most recent kept");
     assert!(!content.contains("cmd-1`"), "oldest dropped");
@@ -1472,12 +1478,7 @@ async fn terminal_card_freezes_without_whisper() {
         !terminal.contains("🔧"),
         "terminal drops the last-tool line"
     );
-    // The run trace survives on the frozen card as a collapsed panel.
-    assert!(
-        terminal.contains("collapsible_panel"),
-        "trace panel: {terminal}"
-    );
-    assert!(terminal.contains("Trace · 0 steps · 1 tools"), "{terminal}");
+    assert!(terminal.contains("collapsible_panel"), "{terminal}");
     assert!(terminal.contains("⏳ **bash**"), "{terminal}");
 }
 
@@ -1534,13 +1535,23 @@ async fn trace_inline_arg_summary_is_capped() {
 
     let patches = mock.patches.lock().await;
     let body: serde_json::Value = serde_json::from_str(&patches.last().unwrap().1).unwrap();
-    let content = body["body"]["elements"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|e| e["content"].as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
+    // Collect text from top-level elements and any nested collapsible panel
+    // (the live trace now lives inside one).
+    fn collect(e: &serde_json::Value, out: &mut Vec<String>) {
+        if let Some(c) = e["content"].as_str() {
+            out.push(c.to_string());
+        }
+        if let Some(inner) = e["elements"].as_array() {
+            for i in inner {
+                collect(i, out);
+            }
+        }
+    }
+    let mut parts = Vec::new();
+    for e in body["body"]["elements"].as_array().unwrap() {
+        collect(e, &mut parts);
+    }
+    let content = parts.join("\n");
     // Long args stay on one truncated inline line (ARG_SUMMARY_MAX_CHARS + ellipsis).
     let tool_line = content
         .lines()
@@ -1577,9 +1588,9 @@ async fn whisper_line_is_capped_at_100_chars() {
 
     let patches = mock.patches.lock().await;
     let body: serde_json::Value = serde_json::from_str(&patches.last().unwrap().1).unwrap();
-    // Tools present → layout is [stats, hr, trace+whisper]; the whisper
-    // tail rides the trace element.
-    let content = body["body"]["elements"][2]["content"].as_str().unwrap();
+    // Tools present → layout is [whisper, collapsible trace panel]; the
+    // whisper narration is its own top-level (always-visible) element.
+    let content = body["body"]["elements"][0]["content"].as_str().unwrap();
     let whisper_line = content
         .lines()
         .find(|l| l.contains('💬'))
@@ -2250,7 +2261,7 @@ async fn freeze_stopped_keep_trace_true_keeps_panel() {
     assert_eq!(patches.len(), 1);
     assert!(patches[0].1.contains("✅ **Done**"));
     assert!(
-        patches[0].1.contains("collapsible_panel") && patches[0].1.contains("Trace ·"),
+        patches[0].1.contains("collapsible_panel") && patches[0].1.contains("🐾"),
         "no reply to carry the trace — the card keeps it: {patches:?}"
     );
 }

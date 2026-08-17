@@ -4,16 +4,12 @@
 #[allow(clippy::duration_suboptimal_units)]
 pub(crate) const MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(300);
 
-/// Rewrite the platform-neutral `<@USER_ID>` mention contract (see the
-/// agent prompt's Mentions section) into native syntax via `render`.
-/// Fenced code blocks and inline code spans are left untouched so the
-/// agent can show the syntax literally. The id pattern is bounded
-/// (`{1,64}`) — feishu open_ids run ~36 chars, telegram ids are numeric —
-/// so a runaway `<@...>` never matches.
-pub(crate) fn rewrite_mentions(text: &str, render: &dyn Fn(&str) -> String) -> String {
+/// Map each text segment outside fenced code blocks and inline code spans
+/// through `f`, leaving code untouched so an example stays literal. An
+/// unbalanced backtick only affects its own line — the `in_code` state
+/// resets per line so a stray backtick never suppresses later lines.
+pub(crate) fn map_outside_code_spans(text: &str, f: &mut dyn FnMut(&str, &mut String)) -> String {
     crate::utils::markdown::map_outside_fences(text, |run, out| {
-        // Split inline code spans on backticks, per line: an unbalanced
-        // backtick must not suppress mentions in later lines.
         for line in run.split_inclusive('\n') {
             let mut in_code = false;
             for (i, segment) in line.split('`').enumerate() {
@@ -24,10 +20,22 @@ pub(crate) fn rewrite_mentions(text: &str, render: &dyn Fn(&str) -> String) -> S
                 if in_code {
                     out.push_str(segment);
                 } else {
-                    rewrite_mention_segment(segment, render, out);
+                    f(segment, out);
                 }
             }
         }
+    })
+}
+
+/// Rewrite the platform-neutral `<@USER_ID>` mention contract (see the
+/// agent prompt's Mentions section) into native syntax via `render`.
+/// Fenced code blocks and inline code spans are left untouched so the
+/// agent can show the syntax literally. The id pattern is bounded
+/// (`{1,64}`) — feishu open_ids run ~36 chars, telegram ids are numeric —
+/// so a runaway `<@...>` never matches.
+pub(crate) fn rewrite_mentions(text: &str, render: &dyn Fn(&str) -> String) -> String {
+    map_outside_code_spans(text, &mut |segment, out| {
+        rewrite_mention_segment(segment, render, out);
     })
 }
 

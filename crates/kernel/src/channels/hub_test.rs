@@ -610,7 +610,7 @@ async fn flush_reply_plain_platform_appends_trace_lines() {
         panic!("expected text block");
     };
     assert!(text.starts_with("final answer"));
-    assert!(text.contains("Trace · 2 steps · 1 tools"));
+    assert!(text.contains("🐾 0s · 2 steps · 1 tools"));
     assert!(text.contains("cargo test"));
 }
 
@@ -2642,7 +2642,7 @@ async fn deliver_reply_freezes_card_and_flushes_new_message_on_mid_run_posts() {
     assert_eq!(cards.len(), 2, "materialize + reply card");
     assert!(cards[1].1.contains("final answer"));
     assert!(
-        cards[1].1.contains("collapsible_panel") && cards[1].1.contains("Trace ·"),
+        cards[1].1.contains("collapsible_panel") && cards[1].1.contains("🐾"),
         "reply card carries the trace panel"
     );
     assert!(mock.outgoing.lock().await.is_empty(), "no bare-text flush");
@@ -2685,7 +2685,7 @@ async fn deliver_reply_mid_run_without_text_keeps_trace_on_frozen_card() {
     assert_eq!(patches.len(), 1);
     assert!(patches[0].1.contains("✅ **Done**"), "frozen terminal card");
     assert!(
-        patches[0].1.contains("collapsible_panel") && patches[0].1.contains("Trace ·"),
+        patches[0].1.contains("collapsible_panel") && patches[0].1.contains("🐾"),
         "no reply to carry the trace — the card keeps it"
     );
     let cards = mock.cards.lock().await;
@@ -2808,7 +2808,7 @@ async fn deliver_reply_mid_run_trace_disabled_keeps_panel_on_card() {
     let outgoing = mock.outgoing.lock().await;
     assert_eq!(outgoing.len(), 1, "bare-text flush");
     assert!(outgoing[0].contains("final answer"));
-    assert!(!outgoing[0].contains("Trace ·"));
+    assert!(!outgoing[0].contains("🐾"));
 }
 
 #[tokio::test]
@@ -2884,7 +2884,7 @@ async fn deliver_reply_mid_run_flush_failure_keeps_trace_on_card() {
     assert_eq!(patches.len(), 1, "frozen in place");
     assert!(patches[0].1.contains("✅ **Done**"));
     assert!(
-        patches[0].1.contains("collapsible_panel") && patches[0].1.contains("Trace ·"),
+        patches[0].1.contains("collapsible_panel") && patches[0].1.contains("🐾"),
         "flush failed — trace stays on the card: {patches:?}"
     );
     let cards = mock.cards.lock().await;
@@ -2921,7 +2921,7 @@ async fn deliver_reply_plain_platform_flushes_without_morph() {
         panic!("expected text block");
     };
     assert!(text.contains("final answer"));
-    assert!(text.contains("Trace · 2 steps · 1 tools"));
+    assert!(text.contains("🐾 0s · 2 steps · 1 tools"));
 }
 
 #[tokio::test]

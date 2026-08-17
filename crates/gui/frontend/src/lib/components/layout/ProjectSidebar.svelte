@@ -745,7 +745,7 @@
             <div
               class="group flex w-full items-center gap-2 rounded-sm border-l-2 py-1 pl-3 pr-1 transition-colors {active
                 ? 'border-primary bg-primary/8 text-foreground'
-                : 'border-transparent text-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground'}"
+                : 'border-transparent text-muted-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground'}"
             >
               <button
                 type="button"
@@ -909,7 +909,7 @@
         <div class="flex flex-col items-center gap-1">
           <!-- Project divider -->
           <div
-            class="w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold bg-transparent text-foreground mt-1 mb-0.5"
+            class="w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold bg-transparent text-muted-foreground mt-1 mb-0.5"
             title={project.name}
           >
             {project.name.slice(0, 2).toUpperCase()}
@@ -919,7 +919,7 @@
               class="relative w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold transition-colors {session.id ===
               sessionState.activeSessionId
                 ? 'bg-primary text-primary-foreground'
-                : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'}"
+                : 'bg-secondary text-muted-foreground hover:bg-secondary/80'}"
               onclick={() => activateSession(session.id)}
               title={session.alias ?? "Untitled"}
             >
@@ -959,7 +959,7 @@
                   class="group relative flex min-h-11 w-full items-center gap-2 rounded-sm border-l-2 py-1.5 pl-2 pr-0.5 transition-colors {session.id ===
                   sessionState.activeSessionId
                     ? 'border-primary bg-primary/8 text-foreground'
-                    : 'border-transparent text-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground'}"
+                    : 'border-transparent text-muted-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground'}"
                 >
                   <div class="min-w-0 flex-1">
                     {#if renamingSessionId === session.id}
@@ -1170,7 +1170,7 @@
             <div
               class="flex items-center gap-1.5 w-full px-2 py-1.5 text-xs transition-colors select-none {isActive
                 ? 'text-foreground bg-secondary/35'
-                : 'text-foreground hover:text-foreground hover:bg-secondary/25'}"
+                : 'text-muted-foreground hover:text-foreground hover:bg-secondary/25'}"
             >
               <button
                 class="flex items-center gap-1.5 flex-1 min-w-0 text-left"
@@ -1181,16 +1181,12 @@
                 {#if expanded[project.id]}
                   <FolderOpen
                     size={13}
-                    class="shrink-0 {isActive
-                      ? 'text-primary'
-                      : 'text-foreground'}"
+                    class="shrink-0 {isActive ? 'text-primary' : ''}"
                   />
                 {:else}
                   <Folder
                     size={13}
-                    class="shrink-0 {isActive
-                      ? 'text-primary'
-                      : 'text-foreground'}"
+                    class="shrink-0 {isActive ? 'text-primary' : ''}"
                   />
                 {/if}
                 {#if renamingProjectId === project.id}
@@ -1279,7 +1275,7 @@
                     class="group relative flex w-full items-center gap-2 rounded-sm border-l-2 py-1 pl-2 pr-0.5 transition-colors {session.id ===
                     sessionState.activeSessionId
                       ? 'border-primary bg-primary/8 text-foreground'
-                      : 'border-transparent text-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground'}"
+                      : 'border-transparent text-muted-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground'}"
                   >
                     {#if renamingSessionId === session.id}
                       <input

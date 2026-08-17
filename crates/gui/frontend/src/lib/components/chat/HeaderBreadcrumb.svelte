@@ -144,7 +144,7 @@
       event.stopPropagation();
       menu = menu === "project" ? null : "project";
     }}
-    class="flex min-w-0 max-w-44 items-center gap-1 rounded-sm px-1 py-0.5 font-medium text-foreground transition-colors hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+    class="flex min-w-0 max-w-44 items-center gap-1 rounded-sm px-1 py-0.5 font-normal text-foreground transition-colors hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
     aria-expanded={menu === "project"}
     title="Switch project"
   >

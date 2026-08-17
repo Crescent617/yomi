@@ -191,6 +191,15 @@ fn response_for(method: &str, path: &str) -> Vec<u8> {
                  "sender":{"id":"ou_q","sender_type":"user"},"body":{"content":"{}"}}
             ]}}"#
             .into(),
+            // With `card_msg_content_type=user_card_content` the get-message
+            // API echoes the real schema 2.0 body (top-level markdown only;
+            // the collapsed panel stays folded) for any sender.
+            "/open-apis/im/v1/messages/om_card" => r#"{"code":0,"msg":"ok","data":{"items":[
+                {"message_id":"om_card","create_time":"1700000000000","msg_type":"interactive","deleted":false,
+                 "sender":{"id":"ou_user","sender_type":"user"},
+                 "body":{"content":"{\"schema\":\"2.0\",\"body\":{\"elements\":[{\"tag\":\"markdown\",\"content\":\"卡片里的问题：怎么配 daemon？\"},{\"tag\":\"collapsible_panel\",\"elements\":[{\"tag\":\"markdown\",\"content\":\"折叠的轨迹\"}]}]}}"}}
+            ]}}"#
+            .into(),
             _ => r#"{"code":0,"msg":"ok","data":{"items":[]}}"#.into(),
         };
     }
@@ -238,6 +247,9 @@ fn response_for(method: &str, path: &str) -> Vec<u8> {
             r#"{"code":0,"msg":"ok","data":{"items":[
                 {"message_id":"m3","create_time":"1700000060000","msg_type":"text","deleted":false,
                  "sender":{"id":"ou_a","sender_type":"user"},"body":{"content":"{\"text\":\"最新\"}"}},
+                {"message_id":"m2c","create_time":"1700000055000","msg_type":"interactive","deleted":false,
+                 "sender":{"id":"ou_c","sender_type":"user"},
+                 "body":{"content":"{\"schema\":\"2.0\",\"body\":{\"elements\":[{\"tag\":\"markdown\",\"content\":\"卡片正文\"},{\"tag\":\"collapsible_panel\",\"expanded\":false,\"header\":{\"title\":{\"tag\":\"markdown\",\"content\":\"折叠\"}},\"elements\":[{\"tag\":\"markdown\",\"content\":\"折叠噪音\"}]}]}}"}},
                 {"message_id":"m2","create_time":"1700000050000","msg_type":"post","deleted":false,
                  "sender":{"id":"ou_b","sender_type":"user"},
                  "body":{"content":"{\"zh_cn\":{\"content\":[[{\"tag\":\"text\",\"text\":\"第一段 \"},{\"tag\":\"text\",\"text\":\"第二段\"}],[{\"tag\":\"img\",\"image_key\":\"img_p1\"}]]}}"}},
@@ -403,16 +415,24 @@ async fn fetch_history_queries_filters_and_orders() {
 
     // m0 dropped (older than cursor), m1 dropped (our own app — sender id
     // == app_id); other apps and users kept; result is chronological.
-    assert_eq!(out.len(), 3);
+    assert_eq!(out.len(), 4);
     assert_eq!(out[0].message_id, "m2b");
     assert_eq!(out[0].text, "CI 构建成功");
     assert_eq!(out[1].message_id, "m2");
     assert_eq!(out[1].text, "第一段 第二段");
     assert_eq!(out[1].image_keys, vec!["img_p1".to_string()]);
     assert_eq!(out[1].create_time, 1_700_000_050_000);
-    assert_eq!(out[2].message_id, "m3");
-    assert_eq!(out[2].text, "最新");
-    assert!(out[2].image_keys.is_empty());
+    // Card history keeps its top-level markdown; the collapsed panel is
+    // excluded from context.
+    assert_eq!(out[2].message_id, "m2c");
+    assert_eq!(out[2].text, "卡片正文");
+    assert!(
+        !out[2].text.contains("折叠噪音"),
+        "collapsed panel excluded"
+    );
+    assert_eq!(out[3].message_id, "m3");
+    assert_eq!(out[3].text, "最新");
+    assert!(out[3].image_keys.is_empty());
 }
 
 #[tokio::test]
@@ -434,6 +454,10 @@ async fn fetch_history_without_cursor_uses_chat_container() {
     assert!(path.contains("container_id=oc_1"), "path: {path}");
     assert!(path.contains("page_size=5"), "path: {path}");
     assert!(!path.contains("start_time"), "no cursor: {path}");
+    assert!(
+        path.contains("card_msg_content_type=user_card_content"),
+        "card bodies echoed: {path}"
+    );
 }
 
 #[tokio::test]
@@ -749,6 +773,110 @@ fn extract_history_content_reads_card_markdown() {
     assert_eq!(text, "真实内容");
 }
 
+/// Card `<at id=...>` mention tags are rewritten to the neutral `<@id>name`
+/// contract on extraction — quoted or bare ids, with or without a surviving
+/// display name; fenced/inline code is left literal.
+#[test]
+fn extract_card_text_rewrites_at_tags() {
+    let card = |content: &str| {
+        json!({
+            "msg_type": "interactive",
+            "body": { "content": serde_json::to_string(&json!({
+                "schema": "2.0",
+                "body": { "elements": [{ "tag": "markdown", "content": content }] }
+            })).unwrap() }
+        })
+    };
+    let extract = |content: &str| super::FeishuAdapter::extract_history_content(&card(content)).0;
+
+    let cases = [
+        // bare id, empty name (the get-message echo drops the name)
+        ("<at id=ou_bot></at> 看一下", "<@ou_bot> 看一下"),
+        // quoted id
+        (r#"<at id="ou_bot"></at> 看一下"#, "<@ou_bot> 看一下"),
+        // name survives
+        ("<at id=ou_a>小明</at> 好", "<@ou_a>小明 好"),
+        (r#"<at id="ou_a">小明</at> 好"#, "<@ou_a>小明 好"),
+        // multiple mentions
+        (
+            "<at id=ou_a></at> 和 <at id=ou_b></at>",
+            "<@ou_a> 和 <@ou_b>",
+        ),
+        // not a mention tag (no id) — untouched
+        ("<at> xxx", "<at> xxx"),
+    ];
+    for (input, want) in cases {
+        assert_eq!(extract(input), want, "input: {input}");
+    }
+
+    // Inline code and fenced blocks stay literal.
+    assert_eq!(
+        extract(
+            "语法是 `<at id=ou_a></at>`，但 <at id=ou_b></at> 是真的\n```\n<at id=ou_c></at>\n```"
+        ),
+        "语法是 `<at id=ou_a></at>`，但 <@ou_b> 是真的\n```\n<at id=ou_c></at>\n```"
+    );
+}
+
+/// Another yomi bot's terminal card: the run trace lives in a
+/// `collapsible_panel`, so a reading yomi bot must see the answer body but
+/// never the trace. This is the cross-bot privacy contract — traces stay
+/// invisible between yomi instances on every read path (all funnel into
+/// `extract_card_text`).
+#[test]
+fn extract_history_content_hides_yomi_trace_panel() {
+    let item = json!({
+        "msg_type": "interactive",
+        "body": { "content": r#"{"schema":"2.0","body":{"elements":[
+            {"tag":"markdown","content":"✅ **Done** — ⏱ 6s · 1 steps"},
+            {"tag":"collapsible_panel","expanded":false,
+             "header":{"title":{"tag":"markdown","content":"<font color='grey'>🐾 Trace · 1 steps · 1 tools</font>"}},
+             "elements":[{"tag":"markdown","text_size":"notation","content":"🔧 shell: cargo test\n✅ done"}]}
+        ]}}"# }
+    });
+
+    let (text, _) = super::FeishuAdapter::extract_history_content(&item);
+
+    assert_eq!(text, "✅ **Done** — ⏱ 6s · 1 steps");
+    for leaked in ["Trace", "shell", "cargo test", "🐾"] {
+        assert!(
+            !text.contains(leaked),
+            "trace leaked into context: {leaked} in {text:?}"
+        );
+    }
+}
+
+/// The **live mid-run** card: its streaming trace sits in a collapsible
+/// panel that starts *expanded* (so the human watches it), but a reading bot
+/// strips the panel all the same — `expanded` makes no difference to text
+/// extraction. Only the whisper survives; the stats line rides the panel's
+/// title, so it is stripped along with the trace.
+#[test]
+fn extract_history_content_hides_midrun_trace_panel() {
+    // Mirrors render_running: top-level whisper (optional) + one expanded
+    // collapsible_panel carrying the stats line in its title and the trace
+    // in its body. No top-level stats element exists.
+    let item = json!({
+        "msg_type": "interactive",
+        "body": { "content": r#"{"schema":"2.0","body":{"elements":[
+            {"tag":"markdown","text_size":"notation","content":"<font color='grey'>💬 查天气中</font>"},
+            {"tag":"collapsible_panel","expanded":true,
+             "header":{"title":{"tag":"markdown","content":"<font color='grey'>🐾 5s · 1 tools</font>"}},
+             "elements":[{"tag":"markdown","text_size":"notation","content":"✅ **web_fetch** · wttr.in · 1s"}]}
+        ]}}"# }
+    });
+
+    let (text, _) = super::FeishuAdapter::extract_history_content(&item);
+
+    assert_eq!(text, "<font color='grey'>💬 查天气中</font>");
+    for leaked in ["🐾 5s", "web_fetch", "wttr.in", "🐾"] {
+        assert!(
+            !text.contains(leaked),
+            "mid-run trace leaked: {leaked} in {text:?}"
+        );
+    }
+}
+
 #[test]
 fn extract_post_text_empty_for_unknown_locale() {
     let content = json!({ "ko_kr": { "content": [[{ "tag": "text", "text": "x" }]] } });
@@ -836,6 +964,101 @@ async fn non_text_event_without_text_is_ignored() {
 
     assert_eq!(msg_id, None);
     assert!(rx.try_recv().is_err(), "nothing forwarded");
+}
+
+/// An `im.message.receive_v1` event for an interactive (card) message.
+/// `chat_type` + `mentions` drive the mention gate; the body itself is only
+/// the legacy placeholder — the real text is fetched from `om_card`.
+fn card_event(chat_type: &str, mentions: serde_json::Value) -> serde_json::Value {
+    json!({
+        "header": { "event_type": "im.message.receive_v1" },
+        "event": {
+            "sender": { "sender_id": { "open_id": "ou_user" } },
+            "message": {
+                "message_id": "om_card",
+                "chat_id": "oc_chat",
+                "chat_type": chat_type,
+                "message_type": "interactive",
+                "create_time": "1700000000000",
+                "mentions": mentions,
+                "content": "{\"title\":null,\"elements\":[[{\"tag\":\"text\",\"text\":\"请升级至最新版本客户端，以查看内容\"}]]}",
+            }
+        }
+    })
+}
+
+#[tokio::test]
+async fn p2p_card_event_fetches_body_and_forwards() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+
+    let msg_id = adapter
+        .parse_event_json(&card_event("p2p", json!([])), &tx)
+        .await
+        .unwrap();
+
+    assert_eq!(msg_id.as_deref(), Some("om_card"));
+    let msg = expect_message(rx.try_recv().expect("card message forwarded"));
+    // Real body fetched, collapsed panel excluded.
+    let text = match &msg.content[0] {
+        crate::types::ContentBlock::Text { text } => text.clone(),
+        other => panic!("expected text block, got {other:?}"),
+    };
+    assert!(
+        text.contains("卡片里的问题：怎么配 daemon？"),
+        "text: {text}"
+    );
+    assert!(
+        !text.contains("折叠的轨迹"),
+        "collapsed must be excluded: {text}"
+    );
+    assert!(msg.is_mention, "p2p is always a mention");
+}
+
+#[tokio::test]
+async fn group_card_with_bot_mention_forwards() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    *adapter.bot_open_id.lock().await = Some("ou_bot".to_string());
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let mentions = json!([{ "key": "@_user_1", "id": { "open_id": "ou_bot" } }]);
+
+    let msg_id = adapter
+        .parse_event_json(&card_event("group", mentions), &tx)
+        .await
+        .unwrap();
+
+    assert_eq!(msg_id.as_deref(), Some("om_card"));
+    let msg = expect_message(rx.try_recv().expect("mentioned card forwarded"));
+    assert!(msg.is_mention);
+}
+
+#[tokio::test]
+async fn group_card_without_bot_mention_is_ignored() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    *adapter.bot_open_id.lock().await = Some("ou_bot".to_string());
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    // A mention of someone else — not the bot.
+    let mentions = json!([{ "key": "@_user_1", "id": { "open_id": "ou_other" } }]);
+
+    let msg_id = adapter
+        .parse_event_json(&card_event("group", mentions), &tx)
+        .await
+        .unwrap();
+
+    assert_eq!(msg_id, None);
+    assert!(rx.try_recv().is_err(), "un-mentioned group card ignored");
+    // The mention gate runs before the fetch: no get-message request made.
+    assert!(
+        stub.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(_, p, _)| !p.contains("/messages/om_card")),
+        "no fetch for un-mentioned card"
+    );
 }
 
 // ── Receive path: images ───────────────────────────────────────────

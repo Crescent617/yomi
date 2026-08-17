@@ -141,7 +141,7 @@ fn tool_call_only_turns_count_as_steps() {
 
     let reply = buf.into_reply();
     let out = render_plain(&reply);
-    assert!(out.contains("Trace · 2 steps · 1 tools"), "out: {out}");
+    assert!(out.contains("🐾 0s · 2 steps · 1 tools"), "out: {out}");
 }
 
 #[test]
@@ -154,7 +154,7 @@ fn full_trace_render_keeps_every_entry_and_empty_is_none() {
     };
     // Unlike into_reply, the final text stays a narration — the terminal
     // receipt card shows the whole run, the reply text lands separately.
-    assert!(title.starts_with("🐾 Trace · 2 steps · 2 tools"), "{title}");
+    assert!(title.starts_with("🐾 0s · 2 steps · 2 tools"), "{title}");
     let joined = lines.join("\n");
     assert!(joined.contains("💬 Let me look at the code."), "{joined}");
     assert!(joined.contains("✅ **read**"), "{joined}");
@@ -208,7 +208,7 @@ fn render_card_structure() {
     assert_eq!(panel["expanded"], false);
     let title = panel["header"]["title"]["content"].as_str().unwrap();
     assert!(
-        title.contains("Trace · 2 steps · 2 tools"),
+        title.contains("🐾 0s · 2 steps · 2 tools"),
         "title: {title}"
     );
 
@@ -216,6 +216,18 @@ fn render_card_structure() {
     assert!(body.contains("💬 Let me look at the code."));
     assert!(body.contains("✅ **read** · `crates/kernel/src/hub.rs` · 120ms"));
     assert!(body.contains("✅ **shell** · `cargo test -p kernel` · 1m05s"));
+}
+
+#[test]
+fn trace_panel_element_expanded_starts_open() {
+    // The live mid-run card keeps the trace visible to the human (expanded),
+    // while reading bots strip the panel regardless of `expanded`.
+    let panel = super::trace_panel_element_expanded(&["l1".to_string()], "t");
+    assert_eq!(panel["tag"], "collapsible_panel");
+    assert_eq!(panel["expanded"], true);
+    // The collapsed variant used on terminal/reply cards stays collapsed.
+    let panel = super::trace_panel_element(&["l1".to_string()], "t");
+    assert_eq!(panel["expanded"], false);
 }
 
 #[test]
@@ -285,7 +297,7 @@ fn render_plain_appends_trace_without_markup() {
     let reply = buffer_with_run().into_reply();
     let out = render_plain(&reply);
     assert!(out.starts_with("All tests pass."));
-    assert!(out.contains("🐾 Trace · 2 steps · 2 tools"));
+    assert!(out.contains("🐾 0s · 2 steps · 2 tools"));
     assert!(out.contains("💬 Let me look at the code."));
     assert!(out.contains("✅ shell · cargo test -p kernel · 1m05s"));
     assert!(!out.contains("<font"), "no Feishu markup in plain fallback");
@@ -342,7 +354,7 @@ fn render_plain_without_text_shows_trace_only() {
     let reply = buf.into_reply();
     let out = render_plain(&reply);
     assert!(!out.is_empty());
-    assert!(out.starts_with("🐾 Trace"));
+    assert!(out.starts_with("🐾 "));
     assert!(out.contains("✅ read · /tmp/a.rs · 5ms"));
 }
 

@@ -506,11 +506,12 @@ impl FeishuAdapter {
         Ok(id)
     }
 
-    /// Cache a sent card's markdown body by message id, so `fetch_message`
-    /// can return real text for our own cards: the get-message API only
-    /// echoes a legacy-rendered fallback for schema 2.0 cards ("请升级至
-    /// 最新版本客户端" notice), never the card JSON we sent. Writes through
-    /// to the persistent KV cache (best-effort) so restarts keep the text.
+    /// Cache a sent card's markdown body by message id. `fetch_message` asks
+    /// the API for the real card body (`card_msg_content_type`), so this cache
+    /// is only a backstop for when that echo still degrades to the legacy
+    /// "请升级至最新版本客户端" placeholder (very old cards, edge cases).
+    /// Writes through to the persistent KV cache (best-effort) so restarts
+    /// keep the text.
     async fn cache_card_text(&self, msg_id: Option<&str>, content: &str) {
         let Some(msg_id) = msg_id else { return };
         let Ok(card) = serde_json::from_str::<serde_json::Value>(content) else {
@@ -1042,6 +1043,9 @@ impl PlatformAdapter for FeishuAdapter {
             ("container_id", id.clone()),
             ("sort_type", "ByCreateTimeDesc".to_string()),
             ("page_size", limit.clamp(1, 50).to_string()),
+            // Echo real card bodies (not the legacy placeholder) so card
+            // history keeps its markdown; collapsed panels stay excluded.
+            ("card_msg_content_type", "user_card_content".to_string()),
         ];
         if let Some(ts) = since_ts {
             // start_time is a unix timestamp in seconds; the cursor keeps
@@ -1149,12 +1153,16 @@ impl PlatformAdapter for FeishuAdapter {
         message_id: &str,
     ) -> Result<Option<super::HistoryMessage>, ChannelError> {
         let token = self.get_token().await?;
+        // `card_msg_content_type=user_card_content` (undocumented but stable,
+        // verified) makes interactive cards echo their real schema 2.0 body
+        // instead of the legacy "请升级至最新版本客户端" placeholder — for any
+        // sender, not just our own cards.
         let resp = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             self.api_get(
                 &token,
                 &format!("{}/open-apis/im/v1/messages/{message_id}", self.base_url),
-                &[],
+                &[("card_msg_content_type", "user_card_content".to_string())],
             ),
         )
         .await
@@ -1166,10 +1174,12 @@ impl PlatformAdapter for FeishuAdapter {
             return Ok(None);
         }
         // No sender filter here — quoting the bot's own answer is a
-        // primary use case. For our own cards the API only echoes a legacy
-        // placeholder, so the text we actually sent wins when cached.
+        // primary use case. With `card_msg_content_type` the API echoes the
+        // real card body for any sender, so it wins; our sent-text cache only
+        // backfills when the API still degraded to the `[interactive]`
+        // placeholder (very old cards, edge cases).
         let (text, image_keys) = Self::extract_history_content(item);
-        let text = if item["msg_type"].as_str() == Some("interactive") {
+        let text = if item["msg_type"].as_str() == Some("interactive") && text == "[interactive]" {
             self.sent_card_text(message_id).await.unwrap_or(text)
         } else {
             text
@@ -1502,7 +1512,8 @@ impl FeishuAdapter {
     /// Two shapes: the sent card JSON (markdown elements — schema 2.0
     /// `body.elements` or legacy v1 top-level `elements`), and the
     /// get-message API echo (legacy-rendered paragraphs of text runs —
-    /// v1 cards keep their real text there). Schema 2.0 echoes degrade
+    /// v1 cards keep their real text there). With `card_msg_content_type`
+    /// the API echoes the real schema 2.0 body; without it the echo degrades
     /// to the "upgrade client" notice, which must not leak into context.
     fn extract_card_text(content: &serde_json::Value) -> String {
         let from_markdown = content["body"]["elements"]
@@ -1517,7 +1528,7 @@ impl FeishuAdapter {
             })
             .unwrap_or_default();
         if !from_markdown.is_empty() {
-            return from_markdown;
+            return rewrite_card_at_tags(&from_markdown);
         }
         let from_runs = content["elements"]
             .as_array()
@@ -1826,6 +1837,11 @@ impl FeishuAdapter {
         // in per-locale paragraphs; images ride along as `img` runs there
         // or as the whole body of an `image` message.
         let msg_type = message["message_type"].as_str().unwrap_or("");
+        // Interactive (card) messages: the event content is only a legacy
+        // placeholder, never the real card body — the text is fetched later
+        // via `fetch_message` (with `card_msg_content_type`), but only after
+        // the mention gate so group cards that don't @ the bot stay ignored.
+        let is_card = msg_type == "interactive";
         let (text, image_keys) = match msg_type {
             "text" => (
                 content_json["text"].as_str().unwrap_or("").to_string(),
@@ -1844,7 +1860,9 @@ impl FeishuAdapter {
             ),
             _ => (String::new(), Vec::new()),
         };
-        if text.is_empty() && image_keys.is_empty() {
+        // Cards defer their content to the mention gate below, so they are
+        // exempt from the empty-content drop here.
+        if !is_card && text.is_empty() && image_keys.is_empty() {
             debug!(chat_id, msg_type, "ignoring message without usable content");
             return Ok(None);
         }
@@ -1868,6 +1886,23 @@ impl FeishuAdapter {
             })
         } else {
             false
+        };
+
+        // Card messages follow mention semantics: p2p always, group only when
+        // the bot is @'d. Fetch the real body (best-effort); on failure fall
+        // back to the `[interactive]` placeholder but still trigger — never
+        // silently swallow like before.
+        let text = if is_card {
+            if !is_mention {
+                debug!(chat_id, msg_id, "ignoring group card without bot mention");
+                return Ok(None);
+            }
+            match self.fetch_message(&msg_id).await {
+                Ok(Some(h)) if !h.text.is_empty() => h.text,
+                _ => "[interactive]".to_string(),
+            }
+        } else {
+            text
         };
 
         let thread_part = thread_id
@@ -2178,6 +2213,42 @@ fn strip_bot_mention(
         .fold(text.to_string(), |text, key| text.replace(key, ""))
         .trim()
         .to_string()
+}
+
+/// Rewrite a card's native `<at id=ou_x>name</at>` mention tags into the
+/// platform-neutral `<@ou_x>name` contract (see the agent prompt's Mentions
+/// section). The get-message API normalizes the tag to `id=` and drops the
+/// display name, so `<at id=ou_x></at>` degrades to bare `<@ou_x>`. Fenced
+/// code blocks and inline code spans are left untouched (shared walker) so
+/// an example shown literally stays literal. The id attribute tolerates
+/// optional quotes.
+fn rewrite_card_at_tags(text: &str) -> String {
+    super::utils::map_outside_code_spans(text, &mut |segment, out| {
+        rewrite_at_tag_segment(segment, out);
+    })
+}
+
+fn rewrite_at_tag_segment(segment: &str, out: &mut String) {
+    use std::fmt::Write as _;
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    // `<at id=ou_x>name</at>` or `<at id="ou_x">name</at>` — id bounded like
+    // the neutral contract (`{1,64}`); the name is any non-`<` text.
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(
+            r#"<at\s+id=(?:"([A-Za-z0-9_\-]{1,64})"|([A-Za-z0-9_\-]{1,64}))>([^<]*)</at>"#,
+        )
+        .unwrap()
+    });
+    let mut last = 0;
+    for cap in re.captures_iter(segment) {
+        let m = cap.get(0).unwrap();
+        out.push_str(&segment[last..m.start()]);
+        let id = cap.get(1).or_else(|| cap.get(2)).map_or("", |g| g.as_str());
+        let name = cap.get(3).map_or("", |g| g.as_str());
+        let _ = write!(out, "<@{id}>{name}");
+        last = m.end();
+    }
+    out.push_str(&segment[last..]);
 }
 
 fn cached_token(cache: Option<&TokenCache>) -> Option<String> {

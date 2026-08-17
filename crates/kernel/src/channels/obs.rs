@@ -990,17 +990,28 @@ fn render_running(s: &ObsCardState) -> String {
         }
         vec![json!({ "tag": "markdown", "text_size": "notation", "content": body })]
     } else {
-        // Stats line, a divider, then the live trace (+ whisper tail).
-        let mut body = trace.join("\n");
+        // Whisper narration on top (if any), then the live trace inside a
+        // collapsible panel that starts expanded so the human watches it
+        // stream — but reading bots skip it (yomi strips collapsible panels
+        // from card text on every read path). The stats line rides the
+        // panel's title instead of a separate top element.
+        let mut elements = Vec::new();
         if let Some(w) = whisper_line() {
-            body.push('\n');
-            body.push_str(&w);
+            elements.push(json!({ "tag": "markdown", "text_size": "notation", "content": w }));
         }
-        vec![
-            json!({ "tag": "markdown", "text_size": "notation", "content": stats_line(s) }),
-            json!({ "tag": "hr" }),
-            json!({ "tag": "markdown", "text_size": "notation", "content": body }),
-        ]
+        elements.push(reply::trace_panel_element_expanded(
+            &trace,
+            &reply::render_trace_title(&reply::TraceTitle {
+                steps: s.trace.step_count(),
+                tools: s.tool_count as usize,
+                elapsed: s.started_at.elapsed(),
+                model: s.model.as_deref(),
+                ctx_footer: s.token_footer.as_deref(),
+                out_estimate: s.out_estimate(),
+                ..Default::default()
+            }),
+        ));
+        elements
     };
     card_json_elements("blue", &phase_title(s), &elements)
 }
@@ -1043,7 +1054,6 @@ fn render_terminal(s: &ObsCardState, settle: &Settle, keep_trace: bool) -> Strin
     }
     json!({
         "schema": "2.0",
-        "config": { "width_mode": "compact" },
         "body": { "elements": elements }
     })
     .to_string()
@@ -1058,10 +1068,10 @@ fn card_json(template: &str, title: &str, body_md: &str) -> String {
 }
 
 fn card_json_elements(template: &str, title: &str, elements: &[serde_json::Value]) -> String {
-    // Compact layout: 400px width, slim header/body padding, 12px notation text.
+    // Default card width (600px, same as the reply card) — not the narrow
+    // compact layout. Slim header/body padding, 12px notation text.
     json!({
         "schema": "2.0",
-        "config": { "width_mode": "compact" },
         "header": {
             "title": { "tag": "plain_text", "content": title },
             "template": template,
@@ -1080,30 +1090,31 @@ fn card_json_elements(template: &str, title: &str, elements: &[serde_json::Value
 /// (`ctx: x / y`) only lands at response end; `out ~z` is the
 /// run-cumulative output estimate.
 fn stats_line(s: &ObsCardState) -> String {
-    use std::fmt::Write as _;
-    let mut line = format!("⏱ {}", fmt_elapsed(s.started_at.elapsed()));
-    let steps = s.trace.step_count();
-    if steps > 0 {
-        let _ = write!(line, " · {steps} steps");
+    let (head, grey) = stats_parts(s);
+    if grey.is_empty() {
+        head
+    } else {
+        format!("{head} · <font color='grey'>{grey}</font>")
     }
-    if s.tool_count > 0 {
-        let _ = write!(line, " · {} tools", s.tool_count);
-    }
-    let mut grey: Vec<String> = Vec::new();
-    if let Some(model) = &s.model {
-        grey.push(model.clone());
-    }
-    if let Some(footer) = &s.token_footer {
-        grey.push(footer.clone());
-    }
-    let out_est = s.out_estimate();
-    if out_est > 0 {
-        grey.push(format!("out ~{}", fmt_k(out_est)));
-    }
-    if !grey.is_empty() {
-        let _ = write!(line, " · <font color='grey'>{}</font>", grey.join(" · "));
-    }
-    line
+}
+
+/// Split the stats line into the always-dark head (elapsed/steps/tools) and
+/// the grey tail (model/ctx/out), so callers choose how to color the tail.
+/// Shares the segment rules with the trace panel title via
+/// [`reply::summary_segments`] — only the icon (⏱ vs 🐾) and coloring differ.
+fn stats_parts(s: &ObsCardState) -> (String, String) {
+    let (segs, tail) = reply::summary_segments(&reply::TraceTitle {
+        steps: s.trace.step_count(),
+        tools: s.tool_count as usize,
+        elapsed: s.started_at.elapsed(),
+        model: s.model.as_deref(),
+        ctx_footer: s.token_footer.as_deref(),
+        out_estimate: s.out_estimate(),
+        ..Default::default()
+    });
+    let mut head = vec![format!("⏱ {}", fmt_elapsed(s.started_at.elapsed()))];
+    head.extend(segs);
+    (head.join(" · "), tail.join(" · "))
 }
 
 pub(crate) fn fmt_elapsed(d: Duration) -> String {
@@ -1118,7 +1129,7 @@ pub(crate) fn fmt_elapsed(d: Duration) -> String {
 }
 
 /// Format a token count as `12.3k` (thousands) for compact footers.
-fn fmt_k(tokens: u32) -> String {
+pub(crate) fn fmt_k(tokens: u32) -> String {
     if tokens < 1000 {
         tokens.to_string()
     } else {

@@ -48,7 +48,7 @@
 )}
   {#if createdAt && !isStreaming}
     <div
-      class="mt-1 flex text-[10px] leading-none text-muted-foreground transition-colors group-hover:text-foreground {alignEnd
+      class="mt-1 flex text-[10px] leading-none text-muted-foreground/60 transition-colors group-hover:text-foreground {alignEnd
         ? 'justify-end pr-1'
         : 'justify-start pl-1'}"
     >

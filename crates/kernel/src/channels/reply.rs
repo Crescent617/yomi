@@ -13,7 +13,7 @@ use serde_json::json;
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
-use super::obs::fmt_elapsed;
+use super::obs::{fmt_elapsed, fmt_k};
 use crate::utils::strs::truncate_by_chars;
 
 /// Reply text budget in bytes. Feishu card payloads cap around 30KB; leave
@@ -356,9 +356,21 @@ pub(crate) fn render_plain(reply: &FinalReply) -> String {
 /// Collapsible run-trace panel (default collapsed) shared by the reply
 /// card and the terminal receipt card.
 pub(crate) fn trace_panel_element(lines: &[String], title: &str) -> serde_json::Value {
+    trace_panel(lines, title, false)
+}
+
+/// Collapsible run-trace panel that starts **expanded** — used on the live
+/// mid-run card so the human still sees the trace streaming, while reading
+/// bots skip it (collapsible panels are stripped from card text on every
+/// yomi read path regardless of `expanded`).
+pub(crate) fn trace_panel_element_expanded(lines: &[String], title: &str) -> serde_json::Value {
+    trace_panel(lines, title, true)
+}
+
+fn trace_panel(lines: &[String], title: &str, expanded: bool) -> serde_json::Value {
     json!({
         "tag": "collapsible_panel",
-        "expanded": false,
+        "expanded": expanded,
         "header": {
             "title": { "tag": "markdown", "content": format!("<font color='grey'>{title}</font>") },
             "vertical_align": "center",
@@ -384,6 +396,60 @@ fn render_trace(reply: &FinalReply, markdown: bool) -> (Vec<String>, String) {
     )
 }
 
+/// Fields for the trace/stats summary line, shared by the terminal receipt
+/// card, the live mid-run card, and the run stats line so all render the
+/// same summary segments. Every part is optional and omitted when
+/// zero/absent.
+#[derive(Default)]
+pub(crate) struct TraceTitle<'a> {
+    pub steps: usize,
+    pub tools: usize,
+    pub failed: usize,
+    pub elapsed: std::time::Duration,
+    pub model: Option<&'a str>,
+    pub ctx_footer: Option<&'a str>,
+    pub out_estimate: u32,
+}
+
+/// Build the ordered summary segments, split into the always-dark head
+/// (`N steps`, `M tools`, `F failed`) and the technical tail (model, ctx,
+/// live out estimate) that callers may grey out. Zero/absent parts omitted;
+/// the elapsed prefix is left to the caller (its icon differs per surface).
+pub(crate) fn summary_segments(t: &TraceTitle<'_>) -> (Vec<String>, Vec<String>) {
+    let mut head = Vec::new();
+    if t.steps > 0 {
+        head.push(format!("{} steps", t.steps));
+    }
+    if t.tools > 0 {
+        head.push(format!("{} tools", t.tools));
+    }
+    if t.failed > 0 {
+        head.push(format!("{} failed", t.failed));
+    }
+    let mut tail = Vec::new();
+    if let Some(m) = t.model {
+        tail.push(m.to_string());
+    }
+    if let Some(c) = t.ctx_footer {
+        tail.push(c.to_string());
+    }
+    if t.out_estimate > 0 {
+        tail.push(format!("out ~{}", fmt_k(t.out_estimate)));
+    }
+    (head, tail)
+}
+
+/// Render the shared trace panel title: `🐾 Xs` plus the summary segments.
+/// No `<font>` markup — the panel wraps its own title in grey, so callers
+/// must not pre-wrap (nesting breaks it).
+pub(crate) fn render_trace_title(t: &TraceTitle<'_>) -> String {
+    let (head, tail) = summary_segments(t);
+    let mut parts = vec![format!("🐾 {}", fmt_elapsed(t.elapsed))];
+    parts.extend(head);
+    parts.extend(tail);
+    parts.join(" · ")
+}
+
 /// Shared trace renderer behind [`render_trace`] and
 /// [`RunReplyBuffer::full_trace_render`].
 fn render_trace_parts(
@@ -398,16 +464,13 @@ fn render_trace_parts(
     if dropped_entries > 0 {
         lines.insert(0, dropped_marker(dropped_entries));
     }
-
-    let mut title = format!(
-        "🐾 Trace · {} steps · {} tools · {}",
+    let title = render_trace_title(&TraceTitle {
         steps,
-        stats.tools,
-        fmt_elapsed(elapsed)
-    );
-    if stats.failed > 0 {
-        let _ = write!(title, " · {} failed", stats.failed);
-    }
+        tools: stats.tools,
+        failed: stats.failed,
+        elapsed,
+        ..Default::default()
+    });
     (lines, title)
 }
 
