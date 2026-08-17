@@ -742,3 +742,230 @@ async fn interrupted_marker_closes_pending_tool_batch() {
     );
     assert!(agent.pending_tool_calls().is_none());
 }
+
+/// Rewind 语义：以 message id 为准，上下文（buffer）和 checkpoint 两个存储
+/// 各自尽力处理——有哪边处理哪边，两边都没有才报 "not found"。
+/// 背景：compaction 会重写 buffer 但保留 checkpoint（旧 id 悬空）；
+/// 反过来消息也可能没有 checkpoint。
+mod rewind_tests {
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs};
+    use crate::checkpoint::{CheckpointStore, FilesystemCheckpointStore, RewindTarget};
+    use crate::provider::ModelConfig;
+    use crate::types::{Message, MessageId, SessionId};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    struct RewindHarness {
+        agent: Agent,
+        checkpoint_store: Arc<dyn CheckpointStore>,
+        session_id: String,
+        event_bus: Arc<crate::comms::EventBus>,
+        // 持有 tempdir，drop 时自动清理。
+        _data_dir: tempfile::TempDir,
+        _working_dir: tempfile::TempDir,
+    }
+
+    async fn build(history: Vec<Arc<Message>>) -> RewindHarness {
+        let data_dir = tempfile::tempdir().unwrap();
+        let working_dir = tempfile::tempdir().unwrap();
+        let checkpoint_store: Arc<dyn CheckpointStore> =
+            Arc::new(FilesystemCheckpointStore::new(data_dir.path()));
+
+        let mut models = BTreeMap::new();
+        models.insert(
+            "test".to_string(),
+            ModelConfig {
+                name: "test".to_string(),
+                model_id: "test-id".to_string(),
+                ..ModelConfig::default()
+            },
+        );
+        let mut shared = AgentShared::new(
+            Arc::new(models),
+            "test".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+            Some(checkpoint_store.clone()),
+        );
+        let event_bus = crate::comms::EventBus::new();
+        shared.event_bus = Some(event_bus.clone());
+        let shared = Arc::new(shared);
+
+        let session_id = SessionId::new().to_string();
+        let args = AgentSpawnArgs {
+            base_prompt: "test".to_string(),
+            skills: Vec::new(),
+            history,
+            session_id: session_id.clone(),
+            parent_session_id: None,
+            max_iterations: 1,
+            working_dir: working_dir.path().to_path_buf(),
+            cancel_token: None,
+            tool_flags: crate::tools::ToolFlags::new(false),
+            file_state_store: None,
+            tool_blocklist: Vec::new(),
+            max_tool_output_length: 1024,
+            mailbox: Arc::new(crate::comms::Mailbox::new()),
+            input_bus: None,
+        };
+        let agent = Agent::new(&shared, args).await;
+        RewindHarness {
+            agent,
+            checkpoint_store,
+            session_id,
+            event_bus,
+            _data_dir: data_dir,
+            _working_dir: working_dir,
+        }
+    }
+
+    /// 消息在 buffer 里、但没有 checkpoint：只截断上下文，不报错。
+    #[tokio::test]
+    async fn rewind_without_checkpoint_only_truncates_context() {
+        let m1 = Arc::new(Message::user("first"));
+        let m2 = Arc::new(Message::user("second"));
+        let target_id = m1.id.clone();
+        let mut harness = build(vec![m1, m2]).await;
+        let before = harness.agent.message_buffer.len();
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        harness
+            .agent
+            .process_rewind(target_id.clone(), RewindTarget::Both, tx)
+            .await
+            .expect("rewind should succeed without checkpoint");
+        rx.recv().await.expect("result sent").expect("ok result");
+
+        let messages = harness.agent.message_buffer.messages();
+        assert_eq!(messages.len(), before - 2);
+        assert!(!messages.iter().any(|m| m.id == target_id));
+    }
+
+    /// compact 后的场景：消息已不在 buffer，但 checkpoint 还在（悬空 id）：
+    /// 只处理 checkpoint（删除目标及之后的 checkpoint），不报错。
+    #[tokio::test]
+    async fn rewind_stale_checkpoint_after_compact_only_processes_checkpoint() {
+        let mut harness = build(vec![Arc::new(Message::user("kept"))]).await;
+        let stale_id = MessageId::new();
+        let later_id = MessageId::new();
+        harness
+            .checkpoint_store
+            .create_checkpoint(&harness.session_id, stale_id.as_str(), "old turn", vec![])
+            .await
+            .unwrap();
+        harness
+            .checkpoint_store
+            .create_checkpoint(&harness.session_id, later_id.as_str(), "later turn", vec![])
+            .await
+            .unwrap();
+
+        let before_msgs = harness.agent.message_buffer.len();
+        let mut subscriber = harness
+            .event_bus
+            .subscribe(SessionId::from(harness.session_id.clone()));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        harness
+            .agent
+            .process_rewind(stale_id.clone(), RewindTarget::Both, tx)
+            .await
+            .expect("rewind should succeed for stale checkpoint");
+        rx.recv().await.expect("result sent").expect("ok result");
+
+        // 上下文不动，目标及之后的 checkpoint 被删除。
+        assert_eq!(harness.agent.message_buffer.len(), before_msgs);
+        let remaining = harness
+            .checkpoint_store
+            .get_session_checkpoints(&harness.session_id)
+            .await
+            .unwrap();
+        assert!(remaining.is_empty(), "checkpoints should be rewound");
+
+        // 即使上下文没动，也必须发 MessageReplaced：checkpoint 回滚会把磁盘
+        // 消息快照恢复成旧版本，持久化层需要用当前 buffer 覆盖回去，否则
+        // session 重载后被 compact 掉的旧消息会复活。
+        let (_, envelope) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), subscriber.recv())
+                .await
+                .expect("MessageReplaced emitted")
+                .unwrap();
+        assert!(
+            matches!(
+                envelope.event,
+                crate::event::Event::Internal(crate::event::InternalEvent::MessageReplaced { .. })
+            ),
+            "expected MessageReplaced, got {:?}",
+            envelope.event
+        );
+    }
+
+    /// 正常 /undo 主路径：消息在 buffer 且有 checkpoint——两边都处理：
+    /// 截断上下文并删除目标及之后的 checkpoint。
+    #[tokio::test]
+    async fn rewind_with_both_sides_processes_context_and_checkpoint() {
+        let m1 = Arc::new(Message::user("first"));
+        let m2 = Arc::new(Message::user("second"));
+        let target_id = m1.id.clone();
+        let mut harness = build(vec![m1, m2]).await;
+        harness
+            .checkpoint_store
+            .create_checkpoint(&harness.session_id, target_id.as_str(), "turn one", vec![])
+            .await
+            .unwrap();
+        harness
+            .checkpoint_store
+            .create_checkpoint(
+                &harness.session_id,
+                MessageId::new().as_str(),
+                "turn two",
+                vec![],
+            )
+            .await
+            .unwrap();
+        let before = harness.agent.message_buffer.len();
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        harness
+            .agent
+            .process_rewind(target_id.clone(), RewindTarget::Both, tx)
+            .await
+            .expect("rewind should succeed");
+        rx.recv().await.expect("result sent").expect("ok result");
+
+        let messages = harness.agent.message_buffer.messages();
+        assert_eq!(messages.len(), before - 2);
+        assert!(!messages.iter().any(|m| m.id == target_id));
+        let remaining = harness
+            .checkpoint_store
+            .get_session_checkpoints(&harness.session_id)
+            .await
+            .unwrap();
+        assert!(
+            remaining.is_empty(),
+            "target and later checkpoints should be deleted"
+        );
+    }
+
+    /// 两边都没有这个 id：仍然报 not found。
+    #[tokio::test]
+    async fn rewind_unknown_id_still_errors() {
+        let mut harness = build(vec![Arc::new(Message::user("kept"))]).await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let result = harness
+            .agent
+            .process_rewind(MessageId::new(), RewindTarget::Both, tx)
+            .await;
+        let err = result.expect_err("unknown id should error");
+        assert!(err.to_string().contains("not found"), "err: {err}");
+        rx.recv()
+            .await
+            .expect("result sent")
+            .expect_err("err result");
+    }
+}

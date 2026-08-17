@@ -595,28 +595,67 @@ impl Agent {
             }
         }
 
-        let truncated = self.truncate_at(&message_id);
-        if !truncated {
+        // Rewind is keyed by message id on two independent stores: the live
+        // message buffer (context) and the checkpoint store (files). Either
+        // side may be missing — compaction rewrites the buffer but keeps
+        // checkpoints, while a message may exist without any checkpoint.
+        // Process whichever side has the id; error only when neither does.
+        let in_buffer = self
+            .message_buffer
+            .messages()
+            .iter()
+            .any(|m| m.id == message_id);
+
+        let has_checkpoint = match self
+            .checkpoint_store
+            .get_session_checkpoints(&self.session_id)
+            .await
+        {
+            Ok(checkpoints) => checkpoints
+                .iter()
+                .any(|c| c.message_id == message_id.as_str()),
+            Err(e) => {
+                // Treat a transient store error as "no checkpoint": context
+                // truncation can still proceed, but keep it observable.
+                tracing::warn!("Failed to list checkpoints on rewind: {}", e);
+                false
+            }
+        };
+
+        if !in_buffer && !has_checkpoint {
             let err =
                 AgentError::Serialization(format!("Message {} not found", message_id.as_str()));
             let _ = result_tx.try_send(Err(err.clone()));
             return Err(err);
         }
 
-        let result = super::turn::Turn::rewind_to_checkpoint(
-            &self.session_id,
-            &message_id,
-            target,
-            &self.checkpoint_store,
-        )
-        .await;
+        // Checkpoint first: on failure nothing has been mutated yet, so the
+        // session stays consistent.
+        if has_checkpoint {
+            let result = super::turn::Turn::rewind_to_checkpoint(
+                &self.session_id,
+                &message_id,
+                target,
+                &self.checkpoint_store,
+            )
+            .await;
 
-        if let Err(e) = &result {
-            let err = AgentError::Serialization(e.to_string());
-            let _ = result_tx.try_send(Err(err.clone()));
-            return Err(err);
+            if let Err(e) = &result {
+                let err = AgentError::Serialization(e.to_string());
+                let _ = result_tx.try_send(Err(err.clone()));
+                return Err(err);
+            }
         }
 
+        if in_buffer {
+            let truncated = self.truncate_at(&message_id);
+            debug_assert!(truncated, "presence checked above");
+        }
+
+        // Always re-emit the authoritative in-memory history: the checkpoint
+        // rewind restores an on-disk messages snapshot that may no longer
+        // match the buffer (e.g. a pre-compaction snapshot), so the persister
+        // must overwrite it with the current buffer.
         let updated_messages: Vec<Arc<Message>> = self.message_buffer.messages().to_vec();
         self.emit(Event::Internal(
             crate::event::InternalEvent::MessageReplaced {
