@@ -61,7 +61,7 @@
       type="button"
       onclick={onClose}
       class="w-9 h-9 rounded-lg flex items-center justify-center transition-colors
-             text-foreground hover:text-foreground hover:bg-accent"
+             text-muted-foreground hover:text-foreground hover:bg-accent"
       title="Hide navigation"
       aria-label="Hide navigation"
     >
@@ -78,7 +78,7 @@
       class="w-9 h-9 rounded-lg flex items-center justify-center transition-colors
              {appState.activePanel === tab.id
         ? 'bg-primary/10 text-primary'
-        : 'text-foreground hover:text-foreground hover:bg-accent'}"
+        : 'text-muted-foreground hover:text-foreground hover:bg-accent'}"
       title={tabTitle(tab)}
     >
       <tab.icon class="w-5 h-5" />
@@ -92,7 +92,7 @@
     type="button"
     onclick={toggleTheme}
     class="w-9 h-9 rounded-lg flex items-center justify-center transition-colors
-           text-foreground hover:text-foreground hover:bg-accent"
+           text-muted-foreground hover:text-foreground hover:bg-accent"
     title="Toggle theme"
   >
     {#if guiPreferences.appearance.theme === "system"}
