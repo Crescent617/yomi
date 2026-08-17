@@ -418,8 +418,7 @@ impl KernelApi for Kernel {
     }
 
     async fn compact_session(&self, session_id: &SessionId) -> Result<()> {
-        Self::compact_session(self, session_id);
-        Ok(())
+        Self::compact_session(self, session_id)
     }
 
     async fn rewind_session(

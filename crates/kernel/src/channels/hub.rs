@@ -1385,7 +1385,14 @@ async fn handle_incoming_message(
             // `Compacted`) — that card is the feedback. Otherwise this
             // text ack is the only one (the outcome is only logged).
             if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
-                kernel.compact_session(&sid);
+                if let Err(e) = kernel.compact_session(&sid) {
+                    // Publish failed — no events will fire, so neither the
+                    // card nor a swallowed ack may stand in for feedback.
+                    warn!(error = %e, "compact request publish failed");
+                    return Ok(Some(
+                        "⚠️ Failed to start compaction (busy) — please retry.".to_string(),
+                    ));
+                }
                 let card_covers = config.observability
                     && adapter.supports_status_card()
                     && msg.doc_comment.is_none();

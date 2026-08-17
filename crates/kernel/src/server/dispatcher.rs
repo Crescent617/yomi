@@ -801,7 +801,7 @@ async fn dispatch_command(
             Ok(serde_json::Value::Null)
         }
         Command::Compact => {
-            kernel.compact_session(sid);
+            kernel.compact_session(sid)?;
             Ok(serde_json::Value::Null)
         }
         Command::StartGoal(state) => {

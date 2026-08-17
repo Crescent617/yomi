@@ -933,6 +933,10 @@ impl ObsTracker {
     /// recorded as a reaction target. Run receipts are left alone: a
     /// message posted mid-compact is the next run's trigger, and that
     /// run's settlement still needs it for the morph/split decision.
+    /// (Divergence, accepted: the cancel path settles through
+    /// `settle_card`, which does clear receipts — a mid-compact post
+    /// followed by `/stop` then morphs instead of splitting, visually
+    /// identical since the new card anchors below the trigger anyway.)
     async fn settle_compact(&self, session_id: &SessionId, summary: &str, is_error: bool) {
         let Some((_, state)) = self.states.remove(session_id) else {
             return;

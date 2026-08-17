@@ -1369,13 +1369,11 @@ impl Kernel {
 
     /// Request compaction for a session's message buffer
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
-    pub fn compact_session(&self, session_id: &SessionId) {
-        if let Err(e) = self
-            .input_bus
+    pub fn compact_session(&self, session_id: &SessionId) -> Result<()> {
+        self.input_bus
             .publish(session_id.clone(), AgentInput::Compact)
-        {
-            tracing::warn!("Failed to publish compact input: {}", e);
-        }
+            .map_err(|e| KernelError::io(format!("InputBus full: {e}")))?;
+        Ok(())
     }
 
     /// Rewind a session to a specific checkpoint

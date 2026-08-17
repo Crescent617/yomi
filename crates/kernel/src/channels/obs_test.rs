@@ -1081,6 +1081,53 @@ async fn compacting_inactive_without_state_is_noop() {
 }
 
 #[tokio::test]
+async fn cancelled_compact_settles_via_generic_stopped_path() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    // /stop mid-compact: the agent emits Stopped{Cancelled} (operation
+    // cancelled), which settles the compact-only card through the generic
+    // forwarder path as ⏹; the trailing Compacted is a no-op.
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &compacting(true))
+        .await;
+    assert_eq!(mock.cards.lock().await.len(), 1);
+
+    let outcome = tracker
+        .handle_stopped(
+            &sid,
+            &StopReason::Cancelled {
+                operation: Some("compaction".to_string()),
+            },
+            None,
+        )
+        .await;
+    assert!(outcome.unsettled.is_none());
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1);
+    assert!(patches[0].1.contains("⏹ **Stopped**"));
+    drop(patches);
+    assert!(!tracker.has_state(&sid));
+    // Cancelled runs never react.
+    assert!(mock.reactions_added.lock().await.is_empty());
+
+    // The trailing Compacted finds no state — no second settle.
+    tracker
+        .handle_event(
+            &adapter,
+            &sid,
+            "chat-1",
+            None,
+            &compacted("Compaction was cancelled", true),
+        )
+        .await;
+    assert_eq!(mock.patches.lock().await.len(), 1);
+    assert!(mock.cards.lock().await.len() == 1);
+}
+
+#[tokio::test]
 async fn compact_settle_leaves_receipts_for_the_next_run() {
     let tracker = ObsTracker::new();
     let mock = MockAdapter::new();
