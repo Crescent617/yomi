@@ -11,6 +11,7 @@ pub mod id;
 pub mod image;
 pub mod line_numbers;
 pub mod logging;
+pub mod markdown;
 pub mod path;
 pub mod rg_helper;
 pub mod search;

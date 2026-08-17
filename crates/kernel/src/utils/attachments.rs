@@ -3,11 +3,8 @@
 //! An agent attaches files to a reply with a `<yomi_attachments>` block,
 //! one path per line (absolute, or relative to the session workspace).
 //! A block counts as a declaration only when it stands outside a fenced
-//! code block — decided by parity: the fences after a fenced-in block are
-//! odd (its enclosing fence closes after it), while an even count (zero
-//! included) means the block stands outside any fence. A fenced example
-//! (e.g. the model showing the syntax to the user) therefore renders as
-//! typed.
+//! code block (see `crate::utils::markdown`); a fenced example (e.g. the
+//! model showing the syntax to the user) renders as typed.
 //!
 //! Each chat surface strips recognized blocks at its own boundary and
 //! presents the files its own way: channels deliver them via the platform
@@ -18,49 +15,39 @@ use std::path::{Path, PathBuf};
 
 const OPEN_TAG: &str = "<yomi_attachments>";
 const CLOSE_TAG: &str = "</yomi_attachments>";
-const FENCE: &str = "```";
 
 /// Strip every `<yomi_attachments>…</yomi_attachments>` block standing
 /// outside a fenced code block, returning the cleaned text and the
 /// declared paths (trimmed, non-empty, in document order).
 ///
-/// Fence membership is decided by parity: the fences remaining after a
-/// fenced-in block are odd (its enclosing fence closes after it), so an
-/// even count — zero included — means the block stands outside any fence.
 /// Fenced examples and unterminated blocks are left in place: they should
 /// surface to the user as typed, not vanish silently into a bogus
 /// declaration.
 pub fn parse_attachments(text: &str) -> (String, Vec<String>) {
     let mut paths = Vec::new();
-    let mut cleaned = String::with_capacity(text.len());
     let mut removed = false;
-    let mut rest = text;
-    while let Some(open) = rest.find(OPEN_TAG) {
-        let after_open = &rest[open + OPEN_TAG.len()..];
-        let Some(close) = after_open.find(CLOSE_TAG) else {
-            break;
-        };
-        let block_end = open + OPEN_TAG.len() + close + CLOSE_TAG.len();
-        if rest[block_end..].matches(FENCE).count() % 2 != 0 {
-            // Fenced example: keep it verbatim, keep scanning after it.
-            cleaned.push_str(&rest[..block_end]);
-            rest = &rest[block_end..];
-            continue;
-        }
-        cleaned.push_str(&rest[..open]);
-        for line in after_open[..close].lines() {
-            let line = line.trim();
-            if !line.is_empty() {
-                paths.push(line.to_string());
+    let cleaned = crate::utils::markdown::map_outside_fences(text, |run, out| {
+        let mut rest = run;
+        while let Some(open) = rest.find(OPEN_TAG) {
+            let after_open = &rest[open + OPEN_TAG.len()..];
+            let Some(close) = after_open.find(CLOSE_TAG) else {
+                break;
+            };
+            out.push_str(&rest[..open]);
+            for line in after_open[..close].lines() {
+                let line = line.trim();
+                if !line.is_empty() {
+                    paths.push(line.to_string());
+                }
             }
+            removed = true;
+            rest = &after_open[close + CLOSE_TAG.len()..];
         }
-        removed = true;
-        rest = &rest[block_end..];
-    }
+        out.push_str(rest);
+    });
     if !removed {
         return (text.to_string(), paths);
     }
-    cleaned.push_str(rest);
     (cleaned.trim().to_string(), paths)
 }
 

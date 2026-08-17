@@ -511,11 +511,11 @@ impl Conductor {
 
         // Every non-sub-agent session learns the attachment syntax when the
         // feature is on: declared files reach the user alongside the message
-        // (channels deliver them, the app shows clickable items). Sub-agents
-        // never get it — their output never leaves the parent, so the parent
-        // decides what becomes an attachment. Note the narrower predicate
-        // than the ask_user blocklist above, which covers every sub-agent
-        // outright.
+        // (channels deliver them, the app shows clickable items). The
+        // mention syntax only makes sense where a platform can render it:
+        // channel-routed sessions. Sub-agents get neither — their output
+        // never leaves the parent. Note the narrower predicate than the
+        // ask_user blocklist above, which covers every sub-agent outright.
         let base_prompt = match &template {
             Some(t) => t.body.clone(),
             None if !is_sub_agent => {
@@ -523,7 +523,10 @@ impl Conductor {
                 if self.agent_config.enable_attachments {
                     prompt = format!("{prompt}\n\n{}", crate::prompt::ATTACHMENTS_SECTION);
                 }
-                format!("{prompt}\n\n{}", crate::prompt::MENTIONS_SECTION)
+                if self.is_channel_routed(sid, session_info.as_ref()).await {
+                    prompt = format!("{prompt}\n\n{}", crate::prompt::MENTIONS_SECTION);
+                }
+                prompt
             }
             None => self.base_prompt.clone(),
         };

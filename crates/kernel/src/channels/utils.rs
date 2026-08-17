@@ -11,21 +11,10 @@ pub(crate) const MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::fro
 /// (`{1,64}`) — feishu open_ids run ~36 chars, telegram ids are numeric —
 /// so a runaway `<@...>` never matches.
 pub(crate) fn rewrite_mentions(text: &str, render: &dyn Fn(&str) -> String) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut fenced = false;
-    for line in text.split_inclusive('\n') {
-        if line.trim_start().starts_with("```") {
-            fenced = !fenced;
-            out.push_str(line);
-            continue;
-        }
-        if fenced {
-            out.push_str(line);
-            continue;
-        }
+    crate::utils::markdown::map_outside_fences(text, |run, out| {
         // Split inline code spans on backticks; rewrite only outside spans.
         let mut in_code = false;
-        for (i, segment) in line.split('`').enumerate() {
+        for (i, segment) in run.split('`').enumerate() {
             if i > 0 {
                 out.push('`');
                 in_code = !in_code;
@@ -33,11 +22,10 @@ pub(crate) fn rewrite_mentions(text: &str, render: &dyn Fn(&str) -> String) -> S
             if in_code {
                 out.push_str(segment);
             } else {
-                rewrite_mention_segment(segment, render, &mut out);
+                rewrite_mention_segment(segment, render, out);
             }
         }
-    }
-    out
+    })
 }
 
 fn rewrite_mention_segment(segment: &str, render: &dyn Fn(&str) -> String, out: &mut String) {
