@@ -235,3 +235,63 @@ async fn test_rewind_deletes_file_created_then_modified_after_target() {
         "file created after target must be deleted, not restored to an intermediate version"
     );
 }
+
+/// Retention：稳态必须恰好保留 max 个，且保留最新的。
+#[tokio::test]
+async fn test_retention_keeps_exactly_max_newest() {
+    let temp = TempDir::new().unwrap();
+    let store = FilesystemCheckpointStore::with_max_checkpoints(temp.path(), 2);
+
+    for i in 1..=4 {
+        store
+            .create_checkpoint("session-1", &format!("msg-{i}"), "t", vec![])
+            .await
+            .unwrap();
+        let checkpoints = store.get_session_checkpoints("session-1").await.unwrap();
+        assert_eq!(
+            checkpoints.len(),
+            usize::min(i, 2),
+            "after {i} creates: {:?}",
+            checkpoints
+                .iter()
+                .map(|c| &c.message_id)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    let checkpoints = store.get_session_checkpoints("session-1").await.unwrap();
+    assert_eq!(checkpoints[0].message_id, "msg-3");
+    assert_eq!(checkpoints[1].message_id, "msg-4");
+}
+
+/// Fork 拷贝 checkpoint 后，子 session 的增删不得污染父 session 的 manifest
+/// （拷贝来的 manifest.json 里写的是父 session id）。
+#[tokio::test]
+async fn test_forked_session_does_not_overwrite_parent_manifest() {
+    let (store, _temp) = create_test_store();
+
+    store
+        .create_checkpoint("parent", "p-1", "parent turn", vec![])
+        .await
+        .unwrap();
+    store
+        .copy_session_checkpoints("parent", "child")
+        .await
+        .unwrap();
+
+    // 子 session 新增 + 删除 checkpoint。
+    store
+        .create_checkpoint("child", "c-1", "child turn", vec![])
+        .await
+        .unwrap();
+    store.delete_checkpoint("child", "p-1").await.unwrap();
+
+    let child = store.get_session_checkpoints("child").await.unwrap();
+    assert_eq!(child.len(), 1);
+    assert_eq!(child[0].message_id, "c-1");
+
+    // 父 session 的 manifest 必须原封不动。
+    let parent = store.get_session_checkpoints("parent").await.unwrap();
+    assert_eq!(parent.len(), 1);
+    assert_eq!(parent[0].message_id, "p-1");
+}

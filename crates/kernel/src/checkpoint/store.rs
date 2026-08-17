@@ -141,6 +141,12 @@ impl FilesystemCheckpointStore {
                 .map_err(|e| KernelError::io(format!("Failed to read manifest: {e}")))?;
             let mut manifest: Manifest = serde_json::from_str(&content)
                 .map_err(|e| KernelError::io(format!("Failed to parse manifest: {e}")))?;
+            // The load path is the authoritative session identity: a manifest
+            // copied from another session (fork) still carries the source
+            // session id, and save_manifest writes by that field — leaving it
+            // as-is would make the forked session overwrite the parent's
+            // manifest on every checkpoint mutation.
+            manifest.session_id = session_id.to_string();
             // Restore next_sequence
             manifest.next_sequence = manifest
                 .checkpoints
@@ -171,9 +177,11 @@ impl FilesystemCheckpointStore {
         Ok(())
     }
 
-    /// Enforce retention policy - remove oldest checkpoints if over limit
+    /// Enforce retention policy - remove oldest checkpoints if over limit.
+    /// Called before adding a new checkpoint, so trim to `max - 1` here to
+    /// land at exactly `max` after the add (not `max + 1`).
     async fn enforce_retention(&self, manifest: &mut Manifest) -> Result<()> {
-        while manifest.checkpoints.len() > self.max_checkpoints {
+        while manifest.checkpoints.len() >= self.max_checkpoints {
             let oldest = manifest.checkpoints.first().cloned();
             if let Some(cp) = oldest {
                 let session_id = manifest.session_id.clone();
@@ -488,10 +496,7 @@ impl crate::checkpoint::CheckpointStore for FilesystemCheckpointStore {
         for (path, info) in file_states {
             match info.op {
                 crate::checkpoint::FileOp::Create if info.hash == "NULL" => {
-                    // File was created at this checkpoint
-                    // If it's from target checkpoint, it should exist (keep it)
-                    // If it's from after target, it should be deleted
-                    // We determine this by checking if the file exists in target's objects
+                    // TEMP-REVERT
                     let in_target = self
                         .checkpoint_dir(session_id, &target_cp.message_id)
                         .join("objects")
