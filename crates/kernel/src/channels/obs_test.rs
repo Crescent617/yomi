@@ -1903,9 +1903,12 @@ async fn whisper_line_is_capped_at_100_chars() {
 
     let patches = mock.patches.lock().await;
     let body: serde_json::Value = serde_json::from_str(&patches.last().unwrap().1).unwrap();
-    // Tools present → layout is [whisper, collapsible trace panel]; the
-    // whisper narration is its own top-level (always-visible) element.
-    let content = body["body"]["elements"][0]["content"].as_str().unwrap();
+    // Live content rides inside the collapsible panel (humans see it
+    // expanded; reading bots strip it) — the whisper tail is its first
+    // line, the trace lines follow.
+    let panel = &body["body"]["elements"][0];
+    assert_eq!(panel["tag"], "collapsible_panel");
+    let content = panel["elements"][0]["content"].as_str().unwrap();
     let whisper_line = content
         .lines()
         .find(|l| l.contains('💬'))
@@ -1916,6 +1919,15 @@ async fn whisper_line_is_capped_at_100_chars() {
         .trim_end_matches("</font>");
     assert_eq!(snippet.chars().count(), 100, "snippet: {snippet}");
     assert!(snippet.starts_with('…'));
+
+    // 隐私不变量：whisper/trace/stats 全部收进面板——顶层没有 markdown
+    // 元素（读取路径只取顶层 markdown，面板整体被剥离，其他 bot 读不到
+    // 任何暂态内容）。
+    let top = body["body"]["elements"].as_array().unwrap();
+    assert!(
+        top.iter().all(|e| e["tag"] == "collapsible_panel"),
+        "live content must not leak into top-level markdown: {top:?}"
+    );
 }
 
 // ── Morph settlement (one message per run) ──────────────────────────

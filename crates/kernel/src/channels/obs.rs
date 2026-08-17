@@ -1053,26 +1053,23 @@ fn render_running(s: &ObsCardState) -> String {
             )
         })
     };
-    let elements = if trace.is_empty() {
-        // No tools yet but text is flowing: stats + whisper in one block.
-        let mut body = stats_line(s);
-        if let Some(w) = whisper_line() {
-            body.push('\n');
-            body.push_str(&w);
-        }
-        vec![json!({ "tag": "markdown", "text_size": "notation", "content": body })]
+    // Everything live rides inside one collapsible panel that starts
+    // expanded so the human watches it stream — the whisper tail first,
+    // then the trace — while reading bots skip the whole thing (yomi
+    // strips collapsible panels from card text on every read path). The
+    // stats line rides the panel's title instead of a top element.
+    let mut panel_lines: Vec<String> = Vec::new();
+    if let Some(w) = whisper_line() {
+        panel_lines.push(w);
+    }
+    panel_lines.extend(trace);
+    let elements = if panel_lines.is_empty() {
+        // Retry edge: a new Request cleared the whisper before the first
+        // tool or model End — bare stats until content flows again.
+        vec![json!({ "tag": "markdown", "text_size": "notation", "content": stats_line(s) })]
     } else {
-        // Whisper narration on top (if any), then the live trace inside a
-        // collapsible panel that starts expanded so the human watches it
-        // stream — but reading bots skip it (yomi strips collapsible panels
-        // from card text on every read path). The stats line rides the
-        // panel's title instead of a separate top element.
-        let mut elements = Vec::new();
-        if let Some(w) = whisper_line() {
-            elements.push(json!({ "tag": "markdown", "text_size": "notation", "content": w }));
-        }
-        elements.push(reply::trace_panel_element_expanded(
-            &trace,
+        vec![reply::trace_panel_element_expanded(
+            &panel_lines,
             &reply::render_trace_title(&reply::TraceTitle {
                 steps: s.trace.step_count(),
                 tools: s.tool_count as usize,
@@ -1082,8 +1079,7 @@ fn render_running(s: &ObsCardState) -> String {
                 out_estimate: s.out_estimate(),
                 ..Default::default()
             }),
-        ));
-        elements
+        )]
     };
     card_json_elements("blue", &phase_title(s), &elements)
 }
