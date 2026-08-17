@@ -5,6 +5,11 @@
   import * as smd from "streaming-markdown";
   import CodeBlock from "./CodeBlock.svelte";
   import MermaidBlock from "./MermaidBlock.svelte";
+  import DetailsBlock from "./DetailsBlock.svelte";
+  import {
+    DETAILS_MARKER_PREFIX,
+    splitDetailsBlocks,
+  } from "./markdown-details";
   import { endsWithClosedBacktickFence } from "./markdown-fences";
   import { escapeIntrawordUnderscores } from "./escape-underscores";
 
@@ -17,10 +22,14 @@
   let parserHasSyntheticNewline = false;
   let enhanceFrame: number | null = null;
   let mountedCodeBlocks: ReturnType<typeof mount>[] = [];
+  let mountedDetailsBlocks: ReturnType<typeof mount>[] = [];
+  let detailsBlocks: { summary: string; body: string }[] = [];
 
   function clearMountedCodeBlocks() {
     for (const component of mountedCodeBlocks) void unmount(component);
     mountedCodeBlocks = [];
+    for (const component of mountedDetailsBlocks) void unmount(component);
+    mountedDetailsBlocks = [];
   }
 
   function createRenderer() {
@@ -82,6 +91,23 @@
         );
       }
     }
+
+    // details/summary 折叠块：占位段落替换成挂载组件（索引与切分时一致）
+    const markerRe = new RegExp(`^${DETAILS_MARKER_PREFIX}(\\d+)%%$`);
+    for (const p of [...el.querySelectorAll("p")]) {
+      const match = p.textContent?.trim().match(markerRe);
+      if (!match) continue;
+      const block = detailsBlocks[Number(match[1])];
+      if (!block) continue;
+      const target = document.createElement("div");
+      p.replaceWith(target);
+      mountedDetailsBlocks.push(
+        mount(DetailsBlock, {
+          target,
+          props: { summary: block.summary, body: block.body },
+        }),
+      );
+    }
   }
 
   function scheduleCodeBlockEnhancement() {
@@ -133,11 +159,14 @@
 
   $effect(() => {
     if (!el) return;
-    // Escape intra-word underscores up front: streaming-markdown doesn't
+    // details/summary 折叠块先于解析切出（占位标记进 parser，渲染后挂载组件）；
+    // escape intra-word underscores up front: streaming-markdown doesn't
     // implement CommonMark flanking rules and would italicize snake_case
     // identifiers (and everything after them). All parser bookkeeping below
     // happens in the escaped space.
-    const curr = escapeIntrawordUnderscores(content);
+    const split = splitDetailsBlocks(content);
+    detailsBlocks = split.blocks;
+    const curr = escapeIntrawordUnderscores(split.text);
     const streaming = isStreaming;
 
     if (parser === undefined) {
