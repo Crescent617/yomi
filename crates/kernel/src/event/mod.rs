@@ -247,6 +247,13 @@ pub enum ModelEvent {
     },
     /// Context compaction in progress
     Compacting { active: bool },
+    /// Context compaction finished (manual or automatic), carrying the
+    /// outcome ("Compacted N messages" / failure reason). Always follows
+    /// `Compacting { active: false }`. Standalone compacts (manual
+    /// `/compact` outside a run) settle their status card on this event;
+    /// mid-run auto-compacts ride the live run's card and are settled by
+    /// the run's `Stopped`.
+    Compacted { summary: String, is_error: bool },
 }
 
 /// Content chunk for streaming

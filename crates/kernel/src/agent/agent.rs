@@ -1032,18 +1032,27 @@ impl Agent {
 
     /// Force full compaction (skip micro-compaction).
     pub async fn force_full_compact(&mut self) -> Result<String, String> {
-        let (provider, model_config) = self
-            .resolve_model()
-            .await
-            .map_err(|e| format!("Model resolution failed: {e}"))?;
-        let compactor = self
-            .shared
-            .compactor
-            .as_ref()
-            .ok_or("No compactor configured")?;
+        // Bracket the whole attempt (model resolution included) so every
+        // manual compact — even one that fails up front — emits the event
+        // pair status cards materialize and settle on.
+        let prev_state = self.begin_compaction();
+        let (provider, model_config) = match self.resolve_model().await {
+            Ok(resolved) => resolved,
+            Err(e) => {
+                let error = format!("Model resolution failed: {e}");
+                self.end_compaction(prev_state);
+                self.emit_compacted(&Err(error.clone()));
+                return Err(error);
+            }
+        };
+        let Some(compactor) = self.shared.compactor.as_ref() else {
+            let error = "No compactor configured".to_string();
+            self.end_compaction(prev_state);
+            self.emit_compacted(&Err(error.clone()));
+            return Err(error);
+        };
         let old_count = self.message_buffer.len();
         let tools = self.tool_registry.definitions();
-        let prev_state = self.begin_compaction();
 
         let result = compactor
             .full_compact(
@@ -1138,7 +1147,18 @@ impl Agent {
             }
         };
 
+        self.emit_compacted(&compact_result);
         compact_result
+    }
+
+    /// Emit the compaction outcome — always after the matching
+    /// `Compacting { active: false }`, so consumers settle in order.
+    fn emit_compacted(&self, result: &Result<String, String>) {
+        let (summary, is_error) = match result {
+            Ok(summary) => (summary.clone(), false),
+            Err(error) => (error.clone(), true),
+        };
+        self.emit(Event::Model(ModelEvent::Compacted { summary, is_error }));
     }
 
     /// Emit compaction start/end event.

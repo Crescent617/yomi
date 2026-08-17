@@ -174,6 +174,17 @@ fn request() -> Event {
     })
 }
 
+fn compacting(active: bool) -> Event {
+    Event::Model(ModelEvent::Compacting { active })
+}
+
+fn compacted(summary: &str, is_error: bool) -> Event {
+    Event::Model(ModelEvent::Compacted {
+        summary: summary.to_string(),
+        is_error,
+    })
+}
+
 fn text_chunk(text: &str) -> Event {
     Event::Model(ModelEvent::Chunk {
         message_id: crate::types::MessageId::new(),
@@ -842,6 +853,263 @@ async fn watchdog_keeps_card_while_session_alive() {
     tracker.sweep_dead_sessions(|_| true).await;
     assert!(tracker.states.contains_key(&sid));
     assert!(mock.patches.lock().await.is_empty());
+}
+
+// ── Standalone compact (`/compact` outside a run) ───────────────────
+
+#[tokio::test]
+async fn standalone_compact_materializes_and_settles_on_compacted() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    // No run bracket: the compact materializes its own card immediately.
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", Some("msg-1"), &compacting(true))
+        .await;
+    let cards = mock.cards.lock().await;
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].0, "chat-1");
+    assert_eq!(cards[0].2.as_deref(), Some("msg-1"));
+    assert!(cards[0].1.contains("📦 Compacting context…"));
+    drop(cards);
+
+    // `Compacting { active: false }` does not settle — the outcome event
+    // follows it.
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &compacting(false))
+        .await;
+    assert!(tracker.has_state(&sid));
+    assert!(mock.patches.lock().await.is_empty());
+
+    tracker
+        .handle_event(
+            &adapter,
+            &sid,
+            "chat-1",
+            None,
+            &compacted("Compacted 42 messages", false),
+        )
+        .await;
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1);
+    let terminal = &patches[0].1;
+    let card: serde_json::Value = serde_json::from_str(terminal).unwrap();
+    assert!(
+        card.get("header").is_none(),
+        "compact receipt has no header: {terminal}"
+    );
+    assert!(terminal.contains("✅ **Compacted** — ⏱"));
+    assert!(terminal.contains("Compacted 42 messages"));
+    drop(patches);
+
+    // Settled: state gone, no reactions (the card's own send notified).
+    assert!(!tracker.has_state(&sid));
+    assert!(mock.reactions_added.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn standalone_compact_failure_settles_with_error() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &compacting(true))
+        .await;
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &compacting(false))
+        .await;
+    tracker
+        .handle_event(
+            &adapter,
+            &sid,
+            "chat-1",
+            None,
+            &compacted("Compaction failed: rate limited", true),
+        )
+        .await;
+
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1);
+    assert!(patches[0].1.contains("❌ **Compaction failed**"));
+    assert!(patches[0].1.contains("**Error**"));
+    assert!(patches[0].1.contains("rate limited"));
+    drop(patches);
+    assert!(!tracker.has_state(&sid));
+}
+
+#[tokio::test]
+async fn standalone_compact_failure_without_card_sends_explanation() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    // The materialize send fails (API down) — no card this compact.
+    mock.fail_send_cards.store(true, Ordering::Relaxed);
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &compacting(true))
+        .await;
+    assert!(mock.cards.lock().await.is_empty());
+    mock.fail_send_cards.store(false, Ordering::Relaxed);
+
+    tracker
+        .handle_event(
+            &adapter,
+            &sid,
+            "chat-1",
+            None,
+            &compacted("Compaction failed: boom", true),
+        )
+        .await;
+    let cards = mock.cards.lock().await;
+    assert_eq!(cards.len(), 1);
+    assert!(cards[0].1.contains("❌ **Compaction failed**"));
+    drop(cards);
+    assert!(!tracker.has_state(&sid));
+}
+
+#[tokio::test]
+async fn standalone_compact_success_without_card_sends_nothing() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    mock.fail_send_cards.store(true, Ordering::Relaxed);
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &compacting(true))
+        .await;
+    mock.fail_send_cards.store(false, Ordering::Relaxed);
+
+    tracker
+        .handle_event(
+            &adapter,
+            &sid,
+            "chat-1",
+            None,
+            &compacted("Compacted 3 messages", false),
+        )
+        .await;
+    assert!(mock.cards.lock().await.is_empty());
+    assert!(!tracker.has_state(&sid));
+}
+
+#[tokio::test]
+async fn mid_run_compact_only_flips_phase_and_ignores_compacted() {
+    let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    // A live run owns the card; an (auto) compact mid-run only flips its
+    // phase and never settles it.
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &tool_start("bash"))
+        .await;
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &compacting(true))
+        .await;
+    assert_eq!(mock.cards.lock().await.len(), 1);
+    let patches = mock.patches.lock().await;
+    assert!(patches.last().unwrap().1.contains("📦 Compacting context…"));
+    drop(patches);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &compacting(false))
+        .await;
+    tracker
+        .handle_event(
+            &adapter,
+            &sid,
+            "chat-1",
+            None,
+            &compacted("Compacted 10 messages", false),
+        )
+        .await;
+
+    // Still live: no terminal settle, and the run settles normally later.
+    assert!(tracker.has_state(&sid));
+    let patches = mock.patches.lock().await;
+    assert!(!patches.iter().any(|(_, c)| c.contains("**Compacted**")));
+    drop(patches);
+
+    tracker
+        .handle_event(
+            &adapter,
+            &sid,
+            "chat-1",
+            None,
+            &stopped(StopReason::Completed {
+                finish_reason: None,
+            }),
+        )
+        .await;
+    let patches = mock.patches.lock().await;
+    assert!(patches.last().unwrap().1.contains("✅ **Done**"));
+    assert!(!tracker.has_state(&sid));
+}
+
+#[tokio::test]
+async fn compacting_inactive_without_state_is_noop() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &compacting(false))
+        .await;
+    tracker
+        .handle_event(
+            &adapter,
+            &sid,
+            "chat-1",
+            None,
+            &compacted("Compacted 1 messages", false),
+        )
+        .await;
+    assert!(mock.cards.lock().await.is_empty());
+    assert!(mock.patches.lock().await.is_empty());
+    assert!(!tracker.has_state(&sid));
+}
+
+#[tokio::test]
+async fn compact_settle_leaves_receipts_for_the_next_run() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    // A message posted mid-compact is the next run's trigger — its
+    // receipt must survive the compact's settlement (that run still
+    // needs it for the morph/split decision).
+    tracker.record_receipt(&sid, "user-msg-1".into());
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &compacting(true))
+        .await;
+    tracker
+        .handle_event(
+            &adapter,
+            &sid,
+            "chat-1",
+            None,
+            &compacted("Compacted 5 messages", false),
+        )
+        .await;
+    assert!(tracker.has_mid_run_posts(&sid));
+
+    // The follow-up run opens a fresh card on the same session.
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    assert_eq!(mock.cards.lock().await.len(), 2);
 }
 
 // ── Render helpers ──────────────────────────────────────────────────

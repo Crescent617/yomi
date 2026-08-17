@@ -407,6 +407,190 @@ async fn apply_compacted_messages_keeps_system_prompt() {
     assert_eq!(messages[1].role, Role::User);
 }
 
+/// `/compact` 的事件契约：手动 compact（无 run 包裹）必须发出
+/// `Compacting{true}` → `Compacting{false}` → `Compacted` 序列——频道状态卡
+/// 靠 `Compacting` 建卡、靠 `Compacted` 结算；早期失败（此处用空模型表触发
+/// 模型解析失败）也不例外，否则卡片永远转圈。
+#[tokio::test]
+async fn force_full_compact_emits_event_bracket_on_early_failure() {
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs};
+    use crate::event::{Event, ModelEvent};
+    use crate::types::SessionId;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    let event_bus = crate::comms::EventBus::new();
+    let mut shared = AgentShared::new(
+        Arc::new(BTreeMap::new()),
+        "test".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+        None,
+    );
+    shared.event_bus = Some(event_bus.clone());
+    let shared = Arc::new(shared);
+
+    let working_dir = tempfile::tempdir().unwrap();
+    let session_id = SessionId::new();
+    let args = AgentSpawnArgs {
+        base_prompt: "test".to_string(),
+        skills: Vec::new(),
+        history: Vec::new(),
+        session_id: session_id.to_string(),
+        parent_session_id: None,
+        max_iterations: 1,
+        working_dir: working_dir.path().to_path_buf(),
+        cancel_token: None,
+        tool_flags: crate::tools::ToolFlags::new(false),
+        file_state_store: None,
+        tool_blocklist: Vec::new(),
+        max_tool_output_length: 1024,
+        mailbox: Arc::new(crate::comms::Mailbox::new()),
+        input_bus: None,
+    };
+    let mut subscriber = event_bus.subscribe(session_id.clone());
+    let mut agent = Agent::new(&shared, args).await;
+
+    let result = agent.force_full_compact().await;
+    assert!(result.is_err(), "no models configured — must fail");
+
+    // Drain until Compacted shows up, collecting the compact event flow.
+    let mut flow = Vec::new();
+    while let Ok(Some((_, envelope))) =
+        tokio::time::timeout(Duration::from_secs(2), subscriber.recv()).await
+    {
+        let is_terminal = matches!(envelope.event, Event::Model(ModelEvent::Compacted { .. }));
+        match &envelope.event {
+            Event::Model(ModelEvent::Compacting { active }) => {
+                flow.push(format!("compacting:{active}"));
+            }
+            Event::Model(ModelEvent::Compacted { summary, is_error }) => {
+                flow.push(format!("compacted:{is_error}:{summary}"));
+            }
+            _ => {}
+        }
+        if is_terminal {
+            break;
+        }
+    }
+    assert_eq!(flow.len(), 3, "full bracket expected, got: {flow:?}");
+    assert_eq!(flow[0], "compacting:true");
+    assert_eq!(flow[1], "compacting:false");
+    assert!(
+        flow[2].starts_with("compacted:true:Model resolution failed"),
+        "early failure must settle as an error outcome: {}",
+        flow[2]
+    );
+}
+
+/// 从事件流里取下一条 `Compacted`（忽略其余事件）。
+async fn next_compacted(subscriber: &mut crate::comms::EventBusSubscriber) -> (String, bool) {
+    while let Ok(Some((_, envelope))) =
+        tokio::time::timeout(Duration::from_secs(2), subscriber.recv()).await
+    {
+        if let crate::event::Event::Model(crate::event::ModelEvent::Compacted {
+            summary,
+            is_error,
+        }) = envelope.event
+        {
+            return (summary, is_error);
+        }
+    }
+    panic!("no Compacted event emitted");
+}
+
+/// `handle_compaction_result` 把任何结局落成 `Compacted` 事件：成功、取消、
+/// API 失败都结算（取消另发 `Stopped{Cancelled}`，此处只断言 Compacted）。
+#[tokio::test]
+async fn compaction_result_emits_compacted_outcome() {
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs};
+    use crate::compactor::CompactionError;
+    use crate::provider::ModelConfig;
+    use crate::types::SessionId;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    let event_bus = crate::comms::EventBus::new();
+    let mut shared = AgentShared::new(
+        Arc::new(BTreeMap::new()),
+        "test".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+        None,
+    );
+    shared.event_bus = Some(event_bus.clone());
+    let shared = Arc::new(shared);
+
+    let working_dir = tempfile::tempdir().unwrap();
+    let session_id = SessionId::new();
+    let args = AgentSpawnArgs {
+        base_prompt: "test".to_string(),
+        skills: Vec::new(),
+        history: Vec::new(),
+        session_id: session_id.to_string(),
+        parent_session_id: None,
+        max_iterations: 1,
+        working_dir: working_dir.path().to_path_buf(),
+        cancel_token: None,
+        tool_flags: crate::tools::ToolFlags::new(false),
+        file_state_store: None,
+        tool_blocklist: Vec::new(),
+        max_tool_output_length: 1024,
+        mailbox: Arc::new(crate::comms::Mailbox::new()),
+        input_bus: None,
+    };
+    let mut subscriber = event_bus.subscribe(session_id.clone());
+    let mut agent = Agent::new(&shared, args).await;
+    let model_config = ModelConfig::default();
+
+    // Success with nothing to do.
+    let ok = agent
+        .handle_compaction_result(Ok(None), 0, &model_config)
+        .await;
+    assert_eq!(ok.as_deref(), Ok("No compaction needed"));
+    assert_eq!(
+        next_compacted(&mut subscriber).await,
+        ("No compaction needed".to_string(), false)
+    );
+
+    // Cancelled.
+    let cancelled = agent
+        .handle_compaction_result(Err(CompactionError::Cancelled), 0, &model_config)
+        .await;
+    assert!(matches!(cancelled.as_deref(), Err(e) if e == "Compaction was cancelled"));
+    assert_eq!(
+        next_compacted(&mut subscriber).await,
+        ("Compaction was cancelled".to_string(), true)
+    );
+
+    // API failure.
+    let failed = agent
+        .handle_compaction_result(
+            Err(CompactionError::Api("boom".to_string())),
+            0,
+            &model_config,
+        )
+        .await;
+    assert!(matches!(failed.as_deref(), Err(e) if e.contains("boom")));
+    let (summary, is_error) = next_compacted(&mut subscriber).await;
+    assert!(is_error);
+    assert!(summary.contains("boom"), "summary: {summary}");
+}
+
 /// A cancelled agent exits its loop instead of resetting and continuing:
 /// the next input respawns it with freshly assembled context (this is what
 /// makes `/cancel` double as a session reload).

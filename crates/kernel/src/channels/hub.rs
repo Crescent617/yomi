@@ -1380,11 +1380,18 @@ async fn handle_incoming_message(
             Ok(Some("Context cleared.".to_string()))
         }
         ChannelCommand::Compact => {
-            // Fire-and-forget: compacting progress shows on the status
-            // card when a run is live; otherwise this ack is the only
-            // feedback (outcome is only logged).
+            // Fire-and-forget: with observability the compact gets its own
+            // status card (materialized on `Compacting`, settled by
+            // `Compacted`) — that card is the feedback. Otherwise this
+            // text ack is the only one (the outcome is only logged).
             if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
                 kernel.compact_session(&sid);
+                let card_covers = config.observability
+                    && adapter.supports_status_card()
+                    && msg.doc_comment.is_none();
+                if card_covers {
+                    return Ok(None);
+                }
                 return Ok(Some("⏳ Compacting context…".to_string()));
             }
             Ok(Some("No session to compact.".to_string()))

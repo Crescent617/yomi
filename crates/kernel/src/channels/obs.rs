@@ -39,6 +39,12 @@
 //! same message delete the bot's previous reaction before re-adding:
 //! platforms deduplicate identical reactions, so only delete-then-re-add
 //! re-surfaces the signal (async runs on a silent session).
+//!
+//! A standalone compaction (`/compact` outside a run) has no run bracket,
+//! so it gets its own minimal card: materialized on
+//! `ModelEvent::Compacting { active: true }` when no run state exists,
+//! settled into an outcome receipt by `ModelEvent::Compacted`. A mid-run
+//! (auto) compact only flips the live card's phase instead.
 
 use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolEvent};
 use crate::types::SessionId;
@@ -166,6 +172,10 @@ struct ObsCardState {
     /// Consecutive heartbeat-patch failures; reaching
     /// [`PATCH_FAILURE_LIMIT`] trips `send_failed` for the rest of the run.
     patch_failures: u32,
+    /// Standalone-compact card (`/compact` outside a run): materialized on
+    /// `Compacting { active: true }` when no run state exists, settled by
+    /// `Compacted` instead of the run's `Stopped`.
+    compact_only: bool,
 }
 
 impl ObsCardState {
@@ -190,6 +200,7 @@ impl ObsCardState {
             last_patch_at: now,
             send_failed: false,
             patch_failures: 0,
+            compact_only: false,
         }
     }
 
@@ -515,7 +526,25 @@ impl ObsTracker {
             }
             Event::Model(ModelEvent::Compacting { active }) => {
                 let active = *active;
+                if active && !self.states.contains_key(session_id) {
+                    // Standalone compaction (manual `/compact` outside a
+                    // run): no run brackets it, so it gets its own status
+                    // card — materialized immediately, settled by
+                    // `Compacted`.
+                    let mut state = ObsCardState::new(Arc::clone(adapter), chat_id, reply_msg_id);
+                    state.phase = Phase::Text("📦 Compacting context…".to_string());
+                    state.compact_only = true;
+                    self.states.insert(session_id.clone(), state);
+                    self.materialize_card(session_id).await;
+                    return;
+                }
                 self.update_running(session_id, |s| {
+                    // A standalone compact's card keeps its phase until
+                    // `Compacted` settles it; a mid-run (auto) compact
+                    // only flips the live card's phase.
+                    if s.compact_only {
+                        return;
+                    }
                     s.phase = if active {
                         Phase::Text("📦 Compacting context…".to_string())
                     } else {
@@ -523,6 +552,15 @@ impl ObsTracker {
                     };
                 })
                 .await;
+            }
+            Event::Model(ModelEvent::Compacted { summary, is_error }) => {
+                // Only a standalone compact's own card settles here; a
+                // mid-run (auto) compact rides the live run's card, which
+                // the run's `Stopped` settles.
+                let compact_only = self.states.get(session_id).is_some_and(|s| s.compact_only);
+                if compact_only {
+                    self.settle_compact(session_id, summary, *is_error).await;
+                }
             }
             Event::Model(ModelEvent::Fallback { from, to, .. }) => {
                 let phase = Phase::Text(format!("↪️ Fallback: {from} → {to}"));
@@ -889,6 +927,36 @@ impl ObsTracker {
         }
     }
 
+    /// Settle a standalone compact's status card (`/compact` outside a
+    /// run): morph it into the outcome receipt. No settle reaction — the
+    /// card's own send already notified, and the command message is never
+    /// recorded as a reaction target. Run receipts are left alone: a
+    /// message posted mid-compact is the next run's trigger, and that
+    /// run's settlement still needs it for the morph/split decision.
+    async fn settle_compact(&self, session_id: &SessionId, summary: &str, is_error: bool) {
+        let Some((_, state)) = self.states.remove(session_id) else {
+            return;
+        };
+        let card = render_compact_terminal(&state, summary, is_error);
+        if state.status_msg_id.is_empty() {
+            // Never materialized (send failed): failures still get an
+            // explanation as a new message; a silent success stays silent.
+            if is_error {
+                if let Err(e) = state
+                    .adapter
+                    .send_card(&state.chat_id, &card, state.reply_msg_id.as_deref())
+                    .await
+                {
+                    warn!(error = %e, "obs compact settle card send failed");
+                }
+            }
+            return;
+        }
+        if let Err(e) = state.adapter.update_card(&state.status_msg_id, &card).await {
+            warn!(error = %e, "obs compact settle card patch failed");
+        }
+    }
+
     /// React on the session's latest user message as the completion
     /// signal for a silently-settled card. A reaction the bot added on a
     /// previous settle is deleted first: platforms deduplicate identical
@@ -1055,6 +1123,38 @@ fn render_terminal(s: &ObsCardState, settle: &Settle, keep_trace: bool) -> Strin
     json!({
         "schema": "2.0",
         "body": { "elements": elements }
+    })
+    .to_string()
+}
+
+/// Terminal receipt for a standalone compact (`/compact` outside a run):
+/// one quiet line (outcome + elapsed) plus the result detail — same
+/// headerless receipt style as [`render_terminal`].
+fn render_compact_terminal(s: &ObsCardState, summary: &str, is_error: bool) -> String {
+    let (emoji, verb) = if is_error {
+        ("❌", "Compaction failed")
+    } else {
+        ("✅", "Compacted")
+    };
+    let mut lines = vec![format!(
+        "{emoji} **{verb}** — ⏱ {}",
+        fmt_elapsed(s.started_at.elapsed())
+    )];
+    if is_error {
+        lines.push(error_line(summary));
+    } else {
+        lines.push(format!(
+            "<font color='grey'>{}</font>",
+            reply::md_safe(summary)
+        ));
+    }
+    json!({
+        "schema": "2.0",
+        "body": {
+            "elements": [
+                { "tag": "markdown", "text_size": "notation", "content": lines.join("\n") },
+            ],
+        },
     })
     .to_string()
 }
