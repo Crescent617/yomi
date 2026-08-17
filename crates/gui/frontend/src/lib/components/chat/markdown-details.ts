@@ -38,9 +38,17 @@ export function splitDetailsBlocks(content: string): SplitDetails {
   const blocks: { summary: string; body: string }[] = [];
   const out: string[] = [];
 
+  // 代码围栏内的 <details> 是示例而非声明——与 mention 的 fence 规则一致
+  let fenced = false;
   let i = 0;
   while (i < lines.length) {
-    if (!OPEN_RE.test(lines[i])) {
+    if (lines[i].trimStart().startsWith("```")) {
+      fenced = !fenced;
+      out.push(lines[i]);
+      i++;
+      continue;
+    }
+    if (fenced || !OPEN_RE.test(lines[i])) {
       out.push(lines[i]);
       i++;
       continue;
@@ -70,6 +78,11 @@ export function splitDetailsBlocks(content: string): SplitDetails {
     blocks.push({ summary, body });
     // 占位行必须独立成段，smd 才会渲染成独立 <p>
     out.push("", `${DETAILS_MARKER_PREFIX}${blocks.length - 1}%%`, "");
+    // 被切走的块内若含围栏标记，围栏状态按奇偶延续
+    const fenceLines = lines
+      .slice(i, close + 1)
+      .filter((l) => l.trimStart().startsWith("```")).length;
+    if (fenceLines % 2 === 1) fenced = !fenced;
     i = close + 1;
   }
 

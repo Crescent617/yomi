@@ -6479,3 +6479,47 @@ async fn trigger_touches_session_recency() {
     assert!(t1 > t0, "updated_at not refreshed: {t0} -> {t1}");
     kernel.stop();
 }
+
+#[tokio::test]
+async fn deliver_reply_with_mention_flushes_new_message_without_mid_run_posts() {
+    let mock = Arc::new(CardMockAdapter::new());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(crate::channels::obs::ObsTracker::new());
+    let sid = SessionId::new();
+
+    obs.handle_event(&adapter, &sid, "chat-1", None, &running_event())
+        .await;
+    obs.handle_event(&adapter, &sid, "chat-1", None, &tool_start_event())
+        .await;
+    // 无 mid-run posts，但回复含 <@USER_ID> —— 必须沉底发新消息才会通知。
+
+    let mut buf = run_buffer();
+    buf.record_model_end("cc <@ou_abc> 看一下");
+    deliver_reply(
+        &obs,
+        &adapter,
+        &test_routing(),
+        Some(buf.into_reply()),
+        true,
+        true,
+        true,
+        &sid,
+        SettleKind::Stopped(&completed()),
+        &std::sync::Weak::new(),
+    )
+    .await;
+
+    // 状态卡冻结为一行终态凭据（无 morph）……
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1, "frozen in place, no morph");
+    assert!(patches[0].1.contains("✅ **Done**"));
+    assert!(
+        !patches[0].1.contains("cc <@"),
+        "status card must not morph into the reply"
+    );
+    drop(patches);
+    // ……回复全文沉底发新消息，<@id> 重写为 <at id=>
+    let cards = mock.cards.lock().await;
+    assert_eq!(cards.len(), 2, "materialize + reply card");
+    assert!(cards[1].1.contains("cc <at id=ou_abc></at> 看一下"));
+}

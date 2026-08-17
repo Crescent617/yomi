@@ -41,3 +41,12 @@ describe("splitDetailsBlocks", () => {
     expect(blocks[0].summary).toBe("带 <code>code</code> 的标题");
   });
 });
+
+test("details inside fenced code stays as raw text", () => {
+  const raw =
+    "用法：\n```\n<details>\n<summary>示例</summary>\nx\n</details>\n```\n<details>\n<summary>真的</summary>\ny\n</details>";
+  const { text, blocks } = splitDetailsBlocks(raw);
+  expect(blocks).toEqual([{ summary: "真的", body: "y" }]);
+  expect(text).toContain("<summary>示例</summary>");
+  expect(text).toContain("%%YOMI-DETAILS-0%%");
+});
