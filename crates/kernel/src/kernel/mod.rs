@@ -28,6 +28,8 @@ pub struct ModelInfo {
 #[derive(Debug, Clone)]
 pub struct CreateSessionInput {
     pub project_id: Option<ProjectId>,
+    /// `None` 时继承 `project_id` 的项目目录（创建时定型）；两者都缺省
+    /// 则运行时回落 `<data_dir>/workspace`。
     pub working_dir: Option<std::path::PathBuf>,
     /// `None` 在创建时回落到配置的 `auto_approve`（创建时定型存储，
     /// 之后修改配置不影响已建会话）。
@@ -662,7 +664,7 @@ impl Kernel {
     /// Create a new session with the given input.
     #[tracing::instrument(skip(self, input))]
     pub async fn create_session(&self, input: CreateSessionInput) -> Result<SessionId> {
-        let _project = match &input.project_id {
+        let project = match &input.project_id {
             Some(pid) => Some(
                 self.project_store
                     .get(pid)
@@ -672,11 +674,16 @@ impl Kernel {
             None => None,
         };
 
+        // working_dir 缺省时继承项目目录（创建时定型存储），而不是运行时
+        // 才回落 data_dir/workspace——定型后各处的 cwd 解析（spawn、
+        // workspace 技能/模板、渠道附件投递）自然一致。
         let working_dir = if let Some(p) = input.working_dir {
             let canonical = tokio::fs::canonicalize(&p).await;
             Some(canonical.unwrap_or(p).to_string_lossy().to_string())
         } else {
-            None
+            project
+                .as_ref()
+                .map(|p| p.dir.to_string_lossy().to_string())
         };
 
         let id = SessionId::new();
@@ -974,15 +981,10 @@ impl Kernel {
                 session_id: session_id.0.to_string(),
             })?;
 
-        let working_dir = info.working_dir.map(std::path::PathBuf::from);
-        let project_dir = match &info.project_id {
-            Some(pid) => self.project_store.get(pid).await?.map(|p| p.dir),
-            None => None,
-        };
-        let data_dir = self.data_dir().await;
-        let cwd = working_dir
-            .or(project_dir)
-            .or_else(|| Some(data_dir.join("workspace")));
+        let cwd = Some(crate::utils::path::session_workspace_dir(
+            &self.data_dir().await,
+            info.working_dir.map(std::path::PathBuf::from),
+        ));
 
         let workspace_skill_dir = match cwd.as_ref() {
             Some(dir) => crate::skill::workspace_skill_dir(dir).await,
@@ -1001,9 +1003,10 @@ impl Kernel {
     /// session: session `working_dir` → `<data_dir>/workspace`.
     ///
     /// Deliberately mirrors the subagent spawn resolution
-    /// (`tools/subagent.rs`, `kernel/conductor.rs`), which does NOT fall back
-    /// to the project dir — the panel must show what spawn sees.
-    /// (`list_session_skills` uses a different, project-aware chain.)
+    /// (`tools/subagent.rs`, `kernel/conductor.rs`) — the panel must show
+    /// what spawn sees. Sessions created with a project get the project
+    /// dir stamped into `working_dir` at creation time, so the chain
+    /// needs no project lookup (same for `list_session_skills`).
     /// `None` session means no workspace context.
     async fn session_asset_cwd(
         &self,

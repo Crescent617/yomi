@@ -130,3 +130,71 @@ async fn auto_gc_disabled_by_default() {
 
     kernel.stop();
 }
+
+/// `create_session` without an explicit `working_dir` inherits the project
+/// dir at creation time (instead of falling back to `<data_dir>/workspace`
+/// at runtime); with neither project nor dir it stays unset.
+#[tokio::test]
+async fn create_session_inherits_project_dir_when_working_dir_absent() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    config.finalize();
+    let kernel = crate::build_kernel(&config, false).await.unwrap();
+
+    let proj_dir = tmp.path().join("proj");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    let project = kernel.create_project(proj_dir.clone(), None).await.unwrap();
+
+    let new_session = |project_id, working_dir| crate::kernel::CreateSessionInput {
+        project_id,
+        working_dir,
+        auto_approve_level: None,
+        tool_blocklist: vec![],
+        model_key: None,
+    };
+    let stored_dir = async |sid: &crate::types::SessionId| {
+        kernel
+            .session_store()
+            .await
+            .get(sid)
+            .await
+            .unwrap()
+            .unwrap()
+            .working_dir
+    };
+
+    // Project-only creation inherits the (canonicalized) project dir.
+    let sid = kernel
+        .create_session(new_session(Some(project.id.clone()), None))
+        .await
+        .unwrap();
+    assert_eq!(
+        stored_dir(&sid).await.map(std::path::PathBuf::from),
+        Some(std::fs::canonicalize(&proj_dir).unwrap())
+    );
+
+    // An explicit working_dir wins over the project dir.
+    let other = tmp.path().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    let sid = kernel
+        .create_session(new_session(Some(project.id.clone()), Some(other.clone())))
+        .await
+        .unwrap();
+    assert_eq!(
+        stored_dir(&sid).await.map(std::path::PathBuf::from),
+        Some(std::fs::canonicalize(&other).unwrap())
+    );
+
+    // Neither project nor dir → stays unset (runtime falls back to the
+    // default workspace).
+    let sid = kernel
+        .create_session(new_session(None, None))
+        .await
+        .unwrap();
+    assert_eq!(stored_dir(&sid).await, None);
+
+    kernel.stop();
+}
