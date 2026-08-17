@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.86] - 2026-08-17
+
+### Changed
+- @ 人提示只注入 IM 通道会话，本地 TUI/GUI 会话的 prompt 不再携带这段内容。
+
+### Fixed
+- 修复行内代码中的孤立反引号会导致后续 `<@用户ID>` 提及失效的问题。
+
 ## [0.7.85] - 2026-08-17
 
 ### Added
