@@ -470,11 +470,15 @@ impl Conductor {
         // ones via post_message), which relays questions instead.
         // Temporary heuristic until per-session tool_blocklist is persisted
         // in session meta at creation time.
+        // Channel routing shapes two decisions below (ask_user blocklist,
+        // mention prompt section) — resolve it once. Subagent sessions
+        // carry no mapping of their own; the parent chain is walked.
+        let channel_routed = self.is_channel_routed(sid, session_info.as_ref()).await;
         let mut tool_blocklist = self.agent_config.tool_blocklist.clone();
         if !tool_blocklist
             .iter()
             .any(|p| p == crate::tools::ask_user::ASK_USER_TOOL_NAME)
-            && (is_sub_agent || self.is_channel_routed(sid, session_info.as_ref()).await)
+            && (is_sub_agent || channel_routed)
         {
             tool_blocklist.push(crate::tools::ask_user::ASK_USER_TOOL_NAME.to_string());
         }
@@ -523,7 +527,7 @@ impl Conductor {
                 self.base_prompt,
                 crate::prompt::contract_sections(
                     self.agent_config.enable_attachments,
-                    self.is_channel_routed(sid, session_info.as_ref()).await,
+                    channel_routed,
                 )
             ),
             None => self.base_prompt.clone(),

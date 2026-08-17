@@ -198,3 +198,21 @@ async fn rejects_relative_without_base_and_directories() {
         .await
         .is_none());
 }
+
+#[test]
+fn block_before_unterminated_fence_is_stripped() {
+    // 截断回复（fence 未闭合）不改变块的位置事实：块在 fence 之外，正常交付。
+    let text = "<yomi_attachments>\nout.pdf\n</yomi_attachments>\n```\n truncated";
+    let (cleaned, paths) = parse_attachments(text);
+    assert_eq!(cleaned, "```\n truncated");
+    assert_eq!(paths, vec!["out.pdf"]);
+}
+
+#[test]
+fn block_inside_unterminated_fence_is_kept() {
+    // fence 开了没合，块一直在 fence 里 → 是示例不是声明。
+    let text = "```\n<yomi_attachments>\nout.pdf\n</yomi_attachments>";
+    let (cleaned, paths) = parse_attachments(text);
+    assert_eq!(cleaned, text);
+    assert!(paths.is_empty());
+}

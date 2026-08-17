@@ -12,17 +12,20 @@ pub(crate) const MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::fro
 /// so a runaway `<@...>` never matches.
 pub(crate) fn rewrite_mentions(text: &str, render: &dyn Fn(&str) -> String) -> String {
     crate::utils::markdown::map_outside_fences(text, |run, out| {
-        // Split inline code spans on backticks; rewrite only outside spans.
-        let mut in_code = false;
-        for (i, segment) in run.split('`').enumerate() {
-            if i > 0 {
-                out.push('`');
-                in_code = !in_code;
-            }
-            if in_code {
-                out.push_str(segment);
-            } else {
-                rewrite_mention_segment(segment, render, out);
+        // Split inline code spans on backticks, per line: an unbalanced
+        // backtick must not suppress mentions in later lines.
+        for line in run.split_inclusive('\n') {
+            let mut in_code = false;
+            for (i, segment) in line.split('`').enumerate() {
+                if i > 0 {
+                    out.push('`');
+                    in_code = !in_code;
+                }
+                if in_code {
+                    out.push_str(segment);
+                } else {
+                    rewrite_mention_segment(segment, render, out);
+                }
             }
         }
     })
