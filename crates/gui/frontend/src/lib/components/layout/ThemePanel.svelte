@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { Check, Pencil, Plus, Trash2 } from "lucide-svelte";
+  import { Check, Pencil, Plus } from "lucide-svelte";
+  import LongPressDelete from "../ui/LongPressDelete.svelte";
   import { showNotification } from "../../state.svelte";
   import {
     guiPreferences,
@@ -147,14 +148,12 @@
         >
           <Pencil size={12} />
         </button>
-        <button
-          type="button"
-          onclick={() => handleDelete(theme)}
-          title="Delete theme"
-          class="rounded-md bg-background/80 p-1 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
-        >
-          <Trash2 size={12} />
-        </button>
+        <LongPressDelete
+          label="Delete theme"
+          size={12}
+          class="rounded-md bg-background/80 p-1 opacity-0 transition-opacity group-hover:opacity-100"
+          ondelete={() => handleDelete(theme)}
+        />
       </span>
     {/if}
   </div>

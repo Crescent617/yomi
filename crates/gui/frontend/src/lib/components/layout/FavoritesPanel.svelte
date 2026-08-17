@@ -8,7 +8,6 @@
     Check,
     Share2,
     ExternalLink,
-    Trash2,
     ArrowLeft,
   } from "lucide-svelte";
   import * as api from "../../api";
@@ -29,8 +28,8 @@
   import { requestShare } from "../../share.svelte";
   import { formatMessageTime } from "../../utils";
   import TextBlock from "../chat/TextBlock.svelte";
-  import ConfirmDialog from "../ui/ConfirmDialog.svelte";
   import IconButton from "../ui/IconButton.svelte";
+  import LongPressDelete from "../ui/LongPressDelete.svelte";
   import PanelHeader from "./PanelHeader.svelte";
 
   interface Props {
@@ -46,7 +45,6 @@
   let refreshing = $state(false);
   let copied = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
-  let deleteTarget = $state<FavoriteAnswer | null>(null);
   let deleting = $state(false);
 
   const visibleItems = $derived(searchResults ?? favoritesState.items);
@@ -171,15 +169,14 @@
       ) ?? null;
   }
 
-  async function confirmDelete() {
-    if (!deleteTarget || deleting) return;
+  async function removeSelected() {
+    if (!selected || deleting) return;
     deleting = true;
-    const target = deleteTarget;
+    const target = selected;
     try {
       await deleteFavorite(target.id);
       searchResults =
         searchResults?.filter((item) => item.id !== target.id) ?? null;
-      deleteTarget = null;
     } finally {
       deleting = false;
     }
@@ -354,11 +351,9 @@
               icon={ExternalLink}
               onclick={jumpToSource}
             />
-            <IconButton
+            <LongPressDelete
               label="Remove favorite"
-              icon={Trash2}
-              tone="destructive"
-              onclick={() => (deleteTarget = selected)}
+              ondelete={removeSelected}
             />
           </div>
         </header>
@@ -397,12 +392,3 @@
     </section>
   </div>
 </div>
-
-<ConfirmDialog
-  open={deleteTarget !== null}
-  title="Remove favorite"
-  message="Remove this answer from favorites? The original message is not affected."
-  confirmText="Remove"
-  onConfirm={confirmDelete}
-  onCancel={() => (deleteTarget = null)}
-/>

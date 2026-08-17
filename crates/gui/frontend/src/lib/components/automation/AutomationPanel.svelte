@@ -16,12 +16,11 @@
     RefreshCw,
     RotateCcw,
     Terminal,
-    Trash2,
   } from "lucide-svelte";
   import { automationStore } from "../../automation.svelte";
   import { isNeverExpires, type CronJob } from "../../api";
-  import ConfirmDialog from "../ui/ConfirmDialog.svelte";
   import IconButton from "../ui/IconButton.svelte";
+  import LongPressDelete from "../ui/LongPressDelete.svelte";
   import CreateJobModal from "./CreateJobModal.svelte";
   import PanelHeader from "../layout/PanelHeader.svelte";
 
@@ -35,7 +34,6 @@
     job_id: string;
     type: "run" | "toggle" | "delete";
   } | null>(null);
-  let deleteTarget = $state<CronJob | null>(null);
 
   onMount(() => {
     void automationStore.load();
@@ -110,13 +108,11 @@
     }
   }
 
-  async function deleteJob() {
-    if (!deleteTarget || pendingAction) return;
-    const job = deleteTarget;
+  async function deleteJob(job: CronJob) {
+    if (pendingAction) return;
     pendingAction = { job_id: job.id, type: "delete" };
     try {
       await automationStore.delete(job.id);
-      deleteTarget = null;
     } finally {
       pendingAction = null;
     }
@@ -324,12 +320,10 @@
               disabled={pendingAction !== null}
               onclick={() => automationStore.openEdit(job.id)}
             />
-            <IconButton
+            <LongPressDelete
               label="Delete task"
-              icon={Trash2}
-              tone="destructive"
               disabled={pendingAction !== null}
-              onclick={() => (deleteTarget = job)}
+              ondelete={() => deleteJob(job)}
             />
           </div>
         </div>
@@ -485,19 +479,3 @@
     }}
   />
 {/if}
-
-<ConfirmDialog
-  open={deleteTarget !== null}
-  title="Delete scheduled task?"
-  message={deleteTarget
-    ? `“${deleteTarget.name}” will be permanently deleted. This cannot be undone.`
-    : ""}
-  confirmText={deleteTarget && isPending(deleteTarget.id, "delete")
-    ? "Deleting..."
-    : "Delete"}
-  cancelText="Cancel"
-  onConfirm={deleteJob}
-  onCancel={() => {
-    if (!pendingAction) deleteTarget = null;
-  }}
-/>
