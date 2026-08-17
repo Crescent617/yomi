@@ -133,17 +133,20 @@ pub async fn extract_inline_image(msg: &mut crate::types::Message, data_dir: &Pa
     }
 }
 
-/// Read asset bytes by `asset://{hash}.{ext}` URL.
-pub async fn read_asset(url: &str, data_dir: &Path) -> Option<Vec<u8>> {
-    let hash_ext = url.strip_prefix("asset://")?;
-    let path = data_dir.join("assets").join(hash_ext);
-    fs::read(&path).await.ok()
-}
-
 /// Get the absolute filesystem path for an asset URL.
+///
+/// Asset names are flat `{hash}.{ext}`: anything with path separators or
+/// `..` components is rejected so a crafted URL cannot escape the assets
+/// directory.
 pub fn asset_path(url: &str, data_dir: &Path) -> Option<std::path::PathBuf> {
     let hash_ext = url.strip_prefix("asset://")?;
-    Some(data_dir.join("assets").join(hash_ext))
+    let mut components = std::path::Path::new(hash_ext).components();
+    match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(_)), None) => {
+            Some(data_dir.join("assets").join(hash_ext))
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]

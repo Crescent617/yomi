@@ -3,17 +3,15 @@
    * Attachments declared via `<yomi_attachments>` blocks in an assistant
    * message: images render inline as a gallery (click opens the in-app
    * lightbox), everything else renders as chips (click opens the system
-   * default app). Resolution happens against the session workspace on the
-   * backend (same safety rules as channel delivery); images that fail to
-   * load fall back to chips.
-   *
-   * Limitation: files are resolved on the LOCAL filesystem, so attachments
-   * neither load nor open when the GUI is connected to a remote daemon
-   * (they live on the daemon's host) — images degrade to chips and clicks
-   * surface an error toast. Proper support needs a wire-level file read.
+   * default app). Resolution happens on the daemon's host — same safety
+   * rules as channel delivery — with bytes fetched over the wire in
+   * remote mode, so both modes behave the same. Images that fail to load
+   * fall back to chips. Opening a file in remote mode downloads it into a
+   * local content-keyed cache first and opens that copy.
    */
   import { ImageOff, Loader2, Paperclip } from "lucide-svelte";
   import { errorMessage, openAttachment, readAttachmentImage } from "../../api";
+  import { connectionState } from "../../connection.svelte";
   import { previewImage } from "../../image-preview.svelte";
   import { getSession, showNotification } from "../../state.svelte";
 
@@ -48,6 +46,7 @@
 
   const baseDir = $derived(getSession(session_id)?.project_path ?? null);
   const uniquePaths = $derived([...new Set(paths)]);
+  const isRemote = $derived(connectionState.info?.mode === "remote");
 
   // Per-image load state: undefined = loading, url = ready, failed = chip.
   // `retryable` marks failures that happened without a workspace path —
@@ -87,11 +86,19 @@
     }
   }
 
+  // Remote opens download the file first — track the in-flight chip so
+  // it can show a spinner and ignore repeat clicks.
+  let opening = $state<string | null>(null);
+
   async function open(path: string) {
+    if (opening) return;
+    opening = path;
     try {
       await openAttachment(baseDir, path);
     } catch (e: unknown) {
       showNotification(errorMessage(e), "error");
+    } finally {
+      opening = null;
     }
   }
 </script>
@@ -149,15 +156,23 @@
   <div class="mt-1.5 flex flex-wrap gap-1.5">
     {#each filePaths as path (path)}
       {@const failed = images[path]?.failed === true}
+      {@const downloading = opening === path}
       <button
         type="button"
+        disabled={downloading}
         class="inline-flex max-w-60 items-center gap-1.5 rounded-md border border-border bg-secondary/40 px-2 py-1 text-xs transition-colors {failed
           ? 'text-muted-foreground/70 hover:bg-secondary/60'
-          : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}"
-        title={failed ? `${path} (preview unavailable)` : path}
+          : 'text-muted-foreground hover:bg-secondary hover:text-foreground'} disabled:opacity-70"
+        title={failed
+          ? `${path} (preview unavailable)`
+          : isRemote
+            ? `${path} (opens a downloaded copy)`
+            : path}
         onclick={() => open(path)}
       >
-        {#if failed && isImagePath(path)}
+        {#if downloading}
+          <Loader2 size={12} class="shrink-0 animate-spin" />
+        {:else if failed && isImagePath(path)}
           <ImageOff size={12} class="shrink-0" />
         {:else}
           <Paperclip size={12} class="shrink-0" />

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tauri::State;
+use tauri::{Manager, State};
 
 use crate::error::GuiError;
 use crate::state::AppState;
@@ -12,11 +12,16 @@ pub async fn ping(_state: State<'_, AppState>) -> Result<bool, GuiError> {
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn read_asset(state: State<'_, AppState>, url: String) -> Result<Vec<u8>, GuiError> {
-    state
-        .kernel_snapshot()
-        .read_asset(url)
-        .await
-        .map_err(GuiError::kernel)
+    let kernel = state.kernel_snapshot();
+    let source = kernel::utils::file_read::FileSource::Asset { url };
+    let (bytes, _mime) = kernel::client::read_file_bytes(
+        kernel.as_ref(),
+        source,
+        kernel::utils::image::MAX_IMAGE_SIZE,
+    )
+    .await
+    .map_err(GuiError::kernel)?;
+    Ok(bytes)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -315,7 +320,8 @@ pub async fn open_default(target: String) -> Result<(), GuiError> {
 
 /// Resolve a declared attachment path against the session workspace
 /// (`kernel::utils::attachments::resolve_attachment`), mapping every
-/// failure to the same user-facing error.
+/// failure to the same user-facing error. Local-mode fast path of
+/// [`open_attachment`].
 async fn resolve_attachment_arg(
     base_dir: Option<String>,
     path: &str,
@@ -331,18 +337,141 @@ async fn resolve_attachment_arg(
 }
 
 /// Open a declared attachment file (from a `<yomi_attachments>` block in an
-/// assistant message). Resolved with the same rules as channel delivery
-/// (`kernel::utils::attachments::resolve_attachment`): relative paths must
-/// stay inside the session workspace; missing/non-file/escaping paths are
-/// rejected. Without a `base_dir` only absolute paths resolve.
+/// assistant message). Resolution follows the same rules as channel
+/// delivery (`kernel::utils::attachments::resolve_attachment`) — applied
+/// on the daemon's host, so both connection modes behave the same.
 ///
-/// Limitation: resolution happens on the local filesystem — attachments of
-/// a REMOTE daemon's sessions (files on the daemon's host) cannot open.
+/// Local mode opens the file in place (edits land on the real file).
+/// Remote mode fetches the bytes over the wire into a local content-keyed
+/// cache and opens that copy — edits do NOT propagate back to the daemon.
 #[tauri::command(rename_all = "snake_case")]
-pub async fn open_attachment(base_dir: Option<String>, path: String) -> Result<(), GuiError> {
-    let resolved = resolve_attachment_arg(base_dir, &path).await?;
-    tauri_plugin_opener::open_path(&resolved, None::<&str>)
+pub async fn open_attachment(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    base_dir: Option<String>,
+    path: String,
+) -> Result<(), GuiError> {
+    let target = match state.connection_mode() {
+        crate::state::ConnectionMode::Local => resolve_attachment_arg(base_dir, &path).await?,
+        crate::state::ConnectionMode::Remote(addr) => {
+            fetch_remote_attachment(&app, &state.kernel_snapshot(), &addr, base_dir, &path).await?
+        }
+    };
+    tauri_plugin_opener::open_path(&target, None::<&str>)
         .map_err(|e| GuiError::unknown(format!("Failed to open: {e}")))?;
+    Ok(())
+}
+
+/// Fetch a remote attachment into the local cache and return the cached
+/// copy's path. The daemon stats the file first (a `limit = 0` read, which
+/// is also where unsafe paths are rejected); the cache entry name encodes
+/// size + mtime, so a changed file invalidates naturally and a re-click on
+/// an unchanged file opens instantly.
+async fn fetch_remote_attachment(
+    app: &tauri::AppHandle,
+    kernel: &Arc<dyn kernel::client::KernelApi>,
+    addr: &kernel::transport::SocketAddr,
+    base_dir: Option<String>,
+    path: &str,
+) -> Result<std::path::PathBuf, GuiError> {
+    let source = kernel::utils::file_read::FileSource::Attachment {
+        base_dir: base_dir.filter(|d| !d.is_empty()),
+        path: path.to_string(),
+    };
+    let meta = kernel
+        .read_file(source.clone(), None, Some(0))
+        .await
+        .map_err(GuiError::kernel)?;
+
+    let cache_root = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| GuiError::unknown(format!("locate app cache dir: {e}")))?;
+    let dir = remote_cache_dir(&cache_root, addr, path);
+    let target = dir.join(cache_entry_name(meta.file_size, meta.mtime_ms, path));
+    if !target.exists() {
+        download_remote_file(kernel, &source, meta.file_size, &dir, &target).await?;
+    }
+    Ok(target)
+}
+
+/// Per-attachment cache directory for remote downloads:
+/// `{cache}/remote-attachments/{hash(daemon + path)}/`.
+fn remote_cache_dir(
+    cache_root: &std::path::Path,
+    addr: &kernel::transport::SocketAddr,
+    path: &str,
+) -> std::path::PathBuf {
+    let key = blake3::hash(format!("{addr}\0{path}").as_bytes()).to_hex();
+    cache_root
+        .join("remote-attachments")
+        .join(&key.as_str()[..16])
+}
+
+/// Cache entry name encoding content identity: a file whose size or mtime
+/// changed gets a new name, so stale copies never open.
+fn cache_entry_name(file_size: u64, mtime_ms: u64, path: &str) -> String {
+    let basename = path
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("file");
+    format!("{mtime_ms}-{file_size}-{basename}")
+}
+
+/// Stream `source` into `target` chunk by chunk (via a temp file in the
+/// same directory, renamed into place on completion), replacing stale
+/// versions of the same remote attachment.
+async fn download_remote_file(
+    kernel: &Arc<dyn kernel::client::KernelApi>,
+    source: &kernel::utils::file_read::FileSource,
+    file_size: u64,
+    dir: &std::path::Path,
+    target: &std::path::Path,
+) -> Result<(), GuiError> {
+    use base64::Engine as _;
+    use tokio::io::AsyncWriteExt;
+
+    tokio::fs::create_dir_all(dir)
+        .await
+        .map_err(|e| GuiError::unknown(format!("create attachment cache: {e}")))?;
+    // Replace stale versions of this attachment.
+    let mut entries = tokio::fs::read_dir(dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let _ = tokio::fs::remove_file(entry.path()).await;
+    }
+
+    let tmp = dir.join(".download");
+    let result: Result<(), GuiError> = async {
+        let mut file = tokio::fs::File::create(&tmp).await?;
+        let mut offset = 0u64;
+        while offset < file_size {
+            let chunk = kernel
+                .read_file(source.clone(), Some(offset), None)
+                .await
+                .map_err(GuiError::kernel)?;
+            if chunk.end_offset <= offset {
+                return Err(GuiError::unknown(format!(
+                    "download stalled at {offset}/{file_size} bytes"
+                )));
+            }
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(&chunk.data_base64)
+                .map_err(|e| GuiError::unknown(format!("decode file chunk: {e}")))?;
+            file.write_all(&data).await?;
+            offset = chunk.end_offset;
+        }
+        file.flush().await?;
+        Ok(())
+    }
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&tmp).await;
+    }
+    result?;
+    tokio::fs::rename(&tmp, target)
+        .await
+        .map_err(|e| GuiError::unknown(format!("store attachment: {e}")))?;
     Ok(())
 }
 
@@ -356,37 +485,33 @@ pub struct AttachmentImage {
 /// Largest image read for inline display (rejects accidental huge reads).
 const MAX_INLINE_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 
-/// Read an image attachment for inline display. Same resolution rules as
-/// [`open_attachment`] — including its local-filesystem limitation
-/// (remote-daemon attachments cannot load); non-images and oversized files
-/// are rejected (the frontend falls back to a plain chip).
+/// Read an image attachment for inline display. Bytes come from the daemon
+/// over `KernelApi::read_file`, so local and remote mode behave the same;
+/// non-images and oversized files are rejected (the frontend falls back to
+/// a plain chip).
 #[tauri::command(rename_all = "snake_case")]
 pub async fn read_attachment_image(
+    state: State<'_, AppState>,
     base_dir: Option<String>,
     path: String,
 ) -> Result<AttachmentImage, GuiError> {
     use base64::Engine as _;
 
-    let resolved = resolve_attachment_arg(base_dir, &path).await?;
-
-    let mime = mime_guess::from_path(&resolved).first_or_octet_stream();
-    if mime.type_() != "image" {
+    let kernel = state.kernel_snapshot();
+    let source = kernel::utils::file_read::FileSource::Attachment {
+        base_dir: base_dir.filter(|d| !d.is_empty()),
+        path: path.clone(),
+    };
+    let (bytes, mime) =
+        kernel::client::read_file_bytes(kernel.as_ref(), source, MAX_INLINE_IMAGE_BYTES)
+            .await
+            .map_err(GuiError::kernel)?;
+    if !mime.starts_with("image/") {
         return Err(GuiError::unknown(format!("not an image: {path}")));
     }
-    let meta = tokio::fs::metadata(&resolved)
-        .await
-        .map_err(|e| GuiError::unknown(format!("stat attachment: {e}")))?;
-    if meta.len() > MAX_INLINE_IMAGE_BYTES {
-        return Err(GuiError::unknown(format!(
-            "image too large to preview: {path}"
-        )));
-    }
-    let bytes = tokio::fs::read(&resolved)
-        .await
-        .map_err(|e| GuiError::unknown(format!("read attachment: {e}")))?;
     Ok(AttachmentImage {
         data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
-        mime: mime.essence_str().to_string(),
+        mime,
     })
 }
 

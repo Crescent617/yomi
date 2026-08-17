@@ -69,15 +69,15 @@ impl KernelServer {
                     ),
                 }
             }
-            ReqMethod::ReadAsset { url } => {
+            ReqMethod::ReadFile {
+                source,
+                offset,
+                limit,
+            } => {
                 let data_dir = self.kernel.data_dir().await;
                 rpc_body(
-                    "read_asset_failed",
-                    crate::utils::asset::read_asset(&url, &data_dir)
-                        .await
-                        .ok_or_else(|| {
-                            crate::types::KernelError::config(format!("Asset not found: {url}"))
-                        }),
+                    "read_file_failed",
+                    crate::utils::file_read::read_file(&source, &data_dir, offset, limit).await,
                 )
             }
 

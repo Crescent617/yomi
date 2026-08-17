@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 // ── Wire Protocol ────────────────────────────────────────────────────────
 
 /// Wire protocol version. Bumped on any breaking change to the IPC schema.
-pub const WIRE_PROTOCOL_VERSION: u32 = 24;
+pub const WIRE_PROTOCOL_VERSION: u32 = 25;
 
 /// All operations a client can request from the daemon.
 ///
@@ -27,8 +27,16 @@ pub enum ReqMethod {
         content: String,
     },
     Restart,
-    ReadAsset {
-        url: String,
+
+    // ── Files ────────────────────────────────────────────────────────────
+    /// Read a byte range of a daemon-side file (asset or declared
+    /// attachment; see `crate::utils::file_read`). `offset` defaults to 0;
+    /// `limit` defaults to a server-side chunk size, and `Some(0)` returns
+    /// metadata only.
+    ReadFile {
+        source: crate::utils::file_read::FileSource,
+        offset: Option<u64>,
+        limit: Option<u64>,
     },
 
     // ── Project ──────────────────────────────────────────────────────────

@@ -1,6 +1,21 @@
 use super::*;
 use crate::utils::image::test_utils::{decode_data_url, noisy_png, to_data_url};
 
+#[test]
+fn asset_path_rejects_traversal() {
+    let dir = std::path::Path::new("/data");
+    assert!(asset_path("asset://abc123.png", dir).is_some());
+    for url in [
+        "asset://../secret",
+        "asset://a/b.png",
+        "asset://..",
+        "asset://",
+        "file:///etc/passwd",
+    ] {
+        assert!(asset_path(url, dir).is_none(), "{url} must not resolve");
+    }
+}
+
 #[tokio::test]
 async fn extract_stores_compressed_asset() {
     let dir = tempfile::tempdir().unwrap();
@@ -18,7 +33,8 @@ async fn extract_stores_compressed_asset() {
     assert!(asset_url.starts_with("asset://"), "url: {asset_url}");
 
     // The stored asset is the compressed form — jpeg, within the cap.
-    let bytes = read_asset(&asset_url, dir.path()).await.expect("asset");
+    let path = asset_path(&asset_url, dir.path()).expect("asset path");
+    let bytes = tokio::fs::read(&path).await.expect("asset");
     assert!(
         bytes.len() as u64 <= crate::utils::image::MAX_EMBED_IMAGE_BYTES as u64,
         "{} bytes",

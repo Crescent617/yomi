@@ -875,8 +875,10 @@ export async function openDefault(target: string): Promise<void> {
 }
 
 /**
- * Open a declared attachment file (resolved against the session workspace
- * on the backend; relative paths must stay inside it).
+ * Open a declared attachment file. Resolution happens on the daemon's
+ * host against the session workspace (relative paths must stay inside
+ * it). In remote mode the file is downloaded into a local content-keyed
+ * cache and the cached copy is what opens.
  */
 export async function openAttachment(
   base_dir: string | null,
@@ -891,8 +893,9 @@ export interface AttachmentImage {
 }
 
 /**
- * Read an image attachment for inline display (same backend resolution
- * rules as `openAttachment`; rejects non-images and oversized files).
+ * Read an image attachment for inline display (same daemon-side
+ * resolution rules as `openAttachment`, works in remote mode too;
+ * rejects non-images and oversized files).
  */
 export async function readAttachmentImage(
   base_dir: string | null,

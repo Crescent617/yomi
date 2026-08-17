@@ -4,6 +4,7 @@ pub mod asset;
 pub mod attachments;
 pub mod env;
 pub mod file_chunk;
+pub mod file_read;
 pub mod g_lock;
 pub mod html;
 pub mod http;

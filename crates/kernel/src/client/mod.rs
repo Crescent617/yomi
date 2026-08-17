@@ -50,6 +50,51 @@ pub struct PaginatedSessions {
 /// Raw, unformatted byte range from a session JSONL file.
 pub type SessionJsonlChunk = crate::utils::file_chunk::FileChunk;
 
+/// Read `source` in full by looping chunked [`KernelApi::read_file`] calls.
+///
+/// Fails before transferring anything when the daemon reports a file size
+/// above `max_bytes`. Returns the raw bytes and the daemon-guessed mime.
+pub async fn read_file_bytes(
+    api: &dyn KernelApi,
+    source: crate::utils::file_read::FileSource,
+    max_bytes: u64,
+) -> Result<(Vec<u8>, String)> {
+    use base64::Engine as _;
+
+    let mut offset = 0u64;
+    let mut mime = String::new();
+    let mut bytes = Vec::new();
+    loop {
+        let chunk = api.read_file(source.clone(), Some(offset), None).await?;
+        if offset == 0 {
+            if chunk.file_size > max_bytes {
+                return Err(KernelError::io(format!(
+                    "file too large: {} bytes (max {max_bytes})",
+                    chunk.file_size
+                )));
+            }
+            mime.clone_from(&chunk.mime);
+            bytes.reserve(chunk.file_size as usize);
+        }
+        let advanced = chunk.end_offset > offset;
+        if advanced {
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(&chunk.data_base64)
+                .map_err(|e| KernelError::io(format!("decode file chunk: {e}")))?;
+            bytes.extend_from_slice(&data);
+            offset = chunk.end_offset;
+        }
+        if offset >= chunk.file_size {
+            return Ok((bytes, mime));
+        }
+        if !advanced {
+            return Err(KernelError::io(format!(
+                "file read stalled at {offset} bytes"
+            )));
+        }
+    }
+}
+
 /// Unified API for both local (in-process) and remote (IPC) kernels.
 #[async_trait]
 pub trait KernelApi: Send + Sync {
@@ -68,7 +113,17 @@ pub trait KernelApi: Send + Sync {
     async fn get_config(&self) -> Result<crate::config::KernelConfig>;
     async fn set_config(&self, content: String) -> Result<()>;
     async fn restart(&self) -> Result<()>;
-    async fn read_asset(&self, url: String) -> Result<Vec<u8>>;
+
+    // ── Files ────────────────────────────────────────────────────────────
+    /// Read a byte range of a daemon-side file (see
+    /// `crate::utils::file_read`). Resolution happens on the daemon's host,
+    /// so this works identically against local and remote daemons.
+    async fn read_file(
+        &self,
+        source: crate::utils::file_read::FileSource,
+        offset: Option<u64>,
+        limit: Option<u64>,
+    ) -> Result<crate::utils::file_read::FileBytes>;
 
     // ── Project ──────────────────────────────────────────────────────────
     async fn list_projects(&self) -> Result<Vec<Project>>;
@@ -290,10 +345,13 @@ impl KernelApi for Kernel {
         ))
     }
 
-    async fn read_asset(&self, url: String) -> Result<Vec<u8>> {
-        crate::utils::asset::read_asset(&url, &self.data_dir().await)
-            .await
-            .ok_or_else(|| KernelError::config(format!("Asset not found: {url}")))
+    async fn read_file(
+        &self,
+        source: crate::utils::file_read::FileSource,
+        offset: Option<u64>,
+        limit: Option<u64>,
+    ) -> Result<crate::utils::file_read::FileBytes> {
+        crate::utils::file_read::read_file(&source, &self.data_dir().await, offset, limit).await
     }
 
     async fn list_projects(&self) -> Result<Vec<Project>> {
@@ -1243,8 +1301,19 @@ impl KernelApi for RemoteKernel {
         Ok(())
     }
 
-    async fn read_asset(&self, url: String) -> Result<Vec<u8>> {
-        let result = self.call(ReqMethod::ReadAsset { url }).await?;
+    async fn read_file(
+        &self,
+        source: crate::utils::file_read::FileSource,
+        offset: Option<u64>,
+        limit: Option<u64>,
+    ) -> Result<crate::utils::file_read::FileBytes> {
+        let result = self
+            .call(ReqMethod::ReadFile {
+                source,
+                offset,
+                limit,
+            })
+            .await?;
         Ok(serde_json::from_value(result)?)
     }
 
