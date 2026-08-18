@@ -1149,10 +1149,11 @@ fn stop_button_row(sid: &SessionId) -> serde_json::Value {
 }
 
 /// `act_stop` button callback (bottom of the live status card): cancel
-/// the session's current run. No admin gate — same as the `/stop`
-/// command; the card only ever lands where the run is visible. No card
-/// patch here: the run's settlement morphs the card into the terminal
-/// receipt, which is the click feedback.
+/// the session's current run. The user-level gate (blocked /
+/// `allowed_users`) runs at the hub's card-action router, shared by
+/// every button; this handler only executes. No card patch here: the
+/// run's settlement morphs the card into the terminal receipt, which is
+/// the click feedback.
 pub(crate) fn handle_stop_action(kernel: &crate::kernel::Kernel, action: &super::CardAction) {
     if action.value["action"].as_str() != Some("act_stop") {
         warn!(value = %action.value, "unrecognized obs card action");

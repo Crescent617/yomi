@@ -215,3 +215,38 @@ fn doc_comment_mapping_key_rejects_non_doc_keys() {
         assert!(parse_doc_comment_mapping_key(key).is_none(), "{key}");
     }
 }
+
+#[test]
+fn test_check_user_access_button_gate() {
+    let base = ChannelConfig {
+        name: "test".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram {
+            token: String::new(),
+        },
+        ..Default::default()
+    };
+    // Empty allowlist = open to anyone not blocked.
+    assert!(super::check_user_access(&base, "anyone").is_none());
+
+    // Allowlist set: operator must be in it.
+    let config = ChannelConfig {
+        allowed_users: vec!["alice".to_string()],
+        ..base.clone()
+    };
+    assert!(super::check_user_access(&config, "alice").is_none());
+    assert_eq!(
+        super::check_user_access(&config, "bob").as_deref(),
+        Some("Permission denied: not in allowed_users.")
+    );
+
+    // Blocklist wins even over an allowlist entry.
+    let config = ChannelConfig {
+        blocked_users: vec!["alice".to_string()],
+        ..config
+    };
+    assert_eq!(
+        super::check_user_access(&config, "alice").as_deref(),
+        Some("Permission denied: blocked user.")
+    );
+}

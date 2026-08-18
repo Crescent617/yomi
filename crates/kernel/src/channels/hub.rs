@@ -228,6 +228,32 @@ impl ChannelHub {
                                     kernel.clone(),
                                 );
                                 tokio::spawn(async move {
+                                    // Card-action gate: button clicks
+                                    // bypass the message gate, so every
+                                    // action first re-applies its user
+                                    // rule (blocked / allowed_users).
+                                    // Admin-gated surfaces (mb_*, doc
+                                    // approvals) stack check_admin in
+                                    // their own handlers.
+                                    if let Some(deny) = super::check_user_access(
+                                        &config,
+                                        &action.operator_open_id,
+                                    ) {
+                                        if let Some(chat_id) = &action.chat_id {
+                                            let _ = adapter
+                                                .send_message(
+                                                    chat_id,
+                                                    vec![
+                                                        crate::types::ContentBlock::Text {
+                                                            text: deny,
+                                                        },
+                                                    ],
+                                                    None,
+                                                )
+                                                .await;
+                                        }
+                                        return;
+                                    }
                                     // 按钮命名空间路由：mb_* 归 mailbox
                                     // 管理面，act_* 归状态卡动作（stop
                                     // 等），其余归权限审批。
