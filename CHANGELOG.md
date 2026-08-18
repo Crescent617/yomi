@@ -15,6 +15,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.94] - 2026-08-18
+
+### Added
+
+- `/info` 显示当前上下文占用（如 `45.2k/128k (35%)`；首次回复前显示 `—`）。
+
+### Changed
+
+- 运行进度标题的上下文占用改为百分比（如 `35%`），不同模型的上下文窗口不再影响可读性。
+- `/info`、`/models`、`/model`、`/threads`、`/mention`、`/permits`、`/help` 的查询结果改为与 `/sessions` 一致的蓝色标题卡片（Telegram 与文档评论保持纯文本）。
+- `/info` 的后台 Shell 数量：无任务时显示 `0`（原为 `none`），有任务时逐行列出命令与 pid。
+- `/threads`、`/mention` 查询仅在存在覆盖设置时附带渠道默认值，文案不再重复。
+
+### Fixed
+
+- 运行或 `/compact` 成功完成后，状态卡不再偶发误显为「⏰ Timed out」（后台巡检误判存活中的卡片）。
+
 ## [0.7.93] - 2026-08-18
 
 ### Added
