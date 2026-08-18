@@ -3,7 +3,8 @@
 use serde_json::json;
 
 /// Legacy-rendered echo of a schema 2.0 card (real content unavailable).
-pub(crate) const UPGRADE_CLIENT_NOTICE: &str = "请升级至最新版本客户端，以查看内容";
+pub(crate) const UPGRADE_CLIENT_NOTICE: &str =
+    "Please upgrade your Feishu client to view this content";
 
 use super::feishu::FeishuAdapter;
 

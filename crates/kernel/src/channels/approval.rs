@@ -17,9 +17,9 @@ const PERM_LEVELS: &[&str] = &["view", "edit", "full_access"];
 /// Usage text for malformed approval commands.
 const APPROVAL_USAGE: &str = "\
 用法：
-`/permits` — 列出待审批申请
-`/approve <id> [view|edit|full_access]` — 批准（可改权限级别）
-`/deny <id>` — 拒绝";
+`/permits` — list pending requests
+`/approve <id> [view|edit|full_access]` — approve (optionally change level)
+`/deny <id>` — deny";
 
 /// `/permits` shows at most this many rows (oldest first) to keep the
 /// reply card well under the platform payload cap.
@@ -120,7 +120,7 @@ pub(super) async fn approve(
     if let Some(perm) = perm {
         if !PERM_LEVELS.contains(&perm) {
             return Ok(Some(format!(
-                "无效权限级别 `{perm}`，可选：{}",
+                "Invalid permission level `{perm}`; expected one of: {}",
                 PERM_LEVELS.join("/")
             )));
         }
@@ -281,7 +281,7 @@ async fn resolve(
         .await?
     else {
         return Ok(ApprovalReply {
-            text: format!("申请 #{id} 不存在或已被处理"),
+            text: format!("Request #{id} not found or already resolved"),
             success: false,
             cards_updated: false,
         });
@@ -300,7 +300,7 @@ async fn resolve(
             }
             return Ok(ApprovalReply {
                 text: format!(
-                    "申请权限 `{effective_perm}` 无法识别，未执行授权。请用 `/approve {id} [view|edit|full_access]` 显式指定级别。"
+                    "Unrecognized permission `{effective_perm}`; grant skipped. Specify a level explicitly: `/approve {id} [view|edit|full_access]`."
                 ),
                 success: false,
                 cards_updated: false,
@@ -316,7 +316,7 @@ async fn resolve(
                 error!(channel = %channel_name, id, error = %e, "failed to reopen perm request");
             }
             return Ok(ApprovalReply {
-                text: format!("批准 #{id} 失败：{e}。申请已恢复为待审批，可重试。"),
+                text: format!("Failed to approve #{id}: {e}. Back to pending; please retry."),
                 success: false,
                 cards_updated: false,
             });
@@ -324,7 +324,7 @@ async fn resolve(
         let cards_updated = update_notify_cards(adapter, &row).await;
         return Ok(ApprovalReply {
             text: format!(
-                "已批准 #{id}：{} 获得 {effective_perm} 权限",
+                "Approved #{id}: {} granted {effective_perm}",
                 applicant_summary(&row)
             ),
             success: true,
@@ -334,7 +334,7 @@ async fn resolve(
 
     let cards_updated = update_notify_cards(adapter, &row).await;
     Ok(ApprovalReply {
-        text: format!("已拒绝 #{id}：{}", applicant_summary(&row)),
+        text: format!("Denied #{id}: {}", applicant_summary(&row)),
         success: true,
         cards_updated,
     })
@@ -363,7 +363,7 @@ pub(super) fn check_admin(config: &ChannelConfig, user_id: &str) -> Option<Strin
     if config.admin_users.iter().any(|u| u == user_id) {
         None
     } else {
-        Some("permission denied：你不在 admin_users 中。".to_string())
+        Some("Permission denied: not in admin_users.".to_string())
     }
 }
 
@@ -391,11 +391,11 @@ fn format_applicants(users: &[String], chats: &[String], departments: &[String])
         if users.len() == 1 {
             parts.push(mention);
         } else {
-            parts.push(format!("{}（等 {} 人）", mention, users.len()));
+            parts.push(format!("{} (and {} more)", mention, users.len()));
         }
     }
-    parts.extend(chats.iter().map(|c| format!("群 {c}")));
-    parts.extend(departments.iter().map(|d| format!("部门 {d}")));
+    parts.extend(chats.iter().map(|c| format!("chat {c}")));
+    parts.extend(departments.iter().map(|d| format!("dept {d}")));
     parts.join(" · ")
 }
 
@@ -417,12 +417,12 @@ fn doc_md(file_type: &str, file_token: &str) -> String {
 
 fn format_pending_list(rows: &[PermRequestRow]) -> String {
     if rows.is_empty() {
-        return "没有待审批的文档权限申请。".to_string();
+        return "No pending document permission requests.".to_string();
     }
     let mut lines = Vec::new();
     for row in rows.iter().take(MAX_PENDING_ROWS) {
         lines.push(format!(
-            "- `#{}` {} · {} · 申请 {} · {}",
+            "- `#{}` {} · {} · requests {} · {}",
             row.id,
             applicant_summary(row),
             doc_md(&row.file_type, &row.file_token),
@@ -432,12 +432,12 @@ fn format_pending_list(rows: &[PermRequestRow]) -> String {
     }
     if rows.len() > MAX_PENDING_ROWS {
         lines.push(format!(
-            "… 共 {} 条，仅显示前 {MAX_PENDING_ROWS} 条",
+            "… {} total, showing first {MAX_PENDING_ROWS}",
             rows.len()
         ));
     }
     lines.push(String::new());
-    lines.push("批准 `/approve <id> [perm]` · 拒绝 `/deny <id>`".to_string());
+    lines.push("Approve: `/approve <id> [perm]` · Deny: `/deny <id>`".to_string());
     lines.join("\n")
 }
 
@@ -466,7 +466,7 @@ fn build_request_card(id: i64, req: &DocPermissionRequest, doc_title: Option<&st
     let doc_text = doc_title.unwrap_or(&req.file_token);
     let mut lines = vec![
         format!(
-            "**申请人** {}",
+            "**Applicant** {}",
             format_applicants(
                 &req.applicant_users,
                 &req.applicant_chats,
@@ -474,19 +474,19 @@ fn build_request_card(id: i64, req: &DocPermissionRequest, doc_title: Option<&st
             )
         ),
         format!(
-            "**文档** [{}]({})",
+            "**Document** [{}]({})",
             doc_text,
             super::doc_link(&req.file_type, &req.file_token)
         ),
-        format!("**申请权限** {}", req.permission),
+        format!("**Requested permission** {}", req.permission),
     ];
     if let Some(remark) = req.remark.as_deref().filter(|r| !r.is_empty()) {
-        lines.push(format!("**备注** {remark}"));
+        lines.push(format!("**Remark** {remark}"));
     }
 
     card_json(
         "orange",
-        &format!("📄 文档权限申请 #{id}"),
+        &format!("📄 Doc permission #{id}"),
         &[
             json!({ "tag": "markdown", "text_size": "notation", "content": lines.join("\n") }),
             // Schema 2.0 dropped the `action` container tag — buttons are
@@ -501,7 +501,7 @@ fn build_request_card(id: i64, req: &DocPermissionRequest, doc_title: Option<&st
                         "weight": 1,
                         "elements": [{
                             "tag": "button",
-                            "text": { "tag": "plain_text", "content": "✅ 批准" },
+                            "text": { "tag": "plain_text", "content": "✅ Approve" },
                             "type": "primary",
                             "behaviors": [{ "type": "callback", "value": { "action": "approve", "id": id } }],
                         }],
@@ -512,7 +512,7 @@ fn build_request_card(id: i64, req: &DocPermissionRequest, doc_title: Option<&st
                         "weight": 1,
                         "elements": [{
                             "tag": "button",
-                            "text": { "tag": "plain_text", "content": "❌ 拒绝" },
+                            "text": { "tag": "plain_text", "content": "❌ Deny" },
                             "type": "danger",
                             "behaviors": [{ "type": "callback", "value": { "action": "deny", "id": id } }],
                         }],
@@ -522,7 +522,7 @@ fn build_request_card(id: i64, req: &DocPermissionRequest, doc_title: Option<&st
             json!({
                 "tag": "markdown",
                 "text_size": "notation",
-                "content": format!("<font color='grey'>改权限批准：`/approve {id} [view|edit|full_access]`</font>"),
+                "content": format!("<font color='grey'>Approve with a different level: `/approve {id} [view|edit|full_access]`</font>"),
             }),
         ],
     )
@@ -533,9 +533,9 @@ fn build_resolved_card(row: &PermRequestRow, doc_title: Option<&str>) -> String 
     let approved = row.status == "approved";
     let (template, mark, action_text) = if approved {
         let perm = row.resolved_perm.as_deref().unwrap_or(&row.permission);
-        ("green", "✅", format!("已批准 {perm}"))
+        ("green", "✅", format!("Approved ({perm})"))
     } else {
-        ("grey", "❌", "已拒绝".to_string())
+        ("grey", "❌", "Denied".to_string())
     };
     let by = row.resolved_by.as_deref().unwrap_or("unknown");
     let by_text = if by.starts_with("ou_") {
@@ -545,14 +545,14 @@ fn build_resolved_card(row: &PermRequestRow, doc_title: Option<&str>) -> String 
     };
     let doc_text = doc_title.unwrap_or(&row.file_token);
     let content = format!(
-        "**申请人** {}\n**文档** [{}]({})\n\n**{action_text}** · by {by_text}",
+        "**Applicant** {}\n**Document** [{}]({})\n\n**{action_text}** · by {by_text}",
         applicant_summary(row),
         doc_text,
         super::doc_link(&row.file_type, &row.file_token),
     );
     card_json(
         template,
-        &format!("{mark} 文档权限申请 #{}", row.id),
+        &format!("{mark} Doc permission #{}", row.id),
         &[json!({ "tag": "markdown", "text_size": "notation", "content": content })],
     )
 }

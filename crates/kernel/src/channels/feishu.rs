@@ -869,7 +869,7 @@ impl PlatformAdapter for FeishuAdapter {
         if text.is_empty() {
             return Ok(None);
         }
-        let text = crate::utils::strs::truncate_with_suffix(&text, MAX_MD, "\n\n...(内容已截断)");
+        let text = crate::utils::strs::truncate_with_suffix(&text, MAX_MD, "\n\n...(truncated)");
 
         let content = Self::build_card(&text);
 

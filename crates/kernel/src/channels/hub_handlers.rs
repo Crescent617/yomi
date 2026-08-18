@@ -61,7 +61,7 @@ pub(crate) async fn handle_incoming_message(
                     tracing::warn!("Failed to clear session {}: {}", sid.0, e);
                 }
             }
-            Ok(Some("Context cleared.".to_string()))
+            Ok(Some("🧹 Context cleared.".to_string()))
         }
         ChannelCommand::Compact => {
             // Fire-and-forget: with observability the compact gets its own
@@ -90,7 +90,7 @@ pub(crate) async fn handle_incoming_message(
         ChannelCommand::Stop => {
             if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
                 kernel.cancel(&sid);
-                return Ok(Some("Stopped.".to_string()));
+                return Ok(Some("⏹ Stopped.".to_string()));
             }
             Ok(Some("No active session to stop.".to_string()))
         }
@@ -286,7 +286,7 @@ pub(crate) async fn handle_incoming_message(
             .await?;
             kernel.set_session_model(&sid, &key).await?;
             Ok(Some(format!(
-                "Switched to `{key}`. It takes effect on the next model invocation."
+                "✅ Switched to `{key}`. It takes effect on the next model invocation."
             )))
         }
         ChannelCommand::InvalidModelCommand => Ok(Some(
@@ -373,7 +373,7 @@ pub(crate) async fn handle_incoming_message(
                         ));
                     }
                     lines.push(String::new());
-                    lines.push("查看输出：`/shell <n>`".to_string());
+                    lines.push("View output: `/shell <n>`".to_string());
                     send_info_reply(
                         adapter,
                         &msg,
@@ -548,7 +548,7 @@ pub(crate) async fn handle_incoming_message(
                 .remove_run_subscription(channel_name, &scope_key, &msg.external_user_id)
                 .await?;
             Ok(Some(if removed > 0 {
-                "Unsubscribed.".to_string()
+                "✅ Unsubscribed.".to_string()
             } else {
                 "You have no subscription here.".to_string()
             }))
@@ -708,7 +708,7 @@ pub(crate) async fn handle_bind(
         };
         if !compatible {
             return Ok(format!(
-                "`{target}` is bound to another conversation; refusing to rebind."
+                "⚠️ `{target}` is bound to another conversation; refusing to rebind."
             ));
         }
         // Say goodbye in the old conversation — its members otherwise just
@@ -806,7 +806,7 @@ pub(crate) async fn handle_mention_command(
                 .set_mention_override(&config.name, container.id(), value)
                 .await?;
             Ok(Some(format!(
-                "Mention requirement set to `{}` for this {scope} (channel default: `{}`).",
+                "✅ Mention requirement set to `{}` for this {scope} (channel default: `{}`).",
                 on_off(value),
                 on_off(config.require_mention),
             )))
@@ -817,7 +817,7 @@ pub(crate) async fn handle_mention_command(
                 .await?;
             let (effective, source) = resolve_require_mention(store, config, msg).await;
             Ok(Some(format!(
-                "Override cleared for this {scope}; now following {source}: `{}`.",
+                "✅ Override cleared for this {scope}; now following {source}: `{}`.",
                 on_off(effective),
             )))
         }
@@ -879,7 +879,7 @@ pub(crate) async fn handle_threads_command(
                 " New messages will share the chat-level session; existing threads keep working."
             };
             Ok(Some(format!(
-                "Reply-in-thread set to `{}` for this chat (channel default: `{}`).{note}",
+                "✅ Reply-in-thread set to `{}` for this chat (channel default: `{}`).{note}",
                 on_off(value),
                 on_off(config.reply_in_thread),
             )))
@@ -887,7 +887,7 @@ pub(crate) async fn handle_threads_command(
         OverrideMode::Reset => {
             store.clear_rit_override(&config.name, chat_id).await?;
             Ok(Some(format!(
-                "Override cleared for this chat; now following the channel default: `{}`.",
+                "✅ Override cleared for this chat; now following the channel default: `{}`.",
                 on_off(config.reply_in_thread),
             )))
         }
@@ -1049,7 +1049,7 @@ pub(crate) fn session_time_bucket(
     }
 }
 
-pub(crate) const SESSION_BUCKET_LABELS: [&str; 4] = ["", "6 小时前", "一天前", "一周前"];
+pub(crate) const SESSION_BUCKET_LABELS: [&str; 4] = ["", "6h ago", "1d ago", "1w ago"];
 
 /// The plain-text rendering of `/sessions` (fallback for platforms
 /// without cards).
@@ -1112,7 +1112,7 @@ pub(crate) fn sessions_card(offset: usize, entries: &[SessionEntry], has_more: b
         elements.push(serde_json::json!({ "tag": "hr" }));
         elements.push(serde_json::json!({
             "tag": "markdown", "text_size": "notation",
-            "content": format!("下一页 → `/sessions {}`", offset + SESSIONS_PAGE_SIZE)
+            "content": format!("Next page → `/sessions {}`", offset + SESSIONS_PAGE_SIZE)
         }));
     }
     super::hub_deliver::info_card_envelope(

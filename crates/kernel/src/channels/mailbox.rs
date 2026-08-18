@@ -42,6 +42,9 @@ fn parse_scope(v: &serde_json::Value) -> MailboxScope {
 pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> String {
     let items = merged(snapshot);
     let mut elements: Vec<serde_json::Value> = Vec::new();
+    // Empty state is reachable: the `/mailbox` command short-circuits to
+    // plain text when empty, but the in-place refresh after a 🧹 Clear
+    // button re-renders this card with an empty snapshot.
     if items.is_empty() {
         elements.push(serde_json::json!({
             "tag": "markdown", "text_size": "notation", "content": "Mailbox is empty."
@@ -94,7 +97,7 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
                     "tag": "column", "width": "weighted", "weight": 1,
                     "elements": [{
                         "tag": "button",
-                        "text": { "tag": "plain_text", "content": "🔄 刷新" },
+                        "text": { "tag": "plain_text", "content": "🔄 Refresh" },
                         "type": "default",
                         "size": "small",
                         "behaviors": [{ "type": "callback", "value": { "action": "mb_refresh", "sid": sid.0 } }],
@@ -104,7 +107,7 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
                     "tag": "column", "width": "weighted", "weight": 1,
                     "elements": [{
                         "tag": "button",
-                        "text": { "tag": "plain_text", "content": "🧹 清空" },
+                        "text": { "tag": "plain_text", "content": "🧹 Clear" },
                         "type": "default",
                         "size": "small",
                         "behaviors": [{ "type": "callback", "value": { "action": "mb_clear", "sid": sid.0, "scope": "all" } }],
@@ -119,7 +122,7 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
                 "tag": "column", "width": "weighted", "weight": 1,
                 "elements": [{
                     "tag": "button",
-                    "text": { "tag": "plain_text", "content": "🔄 刷新" },
+                    "text": { "tag": "plain_text", "content": "🔄 Refresh" },
                     "type": "default",
                     "size": "small",
                     "behaviors": [{ "type": "callback", "value": { "action": "mb_refresh", "sid": sid.0 } }],
@@ -150,9 +153,7 @@ pub(super) fn pending_text(snapshot: &MailboxSnapshot) -> String {
         lines.push(format!("… and {overflow} more"));
     }
     lines.push(String::new());
-    lines.push(
-        "管理：`/mailbox retract <序号>` 撤回 · `/mailbox clear [steer|queue]` 清空".to_string(),
-    );
+    lines.push("Manage: `/mailbox retract <n>` · `/mailbox clear [steer|queue]`".to_string());
     lines.join("\n")
 }
 
@@ -265,7 +266,7 @@ pub(super) async fn handle_mailbox_command(
             };
             let id = item.id.clone();
             if kernel.remove_mailbox_item(sid, id.as_str()).await {
-                Ok(Some(format!("Retracted #{n}: {}", item.preview)))
+                Ok(Some(format!("✅ Retracted #{n}: {}", item.preview)))
             } else {
                 Ok(Some(format!("#{n} is already gone (consumed).")))
             }

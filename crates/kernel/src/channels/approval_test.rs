@@ -166,7 +166,7 @@ fn request_card_carries_button_values() {
     let card = build_request_card(7, &perm_req(), Some("测试文档"));
     let v: serde_json::Value = serde_json::from_str(&card).unwrap();
     assert_eq!(v["header"]["template"], "orange");
-    assert_eq!(v["header"]["title"]["content"], "📄 文档权限申请 #7");
+    assert_eq!(v["header"]["title"]["content"], "📄 Doc permission #7");
 
     // Buttons sit on one row inside a column_set.
     let columns = &v["body"]["elements"][1]["columns"];
@@ -189,8 +189,8 @@ fn request_card_carries_button_values() {
         md.contains("[测试文档](https://feishu.cn/docx/doxcnABC)"),
         "{md}"
     );
-    assert!(md.contains("**申请权限** view"), "{md}");
-    assert!(md.contains("**备注** 求权限"), "{md}");
+    assert!(md.contains("**Requested permission** view"), "{md}");
+    assert!(md.contains("**Remark** 求权限"), "{md}");
 
     let hint = v["body"]["elements"][2]["content"].as_str().unwrap();
     assert!(hint.contains("/approve 7"), "{hint}");
@@ -210,7 +210,7 @@ async fn resolved_card_shows_terminal_state_without_buttons() {
     let v: serde_json::Value = serde_json::from_str(&card).unwrap();
     assert_eq!(v["header"]["template"], "green");
     let md = v["body"]["elements"][0]["content"].as_str().unwrap();
-    assert!(md.contains("已批准 edit"), "{md}");
+    assert!(md.contains("Approved (edit)"), "{md}");
     assert!(md.contains("by <at id=ou_admin></at>"), "{md}");
     assert_eq!(
         v["body"]["elements"].as_array().unwrap().len(),
@@ -230,11 +230,11 @@ fn applicants_formatting() {
     );
     assert_eq!(
         format_applicants(&users(&["ou_a", "ou_b"]), &[], &[]),
-        "<at id=ou_a></at>（等 2 人）"
+        "<at id=ou_a></at> (and 2 more)"
     );
     assert_eq!(
         format_applicants(&users(&["ou_a"]), &users(&["oc_c"]), &users(&["od_d"])),
-        "<at id=ou_a></at> · 群 oc_c · 部门 od_d"
+        "<at id=ou_a></at> · chat oc_c · dept od_d"
     );
     assert_eq!(format_applicants(&[], &[], &[]), "");
 }
@@ -242,7 +242,10 @@ fn applicants_formatting() {
 #[tokio::test]
 async fn pending_list_formatting() {
     let store = test_store().await;
-    assert_eq!(format_pending_list(&[]), "没有待审批的文档权限申请。");
+    assert_eq!(
+        format_pending_list(&[]),
+        "No pending document permission requests."
+    );
 
     seed_pending(&store).await;
     let rows = store.list_pending_perm_requests("feishu").await.unwrap();
@@ -259,7 +262,7 @@ async fn permits_requires_admin() {
     let reply = check_admin(&admin_config(), "ou_stranger");
     assert_eq!(
         reply.as_deref(),
-        Some("permission denied：你不在 admin_users 中。")
+        Some("Permission denied: not in admin_users.")
     );
 }
 
@@ -280,7 +283,7 @@ async fn approve_rejects_invalid_perm() {
     )
     .await
     .unwrap();
-    assert!(reply.unwrap().contains("无效权限级别"));
+    assert!(reply.unwrap().contains("Invalid permission level"));
     // Still pending afterwards.
     assert_eq!(
         store
@@ -315,7 +318,7 @@ async fn approve_grants_and_updates_cards() {
     .await
     .unwrap()
     .unwrap();
-    assert!(reply.contains("已批准"), "{reply}");
+    assert!(reply.contains("Approved"), "{reply}");
     assert!(reply.contains("view"), "{reply}");
 
     // Granted with the requested level; both notify cards updated.
@@ -330,7 +333,7 @@ async fn approve_grants_and_updates_cards() {
     let updated = mock.updated_cards.lock().unwrap().clone();
     assert_eq!(updated.len(), 2);
     assert_eq!(updated[0].0, "om_n1");
-    assert!(updated[0].1.contains("已批准 view"));
+    assert!(updated[0].1.contains("Approved (view)"));
 
     // Row left pending state.
     assert!(store
@@ -385,7 +388,7 @@ async fn approve_twice_second_loses() {
         .await
         .unwrap()
         .unwrap();
-    assert!(second.contains("不存在或已被处理"), "{second}");
+    assert!(second.contains("not found or already resolved"), "{second}");
 }
 
 #[tokio::test]
@@ -409,8 +412,8 @@ async fn approve_grant_failure_reopens() {
     .await
     .unwrap()
     .unwrap();
-    assert!(reply.contains("失败"), "{reply}");
-    assert!(reply.contains("恢复为待审批"), "{reply}");
+    assert!(reply.contains("Failed to approve"), "{reply}");
+    assert!(reply.contains("Back to pending"), "{reply}");
 
     // Back to pending — resolvable again.
     assert_eq!(
@@ -450,7 +453,7 @@ async fn approve_unrecognized_stored_perm_reopens() {
     .await
     .unwrap()
     .unwrap();
-    assert!(reply.contains("无法识别"), "{reply}");
+    assert!(reply.contains("Unrecognized permission"), "{reply}");
     assert!(mock.granted.lock().unwrap().is_empty(), "no blind grant");
     assert_eq!(
         store
@@ -478,11 +481,11 @@ async fn deny_marks_denied_without_grant() {
         .await
         .unwrap()
         .unwrap();
-    assert!(reply.contains("已拒绝"), "{reply}");
+    assert!(reply.contains("Denied"), "{reply}");
     assert!(mock.granted.lock().unwrap().is_empty(), "deny never grants");
     let updated = mock.updated_cards.lock().unwrap();
     assert_eq!(updated.len(), 1);
-    assert!(updated[0].1.contains("已拒绝"));
+    assert!(updated[0].1.contains("Denied"));
 }
 
 // ── Button callbacks ───────────────────────────────────────────────
@@ -536,7 +539,7 @@ async fn button_success_without_cards_falls_back_to_message() {
     assert_eq!(mock.granted.lock().unwrap().len(), 1);
     let msgs = wait_for_messages(&mock).await;
     assert_eq!(msgs.len(), 1);
-    assert!(msgs[0].1.contains("已批准"), "{}", msgs[0].1);
+    assert!(msgs[0].1.contains("Approved"), "{}", msgs[0].1);
 }
 
 #[tokio::test]
@@ -582,7 +585,7 @@ async fn button_non_admin_gets_feedback_message() {
     let msgs = wait_for_messages(&mock).await;
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].0, "oc_chat");
-    assert!(msgs[0].1.contains("permission denied"), "{}", msgs[0].1);
+    assert!(msgs[0].1.contains("Permission denied"), "{}", msgs[0].1);
     // Nothing was resolved.
     assert_eq!(
         store
@@ -611,7 +614,7 @@ async fn button_repeat_click_reports_already_resolved() {
 
     let msgs = wait_for_messages(&mock).await;
     assert_eq!(msgs.len(), 1);
-    assert!(msgs[0].1.contains("已被处理"), "{}", msgs[0].1);
+    assert!(msgs[0].1.contains("already resolved"), "{}", msgs[0].1);
     assert_eq!(
         mock.granted.lock().unwrap().len(),
         1,
@@ -678,7 +681,7 @@ async fn notify_dms_every_admin_without_approval_chat() {
     assert_eq!(dms.len(), 2);
     assert_eq!(dms[0].0, "ou_a1");
     assert_eq!(dms[1].0, "ou_a2");
-    assert!(dms[0].1.contains("文档权限申请 #1"), "{}", dms[0].1);
+    assert!(dms[0].1.contains("Doc permission #1"), "{}", dms[0].1);
     let rows = store.list_pending_perm_requests("feishu").await.unwrap();
     assert_eq!(rows[0].notify_msg_ids.len(), 2);
 }

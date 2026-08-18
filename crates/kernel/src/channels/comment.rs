@@ -266,7 +266,7 @@ fn assemble_message(
     }
     body.push_str(reply_text);
     if let Some(error) = fetch_error {
-        let _ = write!(body, "[评论内容拉取失败: {error}]");
+        let _ = write!(body, "[failed to fetch comment content: {error}]");
     }
     format!("{header}\n{body}")
 }

@@ -81,7 +81,7 @@ pub(crate) const COMMANDS: &[(&str, &[&str])] = &[
 
 /// `/help` response: the channel command list.
 pub(crate) const HELP_TEXT: &str = "\
-**信息**
+**Info**
 `/help` (`/h`) — this help
 `/info` (`/i`) — current session info
 `/mailbox` (`/mb`) — pending steer/queued messages; `/mailbox retract <n>` · `/mailbox clear [steer|queue|all]` (admin)
@@ -90,7 +90,7 @@ pub(crate) const HELP_TEXT: &str = "\
 `/model` (`/m`) — show current model; `/model <key>` to switch
 `/sessions` — recent 10 sessions of this channel with jump links; `/sessions <offset>` for the next page (admin)
 
-**会话控制**
+**Session control**
 `/clear` (`/c`) — clear context and start fresh
 `/compact` — summarize and compact the context
 `/stop` (`/s`) — stop the current run
@@ -100,7 +100,7 @@ pub(crate) const HELP_TEXT: &str = "\
 `/subscribe [chat_id] [-r]` (`/sub`) — DM you when runs here complete; `-r` covers this chat's threads (Feishu)
 `/unsubscribe` (`/unsub`) — cancel the subscription here
 
-**群管理（admin）**
+**Chat admin**
 `/mention` — show the @-requirement here; `/mention on|off|reset` to override it
 `/threads` — show reply-in-thread mode for this chat; `/threads on|off|reset` to override it
 `/bind` — show this conversation's session id; `/bind <session_id>` to retarget it

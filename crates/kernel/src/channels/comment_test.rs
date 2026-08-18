@@ -555,7 +555,7 @@ async fn fetch_failure_injects_bare_meta_with_note() {
         panic!("expected text block");
     };
     assert!(text.contains("[doc: docx:doxcnABC123]"), "{text}");
-    assert!(text.contains("[评论内容拉取失败:"), "{text}");
+    assert!(text.contains("[failed to fetch comment content:"), "{text}");
     assert!(!text.contains('>'), "{text}");
 }
 

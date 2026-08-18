@@ -1091,7 +1091,7 @@ async fn bind_command_show_adopt_and_guards() {
 
     // Non-admin cannot bind.
     let reply = call(msg("ou_random", &bind_cmd)).await.unwrap().unwrap();
-    assert!(reply.contains("permission denied"), "{reply}");
+    assert!(reply.contains("Permission denied"), "{reply}");
 
     // Admin binds: the scope now maps to the session.
     let reply = call(msg("ou_admin", &bind_cmd)).await.unwrap().unwrap();
@@ -1327,7 +1327,7 @@ async fn test_restart_command_gate_and_trigger() {
     .unwrap();
     assert_eq!(
         reply.as_deref(),
-        Some("permission denied：你不在 admin_users 中。")
+        Some("Permission denied: not in admin_users.")
     );
     assert!(mock.outgoing.lock().await.is_empty());
 
@@ -2426,14 +2426,14 @@ async fn command_reply_for_doc_comment_goes_to_comment_thread() {
     let adapter: Arc<dyn PlatformAdapter> = mock.clone();
     let msg = doc_comment_msg();
 
-    send_command_reply(&adapter, &msg, None, "Context cleared.".to_string())
+    send_command_reply(&adapter, &msg, None, "🧹 Context cleared.".to_string())
         .await
         .unwrap();
 
     let replies = mock.comment_replies.lock().await;
     assert_eq!(replies.len(), 1);
     assert_eq!(replies[0].0, "c_1");
-    assert_eq!(replies[0].1, "Context cleared.");
+    assert_eq!(replies[0].1, "🧹 Context cleared.");
     assert!(mock.outgoing.lock().await.is_empty(), "no chat message");
 }
 
@@ -2443,7 +2443,7 @@ async fn command_reply_for_chat_message_goes_to_chat() {
     let adapter: Arc<dyn PlatformAdapter> = mock.clone();
     let msg = channel_message(None, false, true);
 
-    send_command_reply(&adapter, &msg, None, "Context cleared.".to_string())
+    send_command_reply(&adapter, &msg, None, "🧹 Context cleared.".to_string())
         .await
         .unwrap();
 
@@ -2738,7 +2738,7 @@ async fn permits_denies_non_admin_without_card() {
         .unwrap();
     assert_eq!(
         reply.as_deref(),
-        Some("permission denied：你不在 admin_users 中。")
+        Some("Permission denied: not in admin_users.")
     );
     assert!(mock.cards.lock().await.is_empty());
 }
@@ -5213,7 +5213,7 @@ async fn threads_command_query_set_reset() {
     let reply = handle(msg("ou_random", "/threads on", true)).await.unwrap();
     assert_eq!(
         reply.as_deref(),
-        Some("permission denied：你不在 admin_users 中。")
+        Some("Permission denied: not in admin_users.")
     );
     assert_eq!(store.get_rit_override("mock", "oc_1").await.unwrap(), None);
 
@@ -5322,7 +5322,7 @@ async fn mention_command_query_set_reset() {
         .unwrap();
     assert_eq!(
         reply.as_deref(),
-        Some("permission denied：你不在 admin_users 中。")
+        Some("Permission denied: not in admin_users.")
     );
     assert_eq!(
         store.get_mention_override("mock", "oc_1").await.unwrap(),
@@ -5874,7 +5874,7 @@ async fn test_subscribe_command_scopes() {
     )
     .await
     .unwrap();
-    assert_eq!(reply.as_deref(), Some("Unsubscribed."));
+    assert_eq!(reply.as_deref(), Some("✅ Unsubscribed."));
     let reply = handle_incoming_message(
         "feishu",
         &config,
@@ -6186,8 +6186,8 @@ async fn test_notify_run_subscribers() {
     assert_eq!(dm_users, ["ou_dm", "ou_dup", "ou_rec"]);
     let dm_card = &dms[0].1;
     assert!(dm_card.contains("link://om_reply"), "{dm_card}");
-    assert!(dm_card.contains("任务完成"), "{dm_card}");
-    assert!(dm_card.contains("「测试群」"), "{dm_card}");
+    assert!(dm_card.contains("finished"), "{dm_card}");
+    assert!(dm_card.contains("测试群"), "{dm_card}");
     assert!(dm_card.contains("card_link"), "{dm_card}");
     drop(dms);
     let cards = mock.cards.lock().await;
@@ -6210,7 +6210,7 @@ async fn test_notify_run_subscribers() {
     .await;
     let dms = mock.dms.lock().await;
     let failed_card = &dms.last().unwrap().1;
-    assert!(failed_card.contains("任务异常结束"), "{failed_card}");
+    assert!(failed_card.contains("failed"), "{failed_card}");
     assert!(failed_card.contains("❌"), "{failed_card}");
 }
 
@@ -6618,8 +6618,8 @@ async fn sessions_command_card_rendering() {
     assert!(card.contains("[**话题讨论**](link://thread/"), "{card}");
 }
 
-/// `/sessions` recency dividers: rows group under 6 小时前 / 一天前 /
-/// 一周前 labels (card + text alike); the current bucket gets no label.
+/// `/sessions` recency dividers: rows group under 6h ago / 1d ago /
+/// 1w ago labels (card + text alike); the current bucket gets no label.
 #[test]
 fn sessions_render_groups_by_time_bucket() {
     let entry = |marker: &'static str, title: &str, bucket: usize| SessionEntry {
@@ -6636,18 +6636,17 @@ fn sessions_render_groups_by_time_bucket() {
     ];
 
     let card = sessions_card(0, &entries, true);
-    for label in ["6 小时前", "一天前", "一周前", "下一页"] {
+    for label in ["6h ago", "1d ago", "1w ago", "Next page"] {
         assert!(card.contains(label), "{label} in {card}");
     }
     let text = sessions_text(0, &entries, true);
-    for label in ["── 6 小时前 ──", "── 一天前 ──", "── 一周前 ──"]
-    {
+    for label in ["── 6h ago ──", "── 1d ago ──", "── 1w ago ──"] {
         assert!(text.contains(label), "{label} in {text}");
     }
 
     // All-fresh page: no divider labels anywhere.
     let fresh = sessions_card(0, &[entry("⚡", "a", 0), entry("🧵", "b", 0)], false);
-    for label in ["6 小时前", "一天前", "一周前"] {
+    for label in ["6h ago", "1d ago", "1w ago"] {
         assert!(!fresh.contains(label), "{label} unexpected in {fresh}");
     }
 }
@@ -6893,7 +6892,7 @@ async fn mailbox_command_show_retract_clear_and_card_actions() {
 
     // 非 admin：拒绝。
     let reply = handle(msg("ou_random", "/mailbox")).await.unwrap();
-    assert!(reply.unwrap().contains("permission denied"));
+    assert!(reply.as_deref().unwrap().contains("Permission denied"));
 
     // 无会话：提示。
     let reply = handle(msg("ou_admin", "/mailbox")).await.unwrap();

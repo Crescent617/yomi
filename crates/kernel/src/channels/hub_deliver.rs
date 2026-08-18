@@ -42,9 +42,9 @@ impl RunEndStatus {
 
     fn word(self) -> &'static str {
         match self {
-            Self::Completed => "任务完成",
-            Self::Cancelled => "任务已停止",
-            Self::Failed => "任务异常结束",
+            Self::Completed => "finished",
+            Self::Cancelled => "was stopped",
+            Self::Failed => "failed",
         }
     }
 }
@@ -214,11 +214,11 @@ pub(crate) fn subscription_notify_card(
         .collect::<Vec<_>>()
         .join(" ");
     let scope = match chat_name {
-        Some(name) => format!("的「{name}」"),
-        None => "的会话".to_string(),
+        Some(name) => format!(" in \"{name}\""),
+        None => String::new(),
     };
     let text = format!(
-        "{}{} 你订阅{}{}",
+        "{}{} the run you subscribed to{} {}",
         if mention.is_empty() {
             String::new()
         } else {
@@ -229,7 +229,7 @@ pub(crate) fn subscription_notify_card(
         status.word(),
     );
     let line = match link {
-        Some(_) => format!("{text} · **查看回复 →**"),
+        Some(_) => format!("{text} · **View reply →**"),
         None => text,
     };
     let mut elements =
@@ -426,7 +426,7 @@ pub(crate) async fn deliver_doc_comment_reply(
             "doc comment reply cannot carry attachments, dropping"
         );
         reply.push_note(&format!(
-            "（本次运行产出 {attachments} 个附件，无法投递到文档评论）"
+            "(this run produced {attachments} attachment(s), undeliverable to doc comments)"
         ));
     }
     let text = reply.text()?.to_string();
