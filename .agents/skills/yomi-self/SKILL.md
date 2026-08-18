@@ -15,7 +15,8 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 
 - `yomi daemon status` / `restart` / `stop`；`start` 仅供内部调用。
 - 重启等效路径：CLI `restart`、IM 通道 `/restart`（限 `admin_users`）、GUI 改配置自动重启。会话数据在 sqlite，重启不丢；**进行中的 run 会被打断**——重启前先 `rpc list_running_sessions` 确认没在跑。
-- **自杀式重启**（agent 在 daemon 里重启自己）：命令必须**立即 exit 0**，绝不在同一条里 `sleep`+验证——restart 生效时本进程即死，后续验证必然以"失败"误报，诱导重试跑两遍。正确姿势：`nohup sh -c 'sleep 8; yomi daemon restart' >/dev/null 2>&1 &` 后直接结束，**验证留给下一轮**。
+- **自杀式重启**（agent 在 daemon 里重启自己）：命令必须**立即 exit 0**，绝不在同一条里 `sleep`+验证——restart 生效时本进程即死，后续验证必然以"失败"误报，诱导重试跑两遍。正确姿势：先排**一次性 cron 自检**（job 持久化在 sqlite，重启后照跑），再 `nohup sh -c 'sleep 8; yomi daemon restart' >/dev/null 2>&1 &` 直接结束：
+  `yomi cron create --name restart-self-check --session <本会话id> --max-runs 1 --schedule "$(date -v+2M '+%-M %-H %-d %-m *')" --message '自检重启：yomi daemon status + yomi --version + 日志尾部有无 panic/ERROR，简报结果'`
 - 日志在 `~/.yomi/logs/daemon.<date>.log`（`tui.`/`run.` 前缀同理）——行为异常先看这里。
 - `session`/`cron`/`events`/`rpc` 等 daemon-only 命令**不会自动 spawn daemon**，连不上即报 "Is it running?"。
 
@@ -27,7 +28,7 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 
 - `session list` 默认只列当前目录的会话，`-a` 列全部。
 - `session cat [-s <id>]` 读会话消息日志：默认友好输出（user/assistant 文本，图片显示 asset 真实文件路径）；`--tools` 加工具调用行；`--raw` 输出 JSONL。直接读文件，不依赖 daemon。
-- `session send` 往会话注消息（agent 忙则排队）；`--steer` 注入当前 run，回合间生效。
+- `session send` 往会话注消息起新任务（agent 忙则排队）；**补充信息用 `--steer`**——注入当前 run，回合间生效，不打断进行中的回合也不另起完整回合。
 - `session cancel` 停 agent loop，会话保留。
 - 观察运行态（都走 `yomi rpc`）：
   - `get_session '{"session_id":"sess_…"}'`：单会话 `phase`（idle/streaming/executing_tool/compacting）。
@@ -39,6 +40,7 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 ## cron（自己的闹钟）
 
 - `cron list|get|create|update|pause|resume|delete`；`cron trigger <id>` 立即手动触发一次，调试任务时用。
+- 一次性任务（如重启自检，见 daemon 节）：`--max-runs 1` + 近未来的 schedule。
 - shell 类 job 脚本退出码 **42** = 自我完成：标记 `Completed` 不再调度（仅调度执行兑现，手动 `trigger` 不生效）。
 
 ## 清理（自己的数据）
