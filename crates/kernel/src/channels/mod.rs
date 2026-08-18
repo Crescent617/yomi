@@ -2,7 +2,7 @@
 //! that routes their messages into kernel sessions. Feishu card design
 //! rules (button size, copy language, client rendering quirks) live in
 //! the module docs of `feishu.rs` — read them before touching any card
-//! rendering code (obs/reply/mailbox/approval/hub_deliver).
+//! rendering code (`obs`/`reply`/`mailbox`/`approval`/`hub_deliver`).
 
 use crate::permission::Level;
 use crate::types::{ContentBlock, Result as KernelResult, SessionId};
