@@ -412,7 +412,7 @@ impl PlatformAdapter for TelegramAdapter {
                             |msg| {
                                 let raw_text =
                                     msg.text().or_else(|| msg.caption()).unwrap_or_default();
-                                super::hub::has_channel_command_prefix(raw_text)
+                                super::hub_command::has_channel_command_prefix(raw_text)
                             },
                             |msg| msg.from.as_ref().map_or(0, |u| u.id.0),
                         );

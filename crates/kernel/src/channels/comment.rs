@@ -36,7 +36,7 @@ pub(super) async fn handle_doc_comment_added(
     config: &ChannelConfig,
     store: &Arc<dyn ChannelStore>,
     adapter: &Arc<dyn PlatformAdapter>,
-    dispatch_tx: &mpsc::Sender<(ChannelMessage, super::hub::Gate)>,
+    dispatch_tx: &mpsc::Sender<(ChannelMessage, super::hub_gate::Gate)>,
     notice: DocCommentNotice,
 ) {
     // Feature toggle first: disabled means zero platform API calls and no
@@ -137,7 +137,7 @@ pub(super) async fn handle_doc_comment_added(
     let mut content = Vec::new();
     let is_command = bare_text
         .as_deref()
-        .is_some_and(super::hub::has_channel_command_prefix);
+        .is_some_and(super::hub_command::has_channel_command_prefix);
     if !is_command {
         if let Some(d) = &detail {
             if let Some(history) = build_thread_history(store, channel_name, &notice, d).await {
@@ -185,7 +185,7 @@ pub(super) async fn handle_doc_comment_added(
         }),
     };
     if dispatch_tx
-        .send((msg, super::hub::Gate::Allow))
+        .send((msg, super::hub_gate::Gate::Allow))
         .await
         .is_err()
     {
@@ -359,7 +359,7 @@ async fn build_thread_history(
         .filter(|r| Some(r.reply_id.as_str()) != notice.reply_id.as_deref())
         .filter(|r| !r.text.trim().is_empty())
         // Commands are control-plane (same rule as chat history).
-        .filter(|r| !super::hub::is_command_text(r.text.trim()))
+        .filter(|r| !super::hub_command::is_command_text(r.text.trim()))
         .filter(|r| cursor.is_none_or(|c| r.create_time * 1000 > c))
         .map(|r| {
             let ts = chrono::DateTime::from_timestamp(r.create_time, 0)

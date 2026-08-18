@@ -165,7 +165,7 @@ async fn handle_with_store(
     store: &Arc<dyn crate::channels::ChannelStore>,
     adapter: &Arc<CommentMockAdapter>,
     notice: DocCommentNotice,
-) -> mpsc::Receiver<(ChannelMessage, super::super::hub::Gate)> {
+) -> mpsc::Receiver<(ChannelMessage, super::super::hub_gate::Gate)> {
     let (tx, rx) = mpsc::channel(1);
     let adapter: Arc<dyn PlatformAdapter> = adapter.clone();
     handle_doc_comment_added("feishu", config, store, &adapter, &tx, notice).await;
@@ -176,7 +176,7 @@ async fn handle(
     config: &ChannelConfig,
     adapter: &Arc<CommentMockAdapter>,
     notice: DocCommentNotice,
-) -> mpsc::Receiver<(ChannelMessage, super::super::hub::Gate)> {
+) -> mpsc::Receiver<(ChannelMessage, super::super::hub_gate::Gate)> {
     handle_with_store(config, &test_store().await, adapter, notice).await
 }
 
