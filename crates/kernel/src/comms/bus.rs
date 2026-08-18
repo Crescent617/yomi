@@ -262,6 +262,11 @@ impl<T, K> PubSubSubscriber<T, K> {
         self.rx.recv().await
     }
 
+    /// 队列是否已排空。供 select! 守卫让 tick 分支让位于待处理事件。
+    pub fn is_empty(&self) -> bool {
+        self.rx.is_empty()
+    }
+
     /// 从外部 channel 构造 subscriber（用于远程模式桥接）。
     /// id 为 `BRIDGE_LISTENER_ID` 以避免与正常 listener id 冲突。
     pub fn from_receiver(rx: mpsc::Receiver<(K, T)>) -> Self {

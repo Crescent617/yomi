@@ -696,9 +696,11 @@ impl ObsTracker {
     /// lost events where no `Stopped` ever arrives). Liveness is queried,
     /// not inferred from event gaps, so long tool calls never false-positive.
     ///
-    /// Race note: a `Stopped` already queued in the event bus can lose to
-    /// this sweep (card settles as timed-out a beat early); receipts are
-    /// still settled correctly when the real `Stopped` arrives.
+    /// The forwarder's tick arms yield to queued events (entry guard plus
+    /// an in-handler re-check), so terminal events (`Stopped`/`Compacted`)
+    /// already delivered to this listener are always drained before this
+    /// sweep runs; a card is swept here only when its terminal event never
+    /// arrived (crash / lost), the sub-ms bus-forwarder hop aside.
     pub(crate) async fn sweep_dead_sessions(&self, is_alive: impl Fn(&SessionId) -> bool) {
         let dead: Vec<SessionId> = self
             .states

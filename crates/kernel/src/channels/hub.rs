@@ -437,22 +437,41 @@ impl ChannelHub {
                 tokio::select! {
                     biased;
                     () = token.cancelled() => break,
-                    _ = live_refresh.tick() => {
+                    // Ticks yield to queued events (guard disables the arm
+                    // under `biased`): a terminal event (`Stopped`/
+                    // `Compacted`) flips the conductor's state mirror to
+                    // Idle the instant it is emitted, but this loop may not
+                    // have processed it yet — judging liveness before
+                    // draining the queue sweeps live cards into false
+                    // ⏰ Session lost receipts. Guards are evaluated once at
+                    // `select!` entry, so a tick waking the loop can still
+                    // win over events that landed while parked — hence the
+                    // re-check inside each handler. Sustained event flow
+                    // defers ticks (MissedTickBehavior::Skip, no burst);
+                    // they catch up when traffic quiets.
+                    _ = live_refresh.tick(), if rx.is_empty() => {
+                        if !rx.is_empty() {
+                            continue;
+                        }
                         // Live-card heartbeat: re-render + PATCH cards that
                         // haven't updated within the interval (long tool).
                         obs.refresh_stale(LIVE_CARD_REFRESH_INTERVAL).await;
                     }
-                    _ = watchdog.tick() => {
+                    _ = watchdog.tick(), if rx.is_empty() => {
+                        if !rx.is_empty() {
+                            continue;
+                        }
                         // Kernel gone = shutting down; nothing to settle.
                         if let Some(k) = kernel.upgrade() {
                             // Sessions whose agent died (crash / lost
                             // `Stopped`): flush whatever reply state remains
                             // so content is never silently lost, mirroring the
-                            // obs timeout settlement. Race note: a `Stopped`
-                            // already queued in the bus can lose to this flush
-                            // (the reply lands a beat early, from possibly
-                            // not-yet-processed events); the real `Stopped`
-                            // then finds no buffer and sends nothing.
+                            // obs timeout settlement. Tick arms yield to
+                            // queued events (guard + in-handler re-check),
+                            // so an already-delivered `Stopped` is always
+                            // drained before this check; the residual window
+                            // is the bus-forwarder hop (sub-ms scheduling
+                            // latency) before an event reaches this listener.
                             let dead: Vec<SessionId> = reply_buffers
                                 .keys()
                                 .filter(|sid| !k.is_session_running(sid))
