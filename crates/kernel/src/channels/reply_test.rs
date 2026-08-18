@@ -159,14 +159,14 @@ fn trace_title_carries_model_ctx_and_failed_when_set() {
         panic!("expected a trace");
     };
     assert_eq!(
-        title, "🐾 0s · 💬 2 · 🔧 3 · ❌ 1 · k3-hs · 12.3k/128.0k",
+        title, "🐾 0s · 💬 2 · 🔧 3 · ❌ 1 · k3-hs · 10%",
         "title: {title}"
     );
 
     // into_reply（回复卡路径）带出同样的段。
     let card = render_card(&buf.into_reply(), None).unwrap();
     assert!(
-        card.contains("🐾 0s · 💬 2 · 🔧 3 · ❌ 1 · k3-hs · 12.3k/128.0k"),
+        card.contains("🐾 0s · 💬 2 · 🔧 3 · ❌ 1 · k3-hs · 10%"),
         "card: {card}"
     );
 }

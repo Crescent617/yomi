@@ -1092,7 +1092,7 @@ async fn terminal_receipt_title_matches_live_segments() {
     let patches = mock.patches.lock().await;
     let live = patches.last().unwrap().1.clone();
     assert!(
-        live.contains("🐾 0s · 💬 1 · 🔧 1 · ❌ 1 · k3-hs · 12.3k/200.0k"),
+        live.contains("🐾 0s · 💬 1 · 🔧 1 · ❌ 1 · k3-hs · 6%"),
         "live title: {live}"
     );
     drop(patches);
@@ -1109,7 +1109,7 @@ async fn terminal_receipt_title_matches_live_segments() {
     let patches = mock.patches.lock().await;
     let terminal = &patches.last().unwrap().1;
     assert!(
-        terminal.contains("🐾 0s · 💬 1 · 🔧 1 · ❌ 1 · k3-hs · 12.3k/200.0k"),
+        terminal.contains("🐾 0s · 💬 1 · 🔧 1 · ❌ 1 · k3-hs · 6%"),
         "terminal title matches live: {terminal}"
     );
 }
@@ -1287,7 +1287,7 @@ async fn token_usage_adds_footer() {
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 2);
     let last = &patches.last().unwrap().1;
-    assert!(last.contains("12.3k/200.0k"), "{last}");
+    assert!(last.contains("6%"), "{last}");
 }
 
 // ── Live output estimate ────────────────────────────────────────────
@@ -1364,7 +1364,7 @@ async fn thinking_only_stream_shows_estimate_on_placeholder_card() {
     let last = patches.last().unwrap().1.clone();
     assert!(last.contains("⏱"), "stats joined the placeholder: {last}");
     assert!(last.contains("out ~100"), "live estimate: {last}");
-    assert!(!last.contains("12.3k"), "no real usage yet: {last}");
+    assert!(!last.contains('%'), "no real usage yet: {last}");
 }
 
 #[tokio::test]
@@ -1491,7 +1491,7 @@ async fn estimate_accumulates_across_the_run() {
         .await;
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
-    assert!(last.contains("12.3k/200.0k"), "real usage: {last}");
+    assert!(last.contains("6%"), "real usage: {last}");
     assert!(last.contains("out ~20"), "run-cumulative estimate: {last}");
 }
 

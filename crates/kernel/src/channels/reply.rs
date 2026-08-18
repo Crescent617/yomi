@@ -530,10 +530,13 @@ fn dropped_marker(dropped: usize) -> String {
     format!("··· and {dropped} earlier entries")
 }
 
-/// Real token usage as the title's ctx segment (`45.2k/128k`), shared by
-/// the live stats line and the trace title on every surface.
+/// Real token usage as the title's ctx segment (`35%`), shared by the
+/// live stats line and the trace title on every surface.
 pub(crate) fn ctx_footer(total_tokens: u32, context_window: u32) -> String {
-    format!("{}/{}", fmt_k(total_tokens), fmt_k(context_window))
+    // Percentage only: the window size varies across models, and the
+    // ratio is what fits the compact trace title.
+    let pct = (f64::from(total_tokens) * 100.0 / f64::from(context_window.max(1))).round() as u32;
+    format!("{pct}%")
 }
 
 fn trace_lines(entries: &[TraceEntry], markdown: bool) -> Vec<String> {

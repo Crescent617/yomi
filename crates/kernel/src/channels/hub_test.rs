@@ -59,6 +59,20 @@ impl MockAdapter {
     }
 }
 
+/// Text of the mock's most recent outgoing message (info-command replies
+/// travel the adapter, not the handler's return value).
+async fn last_outgoing_text(mock: &MockAdapter) -> String {
+    mock.outgoing
+        .lock()
+        .await
+        .last()
+        .and_then(|(_, blocks)| match blocks.first() {
+            Some(ContentBlock::Text { text }) => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
 #[async_trait::async_trait]
 impl PlatformAdapter for MockAdapter {
     async fn run_receiver(
@@ -2111,8 +2125,7 @@ fn test_format_current_and_unknown_model() {
     let models = vec![model_info("nova", "nova-2", 256_000)];
 
     let current = format_current_model(&models, "nova");
-    assert!(current.contains("Current model: `nova`"));
-    assert!(current.contains("`nova-2`"));
+    assert!(current.contains("`nova` · anthropic · `nova-2` · 256k ctx"));
 
     let unknown = format_unknown_model("missing", &models);
     assert!(unknown.contains("Model `missing` was not found"));
@@ -2507,14 +2520,15 @@ fn test_format_session_info() {
     };
     let models = vec![model_info("nova", "nova-2", 256_000)];
 
-    let out = format_session_info(&session, "nova", &models, 0, &[]);
-    assert!(out.contains(&format!("- ID: `{}`", session.id.0)));
-    assert!(out.contains("- Model: `nova` · anthropic · `nova-2` · 256k ctx (default)"));
-    assert!(out.contains("- Status: idle"));
-    assert!(out.contains("- Created: 3h ago · Active: 5m ago"));
-    assert!(out.contains("- Permission: dangerous"));
-    assert!(out.contains("- Subagents (running): 0"));
-    assert!(out.contains("- Background Shell: none"));
+    let out = format_session_info(&session, "nova", &models, 0, &[], Some(45_056));
+    assert!(out.contains(&format!("- **ID**: `{}`", session.id.0)));
+    assert!(out.contains("- **Model**: `nova` · anthropic · `nova-2` · 256k ctx (default)"));
+    assert!(out.contains("- **Context**: 45.1k/256.0k (18%)"));
+    assert!(out.contains("- **Status**: idle"));
+    assert!(out.contains("- **Created**: 3h ago · **Active**: 5m ago"));
+    assert!(out.contains("- **Permission**: dangerous"));
+    assert!(out.contains("- **Subagents**: 0 running"));
+    assert!(out.contains("- **Background shells**: 0"));
 
     // Persisted model key drops the (default) marker; shells are listed.
     let session = crate::types::SessionResponse {
@@ -2529,13 +2543,133 @@ fn test_format_session_info() {
         output_path: "/tmp/sh-1.log".to_string(),
         started_at: now - chrono::Duration::minutes(9),
     }];
-    let out = format_session_info(&session, "nova", &models, 2, &shells);
-    assert!(out.contains("- Model: `nova` · anthropic · `nova-2` · 256k ctx\n"));
-    assert!(out.contains("- Subagents (running): 2"));
-    assert!(out.contains("- Background Shell: `cargo test` (pid 42, 9m ago)"));
+    let out = format_session_info(&session, "nova", &models, 2, &shells, None);
+    assert!(out.contains("- **Model**: `nova` · anthropic · `nova-2` · 256k ctx\n"));
+    assert!(out.contains("- **Context**: —"));
+    assert!(out.contains("- **Subagents**: 2 running"));
+    assert!(out.contains("- **Background shells**: 1\n  - `cargo test` · pid 42 · 9m ago"));
+}
+
+#[tokio::test]
+async fn session_context_tokens_picks_latest_usage() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+    let sid = SessionId::new();
+
+    // Nothing recorded → unknown (`—` on the card).
+    assert_eq!(kernel.get_session_context_tokens(&sid).await, None);
+
+    let usage = |prompt_tokens: u32, completion_tokens: u32, total_tokens: u32| {
+        crate::types::MessageTokenUsage {
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+        }
+    };
+    let store = kernel.message_store().await;
+    store
+        .append(
+            &sid.0,
+            &[
+                crate::types::Message::user("hi"),
+                crate::types::Message::assistant("a").with_token_usage(usage(100, 20, 120)),
+                crate::types::Message::assistant("b").with_token_usage(usage(200, 30, 230)),
+                crate::types::Message::user("again"),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(kernel.get_session_context_tokens(&sid).await, Some(230));
+}
+
+#[tokio::test]
+async fn permits_denies_non_admin_without_card() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "app".to_string(),
+            app_secret: "secret".to_string(),
+        },
+        require_mention: true,
+        admin_users: vec!["ou_admin".to_string()],
+        ..Default::default()
+    };
+    let mut msg = channel_message(None, true, true);
+    msg.external_user_id = "ou_random".to_string();
+    msg.raw_text = Some("/permits".to_string());
+    let reply = handle_incoming_message("mock", &config, &store, kernel, msg, &obs, &adapter)
+        .await
+        .unwrap();
+    assert_eq!(
+        reply.as_deref(),
+        Some("permission denied：你不在 admin_users 中。")
+    );
+    assert!(mock.cards.lock().await.is_empty());
 }
 
 // ── deliver_reply ───────────────────────────────────────────────────
+
+#[tokio::test]
+async fn info_reply_card_on_capable_platforms_text_elsewhere() {
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let msg = channel_message(None, true, true);
+
+    // Text fallback (default): the title becomes a bold first line.
+    send_info_reply(
+        &adapter,
+        &msg,
+        None,
+        "ℹ️ Session info",
+        "- **A**: 1".to_string(),
+    )
+    .await
+    .unwrap();
+    let text = last_outgoing_text(&mock).await;
+    assert!(
+        text.starts_with("**ℹ️ Session info**\n\n- **A**: 1"),
+        "text fallback: {text}"
+    );
+    assert!(mock.cards.lock().await.is_empty());
+
+    // Card path: the header carries the title, the body the markdown.
+    mock.status_card_ok
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    send_info_reply(
+        &adapter,
+        &msg,
+        None,
+        "ℹ️ Session info",
+        "- **A**: 1".to_string(),
+    )
+    .await
+    .unwrap();
+    let cards = mock.cards.lock().await;
+    let Some((_, card, _)) = cards.last() else {
+        panic!("no card sent")
+    };
+    assert!(card.contains("\"template\":\"blue\""), "card: {card}");
+    assert!(card.contains("ℹ️ Session info"), "card: {card}");
+    assert!(card.contains("- **A**: 1"), "card: {card}");
+}
 
 use crate::event::{AgentEvent, AgentStatus, StopReason, ToolEvent};
 
@@ -3665,7 +3799,17 @@ async fn model_commands_do_not_claim_fresh_thread() {
     )
     .await
     .unwrap();
-    assert!(reply.is_some());
+    assert!(reply.is_none(), "info replies go through the adapter");
+    {
+        let outgoing = mock.outgoing.lock().await;
+        let Some((_, blocks)) = outgoing.last() else {
+            panic!("/models sent nothing")
+        };
+        let Some(ContentBlock::Text { text }) = blocks.first() else {
+            panic!("not a text reply")
+        };
+        assert!(text.contains("`m1`"), "models list: {text}");
+    }
     assert!(!thread_claimed().await, "/models must not claim the thread");
 
     // /info: degrades to the resolved model, no mapping created.
@@ -4975,9 +5119,11 @@ async fn threads_command_query_set_reset() {
     // by its own message id instead of the chat id.
     assert!(resolve_reply_in_thread(&store, &config, "oc_1").await);
 
-    // Query reports the override and its source.
+    // Query reports the override and its source (sent via the adapter —
+    // info replies return `None`).
     let reply = handle(msg("ou_random", "/threads", true)).await.unwrap();
-    let text = reply.unwrap();
+    assert!(reply.is_none(), "info replies go through the adapter");
+    let text = last_outgoing_text(&mock).await;
     assert!(text.contains("`on`"), "query: {text}");
     assert!(text.contains("chat override"), "source: {text}");
 
@@ -4985,7 +5131,8 @@ async fn threads_command_query_set_reset() {
     let mut thread_msg = msg("ou_random", "/threads", true);
     thread_msg.thread_id = Some("omt_1".to_string());
     let reply = handle(thread_msg).await.unwrap();
-    assert!(reply.unwrap().contains("chat override"));
+    assert!(reply.is_none());
+    assert!(last_outgoing_text(&mock).await.contains("chat override"));
 
     // Reset: back to the channel default.
     let reply = handle(msg("ou_admin", "/threads reset", true))
@@ -5084,11 +5231,13 @@ async fn mention_command_query_set_reset() {
         Some(false)
     );
 
-    // Query reports the override and its source.
+    // Query reports the override and its source (sent via the adapter —
+    // info replies return `None`).
     let reply = handle(msg("ou_random", "/mention", None, true))
         .await
         .unwrap();
-    let text = reply.unwrap();
+    assert!(reply.is_none(), "info replies go through the adapter");
+    let text = last_outgoing_text(&mock).await;
     assert!(text.contains("`off`"), "query: {text}");
     assert!(text.contains("chat override"), "source: {text}");
 
@@ -5096,7 +5245,8 @@ async fn mention_command_query_set_reset() {
     let reply = handle(msg("ou_random", "/mention", Some("omt_1"), true))
         .await
         .unwrap();
-    let text = reply.unwrap();
+    assert!(reply.is_none());
+    let text = last_outgoing_text(&mock).await;
     assert!(text.contains("chat override"), "thread fallback: {text}");
 
     // …but mutates its own thread container.

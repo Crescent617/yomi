@@ -1,6 +1,9 @@
 //! Channel slash-command definitions, parsing, and reply formatting.
 
 use crate::storage::format_age;
+use std::fmt::Write as _;
+
+use super::obs::fmt_k;
 
 pub(crate) const CMD_MODELS: &str = "/models";
 
@@ -70,7 +73,6 @@ pub(crate) const COMMANDS: &[(&str, &[&str])] = &[
 
 /// `/help` response: the channel command list.
 pub(crate) const HELP_TEXT: &str = "\
-**Commands**
 `/help` (`/h`) — this help
 `/info` (`/i`) — current session info
 `/models` — list configured models (current one marked)
@@ -390,7 +392,7 @@ pub(crate) fn format_model_list(models: &[crate::kernel::ModelInfo], current: &s
         return "No models are currently available.".to_string();
     }
 
-    let mut lines = vec!["**Available models**".to_string(), String::new()];
+    let mut lines = Vec::new();
     for model in models {
         let marker = if model.name == current {
             " **← current**"
@@ -416,10 +418,10 @@ pub(crate) fn format_current_model(models: &[crate::kernel::ModelInfo], current:
         .iter()
         .find(|model| model.name == current)
         .map_or_else(
-            || format!("Current model: `{current}`. Use `/models` to list available models."),
+            || format!("`{current}` — not one of the configured models.\n\nUse `/models` to list available models."),
             |model| {
                 format!(
-                "Current model: `{}` · {} · `{}` · {}k ctx\n\nSwitch with `/model <model_key>`.",
+                "`{}` · {} · `{}` · {}k ctx\n\nSwitch with `/model <model_key>`.",
                 model.name,
                 model.provider,
                 model.model_id,
@@ -435,8 +437,10 @@ pub(crate) fn format_session_info(
     models: &[crate::kernel::ModelInfo],
     running_subagents: usize,
     shells: &[crate::agent::BackgroundShellTask],
+    context_tokens: Option<u32>,
 ) -> String {
-    let model = models.iter().find(|m| m.name == model_key).map_or_else(
+    let found = models.iter().find(|m| m.name == model_key);
+    let model = found.map_or_else(
         || format!("`{model_key}`"),
         |m| {
             format!(
@@ -454,39 +458,53 @@ pub(crate) fn format_session_info(
     } else {
         ""
     };
+    // Current context occupancy: absolute + window share when the model's
+    // window is known; `—` until the first response records usage.
+    let context = match context_tokens {
+        Some(tokens) => match found {
+            Some(m) => format!(
+                "{}/{} ({:.0}%)",
+                fmt_k(tokens),
+                fmt_k(m.context_window),
+                f64::from(tokens) * 100.0 / f64::from(m.context_window.max(1))
+            ),
+            None => fmt_k(tokens),
+        },
+        None => "—".to_string(),
+    };
     let shells_text = if shells.is_empty() {
-        "none".to_string()
+        "- **Background shells**: 0".to_string()
     } else {
-        shells
-            .iter()
-            .map(|s| {
-                format!(
-                    "`{}` (pid {}, {})",
-                    s.command,
-                    s.pid,
-                    format_age(s.started_at)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
+        let mut text = format!("- **Background shells**: {}", shells.len());
+        for s in shells {
+            // Commands are user-influenceable: neutralize the two chars
+            // that can break the row's inline-code markup (cosmetic).
+            let cmd = s.command.replace('`', "｀").replace('\n', " ");
+            let _ = write!(
+                text,
+                "\n  - `{cmd}` · pid {} · {}",
+                s.pid,
+                format_age(s.started_at)
+            );
+        }
+        text
     };
     [
-        "**Session Info**".to_string(),
-        String::new(),
-        format!("- ID: `{}`", session.id.0),
-        format!("- Model: {model}{default_marker}"),
-        format!("- Status: {}", session.phase),
+        format!("- **ID**: `{}`", session.id.0),
+        format!("- **Model**: {model}{default_marker}"),
+        format!("- **Context**: {context}"),
+        format!("- **Status**: {}", session.phase),
         format!(
-            "- Created: {} · Active: {}",
+            "- **Created**: {} · **Active**: {}",
             format_age(session.created_at),
             format_age(session.updated_at)
         ),
         format!(
-            "- Permission: {}",
+            "- **Permission**: {}",
             session.auto_approve_level.as_deref().unwrap_or("default")
         ),
-        format!("- Subagents (running): {running_subagents}"),
-        format!("- Background Shell: {shells_text}"),
+        format!("- **Subagents**: {running_subagents} running"),
+        shells_text,
     ]
     .join("\n")
 }

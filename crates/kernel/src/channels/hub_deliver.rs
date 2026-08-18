@@ -351,6 +351,41 @@ pub(crate) async fn send_command_reply(
     Ok(())
 }
 
+/// Info-command reply: a header-titled compact card on card-capable
+/// platforms (the `/sessions` style — title lives in the blue header);
+/// plain text with the title as a bold first line everywhere else.
+pub(crate) async fn send_info_reply(
+    adapter: &Arc<dyn PlatformAdapter>,
+    msg: &ChannelMessage,
+    reply_msg_id: Option<String>,
+    title: &str,
+    body: String,
+) -> Result<()> {
+    if msg.doc_comment.is_none() && adapter.supports_status_card() {
+        let card = info_card(title, &body);
+        adapter
+            .send_card(&msg.external_chat_id, &card, reply_msg_id.as_deref())
+            .await?;
+        return Ok(());
+    }
+    send_command_reply(adapter, msg, reply_msg_id, format!("**{title}**\n\n{body}")).await
+}
+
+/// The shared info card: blue header + single markdown body (mirrors
+/// [`sessions_card`](super::hub_handlers::sessions_card)'s compact style).
+fn info_card(title: &str, body_md: &str) -> String {
+    serde_json::json!({
+        "schema": "2.0",
+        "config": { "width_mode": "compact" },
+        "header": {
+            "template": "blue",
+            "title": { "tag": "plain_text", "content": title },
+        },
+        "body": { "elements": [ { "tag": "markdown", "content": body_md } ] },
+    })
+    .to_string()
+}
+
 /// How a run ends, for reply-delivery purposes.
 #[derive(Clone, Copy)]
 pub(crate) enum SettleKind<'a> {

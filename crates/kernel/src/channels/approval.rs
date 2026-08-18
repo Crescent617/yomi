@@ -96,17 +96,13 @@ pub(super) async fn handle_doc_permission_applied(
 // ── Commands ───────────────────────────────────────────────────────
 
 /// `/permits` — list this channel's pending applications (admin only).
-pub(super) async fn list_pending(
+/// The `/permits` list body (no admin check — the caller gates).
+pub(super) async fn pending_list_body(
     channel_name: &str,
-    config: &ChannelConfig,
     store: &Arc<dyn ChannelStore>,
-    user_id: &str,
-) -> KernelResult<Option<String>> {
-    if let Some(reply) = check_admin(config, user_id) {
-        return Ok(Some(reply));
-    }
+) -> KernelResult<String> {
     let rows = store.list_pending_perm_requests(channel_name).await?;
-    Ok(Some(format_pending_list(&rows)))
+    Ok(format_pending_list(&rows))
 }
 
 /// `/approve <id> [perm]` — grant the requested (or overridden) level.
@@ -424,10 +420,7 @@ fn format_pending_list(rows: &[PermRequestRow]) -> String {
     if rows.is_empty() {
         return "没有待审批的文档权限申请。".to_string();
     }
-    let mut lines = vec![
-        "**待审批的文档权限申请**（批准 `/approve <id> [perm]` · 拒绝 `/deny <id>`）".to_string(),
-        String::new(),
-    ];
+    let mut lines = Vec::new();
     for row in rows.iter().take(MAX_PENDING_ROWS) {
         lines.push(format!(
             "- `#{}` {} · {} · 申请 {} · {}",
@@ -444,6 +437,8 @@ fn format_pending_list(rows: &[PermRequestRow]) -> String {
             rows.len()
         ));
     }
+    lines.push(String::new());
+    lines.push("批准 `/approve <id> [perm]` · 拒绝 `/deny <id>`".to_string());
     lines.join("\n")
 }
 

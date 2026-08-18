@@ -255,10 +255,7 @@ async fn pending_list_formatting() {
 
 #[tokio::test]
 async fn permits_requires_admin() {
-    let store = test_store().await;
-    let reply = list_pending("feishu", &admin_config(), &store, "ou_stranger")
-        .await
-        .unwrap();
+    let reply = check_admin(&admin_config(), "ou_stranger");
     assert_eq!(
         reply.as_deref(),
         Some("permission denied：你不在 admin_users 中。")

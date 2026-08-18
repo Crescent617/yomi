@@ -13,10 +13,11 @@ use super::hub_command::{
     parse_channel_command, ChannelCommand, OverrideMode, HELP_TEXT,
 };
 use super::hub_context::{append_message_images, prepare_trigger, TriggerKind};
+use super::hub_deliver::send_info_reply;
 use super::hub_routing::{
     effective_mapping_key, get_or_create_session, history_container, is_chat_level_message,
     reply_anchor, resolve_reply_in_thread, resolve_require_mention, session_jump_link,
-    session_model_key, subscription_scope_key, thread_refusal,
+    session_model_key, subscription_scope_key, thread_refusal, MentionSource,
 };
 
 use super::{
@@ -49,7 +50,11 @@ pub(crate) async fn handle_incoming_message(
 
     let cmd = parse_channel_command(msg.raw_text.as_deref());
     match cmd {
-        ChannelCommand::Help => Ok(Some(HELP_TEXT.to_string())),
+        ChannelCommand::Help => {
+            send_info_reply(adapter, &msg, reply_msg_id, "📖 Commands", HELP_TEXT.to_string())
+                .await?;
+            Ok(None)
+        }
         ChannelCommand::Clear => {
             if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
                 if let Err(e) = kernel.clear_session(&sid) {
@@ -200,13 +205,29 @@ pub(crate) async fn handle_incoming_message(
             let models = kernel.list_models().await?;
             let current =
                 session_model_key(channel_name, store, &kernel, &chat_id, &mapping_key).await?;
-            Ok(Some(format_model_list(&models, &current)))
+            send_info_reply(
+                adapter,
+                &msg,
+                reply_msg_id,
+                "📦 Available models",
+                format_model_list(&models, &current),
+            )
+            .await?;
+            Ok(None)
         }
         ChannelCommand::CurrentModel => {
             let models = kernel.list_models().await?;
             let current =
                 session_model_key(channel_name, store, &kernel, &chat_id, &mapping_key).await?;
-            Ok(Some(format_current_model(&models, &current)))
+            send_info_reply(
+                adapter,
+                &msg,
+                reply_msg_id,
+                "🧠 Current model",
+                format_current_model(&models, &current),
+            )
+            .await?;
+            Ok(None)
         }
         ChannelCommand::SwitchModel(key) => {
             let models = kernel.list_models().await?;
@@ -263,14 +284,14 @@ pub(crate) async fn handle_incoming_message(
             "Usage: `/model` or `/model <model_key>`. Use `/models` to list models.".to_string(),
         )),
         ChannelCommand::Mention(mode) => {
-            handle_mention_command(config, store, &msg, mode).await.map(Some)
+            handle_mention_command(config, store, &msg, adapter, reply_msg_id, mode).await
         }
         ChannelCommand::InvalidMentionCommand => Ok(Some(
             "Usage: `/mention` to show the current setting; `/mention on|off|reset` to change it (admin)."
                 .to_string(),
         )),
         ChannelCommand::Threads(mode) => {
-            handle_threads_command(config, store, &msg, mode).await.map(Some)
+            handle_threads_command(config, store, &msg, adapter, reply_msg_id, mode).await
         }
         ChannelCommand::InvalidThreadsCommand => Ok(Some(
             "Usage: `/threads` to show the current setting; `/threads on|off|reset` to change it (admin)."
@@ -316,16 +337,25 @@ pub(crate) async fn handle_incoming_message(
                 .filter(|s| s.is_running)
                 .count();
             let shells = kernel.list_background_shells(&sid);
-            Ok(Some(format_session_info(
+            let context_tokens = kernel.get_session_context_tokens(&sid).await;
+            let body = format_session_info(
                 &session,
                 &model_key,
                 &models,
                 running_subagents,
                 &shells,
-            )))
+                context_tokens,
+            );
+            send_info_reply(adapter, &msg, reply_msg_id, "ℹ️ Session info", body).await?;
+            Ok(None)
         }
         ChannelCommand::Permits => {
-            super::approval::list_pending(channel_name, config, store, &msg.external_user_id).await
+            if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
+                return Ok(Some(deny));
+            }
+            let body = super::approval::pending_list_body(channel_name, store).await?;
+            send_info_reply(adapter, &msg, reply_msg_id, "🔐 Pending approvals", body).await?;
+            Ok(None)
         }
         ChannelCommand::Approve { id, perm } => {
             super::approval::approve(
@@ -606,24 +636,33 @@ pub(crate) async fn handle_mention_command(
     config: &ChannelConfig,
     store: &Arc<dyn ChannelStore>,
     msg: &ChannelMessage,
+    adapter: &Arc<dyn PlatformAdapter>,
+    reply_msg_id: Option<String>,
     mode: Option<OverrideMode>,
-) -> Result<String> {
+) -> Result<Option<String>> {
     if !msg.is_group {
-        return Ok("No need for this in DMs — every message is answered.".to_string());
+        return Ok(Some(
+            "No need for this in DMs — every message is answered.".to_string(),
+        ));
     }
     let on_off = |v: bool| if v { "on" } else { "off" };
     let container = history_container(msg);
     let scope = container.label();
     let Some(mode) = mode else {
         let (effective, source) = resolve_require_mention(store, config, msg).await;
-        return Ok(format!(
-            "Mention requirement in this {scope}: `{}` ({source}); channel default: `{}`.",
-            on_off(effective),
-            on_off(config.require_mention),
-        ));
+        // The channel default is only a useful reference when an
+        // override hides it; alone it just repeats itself.
+        let suffix = if matches!(source, MentionSource::Default) {
+            String::new()
+        } else {
+            format!(" · channel default: `{}`", on_off(config.require_mention))
+        };
+        let body = format!("This {scope}: `{}` ({source}){suffix}.", on_off(effective));
+        send_info_reply(adapter, msg, reply_msg_id, "📣 Mention", body).await?;
+        return Ok(None);
     };
     if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
-        return Ok(deny);
+        return Ok(Some(deny));
     }
     match mode {
         OverrideMode::On | OverrideMode::Off => {
@@ -631,21 +670,21 @@ pub(crate) async fn handle_mention_command(
             store
                 .set_mention_override(&config.name, container.id(), value)
                 .await?;
-            Ok(format!(
+            Ok(Some(format!(
                 "Mention requirement set to `{}` for this {scope} (channel default: `{}`).",
                 on_off(value),
                 on_off(config.require_mention),
-            ))
+            )))
         }
         OverrideMode::Reset => {
             store
                 .clear_mention_override(&config.name, container.id())
                 .await?;
             let (effective, source) = resolve_require_mention(store, config, msg).await;
-            Ok(format!(
+            Ok(Some(format!(
                 "Override cleared for this {scope}; now following {source}: `{}`.",
                 on_off(effective),
-            ))
+            )))
         }
     }
 }
@@ -658,10 +697,14 @@ pub(crate) async fn handle_threads_command(
     config: &ChannelConfig,
     store: &Arc<dyn ChannelStore>,
     msg: &ChannelMessage,
+    adapter: &Arc<dyn PlatformAdapter>,
+    reply_msg_id: Option<String>,
     mode: Option<OverrideMode>,
-) -> Result<String> {
+) -> Result<Option<String>> {
     if !msg.is_group {
-        return Ok("No need for this in DMs — replies are never threaded.".to_string());
+        return Ok(Some(
+            "No need for this in DMs — replies are never threaded.".to_string(),
+        ));
     }
     let on_off = |v: bool| if v { "on" } else { "off" };
     let chat_id = &msg.external_chat_id;
@@ -675,14 +718,19 @@ pub(crate) async fn handle_threads_command(
             Some(v) => (v, "chat override"),
             None => (config.reply_in_thread, "channel default"),
         };
-        return Ok(format!(
-            "Reply-in-thread in this chat: `{}` ({source}); channel default: `{}`.",
-            on_off(effective),
-            on_off(config.reply_in_thread),
-        ));
+        // Same redundancy rule as /mention: the default is shown only
+        // as an override's reference point.
+        let suffix = if override_value.is_some() {
+            format!(" · channel default: `{}`", on_off(config.reply_in_thread))
+        } else {
+            String::new()
+        };
+        let body = format!("This chat: `{}` ({source}){suffix}.", on_off(effective));
+        send_info_reply(adapter, msg, reply_msg_id, "🧵 Reply-in-thread", body).await?;
+        return Ok(None);
     };
     if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
-        return Ok(deny);
+        return Ok(Some(deny));
     }
     match mode {
         OverrideMode::On | OverrideMode::Off => {
@@ -695,18 +743,18 @@ pub(crate) async fn handle_threads_command(
             } else {
                 " New messages will share the chat-level session; existing threads keep working."
             };
-            Ok(format!(
+            Ok(Some(format!(
                 "Reply-in-thread set to `{}` for this chat (channel default: `{}`).{note}",
                 on_off(value),
                 on_off(config.reply_in_thread),
-            ))
+            )))
         }
         OverrideMode::Reset => {
             store.clear_rit_override(&config.name, chat_id).await?;
-            Ok(format!(
+            Ok(Some(format!(
                 "Override cleared for this chat; now following the channel default: `{}`.",
                 on_off(config.reply_in_thread),
-            ))
+            )))
         }
     }
 }

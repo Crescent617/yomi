@@ -143,6 +143,25 @@ impl Kernel {
             .expect("message_store not configured")
     }
 
+    /// The session's last recorded context occupancy in tokens (the most
+    /// recent message's usage), for `/info`-style displays. `None` when no
+    /// usage has been recorded or no message store is configured.
+    pub async fn get_session_context_tokens(&self, session_id: &SessionId) -> Option<u32> {
+        let store = self.agent_shared.message_store.as_ref()?;
+        let messages = store
+            .get(&session_id.0)
+            .await
+            .map_err(|e| {
+                tracing::warn!(session_id = %session_id.0, error = %e, "context-token read failed");
+                e
+            })
+            .ok()?;
+        messages
+            .iter()
+            .rev()
+            .find_map(|m| m.token_usage.map(|u| u.total_tokens))
+    }
+
     /// Get checkpoint store from `agent_shared`
     pub async fn checkpoint_store(&self) -> Arc<dyn crate::checkpoint::CheckpointStore> {
         self.agent_shared
