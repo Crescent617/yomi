@@ -189,15 +189,7 @@ async fn handle_card_action_inner(
         return Ok(());
     }
     if let Some(deny) = super::approval::check_admin(config, &action.operator_open_id) {
-        if let Some(chat_id) = &action.chat_id {
-            let _ = adapter
-                .send_message(
-                    chat_id,
-                    vec![crate::types::ContentBlock::Text { text: deny }],
-                    None,
-                )
-                .await;
-        }
+        super::approval::send_action_denial(adapter, action, deny).await;
         return Ok(());
     }
     match value["action"].as_str() {

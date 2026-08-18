@@ -367,6 +367,26 @@ pub(super) fn check_admin(config: &ChannelConfig, user_id: &str) -> Option<Strin
     }
 }
 
+/// Send a card-action denial back to the chat the click came from.
+/// Best-effort: a missing chat or a failed send only warns — the
+/// operator's client already registered the tap regardless.
+pub(super) async fn send_action_denial(
+    adapter: &Arc<dyn PlatformAdapter>,
+    action: &CardAction,
+    text: String,
+) {
+    let Some(chat_id) = &action.chat_id else {
+        warn!(operator = %action.operator_open_id, "card action denial undeliverable: no chat_id");
+        return;
+    };
+    if let Err(e) = adapter
+        .send_message(chat_id, vec![ContentBlock::Text { text }], None)
+        .await
+    {
+        warn!(error = %e, "card action denial send failed");
+    }
+}
+
 fn request_from_row(row: &PermRequestRow) -> DocPermissionRequest {
     DocPermissionRequest {
         file_token: row.file_token.clone(),

@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.99] - 2026-08-19
+
+### Added
+
+- 飞书卡片按钮统一接入用户权限门限：点击按钮与发消息遵循同一套规则（黑名单拒绝；配置了 `allowed_users` 时操作者须在列，未配置则不限制）。此前按钮点击不做任何身份检查。管理类按钮（`/mailbox` 管理、文档权限审批）在此之上仍要求 admin。
+
 ## [0.7.98] - 2026-08-19
 
 ### Changed

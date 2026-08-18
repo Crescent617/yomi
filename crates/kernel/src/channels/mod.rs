@@ -1072,12 +1072,12 @@ pub struct HistoryMessage {
 
 // ── Internal helper: access control ──────────────────────────────────
 
-/// User-level gate for card-button callbacks that mutate a run
-/// (`act_*`): button clicks bypass the message gate entirely, so the
-/// same user rule is re-applied here — blocked users are refused; when
-/// `allowed_users` is set the operator must be in it (empty allowlist =
-/// open). `/stop`-style *commands* need no such check: they already
-/// arrive through the message gate. Returns the denial text on refusal.
+/// User-level gate for card-button callbacks: button clicks bypass the
+/// message gate entirely, so its user rule is re-applied at the hub's
+/// card-action router for every button — blocked users are refused;
+/// when `allowed_users` is set the operator must be in it (empty
+/// allowlist = open). Admin-gated surfaces stack `check_admin` in their
+/// handlers. Returns the denial text on refusal.
 pub(crate) fn check_user_access(config: &ChannelConfig, user_id: &str) -> Option<String> {
     if config.blocked_users.iter().any(|u| u == user_id) {
         return Some("Permission denied: blocked user.".to_string());
