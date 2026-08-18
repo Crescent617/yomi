@@ -645,7 +645,7 @@ async fn flush_reply_plain_platform_appends_trace_lines() {
         panic!("expected text block");
     };
     assert!(text.starts_with("final answer"));
-    assert!(text.contains("🐾 0s · 💬 2 · 🔧 1"));
+    assert!(text.contains("🐾 0s · 💬 2"));
     assert!(text.contains("cargo test"));
 }
 
@@ -3176,7 +3176,7 @@ async fn deliver_reply_plain_platform_flushes_without_morph() {
         panic!("expected text block");
     };
     assert!(text.contains("final answer"));
-    assert!(text.contains("🐾 0s · 💬 2 · 🔧 1"));
+    assert!(text.contains("🐾 0s · 💬 2"));
 }
 
 #[tokio::test]

@@ -337,7 +337,9 @@ async fn tool_events_patch_card_with_stats() {
     // end2 (the Running event sent the card instead).
     assert_eq!(patches.len(), 4);
     let last = &patches[3].1;
-    assert!(last.contains("🔧 2"), "tools summary: {last}");
+    // Tool totals are no longer titled (traffic segments carry the cost
+    // shape); the failed counter still is.
+    assert!(last.contains("❌ 1"), "failed summary: {last}");
     // The title drops back to a thinking title after the tool ends.
     assert!(
         super::THINKING_TITLES.iter().any(|t| last.contains(t)),
@@ -1065,7 +1067,8 @@ async fn terminal_receipt_title_matches_live_segments() {
 
     // Live run with model/usage/failure: the settled receipt's trace
     // title must render the very same segments the live card showed
-    // (only expand differs; out ~ is the live-only estimate).
+    // (only expand differs; the ~-marked ↑ estimate is live-only, real
+    // usage renders identically on both).
     tracker.set_model(&sid, "k3-hs".to_string());
     tracker
         .handle_event(&adapter, &sid, "chat-1", None, &running())
@@ -1092,7 +1095,7 @@ async fn terminal_receipt_title_matches_live_segments() {
     let patches = mock.patches.lock().await;
     let live = patches.last().unwrap().1.clone();
     assert!(
-        live.contains("🐾 0s · 💬 1 · 🔧 1 · ❌ 1 · k3-hs · 6%"),
+        live.contains("🐾 0s · 💬 1 · 10.0k↓ · 2.3k↑ · ❌ 1 · k3-hs · 6%"),
         "live title: {live}"
     );
     drop(patches);
@@ -1109,7 +1112,7 @@ async fn terminal_receipt_title_matches_live_segments() {
     let patches = mock.patches.lock().await;
     let terminal = &patches.last().unwrap().1;
     assert!(
-        terminal.contains("🐾 0s · 💬 1 · 🔧 1 · ❌ 1 · k3-hs · 6%"),
+        terminal.contains("🐾 0s · 💬 1 · 10.0k↓ · 2.3k↑ · ❌ 1 · k3-hs · 6%"),
         "terminal title matches live: {terminal}"
     );
 }
@@ -1239,9 +1242,12 @@ fn humanize_tool_name_camelizes() {
 
 #[test]
 fn token_footer_formats_compact() {
-    assert_eq!(fmt_k(999), "999");
-    assert_eq!(fmt_k(12_345), "12.3k");
-    assert_eq!(fmt_k(200_000), "200.0k");
+    assert_eq!(fmt_tokens(999), "999");
+    assert_eq!(fmt_tokens(12_345), "12.3k");
+    assert_eq!(fmt_tokens(200_000), "200.0k");
+    assert_eq!(fmt_tokens(999_999), "1000.0k");
+    assert_eq!(fmt_tokens(1_234_567), "1.2m");
+    assert_eq!(fmt_tokens(200_000_000), "200.0m");
 }
 
 #[test]
@@ -1351,7 +1357,7 @@ async fn thinking_only_stream_shows_estimate_on_placeholder_card() {
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
     assert!(!last.contains("⏱"), "bare placeholder: {last}");
-    assert!(!last.contains("out ~"), "no estimate yet: {last}");
+    assert!(!last.contains('↑'), "no estimate yet: {last}");
     drop(patches);
 
     // Thinking-only stream: the placeholder card gains stats + estimate.
@@ -1367,7 +1373,7 @@ async fn thinking_only_stream_shows_estimate_on_placeholder_card() {
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
     assert!(last.contains("⏱"), "stats joined the placeholder: {last}");
-    assert!(last.contains("out ~100"), "live estimate: {last}");
+    assert!(last.contains("~100↑"), "live estimate: {last}");
     assert!(!last.contains('%'), "no real usage yet: {last}");
 }
 
@@ -1395,7 +1401,7 @@ async fn retried_request_discards_failed_attempt_estimate() {
         .await;
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
-    assert!(last.contains("out ~100"), "first attempt: {last}");
+    assert!(last.contains("~100↑"), "first attempt: {last}");
     drop(patches);
 
     // Stream fails; the retry re-fires Request and the failed attempt's
@@ -1405,7 +1411,7 @@ async fn retried_request_discards_failed_attempt_estimate() {
         .await;
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
-    assert!(!last.contains("out ~"), "discarded at retry: {last}");
+    assert!(!last.contains('↑'), "discarded at retry: {last}");
     drop(patches);
 
     tracker
@@ -1413,8 +1419,8 @@ async fn retried_request_discards_failed_attempt_estimate() {
         .await;
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
-    assert!(last.contains("out ~10"), "restarted from zero: {last}");
-    assert!(!last.contains("out ~110"), "no double count: {last}");
+    assert!(last.contains("~10↑"), "restarted from zero: {last}");
+    assert!(!last.contains("~110↑"), "no double count: {last}");
 }
 
 #[tokio::test]
@@ -1442,7 +1448,7 @@ async fn tool_call_deltas_count_toward_estimate() {
 
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
-    assert!(last.contains("out ~100"), "json estimate: {last}");
+    assert!(last.contains("~100↑"), "json estimate: {last}");
 }
 
 #[tokio::test]
@@ -1463,7 +1469,7 @@ async fn estimate_accumulates_across_the_run() {
         .await;
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
-    assert!(last.contains("out ~10"), "estimate while streaming: {last}");
+    assert!(last.contains("~10↑"), "estimate while streaming: {last}");
     drop(patches);
 
     // Response ends: the estimate folds into the run total — it persists
@@ -1473,7 +1479,7 @@ async fn estimate_accumulates_across_the_run() {
         .await;
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
-    assert!(last.contains("out ~10"), "folded at end: {last}");
+    assert!(last.contains("~10↑"), "folded at end: {last}");
     drop(patches);
 
     // Next request: the run total carries over, new streaming adds on
@@ -1496,7 +1502,9 @@ async fn estimate_accumulates_across_the_run() {
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
     assert!(last.contains("6%"), "real usage: {last}");
-    assert!(last.contains("out ~20"), "run-cumulative estimate: {last}");
+    // Real total (2_345) plus the in-flight estimate (~10) ride one ↑
+    // segment; the folded estimate was zeroed when real usage landed.
+    assert!(last.contains("2.4k↑"), "real + in-flight estimate: {last}");
 }
 
 // ── Last tool & whisper ─────────────────────────────────────────────
@@ -1676,10 +1684,10 @@ async fn stats_line_omits_model_when_unknown() {
     let stats = body["body"]["elements"][0]["header"]["title"]["content"]
         .as_str()
         .unwrap();
-    // No model, no tokens yet: the stats line carries no grey tail at all.
-    assert!(stats.contains("🔧 1"), "stats: {stats}");
-    // Title carries no grey wrapper (notation size alone de-emphasizes
-    // it); with no model/tokens there's no grey tail either.
+    // No model, no tokens, no completed steps yet: the title is bare
+    // elapsed (tool totals are not shown since the traffic redesign).
+    assert_eq!(stats, "🐾 0s", "stats: {stats}");
+    // Title carries no grey wrapper (notation size alone de-emphasizes it).
     assert_eq!(stats.matches("<font").count(), 0, "stats: {stats}");
 }
 
@@ -1852,8 +1860,9 @@ async fn terminal_card_freezes_without_whisper() {
     let terminal = &patches.last().unwrap().1;
     assert!(terminal.contains("✅ **Done**"));
     assert!(!terminal.contains("💬"), "terminal drops the whisper");
-    // …while the title's tools counter survives on the receipt.
-    assert!(terminal.contains("🔧 1"), "tools counter: {terminal}");
+    // …while the stats line survives on the receipt (tool totals are no
+    // longer titled since the traffic redesign).
+    assert!(terminal.contains("⏱ 0s"), "stats line: {terminal}");
     assert!(terminal.contains("collapsible_panel"), "{terminal}");
     assert!(terminal.contains("⏳ **bash**"), "{terminal}");
 }
@@ -2404,11 +2413,10 @@ async fn stats_line_shows_steps_after_first_model_end() {
         .handle_event(&adapter, &sid, "chat-1", None, &tool_start("bash"))
         .await;
 
-    // No completed model response yet (the tool-start patch): tools
-    // only, no steps.
+    // No completed model response yet (the tool-start patch): no steps
+    // (tool totals are not shown since the traffic redesign).
     let patches = mock.patches.lock().await;
     let first = patches[0].1.clone();
-    assert!(first.contains("🔧 1"));
     assert!(!first.contains("💬"), "no steps yet: {first}");
     drop(patches);
 
@@ -2951,5 +2959,59 @@ async fn live_card_carries_stop_button_terminal_card_drops_it() {
     assert!(
         !terminal.contains("act_stop"),
         "terminal card drops the button: {terminal}"
+    );
+}
+
+#[tokio::test]
+async fn usage_event_before_end_fold_never_double_counts() {
+    // Production order: TokenUsage arrives inside the stream, BEFORE the
+    // response's End (provider usage chunks ride the stream tail). Real
+    // usage zeroes the whole estimate, so the End fold that follows
+    // adds 0 — the ↑ segment never re-folds the same response's estimate
+    // on top of its true completion count.
+    let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &request())
+        .await;
+    tracker
+        .handle_event(
+            &adapter,
+            &sid,
+            "chat-1",
+            None,
+            &text_chunk(&"x".repeat(400)),
+        )
+        .await;
+    // True usage (completion 2_345) lands mid-stream, then End folds.
+    tracker
+        .handle_event(
+            &adapter,
+            &sid,
+            "chat-1",
+            None,
+            &token_usage_event(12_345, 200_000),
+        )
+        .await;
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &end_with_text("done"))
+        .await;
+
+    let patches = mock.patches.lock().await;
+    let last = patches.last().unwrap().1.clone();
+    assert!(last.contains("10.0k↓"), "prompt total: {last}");
+    assert!(
+        last.contains("2.3k↑"),
+        "true completion only, no estimate re-fold: {last}"
+    );
+    assert!(
+        !last.contains('~'),
+        "no estimate marker once real usage landed: {last}"
     );
 }

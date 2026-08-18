@@ -636,6 +636,9 @@ impl ChannelHub {
                                     .record_model_end(&text);
                             }
                             Event::Model(ModelEvent::TokenUsage {
+                                message_id,
+                                prompt_tokens,
+                                completion_tokens,
                                 total_tokens,
                                 context_window,
                                 ..
@@ -644,6 +647,7 @@ impl ChannelHub {
                                 // trace title, same segment as the live card.
                                 if let Some(buf) = reply_buffers.get_mut(&session_id) {
                                     buf.set_ctx_footer(*total_tokens, *context_window);
+                                    buf.add_usage(message_id, *prompt_tokens, *completion_tokens);
                                 }
                             }
                             Event::Tool(ToolEvent::Start {

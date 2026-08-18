@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 
 use crate::storage::format_age;
 
-use super::obs::fmt_k;
+use super::obs::fmt_tokens;
 use super::reply::ctx_footer;
 
 pub(crate) const CMD_MODELS: &str = "/models";
@@ -515,11 +515,11 @@ pub(crate) fn format_session_info(
         Some(tokens) => match found {
             Some(m) => format!(
                 "{}/{} ({})",
-                fmt_k(tokens),
-                fmt_k(m.context_window),
+                fmt_tokens(u64::from(tokens)),
+                fmt_tokens(u64::from(m.context_window)),
                 ctx_footer(tokens, m.context_window)
             ),
-            None => fmt_k(tokens),
+            None => fmt_tokens(u64::from(tokens)),
         },
         None => "—".to_string(),
     };

@@ -13,7 +13,7 @@ use serde_json::json;
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
-use super::obs::{fmt_elapsed, fmt_k};
+use super::obs::{fmt_elapsed, fmt_tokens};
 use crate::utils::strs::truncate_by_chars;
 
 /// Reply text budget in bytes. Feishu card payloads cap around 30KB; leave
@@ -90,16 +90,24 @@ pub(crate) struct RunReplyBuffer {
     /// Completed model responses (`ModelEvent::End` count) — the run's
     /// steps, including tool-call-only turns that produced no text.
     steps: usize,
-    /// Tool calls / failed tool calls so far, counted incrementally so the
-    /// title totals stay true even after old entries hit the buffer cap
-    /// (entry-derived counts would silently shrink).
-    tools: usize,
+    /// Failed tool calls so far, counted incrementally so the title total
+    /// stays true even after old entries hit the buffer cap (entry-derived
+    /// counts would silently shrink). Tool totals themselves were dropped
+    /// from the title in the traffic redesign (`↓`/`↑` segments).
     failed: usize,
     /// Session model / latest real token usage, mirrored into the trace
     /// title so every surface (live card, terminal receipt, reply card)
     /// renders the same summary segments.
     model: Option<String>,
     ctx_footer: Option<String>,
+    /// Run-cumulative real token usage (Σ per-response prompt/completion
+    /// at each `TokenUsage`): the title's `↓`/`↑` traffic segments.
+    usage_in: u64,
+    usage_out: u64,
+    /// Last `TokenUsage` seen (message id + values): providers may emit
+    /// usage multiple times per response (partial then final, same
+    /// message id) — only the delta folds into the run totals.
+    last_usage: Option<(crate::types::MessageId, u64, u64)>,
     /// Attachment paths declared via `<yomi_attachments>` blocks in
     /// assistant texts. Blocks are stripped at record time so the XML
     /// never renders on the platform (trace snippets, live card preview,
@@ -116,10 +124,12 @@ impl RunReplyBuffer {
         Self {
             entries: Vec::new(),
             steps: 0,
-            tools: 0,
             failed: 0,
             model: None,
             ctx_footer: None,
+            usage_in: 0,
+            usage_out: 0,
+            last_usage: None,
             attachments: Vec::new(),
             dropped: 0,
             started_at: Instant::now(),
@@ -134,6 +144,34 @@ impl RunReplyBuffer {
     /// Real token usage at response end (title's ctx segment).
     pub(crate) fn set_ctx_footer(&mut self, total_tokens: u32, context_window: u32) {
         self.ctx_footer = Some(ctx_footer(total_tokens, context_window));
+    }
+
+    /// Fold one response's real usage into the run totals. `TokenUsage`
+    /// may fire multiple times per response (same message id, partial
+    /// then final values) — a repeat folds only the delta.
+    pub(crate) fn add_usage(
+        &mut self,
+        message_id: &crate::types::MessageId,
+        prompt_tokens: u32,
+        completion_tokens: u32,
+    ) {
+        let (p, c) = (u64::from(prompt_tokens), u64::from(completion_tokens));
+        if let Some((id, last_p, last_c)) = &self.last_usage {
+            if id == message_id {
+                self.usage_in += p.saturating_sub(*last_p);
+                self.usage_out += c.saturating_sub(*last_c);
+                self.last_usage = Some((message_id.clone(), p, c));
+                return;
+            }
+        }
+        self.usage_in += p;
+        self.usage_out += c;
+        self.last_usage = Some((message_id.clone(), p, c));
+    }
+
+    /// Run-cumulative real usage (title's `↓`/`↑` segments).
+    pub(crate) fn usage(&self) -> (u64, u64) {
+        (self.usage_in, self.usage_out)
     }
 
     /// Failed tool calls so far (title's ❌ segment).
@@ -163,7 +201,6 @@ impl RunReplyBuffer {
         tool_name: &str,
         arguments: Option<&str>,
     ) {
-        self.tools += 1;
         self.push_entry(TraceEntry::Tool(ToolTrace {
             tool_id: tool_id.to_string(),
             tool_name: tool_name.to_string(),
@@ -219,10 +256,11 @@ impl RunReplyBuffer {
         FinalReply {
             text,
             steps: self.steps,
-            tools: self.tools,
             failed: self.failed,
             model: self.model,
             ctx_footer: self.ctx_footer,
+            usage_in: self.usage_in,
+            usage_out: self.usage_out,
             attachments: self.attachments,
             entries,
             dropped_entries: self.dropped,
@@ -254,11 +292,12 @@ impl RunReplyBuffer {
             &self.entries,
             &TraceTitle {
                 steps: self.steps,
-                tools: self.tools,
                 failed: self.failed,
                 elapsed: self.started_at.elapsed(),
                 model: self.model.as_deref(),
                 ctx_footer: self.ctx_footer.as_deref(),
+                usage_in: self.usage_in,
+                usage_out: self.usage_out,
                 ..Default::default()
             },
             self.dropped,
@@ -285,14 +324,16 @@ pub(crate) struct FinalReply {
     /// Completed model responses this run (`ModelEvent::End` count) — the
     /// step count shown in the trace title.
     steps: usize,
-    /// Tool calls / failed tool calls this run (title counters, survive
-    /// the buffer cap).
-    tools: usize,
+    /// Failed tool calls this run (title ❌ counter, survives the buffer
+    /// cap). Tool totals were dropped in the traffic redesign.
     failed: usize,
     /// Title tail segments mirrored from the run state (absent when the
     /// forwarder never learned them — e.g. plain platforms).
     model: Option<String>,
     ctx_footer: Option<String>,
+    /// Run-cumulative real usage (title's `↓`/`↑` traffic segments).
+    usage_in: u64,
+    usage_out: u64,
     /// Attachment paths collected from `<yomi_attachments>` blocks in the
     /// run's assistant texts (blocks already stripped from the recorded
     /// texts).
@@ -446,11 +487,12 @@ fn render_trace(reply: &FinalReply, markdown: bool) -> (Vec<String>, String) {
         &reply.entries,
         &TraceTitle {
             steps: reply.steps,
-            tools: reply.tools,
             failed: reply.failed,
             elapsed: reply.elapsed,
             model: reply.model.as_deref(),
             ctx_footer: reply.ctx_footer.as_deref(),
+            usage_in: reply.usage_in,
+            usage_out: reply.usage_out,
             ..Default::default()
         },
         reply.dropped_entries,
@@ -465,26 +507,41 @@ fn render_trace(reply: &FinalReply, markdown: bool) -> (Vec<String>, String) {
 #[derive(Default)]
 pub(crate) struct TraceTitle<'a> {
     pub steps: usize,
-    pub tools: usize,
     pub failed: usize,
     pub elapsed: std::time::Duration,
     pub model: Option<&'a str>,
     pub ctx_footer: Option<&'a str>,
+    /// Run-cumulative real usage (`↓`/`↑` segments; 0 = not yet reported).
+    pub usage_in: u64,
+    pub usage_out: u64,
     pub out_estimate: u32,
 }
 
 /// Build the ordered summary segments, split into the always-dark head
-/// (icon-tagged counts: 💬 steps, 🔧 tools, ❌ failed) and the technical
-/// tail (model, ctx, live out estimate) that callers may grey out.
-/// Zero/absent parts omitted; the elapsed prefix is left to the caller
-/// (its icon differs per surface).
+/// (💬 steps, traffic totals, ❌ failed) and the technical tail
+/// (model, ctx) that callers may grey out. Zero/absent parts omitted;
+/// the elapsed prefix is left to the caller (its icon differs per
+/// surface). Tool totals are deliberately not shown — the traffic
+/// segments (`12.3k↓` / `636↑`, `~` marking a live estimate until the
+/// first response's real usage lands) carry the run's cost shape.
 pub(crate) fn summary_segments(t: &TraceTitle<'_>) -> (Vec<String>, Vec<String>) {
     let mut head = Vec::new();
     if t.steps > 0 {
         head.push(format!("💬 {}", t.steps));
     }
-    if t.tools > 0 {
-        head.push(format!("🔧 {}", t.tools));
+    if t.usage_in > 0 {
+        head.push(format!("{}↓", fmt_tokens(t.usage_in)));
+    }
+    // ↑ shows real totals plus the in-flight estimate (the estimate's
+    // folded run part is zeroed when real usage lands, so no double
+    // counting); `~` marks "all estimate, no real usage yet".
+    let out = t.usage_out + u64::from(t.out_estimate);
+    if out > 0 {
+        if t.usage_out == 0 {
+            head.push(format!("~{}↑", fmt_tokens(out)));
+        } else {
+            head.push(format!("{}↑", fmt_tokens(out)));
+        }
     }
     if t.failed > 0 {
         head.push(format!("❌ {}", t.failed));
@@ -495,9 +552,6 @@ pub(crate) fn summary_segments(t: &TraceTitle<'_>) -> (Vec<String>, Vec<String>)
     }
     if let Some(c) = t.ctx_footer {
         tail.push(c.to_string());
-    }
-    if t.out_estimate > 0 {
-        tail.push(format!("out ~{}", fmt_k(t.out_estimate)));
     }
     (head, tail)
 }

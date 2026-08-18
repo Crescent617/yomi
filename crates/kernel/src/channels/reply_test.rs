@@ -141,32 +141,34 @@ fn tool_call_only_turns_count_as_steps() {
 
     let reply = buf.into_reply();
     let out = render_plain(&reply);
-    assert!(out.contains("🐾 0s · 💬 2 · 🔧 1"), "out: {out}");
+    assert!(out.contains("🐾 0s · 💬 2"), "out: {out}");
 }
 
-/// 标题段统一：model / ctx / failed 设置后出现在 full trace 标题上——
-/// live 卡、终态收据、回复卡三面共用同一套段落规则（仅 out 估算是
-/// live-only，按"缺失即省略"规则不出现在终态）。
+/// 标题段统一：model / ctx / failed / 流量设置后出现在 full trace 标题
+/// 上——live 卡、终态收据、回复卡三面共用同一套段落规则（仅 ~
+/// 标记的输出估算是 live-only，按"缺失即省略"规则不出现在终态）。
 #[test]
-fn trace_title_carries_model_ctx_and_failed_when_set() {
+fn trace_title_carries_model_ctx_usage_and_failed_when_set() {
     let mut buf = buffer_with_run();
     buf.record_tool_start("t3", "shell", None);
     buf.record_tool_end("t3", 5, true);
     buf.set_model("k3-hs".to_string());
     buf.set_ctx_footer(12_345, 128_000);
+    buf.add_usage(&crate::types::MessageId::new(), 12_345, 2_345);
+    buf.add_usage(&crate::types::MessageId::new(), 100, 5);
 
     let Some((_, title)) = buf.full_trace_render() else {
         panic!("expected a trace");
     };
     assert_eq!(
-        title, "🐾 0s · 💬 2 · 🔧 3 · ❌ 1 · k3-hs · 10%",
+        title, "🐾 0s · 💬 2 · 12.4k↓ · 2.4k↑ · ❌ 1 · k3-hs · 10%",
         "title: {title}"
     );
 
     // into_reply（回复卡路径）带出同样的段。
     let card = render_card(&buf.into_reply(), None).unwrap();
     assert!(
-        card.contains("🐾 0s · 💬 2 · 🔧 3 · ❌ 1 · k3-hs · 10%"),
+        card.contains("🐾 0s · 💬 2 · 12.4k↓ · 2.4k↑ · ❌ 1 · k3-hs · 10%"),
         "card: {card}"
     );
 }
@@ -191,8 +193,8 @@ fn title_counters_survive_buffer_cap() {
         panic!("expected a trace");
     };
     assert!(
-        title.contains("🔧 20"),
-        "all tools counted despite cap: {title}"
+        title.contains("💬 90"),
+        "all steps counted despite cap: {title}"
     );
     assert!(
         title.contains("❌ 10"),
@@ -210,7 +212,7 @@ fn full_trace_render_keeps_every_entry_and_empty_is_none() {
     };
     // Unlike into_reply, the final text stays a narration — the terminal
     // receipt card shows the whole run, the reply text lands separately.
-    assert!(title.starts_with("🐾 0s · 💬 2 · 🔧 2"), "{title}");
+    assert!(title.starts_with("🐾 0s · 💬 2"), "{title}");
     let joined = lines.join("\n");
     assert!(joined.contains("💬 Let me look at the code."), "{joined}");
     assert!(joined.contains("✅ **read**"), "{joined}");
@@ -263,7 +265,7 @@ fn render_card_structure() {
     assert_eq!(panel["tag"], "collapsible_panel");
     assert_eq!(panel["expanded"], false);
     let title = panel["header"]["title"]["content"].as_str().unwrap();
-    assert!(title.contains("🐾 0s · 💬 2 · 🔧 2"), "title: {title}");
+    assert!(title.contains("🐾 0s · 💬 2"), "title: {title}");
 
     let body = panel["elements"][0]["content"].as_str().unwrap();
     assert!(body.contains("💬 Let me look at the code."));
@@ -350,7 +352,7 @@ fn render_plain_appends_trace_without_markup() {
     let reply = buffer_with_run().into_reply();
     let out = render_plain(&reply);
     assert!(out.starts_with("All tests pass."));
-    assert!(out.contains("🐾 0s · 💬 2 · 🔧 2"));
+    assert!(out.contains("🐾 0s · 💬 2"));
     assert!(out.contains("💬 Let me look at the code."));
     assert!(out.contains("✅ shell · cargo test -p kernel · 1m05s"));
     assert!(!out.contains("<font"), "no Feishu markup in plain fallback");
@@ -544,4 +546,21 @@ fn render_card_rewrites_mentions() {
     let card = render_card(&buf.into_reply(), None).unwrap();
     assert!(card.contains("<at id=ou_abc></at>"), "{card}");
     assert!(card.contains("`<@ou_x>`"), "{card}");
+}
+
+#[test]
+fn add_usage_folds_only_the_delta_for_repeated_events_of_one_response() {
+    let mut buf = RunReplyBuffer::new();
+    let mid = crate::types::MessageId::new();
+    // Partial then final usage for the same response (same message id):
+    // the run total tracks the final values, not the sum.
+    buf.add_usage(&mid, 10_000, 1_000);
+    buf.add_usage(&mid, 10_000, 2_345);
+    assert_eq!(buf.usage(), (10_000, 2_345));
+    // Identical repeat (some providers push the same usage twice): no-op.
+    buf.add_usage(&mid, 10_000, 2_345);
+    assert_eq!(buf.usage(), (10_000, 2_345));
+    // A new response (new message id) accumulates on top.
+    buf.add_usage(&crate::types::MessageId::new(), 500, 50);
+    assert_eq!(buf.usage(), (10_500, 2_395));
 }

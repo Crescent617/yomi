@@ -141,8 +141,6 @@ struct ObsCardState {
     started_at: Instant,
     /// Card title phase (icon + phase, rotated for idle phases).
     phase: Phase,
-    /// Total tool executions (per-tool breakdown is not kept).
-    tool_count: u32,
     /// The full run trace shown live on the status card.
     trace: reply::RunReplyBuffer,
     /// The session's model key, shown in the stats line; set by the hub
@@ -188,7 +186,6 @@ impl ObsCardState {
             reply_msg_id: reply_msg_id.map(str::to_string),
             started_at: now,
             phase: Phase::Thinking,
-            tool_count: 0,
             trace: reply::RunReplyBuffer::new(),
             model: None,
             whisper: String::new(),
@@ -490,7 +487,6 @@ impl ObsTracker {
                 let tool_name = tool_name.clone();
                 let arguments = arguments.clone();
                 self.update_running(session_id, |s| {
-                    s.tool_count += 1;
                     s.phase = Phase::Tool(humanize_tool_name(&tool_name));
                     s.trace
                         .record_tool_start(&tool_id, &tool_name, arguments.as_deref());
@@ -627,14 +623,30 @@ impl ObsTracker {
                 .await;
             }
             Event::Model(ModelEvent::TokenUsage {
+                message_id,
+                prompt_tokens,
+                completion_tokens,
                 total_tokens,
                 context_window,
                 ..
             }) => {
-                let (total, window) = (*total_tokens, *context_window);
+                let (msg_id, prompt, completion, total, window) = (
+                    message_id.clone(),
+                    *prompt_tokens,
+                    *completion_tokens,
+                    *total_tokens,
+                    *context_window,
+                );
                 self.update_running(session_id, |s| {
                     s.token_footer = Some(reply::ctx_footer(total, window));
                     s.trace.set_ctx_footer(total, window);
+                    s.trace.add_usage(&msg_id, prompt, completion);
+                    // Real usage now covers this response's output: zero
+                    // the whole estimate (run-folded + in-flight) so the
+                    // following End fold can't re-add the same response's
+                    // estimate on top of the true count.
+                    s.out_run_tokens = 0;
+                    s.reset_out_estimate();
                 })
                 .await;
             }
@@ -1093,11 +1105,12 @@ fn render_running(s: &ObsCardState, sid: &SessionId) -> String {
             &panel_lines,
             &reply::render_trace_title(&reply::TraceTitle {
                 steps: s.trace.step_count(),
-                tools: s.tool_count as usize,
                 failed: s.trace.failed_count(),
                 elapsed: s.started_at.elapsed(),
                 model: s.model.as_deref(),
                 ctx_footer: s.token_footer.as_deref(),
+                usage_in: s.trace.usage().0,
+                usage_out: s.trace.usage().1,
                 out_estimate: s.out_estimate(),
             }),
         )]
@@ -1266,10 +1279,11 @@ fn stats_line(s: &ObsCardState) -> String {
 fn stats_parts(s: &ObsCardState) -> (String, String) {
     let (segs, tail) = reply::summary_segments(&reply::TraceTitle {
         steps: s.trace.step_count(),
-        tools: s.tool_count as usize,
         elapsed: s.started_at.elapsed(),
         model: s.model.as_deref(),
         ctx_footer: s.token_footer.as_deref(),
+        usage_in: s.trace.usage().0,
+        usage_out: s.trace.usage().1,
         out_estimate: s.out_estimate(),
         ..Default::default()
     });
@@ -1289,12 +1303,15 @@ pub(crate) fn fmt_elapsed(d: Duration) -> String {
     }
 }
 
-/// Format a token count as `12.3k` (thousands) for compact footers.
-pub(crate) fn fmt_k(tokens: u32) -> String {
-    if tokens < 1000 {
+/// Format a token count compactly: `999` → `999`, `12_345` → `12.3k`,
+/// `2_345_678` → `2.3m` (prompt totals climb fast on long runs).
+pub(crate) fn fmt_tokens(tokens: u64) -> String {
+    if tokens < 1_000 {
         tokens.to_string()
+    } else if tokens < 1_000_000 {
+        format!("{:.1}k", tokens as f64 / 1_000.0)
     } else {
-        format!("{:.1}k", f64::from(tokens) / 1000.0)
+        format!("{:.1}m", tokens as f64 / 1_000_000.0)
     }
 }
 
