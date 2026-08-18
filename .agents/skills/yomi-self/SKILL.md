@@ -34,7 +34,7 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
   - `get_session '{"session_id":"sess_…"}'`：单会话 `phase`（idle/streaming/executing_tool/compacting）。
   - `list_running_sessions`：在跑会话（有后台任务的 idle 会话也在列）；后台 shell 任务嵌在 `background_shells` 字段（task_id/pid/command/output_path/started_at），无独立 rpc。
   - `list_subagents '{"parent_session_id":"sess_…"}'`：直接子 agent（`is_running`）；会话不存在返回空数组而非报错。
-- **等待跑完**：`scripts/session-wait <session_id>`——每 10s 轮询，直到 `phase=idle` 且无 running subagent、无后台 shell 任务（判定 = `get_session` + `list_subagents` + `list_running_sessions` 三个 rpc）；无超时，一直等到安静。退出码 0 安静 / 2 用法错或首查失败；读到 idle 隔 1s 二次确认，防回合边界误读。盲区：mailbox 排队长度 rpc 不可见。`session send` + `session-wait` 组合就是"驱动兄弟会话干活并等它完成"的最小回路。
+- **等待跑完**：`scripts/session-wait <session_id>`——轮询（无超时）至 `phase=idle` 且无 running subagent、无后台 shell；退出码 0 安静 / 2 用法错或首查失败。盲区：mailbox 排队长度 rpc 不可见（"安静"≠队列空）。`session send` + `session-wait` = 驱动兄弟会话干活并等它完成的最小回路。
 - checkpoint：列表走 `rpc get_checkpoints`；回滚在 TUI `/rewind`；无属主备份由 `gc` 孤儿 sweep 清理。
 
 ## cron（自己的闹钟）
