@@ -728,7 +728,7 @@ impl ObsTracker {
                 return;
             }
             (
-                render_running(s),
+                render_running(s, session_id),
                 s.chat_id.clone(),
                 s.reply_msg_id.clone(),
                 Arc::clone(&s.adapter),
@@ -768,7 +768,7 @@ impl ObsTracker {
             } else {
                 s.last_patch_at = Instant::now();
                 Some((
-                    render_running(s),
+                    render_running(s, session_id),
                     s.status_msg_id.clone(),
                     Arc::clone(&s.adapter),
                 ))
@@ -800,8 +800,8 @@ impl ObsTracker {
             }
             s.last_patch_at = Instant::now();
             patches.push((
-                sid,
-                render_running(s),
+                sid.clone(),
+                render_running(s, &sid),
                 s.status_msg_id.clone(),
                 Arc::clone(&s.adapter),
             ));
@@ -1042,7 +1042,7 @@ async fn send_card_patch(adapter: &dyn PlatformAdapter, message_id: &str, card_j
     true
 }
 
-fn render_running(s: &ObsCardState) -> String {
+fn render_running(s: &ObsCardState, sid: &SessionId) -> String {
     let trace = s.trace.trace_preview_lines(STATUS_TRACE_MAX_ENTRIES);
     if trace.is_empty() && s.whisper.is_empty() && !s.seen_text {
         // Brand-new card: a light random placeholder. Bare while the
@@ -1057,7 +1057,14 @@ fn render_running(s: &ObsCardState) -> String {
         } else {
             placeholder
         };
-        return card_json("blue", &phase_title(s), &body);
+        return card_json_elements(
+            "blue",
+            &phase_title(s),
+            &[
+                json!({ "tag": "markdown", "text_size": "notation", "content": body }),
+                stop_button_row(sid),
+            ],
+        );
     }
     let whisper_line = || {
         (!s.whisper.is_empty()).then(|| {
@@ -1077,7 +1084,7 @@ fn render_running(s: &ObsCardState) -> String {
         panel_lines.push(w);
     }
     panel_lines.extend(trace);
-    let elements = if panel_lines.is_empty() {
+    let mut elements = if panel_lines.is_empty() {
         // Retry edge: a new Request cleared the whisper before the first
         // tool or model End — bare stats until content flows again.
         vec![json!({ "tag": "markdown", "text_size": "notation", "content": stats_line(s) })]
@@ -1095,7 +1102,55 @@ fn render_running(s: &ObsCardState) -> String {
             }),
         )]
     };
+    elements.push(stop_button_row(sid));
     card_json_elements("blue", &phase_title(s), &elements)
+}
+
+/// Bottom-right `Stop` button row on the live card: a small bordered
+/// button, visually quiet but one tap away — cancel is the one
+/// time-sensitive action while a run burns tokens (everything else can
+/// wait for idle and keeps its command entry). Terminal cards don't
+/// carry it. `type: "default"` + `size: "small"` is the quietest
+/// bordered variant; text-type buttons render in plain text color on
+/// Android dark mode (no link-blue), which read as unclickable.
+fn stop_button_row(sid: &SessionId) -> serde_json::Value {
+    json!({
+        "tag": "column_set",
+        "columns": [
+            {
+                "tag": "column", "width": "weighted", "weight": 1,
+                "elements": [{ "tag": "markdown", "text_size": "notation", "content": "" }],
+            },
+            {
+                "tag": "column", "width": "auto",
+                "elements": [{
+                    "tag": "button",
+                    "size": "small",
+                    "text": { "tag": "plain_text", "content": "Stop" },
+                    "type": "default",
+                    "behaviors": [{ "type": "callback", "value": { "action": "act_stop", "sid": sid.0 } }],
+                }],
+            },
+        ],
+    })
+}
+
+/// `act_stop` button callback (bottom of the live status card): cancel
+/// the session's current run. No admin gate — same as the `/stop`
+/// command; the card only ever lands where the run is visible. No card
+/// patch here: the run's settlement morphs the card into the terminal
+/// receipt, which is the click feedback.
+pub(crate) fn handle_stop_action(kernel: &crate::kernel::Kernel, action: &super::CardAction) {
+    if action.value["action"].as_str() != Some("act_stop") {
+        warn!(value = %action.value, "unrecognized obs card action");
+        return;
+    }
+    let sid = SessionId::from(action.value["sid"].as_str().unwrap_or_default().to_string());
+    if sid.0.is_empty() {
+        warn!(value = %action.value, "stop card action missing sid");
+        return;
+    }
+    kernel.cancel(&sid);
 }
 
 /// Single-line whisper tail for the card body (≤ [`STATUS_TEXT_MAX_CHARS`]).
@@ -1171,14 +1226,6 @@ fn render_compact_terminal(s: &ObsCardState, summary: &str, is_error: bool) -> S
         },
     })
     .to_string()
-}
-
-fn card_json(template: &str, title: &str, body_md: &str) -> String {
-    card_json_elements(
-        template,
-        title,
-        &[json!({ "tag": "markdown", "text_size": "notation", "content": body_md })],
-    )
 }
 
 fn card_json_elements(template: &str, title: &str, elements: &[serde_json::Value]) -> String {

@@ -1246,7 +1246,11 @@ fn token_footer_formats_compact() {
 
 #[test]
 fn card_json_uses_default_width_layout() {
-    let card = card_json("blue", "💭 Thinking…", "⏱ 0s");
+    let card = card_json_elements(
+        "blue",
+        "💭 Thinking…",
+        &[serde_json::json!({ "tag": "markdown", "text_size": "notation", "content": "⏱ 0s" })],
+    );
     let v: serde_json::Value = serde_json::from_str(&card).unwrap();
     // No width_mode override: the card uses the platform default width
     // (600px, matching the reply card), not the narrow compact layout.
@@ -1978,10 +1982,13 @@ async fn whisper_line_is_capped_at_100_chars() {
 
     // 隐私不变量：whisper/trace/stats 全部收进面板——顶层没有 markdown
     // 元素（读取路径只取顶层 markdown，面板整体被剥离，其他 bot 读不到
-    // 任何暂态内容）。
+    // 任何暂态内容）。Stop 按钮行（column_set）是唯一例外：只含空
+    // markdown + 按钮，无暂态内容（sid 是标识符非凭证——`/stop` 命令
+    // 本就无门槛，与 mailbox 卡按钮携带 sid 的既有模式相同）。
     let top = body["body"]["elements"].as_array().unwrap();
     assert!(
-        top.iter().all(|e| e["tag"] == "collapsible_panel"),
+        top.iter()
+            .all(|e| e["tag"] == "collapsible_panel" || e["tag"] == "column_set"),
         "live content must not leak into top-level markdown: {top:?}"
     );
 }
@@ -2891,4 +2898,57 @@ async fn settle_reaction_on_fresh_message_deletes_nothing() {
     assert_eq!(added.len(), 2);
     assert_eq!(added[0].0, "user-msg-1");
     assert_eq!(added[1].0, "user-msg-2");
+}
+
+#[tokio::test]
+async fn live_card_carries_stop_button_terminal_card_drops_it() {
+    let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    // Fresh card (placeholder state): the Stop button rides from the start.
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    let cards = mock.cards.lock().await;
+    let fresh = &cards.last().unwrap().1;
+    assert!(
+        fresh.contains("\"act_stop\""),
+        "fresh card stop button: {fresh}"
+    );
+    assert!(
+        fresh.contains(&format!("\"sid\":\"{}\"", sid.0)),
+        "button carries the session id: {fresh}"
+    );
+    drop(cards);
+
+    // Trace state (tool running): button still there.
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &tool_start("bash"))
+        .await;
+    let patches = mock.patches.lock().await;
+    let live = &patches.last().unwrap().1;
+    assert!(
+        live.contains("\"act_stop\""),
+        "live card stop button: {live}"
+    );
+    drop(patches);
+
+    // Settlement morphs the card into the terminal receipt: no button.
+    tracker
+        .handle_stopped(
+            &sid,
+            &StopReason::Completed {
+                finish_reason: None,
+            },
+            Some(reply_with("done")),
+        )
+        .await;
+    let patches = mock.patches.lock().await;
+    let terminal = &patches.last().unwrap().1;
+    assert!(
+        !terminal.contains("act_stop"),
+        "terminal card drops the button: {terminal}"
+    );
 }

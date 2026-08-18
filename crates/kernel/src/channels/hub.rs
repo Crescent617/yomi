@@ -229,11 +229,10 @@ impl ChannelHub {
                                 );
                                 tokio::spawn(async move {
                                     // 按钮命名空间路由：mb_* 归 mailbox
-                                    // 管理面，其余归权限审批。
-                                    if action.value["action"]
-                                        .as_str()
-                                        .is_some_and(|a| a.starts_with("mb_"))
-                                    {
+                                    // 管理面，act_* 归状态卡动作（stop
+                                    // 等），其余归权限审批。
+                                    let ns = action.value["action"].as_str().unwrap_or_default();
+                                    if ns.starts_with("mb_") {
                                         let Some(kernel) = kernel_weak.upgrade() else {
                                             return;
                                         };
@@ -241,6 +240,11 @@ impl ChannelHub {
                                             &name, &config, &kernel, &adapter, action,
                                         )
                                         .await;
+                                    } else if ns.starts_with("act_") {
+                                        let Some(kernel) = kernel_weak.upgrade() else {
+                                            return;
+                                        };
+                                        super::obs::handle_stop_action(&kernel, &action);
                                     } else {
                                         super::approval::handle_card_action(
                                             &name, &config, &store, &adapter, action,
