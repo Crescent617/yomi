@@ -654,7 +654,7 @@
       </div>
     </div>
 
-    <div class="flex-1 overflow-hidden">
+    <div class="flex-1 overflow-hidden flex flex-col">
       <div class="flex-1 min-w-0 min-h-[280px] overflow-hidden flex flex-col">
         {#if activeFilePath}
           <div class="flex-1 overflow-auto">
