@@ -213,6 +213,11 @@ pub enum PlatformConfig {
     Feishu { app_id: String, app_secret: String },
 }
 
+/// Default platform for CLI channel selection (currently the only
+/// thread-capable one). Shared by the CLI flag and the kernel-side
+/// Local/remote defaults so they can't drift.
+pub const DEFAULT_PLATFORM: &str = "feishu";
+
 impl PlatformConfig {
     /// Ack reaction for a message accepted for processing. Values are
     /// platform-specific emoji identifiers (Feishu `emoji_type`, Telegram

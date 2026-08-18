@@ -729,7 +729,7 @@ impl KernelApi for Kernel {
         hub.create_thread_in_chat(
             self,
             channel.as_deref(),
-            platform.as_deref().unwrap_or("feishu"),
+            platform.as_deref().unwrap_or(crate::channels::DEFAULT_PLATFORM),
             &chat_id,
             title.as_deref(),
             &text,

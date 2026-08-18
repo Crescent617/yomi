@@ -37,7 +37,7 @@ struct NewThreadArgs {
     #[arg(long)]
     channel: Option<String>,
     /// Platform used to resolve the channel when --channel is absent
-    #[arg(long, default_value = "feishu")]
+    #[arg(long, default_value = kernel::channels::DEFAULT_PLATFORM)]
     platform: String,
 }
 
