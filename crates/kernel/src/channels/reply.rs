@@ -424,7 +424,10 @@ fn trace_panel(lines: &[String], title: &str, expanded: bool) -> serde_json::Val
         "tag": "collapsible_panel",
         "expanded": expanded,
         "header": {
-            "title": { "tag": "markdown", "content": format!("<font color='grey'>{title}</font>") },
+            // notation 小字标题：统计行是辅助信息，视觉上退到 trace
+            // 内容行同一档（panel header title 支持 text_size，已实物
+            // 验证安卓/桌面均生效）；小字已够弱化，不再叠灰色。
+            "title": { "tag": "markdown", "text_size": "notation", "content": title },
             "vertical_align": "center",
             "padding": "4px 0px 4px 8px",
         },

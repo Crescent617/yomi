@@ -602,7 +602,7 @@ async fn settle_cancelled_freezes_card_and_sends_no_reactions() {
         .await;
 
     let patches = mock.patches.lock().await;
-    assert!(patches[0].1.contains("grey"));
+    assert!(patches[0].1.contains("collapsible_panel"));
     assert!(patches[0].1.contains("⏹ **Stopped**"));
     drop(patches);
 
@@ -1678,8 +1678,9 @@ async fn stats_line_omits_model_when_unknown() {
         .unwrap();
     // No model, no tokens yet: the stats line carries no grey tail at all.
     assert!(stats.contains("🔧 1"), "stats: {stats}");
-    // The only grey wrapper is the panel title's own; no nested tail font.
-    assert_eq!(stats.matches("<font").count(), 1, "stats: {stats}");
+    // Title carries no grey wrapper (notation size alone de-emphasizes
+    // it); with no model/tokens there's no grey tail either.
+    assert_eq!(stats.matches("<font").count(), 0, "stats: {stats}");
 }
 
 #[tokio::test]
