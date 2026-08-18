@@ -26,8 +26,8 @@ pub(crate) enum MailboxSub {
 
 fn kind_label(item: &MailboxItem) -> &'static str {
     match item.kind {
-        crate::comms::MailboxItemKind::Steer => "↳ steer",
-        crate::comms::MailboxItemKind::Queue => "⏱ queue",
+        crate::comms::MailboxItemKind::Steer => "↳",
+        crate::comms::MailboxItemKind::Queue => "⏱",
     }
 }
 
@@ -43,21 +43,8 @@ fn parse_scope(v: &serde_json::Value) -> MailboxScope {
     }
 }
 
-/// 行内容：全量 text（拍平空白，≤300 字符）——preview 的 80 字符在
-/// 卡片上太挤看不全。
-fn item_text(item: &MailboxItem) -> String {
-    let text = item.text.as_deref().unwrap_or(&item.preview);
-    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if flat.chars().count() > 300 {
-        format!("{}…", flat.chars().take(299).collect::<String>())
-    } else {
-        flat
-    }
-}
-
-/// Pending 卡（info 卡同款蓝头 compact）：每行 kind + 全量文本 + 大号
-/// 撤回按钮（primary），底部 steer/queue/全部三个清空按钮；空队列显示
-/// 一行占位。
+/// Pending 卡（info 卡同款蓝头 compact）：每行小字内容（preview ≤80
+/// 字符）+ 一个 ✕ 小按钮；底部仅 刷新/清空 两个按钮，按钮极简化。
 pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> String {
     let items = merged(snapshot);
     let mut elements: Vec<serde_json::Value> = Vec::new();
@@ -67,19 +54,24 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
         }));
     }
     for item in items.iter().take(VISIBLE_ROWS) {
+        // steer 前缀是注入时的注入标记，管理面上是冗余噪声。
+        let preview = item
+            .preview
+            .strip_prefix("[From User] ")
+            .unwrap_or(&item.preview);
         elements.push(serde_json::json!({
             "tag": "column_set",
             "columns": [
                 {
                     "tag": "column", "width": "weighted", "weight": 1,
-                    "elements": [{ "tag": "markdown", "text_size": "notation", "content": format!("`{}` · {}", kind_label(item), item_text(item)) }],
+                    "elements": [{ "tag": "markdown", "text_size": "notation", "content": format!("`{}` · {}", kind_label(item), preview) }],
                 },
                 {
                     "tag": "column", "width": "auto",
                     "elements": [{
                         "tag": "button",
-                        "text": { "tag": "plain_text", "content": "撤回" },
-                        "type": "primary",
+                        "text": { "tag": "plain_text", "content": "✕" },
+                        "type": "default",
                         "behaviors": [{ "type": "callback", "value": { "action": "mb_retract", "sid": sid.0, "item": item.id } }],
                     }],
                 },
@@ -90,49 +82,47 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
     if overflow > 0 {
         elements.push(serde_json::json!({
             "tag": "markdown", "text_size": "notation",
-            "content": format!("<font color='grey'>… and {overflow} more — 用下方按钮清空</font>"),
+            "content": format!("<font color='grey'>… and {overflow} more</font>"),
         }));
     }
     if !items.is_empty() {
-        let button = |scope: MailboxScope, label: &str, kind: &str| {
-            let scope_str = match scope {
-                MailboxScope::Steer => "steer",
-                MailboxScope::Queue => "queue",
-                MailboxScope::All => "all",
-            };
-            serde_json::json!({
-                "tag": "column", "width": "weighted", "weight": 1,
-                "elements": [{
-                    "tag": "button",
-                    "text": { "tag": "plain_text", "content": label },
-                    "type": kind,
-                    "behaviors": [{ "type": "callback", "value": { "action": "mb_clear", "sid": sid.0, "scope": scope_str } }],
-                }],
-            })
-        };
         elements.push(serde_json::json!({
             "tag": "column_set",
             "columns": [
-                button(MailboxScope::Steer, "🧹 steer", "default"),
-                button(MailboxScope::Queue, "🧹 queue", "default"),
-                button(MailboxScope::All, "🧹 全部清空", "danger"),
+                {
+                    "tag": "column", "width": "weighted", "weight": 1,
+                    "elements": [{
+                        "tag": "button",
+                        "text": { "tag": "plain_text", "content": "🔄 刷新" },
+                        "type": "default",
+                        "behaviors": [{ "type": "callback", "value": { "action": "mb_refresh", "sid": sid.0 } }],
+                    }],
+                },
+                {
+                    "tag": "column", "width": "weighted", "weight": 1,
+                    "elements": [{
+                        "tag": "button",
+                        "text": { "tag": "plain_text", "content": "🧹 清空" },
+                        "type": "danger",
+                        "behaviors": [{ "type": "callback", "value": { "action": "mb_clear", "sid": sid.0, "scope": "all" } }],
+                    }],
+                },
             ],
         }));
-    }
-    // 手动刷新：卡片不自动跟踪 mailbox 变化（多卡片并存时注册表难以
-    // 维护），需要时用户点一下或重发 `/mailbox`。
-    elements.push(serde_json::json!({
-        "tag": "column_set",
-        "columns": [{
-            "tag": "column", "width": "weighted", "weight": 1,
-            "elements": [{
-                "tag": "button",
-                "text": { "tag": "plain_text", "content": "🔄 刷新" },
-                "type": "default",
-                "behaviors": [{ "type": "callback", "value": { "action": "mb_refresh", "sid": sid.0 } }],
+    } else {
+        elements.push(serde_json::json!({
+            "tag": "column_set",
+            "columns": [{
+                "tag": "column", "width": "weighted", "weight": 1,
+                "elements": [{
+                    "tag": "button",
+                    "text": { "tag": "plain_text", "content": "🔄 刷新" },
+                    "type": "default",
+                    "behaviors": [{ "type": "callback", "value": { "action": "mb_refresh", "sid": sid.0 } }],
+                }],
             }],
-        }],
-    }));
+        }));
+    }
     info_card_envelope(&format!("⏳ Pending ({})", items.len()), elements)
 }
 
