@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.98] - 2026-08-19
+
+### Changed
+
+- 运行轨迹标题的流量箭头改为用户视角：`↑` 为发给模型的输入 token，`↓` 为模型返回的输出 token（此前方向相反）。
+- 飞书命令的动作回执统一前缀风格：成功 ✅（切换模型、设置与重置、退订、撤回排队消息）、停止 ⏹、清理 🧹、拒绝 ⚠️。
+- 飞书用户可见文案统一为英文：文档权限审批卡与 `/permits`、`/approve`、`/deny` 回执、`/sessions` 时间分桶（`6h ago` 等）与翻页提示、`/mailbox` 按钮与提示、订阅通知、`/help` 分组名等。
+- 飞书所有卡片按钮统一为小号（文档权限审批卡按钮原为中号）。
+- `/help` 补充收录 `/subscribe`、`/unsubscribe`。
+
 ## [0.7.97] - 2026-08-19
 
 ### Added
