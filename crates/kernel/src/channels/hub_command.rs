@@ -43,6 +43,8 @@ pub(crate) const CMD_MENTION: &str = "/mention";
 
 pub(crate) const CMD_THREADS: &str = "/threads";
 
+pub(crate) const CMD_MAILBOX: &str = "/mailbox";
+
 pub(crate) const CMD_BIND: &str = "/bind";
 
 pub(crate) const CMD_SESSIONS: &str = "/sessions";
@@ -65,6 +67,7 @@ pub(crate) const COMMANDS: &[(&str, &[&str])] = &[
     (CMD_UNSUBSCRIBE, &["/unsub"]),
     (CMD_MENTION, &[]),
     (CMD_THREADS, &[]),
+    (CMD_MAILBOX, &["/mb"]),
     (CMD_BIND, &[]),
     (CMD_SESSIONS, &[]),
     (CMD_PERMITS, &[]),
@@ -89,6 +92,7 @@ pub(crate) const HELP_TEXT: &str = "\
 `/unsubscribe` (`/unsub`) — cancel the subscription here
 `/mention` — show the @-requirement here; `/mention on|off|reset` to override it (admin)
 `/threads` — show reply-in-thread mode for this chat; `/threads on|off|reset` to override it (admin)
+`/mailbox` (`/mb`) — show pending steer/queued messages; `/mailbox retract <n>` · `/mailbox clear [steer|queue|all]` (admin)
 `/bind` — show this conversation's session id; `/bind <session_id>` to retarget it (admin)
 `/sessions` — recent 10 sessions of this channel with jump links; `/sessions <offset>` for the next page (admin)
 `/permits` — list pending doc-permission requests (admin)
@@ -168,6 +172,10 @@ pub(crate) enum ChannelCommand {
     Threads(Option<OverrideMode>),
     /// A malformed `/threads` command.
     InvalidThreadsCommand,
+    /// Show or manage the session's pending mailbox (admin).
+    Mailbox(super::mailbox::MailboxSub),
+    /// A malformed `/mailbox` command.
+    InvalidMailboxCommand,
     /// List this channel's recent sessions (admin), with the page offset.
     Sessions(usize),
     /// A malformed `/sessions` command.
@@ -321,6 +329,26 @@ pub(crate) fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
             (Some("off"), None) => ChannelCommand::Threads(Some(OverrideMode::Off)),
             (Some("reset"), None) => ChannelCommand::Threads(Some(OverrideMode::Reset)),
             _ => ChannelCommand::InvalidThreadsCommand,
+        },
+        CMD_MAILBOX => match (parts.next(), parts.next(), parts.next()) {
+            (None, None, None) => ChannelCommand::Mailbox(super::mailbox::MailboxSub::Show),
+            (Some("clear"), scope, None) => match scope {
+                None | Some("all") => ChannelCommand::Mailbox(super::mailbox::MailboxSub::Clear(
+                    crate::comms::MailboxScope::All,
+                )),
+                Some("steer") => ChannelCommand::Mailbox(super::mailbox::MailboxSub::Clear(
+                    crate::comms::MailboxScope::Steer,
+                )),
+                Some("queue") => ChannelCommand::Mailbox(super::mailbox::MailboxSub::Clear(
+                    crate::comms::MailboxScope::Queue,
+                )),
+                _ => ChannelCommand::InvalidMailboxCommand,
+            },
+            (Some("retract"), Some(n), None) => match n.parse::<usize>() {
+                Ok(n) if n > 0 => ChannelCommand::Mailbox(super::mailbox::MailboxSub::Retract(n)),
+                _ => ChannelCommand::InvalidMailboxCommand,
+            },
+            _ => ChannelCommand::InvalidMailboxCommand,
         },
         CMD_BIND => match (parts.next(), parts.next()) {
             (None, None) => ChannelCommand::Bind(None),

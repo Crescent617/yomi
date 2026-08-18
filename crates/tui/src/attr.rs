@@ -41,7 +41,7 @@ pub const APPEND_THINKING: &str = "append_thinking";
 
 /// Attribute for setting whether there's a queued message.
 pub const HAS_QUEUED_MESSAGE: &str = "has_queued_message";
-/// Feed the ChatView the pending mailbox items (JSON `Vec<MailboxItem>`).
+/// Feed the `ChatView` the pending mailbox items (JSON `Vec<MailboxItem>`).
 pub const SET_PENDING_ITEMS: &str = "set_pending_items";
 
 // =============================================================================

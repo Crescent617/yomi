@@ -6816,3 +6816,206 @@ async fn deliver_reply_with_mention_flushes_new_message_without_mid_run_posts() 
     assert_eq!(cards.len(), 2, "materialize + reply card");
     assert!(cards[1].1.contains("cc <at id=ou_abc></at> 看一下"));
 }
+
+// ── /mailbox ─────────────────────────────────────────────────────────
+
+/// `/mailbox` 全链路：admin 门槛、无会话提示、pending 卡片（按钮值）、
+/// retract/clear、按钮回调原地刷新、空队列文本。黑洞 listener 占住
+/// agent，保证 pending 不被抢先消费（确定性）。
+#[tokio::test]
+async fn mailbox_command_show_retract_clear_and_card_actions() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((s, _)) = listener.accept().await {
+            held.push(s);
+        }
+    });
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        models: vec![crate::provider::ModelConfig {
+            name: "blackhole".into(),
+            endpoint: format!("http://{addr}"),
+            ..Default::default()
+        }],
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+    kernel.start();
+
+    let mock = Arc::new(CardMockAdapter::new());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "app".into(),
+            app_secret: "secret".into(),
+        },
+        require_mention: true,
+        admin_users: vec!["ou_admin".to_string()],
+        ..Default::default()
+    };
+    let msg = |user: &str, text: &str| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: user.to_string(),
+        external_message_id: Some("m1".to_string()),
+        is_mention: true,
+        raw_text: Some(text.to_string()),
+        content: vec![ContentBlock::Text {
+            text: text.to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: true,
+        create_time: Some(1000),
+        doc_comment: None,
+    };
+    let handle = |m: ChannelMessage| {
+        handle_incoming_message(
+            "mock",
+            &config,
+            &store,
+            Arc::clone(&kernel),
+            m,
+            &obs,
+            &adapter,
+        )
+    };
+
+    // 非 admin：拒绝。
+    let reply = handle(msg("ou_random", "/mailbox")).await.unwrap();
+    assert!(reply.unwrap().contains("permission denied"));
+
+    // 无会话：提示。
+    let reply = handle(msg("ou_admin", "/mailbox")).await.unwrap();
+    assert!(reply.unwrap().contains("No session yet"));
+
+    // 建会话并占住 agent（首个模型请求挂起）。
+    let (sid, _) = get_or_create_session("mock", &store, &kernel, "oc_1", "oc_1", None)
+        .await
+        .unwrap();
+    let text = |t: &str| {
+        vec![ContentBlock::Text {
+            text: t.to_string(),
+        }]
+    };
+    kernel.send_message(&sid, text("blocker")).await.unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let phase = kernel.get_session(&sid).await.unwrap().phase;
+        if phase == "streaming" {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "agent not blocked");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    // 入队：queue 两条 + steer 一条。
+    kernel.send_message(&sid, text("task A")).await.unwrap();
+    kernel.send_message(&sid, text("task B")).await.unwrap();
+    kernel.send_steer(&sid, text("note C")).await;
+    loop {
+        let snap = kernel.mailbox_snapshot(&sid).await;
+        if snap.queue.len() == 2 && snap.steer.len() == 1 {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "items never landed");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    // /mailbox → Pending (3) 卡片，含预览与 mb_ 按钮值。
+    let reply = handle(msg("ou_admin", "/mailbox")).await.unwrap();
+    assert!(reply.is_none(), "card path returns None");
+    let card = {
+        let cards = mock.cards.lock().await;
+        let Some((_, card)) = cards.last() else {
+            panic!("no card sent")
+        };
+        card.clone()
+    };
+    assert!(card.contains("⏳ Pending (3)"), "{card}");
+    assert!(card.contains("task A") && card.contains("note C"), "{card}");
+    assert!(
+        card.contains("mb_retract") && card.contains("mb_clear"),
+        "{card}"
+    );
+
+    // 按钮回调 mb_retract：删除并原地刷新（update_card）。
+    let item_id = kernel.mailbox_snapshot(&sid).await.queue[0].id.clone();
+    crate::channels::mailbox::handle_card_action(
+        "mock",
+        &config,
+        &kernel,
+        &adapter,
+        crate::channels::CardAction {
+            operator_open_id: "ou_admin".to_string(),
+            chat_id: Some("oc_1".to_string()),
+            message_id: Some("om_card".to_string()),
+            value: serde_json::json!({"action": "mb_retract", "sid": sid.0, "item": item_id.as_str()}),
+        },
+    )
+    .await;
+    {
+        let snap = kernel.mailbox_snapshot(&sid).await;
+        assert!(snap.queue.iter().all(|i| i.id != item_id), "button retract");
+        let patches = mock.patches.lock().await;
+        assert!(
+            patches
+                .iter()
+                .any(|(mid, card)| mid == "om_card" && card.contains("Pending (2)")),
+            "in-place card refresh: {patches:?}"
+        );
+    }
+
+    // /mailbox retract 1 → 撤掉剩下的 queue 条目（此时 merged=[note C, task B]，#1=note C）。
+    let reply = handle(msg("ou_admin", "/mailbox retract 1")).await.unwrap();
+    let text = reply.unwrap();
+    assert!(text.contains("Retracted #1"), "{text}");
+    let snap = kernel.mailbox_snapshot(&sid).await;
+    assert!(snap.steer.is_empty(), "retract #1 hits the steer head");
+    assert_eq!(snap.queue.len(), 1);
+
+    // /mailbox clear → 全清；再查 → 空文本。
+    let reply = handle(msg("ou_admin", "/mailbox clear")).await.unwrap();
+    assert!(reply.unwrap().contains("Cleared 1"));
+    let reply = handle(msg("ou_admin", "/mailbox")).await.unwrap();
+    assert!(reply.unwrap().contains("Mailbox is empty"));
+
+    // 解析：/mb 别名、坏用法。
+    assert!(matches!(
+        parse_channel_command(Some("/mb")),
+        ChannelCommand::Mailbox(crate::channels::mailbox::MailboxSub::Show)
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/mailbox clear steer")),
+        ChannelCommand::Mailbox(crate::channels::mailbox::MailboxSub::Clear(
+            crate::comms::MailboxScope::Steer
+        ))
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/mailbox retract 2")),
+        ChannelCommand::Mailbox(crate::channels::mailbox::MailboxSub::Retract(2))
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/mailbox retract 0")),
+        ChannelCommand::InvalidMailboxCommand
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/mailbox clear foo")),
+        ChannelCommand::InvalidMailboxCommand
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/mailbox retract x")),
+        ChannelCommand::InvalidMailboxCommand
+    ));
+    kernel.stop();
+}

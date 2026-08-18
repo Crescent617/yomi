@@ -314,6 +314,27 @@ pub(crate) async fn handle_incoming_message(
             "Usage: `/sessions` for the 10 most recent sessions; `/sessions <offset>` for the next page (admin)."
                 .to_string(),
         )),
+        ChannelCommand::Mailbox(sub) => {
+            if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
+                return Ok(Some(deny));
+            }
+            // Same scope resolution as `/info`: chat-level messages show
+            // the chat session, in-thread ones the thread's.
+            let chat_level = is_chat_level_message(&msg, rit);
+            let key = if chat_level { &chat_id } else { &mapping_key };
+            let Some(sid) = store.find_mapping(channel_name, key).await? else {
+                return Ok(Some(format!(
+                    "No session yet in this {}.",
+                    if chat_level { "chat" } else { "thread" },
+                )));
+            };
+            super::mailbox::handle_mailbox_command(&kernel, adapter, &msg, reply_msg_id, &sid, sub)
+                .await
+        }
+        ChannelCommand::InvalidMailboxCommand => Ok(Some(
+            "Usage: `/mailbox` to show pending messages; `/mailbox retract <n>` · `/mailbox clear [steer|queue|all]` (admin)."
+                .to_string(),
+        )),
         ChannelCommand::Info => {
             // Chat-level messages show the chat session, in-thread ones
             // the thread's. Read-only: never creates a session or mapping.

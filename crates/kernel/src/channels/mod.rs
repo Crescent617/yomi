@@ -11,6 +11,8 @@ pub(crate) mod attachments;
 
 pub(crate) mod approval;
 
+pub(crate) mod mailbox;
+
 pub(crate) mod comment;
 
 /// Why a channel message was rejected by access control.
@@ -479,6 +481,9 @@ pub struct CardAction {
     /// Chat the callback happened in (for feedback messages), when the
     /// platform provides it.
     pub chat_id: Option<String>,
+    /// Message the button card lives in (for in-place card refresh),
+    /// when the platform provides it.
+    pub message_id: Option<String>,
     /// Button value, e.g. `{"action": "approve"|"deny", "id": N}`.
     pub value: serde_json::Value,
 }

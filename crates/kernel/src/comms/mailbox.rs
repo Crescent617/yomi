@@ -225,7 +225,7 @@ impl Mailbox {
 
     /// 按范围清空（管理面操作；不同于 cancel 的全清，不影响 agent 运行）。
     /// normal 队列只清用户消息：控制输入（Compact/Rewind/…）是内部瞬态项
-    /// （且 Rewind 带挂起的 result_tx），不动它们。
+    /// （且 Rewind 带挂起的 `result_tx`），不动它们。
     pub async fn clear_scope(&self, scope: MailboxScope) -> usize {
         let mut removed = 0;
         if matches!(scope, MailboxScope::Steer | MailboxScope::All) {

@@ -142,6 +142,7 @@ fn card_action(operator: &str, value: serde_json::Value) -> CardAction {
     CardAction {
         operator_open_id: operator.to_string(),
         chat_id: Some("oc_chat".to_string()),
+        message_id: None,
         value,
     }
 }
