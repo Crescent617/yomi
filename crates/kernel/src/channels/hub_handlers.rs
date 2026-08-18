@@ -10,7 +10,7 @@ use tracing::warn;
 
 use super::hub_command::{
     format_current_model, format_model_list, format_session_info, format_unknown_model,
-    parse_channel_command, ChannelCommand, OverrideMode, HELP_TEXT,
+    parse_channel_command, suggest_command, ChannelCommand, OverrideMode, HELP_TEXT,
 };
 use super::hub_context::{append_message_images, prepare_trigger, TriggerKind};
 use super::hub_deliver::send_info_reply;
@@ -344,6 +344,71 @@ pub(crate) async fn handle_incoming_message(
             "Usage: `/mailbox` to show pending messages; `/mailbox retract <n>` · `/mailbox clear [steer|queue|all]` (admin)."
                 .to_string(),
         )),
+        ChannelCommand::Shell(n) => {
+            if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
+                return Ok(Some(deny));
+            }
+            let chat_level = is_chat_level_message(&msg, rit);
+            let key = if chat_level { &chat_id } else { &mapping_key };
+            let Some(sid) = store.find_mapping(channel_name, key).await? else {
+                return Ok(Some(format!(
+                    "No session yet in this {}.",
+                    if chat_level { "chat" } else { "thread" },
+                )));
+            };
+            let shells = kernel.list_background_shells(&sid);
+            if shells.is_empty() {
+                return Ok(Some("No background shells in this session.".to_string()));
+            }
+            match n {
+                None => {
+                    let mut lines = Vec::new();
+                    for (i, s) in shells.iter().enumerate() {
+                        lines.push(format!(
+                            "- **#{}** `{}` · pid {} · {}",
+                            i + 1,
+                            s.command,
+                            s.pid,
+                            crate::storage::format_age(s.started_at)
+                        ));
+                    }
+                    lines.push(String::new());
+                    lines.push("查看输出：`/shell <n>`".to_string());
+                    send_info_reply(
+                        adapter,
+                        &msg,
+                        reply_msg_id,
+                        "🖥 Background shells",
+                        lines.join("\n"),
+                    )
+                    .await?;
+                    Ok(None)
+                }
+                Some(n) => {
+                    let Some(shell) = n.checked_sub(1).and_then(|i| shells.get(i)) else {
+                        return Ok(Some(format!(
+                            "No background shell #{n} ({} shell(s) in this session).",
+                            shells.len()
+                        )));
+                    };
+                    let tail = tail_shell_output(&shell.output_path, 40).await;
+                    let body = format!(
+                        "`{}` · pid {} · {}\n\n```\n{}\n```",
+                        shell.command,
+                        shell.pid,
+                        crate::storage::format_age(shell.started_at),
+                        tail.replace("```", "` ` `")
+                    );
+                    send_info_reply(adapter, &msg, reply_msg_id, &format!("🖥 Shell #{n}"), body)
+                        .await?;
+                    Ok(None)
+                }
+            }
+        }
+        ChannelCommand::InvalidShellCommand => Ok(Some(
+            "Usage: `/shell` to list background shells; `/shell <n>` for shell n's output (admin)."
+                .to_string(),
+        )),
         ChannelCommand::Info => {
             // Chat-level messages show the chat session, in-thread ones
             // the thread's. Read-only: never creates a session or mapping.
@@ -510,9 +575,12 @@ pub(crate) async fn handle_incoming_message(
         ChannelCommand::InvalidBindCommand => {
             Ok(Some("Usage: `/bind` or `/bind <session_id>`.".to_string()))
         }
-        ChannelCommand::Unknown(cmd) => Ok(Some(format!(
-            "Unknown command `{cmd}`. See `/help` for the command list."
-        ))),
+        ChannelCommand::Unknown(cmd) => Ok(Some(match suggest_command(&cmd) {
+            Some(suggestion) => {
+                format!("Unknown command `{cmd}`. Did you mean `{suggestion}`? See `/help`.")
+            }
+            None => format!("Unknown command `{cmd}`. See `/help` for the command list."),
+        })),
         ChannelCommand::None => {
             let (sid, mut content) = prepare_trigger(
                 channel_name,
@@ -547,8 +615,34 @@ pub(crate) async fn handle_incoming_message(
     }
 }
 
-/// `/bind`: show or retarget the current scope's session binding.
-/// Retargeting is admin-only. A session already routed elsewhere is
+/// Read the last `max_lines` of a background shell's output (capped at
+/// the last 64KB).
+pub(crate) async fn tail_shell_output(path: &str, max_lines: usize) -> String {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    const MAX_BYTES: u64 = 64 * 1024;
+    let mut file = match tokio::fs::File::open(path).await {
+        Ok(f) => f,
+        Err(e) => return format!("(failed to read output: {e})"),
+    };
+    let len = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+    if file
+        .seek(std::io::SeekFrom::Start(len.saturating_sub(MAX_BYTES)))
+        .await
+        .is_err()
+    {
+        return "(failed to seek output)".to_string();
+    }
+    let mut buf = Vec::new();
+    if file.take(MAX_BYTES).read_to_end(&mut buf).await.is_err() {
+        return "(failed to read output)".to_string();
+    }
+    let text = String::from_utf8_lossy(&buf);
+    let lines: Vec<&str> = text.lines().collect();
+    let tail = &lines[lines.len().saturating_sub(max_lines)..];
+    tail.join("\n")
+}
+
+/// `/bind`: show or retarget the current scope's session binding./// Retargeting is admin-only. A session already routed elsewhere is
 /// refused: for chat scopes that means another chat/channel (a reply
 /// could land in the wrong chat); for doc-comment scopes, ANY other
 /// mapping (the delivery target comes from the mapping row itself, so

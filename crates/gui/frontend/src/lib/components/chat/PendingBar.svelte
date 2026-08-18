@@ -71,7 +71,11 @@
         <Hourglass class="w-3 h-3" />queue
       {/if}
     </span>
-    <span class="flex-1 min-w-0 text-sm truncate">{item.preview}</span>
+    <span class="flex-1 min-w-0 text-sm truncate"
+      >{item.preview}{#if item.has_image}
+        <span class="text-muted-foreground"> 📎</span>
+      {/if}</span
+    >
     {#if item.kind === "queue"}
       <button
         type="button"

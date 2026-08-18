@@ -859,13 +859,14 @@ pub fn render_pending_items(items: &[kernel::comms::MailboxItem]) -> Vec<Arc<Lin
             kernel::comms::MailboxItemKind::Steer => "↳ steer",
             kernel::comms::MailboxItemKind::Queue => "⏱ queue",
         };
+        let attachment = if item.has_image { " 📎" } else { "" };
         lines.push(Arc::new(Line::from(vec![
             Span::styled(
                 chars::MSG_INDENT_GUIDE,
                 Style::default().fg(colors::text_secondary()),
             ),
             Span::styled(
-                format!("{marker} · {}", preprocess(&item.preview)),
+                format!("{marker} · {}{attachment}", preprocess(&item.preview)),
                 Style::default().fg(colors::text_secondary()),
             ),
         ])));

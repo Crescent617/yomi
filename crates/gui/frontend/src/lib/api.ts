@@ -674,6 +674,8 @@ export interface MailboxItem {
   preview: string;
   /** 首个文本块全文（编辑重发用），非文本消息为 null */
   text: string | null;
+  /** 是否含图片等附件 */
+  has_image: boolean;
   blocks_len: number;
   enqueued_at: string;
 }

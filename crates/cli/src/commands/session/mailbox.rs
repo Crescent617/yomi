@@ -38,7 +38,11 @@ pub async fn list(global: &GlobalArgs, session: Option<String>) -> Result<()> {
             item.id.as_str(),
             kind,
             &kernel::storage::format_age(item.enqueued_at),
-            &item.preview,
+            &if item.has_image {
+                format!("{} 📎", item.preview)
+            } else {
+                item.preview.clone()
+            },
         ]);
     }
     println!("{table}");

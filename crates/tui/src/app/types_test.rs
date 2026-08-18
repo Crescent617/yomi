@@ -72,6 +72,7 @@ fn item(kind: MailboxItemKind, preview: &str) -> MailboxItem {
         kind,
         preview: preview.to_string(),
         text: Some(preview.to_string()),
+        has_image: false,
         blocks_len: 1,
         enqueued_at: chrono::Utc::now(),
     }

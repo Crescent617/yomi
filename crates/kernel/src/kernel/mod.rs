@@ -1302,6 +1302,7 @@ impl Kernel {
         let Some(AgentInput::User { content }) =
             mb.take(&crate::types::MailboxItemId::from(item_id)).await
         else {
+            debug_assert!(false, "take() only removes User entries from normal queue");
             tracing::debug!(session_id = %session_id.0, item_id, "mailbox steer-promote: item not pending");
             return false;
         };

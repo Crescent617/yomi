@@ -49,6 +49,8 @@ pub struct MailboxItem {
     pub preview: String,
     /// 首个文本块的全文（供前端"编辑后重发"）；非文本消息为 None。
     pub text: Option<String>,
+    /// 是否含非文本块（图片等附件）——面板显示 📎 用。
+    pub has_image: bool,
     pub blocks_len: usize,
     pub enqueued_at: chrono::DateTime<chrono::Utc>,
 }
@@ -182,6 +184,9 @@ impl Mailbox {
                 kind,
                 preview,
                 text,
+                has_image: blocks
+                    .iter()
+                    .any(|b| !matches!(b, ContentBlock::Text { .. })),
                 blocks_len,
                 enqueued_at: entry.enqueued_at,
             })

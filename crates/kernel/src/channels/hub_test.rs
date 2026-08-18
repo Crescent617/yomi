@@ -7149,3 +7149,55 @@ async fn queue_command_carries_images() {
     );
     kernel.stop();
 }
+
+// ── suggest_command / /shell ─────────────────────────────────────────
+
+#[test]
+fn unknown_command_suggests_close_match() {
+    assert_eq!(suggest_command("malbox"), Some("/mailbox"));
+    assert_eq!(suggest_command("mailbx"), Some("/mailbox"));
+    assert_eq!(suggest_command("inf"), Some("/info"));
+    assert_eq!(
+        suggest_command("maliobx"),
+        Some("/mailbox"),
+        "相邻交换算 1 步，真实 typo 应命中"
+    );
+    assert_eq!(suggest_command("xyzzy"), None);
+}
+
+#[test]
+fn shell_command_parse() {
+    assert!(matches!(
+        parse_channel_command(Some("/shell")),
+        ChannelCommand::Shell(None)
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/shell 2")),
+        ChannelCommand::Shell(Some(2))
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/shell 0")),
+        ChannelCommand::InvalidShellCommand
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/shell x")),
+        ChannelCommand::InvalidShellCommand
+    ));
+}
+
+#[tokio::test]
+async fn tail_shell_output_reads_last_lines() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+    let content: String = (1..=50).map(|i| format!("line {i}\n")).collect();
+    tokio::fs::write(&path, content).await.unwrap();
+
+    let tail = tail_shell_output(&path, 40).await;
+    let lines: Vec<&str> = tail.lines().collect();
+    assert_eq!(lines.len(), 40);
+    assert_eq!(lines.first(), Some(&"line 11"));
+    assert_eq!(lines.last(), Some(&"line 50"));
+
+    let missing = tail_shell_output("/nonexistent/output.log", 40).await;
+    assert!(missing.contains("failed to read"), "{missing}");
+}

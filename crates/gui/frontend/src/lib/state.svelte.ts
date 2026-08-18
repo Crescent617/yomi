@@ -29,6 +29,7 @@ import {
   mailboxBySession,
   onMailboxChanged,
   pendingCounts,
+  refreshMailbox,
 } from "./mailbox.svelte";
 
 // ── Kernel notification listener ─────────────────────────────────────────
@@ -72,6 +73,9 @@ export function refreshRunningSessions(): Promise<void> {
           continue;
         }
         runningSessions.splice(0, runningSessions.length, ...sessions);
+        // Hydrate pending badges: pending items live in sessions with a
+        // live agent, so the running list is the complete hydration set.
+        for (const session of sessions) void refreshMailbox(session.id);
         reconcileRunningSessionPhases(
           sessionState.sessions,
           sessions,

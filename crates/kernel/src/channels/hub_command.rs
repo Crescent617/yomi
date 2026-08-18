@@ -45,6 +45,8 @@ pub(crate) const CMD_THREADS: &str = "/threads";
 
 pub(crate) const CMD_MAILBOX: &str = "/mailbox";
 
+pub(crate) const CMD_SHELL: &str = "/shell";
+
 pub(crate) const CMD_BIND: &str = "/bind";
 
 pub(crate) const CMD_SESSIONS: &str = "/sessions";
@@ -68,6 +70,7 @@ pub(crate) const COMMANDS: &[(&str, &[&str])] = &[
     (CMD_MENTION, &[]),
     (CMD_THREADS, &[]),
     (CMD_MAILBOX, &["/mb"]),
+    (CMD_SHELL, &[]),
     (CMD_BIND, &[]),
     (CMD_SESSIONS, &[]),
     (CMD_PERMITS, &[]),
@@ -78,10 +81,16 @@ pub(crate) const COMMANDS: &[(&str, &[&str])] = &[
 
 /// `/help` response: the channel command list.
 pub(crate) const HELP_TEXT: &str = "\
+**信息**
 `/help` (`/h`) — this help
 `/info` (`/i`) — current session info
+`/mailbox` (`/mb`) — pending steer/queued messages; `/mailbox retract <n>` · `/mailbox clear [steer|queue|all]` (admin)
+`/shell` — list background shells; `/shell <n>` shows shell n's recent output (admin)
 `/models` — list configured models (current one marked)
 `/model` (`/m`) — show current model; `/model <key>` to switch
+`/sessions` — recent 10 sessions of this channel with jump links; `/sessions <offset>` for the next page (admin)
+
+**会话控制**
 `/clear` (`/c`) — clear context and start fresh
 `/compact` — summarize and compact the context
 `/stop` (`/s`) — stop the current run
@@ -90,15 +99,15 @@ pub(crate) const HELP_TEXT: &str = "\
 `/thread <text>` (`/t`) — ask in a new thread opened off this message (Feishu)
 `/subscribe [chat_id] [-r]` (`/sub`) — DM you when runs here complete; `-r` covers this chat's threads (Feishu)
 `/unsubscribe` (`/unsub`) — cancel the subscription here
-`/mention` — show the @-requirement here; `/mention on|off|reset` to override it (admin)
-`/threads` — show reply-in-thread mode for this chat; `/threads on|off|reset` to override it (admin)
-`/mailbox` (`/mb`) — show pending steer/queued messages; `/mailbox retract <n>` · `/mailbox clear [steer|queue|all]` (admin)
-`/bind` — show this conversation's session id; `/bind <session_id>` to retarget it (admin)
-`/sessions` — recent 10 sessions of this channel with jump links; `/sessions <offset>` for the next page (admin)
-`/permits` — list pending doc-permission requests (admin)
-`/approve <id> [perm]` — approve a doc-permission request (admin)
-`/deny <id>` — deny a doc-permission request (admin)
-`/restart` — restart the daemon (admin)
+
+**群管理（admin）**
+`/mention` — show the @-requirement here; `/mention on|off|reset` to override it
+`/threads` — show reply-in-thread mode for this chat; `/threads on|off|reset` to override it
+`/bind` — show this conversation's session id; `/bind <session_id>` to retarget it
+`/permits` — list pending doc-permission requests
+`/approve <id> [perm]` — approve a doc-permission request
+`/deny <id>` — deny a doc-permission request
+`/restart` — restart the daemon
 
 Anything else is sent to the agent as a message.";
 
@@ -176,6 +185,10 @@ pub(crate) enum ChannelCommand {
     Mailbox(super::mailbox::MailboxSub),
     /// A malformed `/mailbox` command.
     InvalidMailboxCommand,
+    /// Show a background shell's recent output (`/shell <n>`, admin).
+    Shell(Option<usize>),
+    /// A malformed `/shell` command.
+    InvalidShellCommand,
     /// List this channel's recent sessions (admin), with the page offset.
     Sessions(usize),
     /// A malformed `/sessions` command.
@@ -349,6 +362,14 @@ pub(crate) fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
                 _ => ChannelCommand::InvalidMailboxCommand,
             },
             _ => ChannelCommand::InvalidMailboxCommand,
+        },
+        CMD_SHELL => match (parts.next(), parts.next()) {
+            (None, None) => ChannelCommand::Shell(None),
+            (Some(n), None) => match n.parse::<usize>() {
+                Ok(n) if n > 0 => ChannelCommand::Shell(Some(n)),
+                _ => ChannelCommand::InvalidShellCommand,
+            },
+            _ => ChannelCommand::InvalidShellCommand,
         },
         CMD_BIND => match (parts.next(), parts.next()) {
             (None, None) => ChannelCommand::Bind(None),
@@ -552,4 +573,46 @@ pub(crate) fn format_unknown_model(key: &str, models: &[crate::kernel::ModelInfo
             "Model `{key}` was not found.\n\nAvailable model keys: {keys}\n\nUse `/models` for details."
         )
     }
+}
+
+/// 打错命令时的建议：与任一命令名/别名编辑距离 ≤2 即提示（取最近者）。
+/// 距离用 OSA（相邻交换算 1 步，覆盖最常见的 typo）。
+pub(crate) fn suggest_command(cmd: &str) -> Option<&'static str> {
+    let cmd = cmd.trim_start_matches('/');
+    let mut best: Option<(&'static str, usize)> = None;
+    for &(name, aliases) in COMMANDS {
+        for candidate in std::iter::once(name).chain(aliases.iter().copied()) {
+            let d = levenshtein(cmd, candidate.trim_start_matches('/'));
+            if d <= 2 && d < best.map_or(usize::MAX, |(_, bd)| bd) {
+                best = Some((name, d));
+            }
+        }
+    }
+    best.map(|(name, _)| name)
+}
+
+/// 经典 Levenshtein（命令名都很短，O(n·m) 足够）。
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let (n, m) = (a.len(), b.len());
+    let mut d = vec![vec![0usize; m + 1]; n + 1];
+    for (i, row) in d.iter_mut().enumerate().take(n + 1) {
+        row[0] = i;
+    }
+    for (j, cell) in d[0].iter_mut().enumerate().take(m + 1) {
+        *cell = j;
+    }
+    for i in 1..=n {
+        for j in 1..=m {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            d[i][j] = (d[i - 1][j] + 1)
+                .min(d[i][j - 1] + 1)
+                .min(d[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                d[i][j] = d[i][j].min(d[i - 2][j - 2] + 1);
+            }
+        }
+    }
+    d[n][m]
 }
