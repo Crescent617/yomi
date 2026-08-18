@@ -269,7 +269,7 @@ pub(super) async fn handle_mailbox_command(
             if kernel.remove_mailbox_item(sid, id.as_str()).await {
                 Ok(Some(format!("✅ Retracted #{n}: {}", item.preview)))
             } else {
-                Ok(Some(format!("#{n} is already gone (consumed).")))
+                Ok(Some(format!("⚠️ #{n} is already gone (consumed).")))
             }
         }
     }

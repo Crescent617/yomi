@@ -305,7 +305,7 @@ fn render_card_truncates_oversized_text() {
     buf.record_model_end(&"x".repeat(FINAL_TEXT_MAX_BYTES + 100));
     let reply = buf.into_reply();
     let card = render_card(&reply, None).unwrap();
-    assert!(card.contains("...(内容已截断)"));
+    assert!(card.contains("...(truncated)"));
 }
 
 #[test]

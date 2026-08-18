@@ -1,3 +1,22 @@
+//! Feishu channel adapter: websocket event intake + REST API client.
+//!
+//! ## Card design rules
+//!
+//! Verified against real clients (Android dark mode included); every card
+//! rendered for this platform must follow them:
+//!
+//! - **Buttons**: always `size: "small"`; bordered type for real actions
+//!   (`default`/`primary`/`danger`), `text` type only for inline row
+//!   actions — on Android dark mode it renders as plain text, not a link.
+//! - **Copy**: English everywhere. Acks: ✅ success / ⏹ stopped /
+//!   🧹 cleared / ⚠️ refused.
+//! - **Trace arrows**: `↑` prompt sent, `↓` completion received
+//!   (user-centric, speedtest-style).
+//! - **Panel titles**: `text_size: "notation"` for stats lines; small is
+//!   enough, don't add grey.
+//! - **Read-back caveat**: the message GET API strips button `behaviors`
+//!   and `text_size` — verify those by rendering and real clicks only.
+
 use crate::types::ContentBlock;
 use futures::{SinkExt, StreamExt};
 use lru::LruCache;

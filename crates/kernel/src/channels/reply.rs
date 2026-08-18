@@ -406,7 +406,7 @@ pub(crate) fn render_card(reply: &FinalReply, notice: Option<&str>) -> Option<St
         let text = crate::utils::strs::truncate_with_suffix(
             &text,
             FINAL_TEXT_MAX_BYTES,
-            "\n\n...(内容已截断)",
+            "\n\n...(truncated)",
         );
         elements.push(json!({ "tag": "markdown", "content": text }));
     }

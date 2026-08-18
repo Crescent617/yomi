@@ -7213,7 +7213,7 @@ async fn tail_shell_output_caps_total_length() {
 
     let tail = tail_shell_output(&path, 40).await;
     assert!(
-        tail.starts_with("…(前面已截断)"),
+        tail.starts_with("…(truncated)"),
         "truncation marker missing"
     );
     assert!(tail.len() <= 16_100, "still too long: {}", tail.len());

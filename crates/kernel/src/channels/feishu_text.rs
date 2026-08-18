@@ -2,9 +2,11 @@
 
 use serde_json::json;
 
-/// Legacy-rendered echo of a schema 2.0 card (real content unavailable).
-pub(crate) const UPGRADE_CLIENT_NOTICE: &str =
-    "Please upgrade your Feishu client to view this content";
+/// Placeholder text Feishu ITSELF substitutes when a client can't render
+/// a card (it shows up in message bodies read back from the API). This
+/// is a platform-generated string we filter against — NOT our own copy;
+/// do not translate or reword it.
+pub(crate) const UPGRADE_CLIENT_NOTICE: &str = "请升级至最新版本客户端，以查看内容";
 
 use super::feishu::FeishuAdapter;
 

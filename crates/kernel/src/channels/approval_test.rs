@@ -230,7 +230,7 @@ fn applicants_formatting() {
     );
     assert_eq!(
         format_applicants(&users(&["ou_a", "ou_b"]), &[], &[]),
-        "<at id=ou_a></at> (and 2 more)"
+        "<at id=ou_a></at> (and 1 more)"
     );
     assert_eq!(
         format_applicants(&users(&["ou_a"]), &users(&["oc_c"]), &users(&["od_d"])),

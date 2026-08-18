@@ -16,7 +16,7 @@ const PERM_LEVELS: &[&str] = &["view", "edit", "full_access"];
 
 /// Usage text for malformed approval commands.
 const APPROVAL_USAGE: &str = "\
-用法：
+Usage:
 `/permits` — list pending requests
 `/approve <id> [view|edit|full_access]` — approve (optionally change level)
 `/deny <id>` — deny";
@@ -324,7 +324,7 @@ async fn resolve(
         let cards_updated = update_notify_cards(adapter, &row).await;
         return Ok(ApprovalReply {
             text: format!(
-                "Approved #{id}: {} granted {effective_perm}",
+                "✅ Approved #{id}: {} granted {effective_perm}",
                 applicant_summary(&row)
             ),
             success: true,
@@ -334,7 +334,7 @@ async fn resolve(
 
     let cards_updated = update_notify_cards(adapter, &row).await;
     Ok(ApprovalReply {
-        text: format!("Denied #{id}: {}", applicant_summary(&row)),
+        text: format!("❌ Denied #{id}: {}", applicant_summary(&row)),
         success: true,
         cards_updated,
     })
@@ -391,7 +391,7 @@ fn format_applicants(users: &[String], chats: &[String], departments: &[String])
         if users.len() == 1 {
             parts.push(mention);
         } else {
-            parts.push(format!("{} (and {} more)", mention, users.len()));
+            parts.push(format!("{} (and {} more)", mention, users.len() - 1));
         }
     }
     parts.extend(chats.iter().map(|c| format!("chat {c}")));

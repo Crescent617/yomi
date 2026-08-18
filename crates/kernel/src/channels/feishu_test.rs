@@ -168,7 +168,7 @@ fn response_for(method: &str, path: &str) -> Vec<u8> {
             "/open-apis/im/v1/messages/om_new" => r#"{"code":0,"msg":"ok","data":{"items":[
                 {"message_id":"om_new","create_time":"1700000000000","msg_type":"interactive","deleted":false,
                  "sender":{"id":"cli_bot","sender_type":"app"},
-                 "body":{"content":"{\"title\":null,\"elements\":[[{\"tag\":\"text\",\"text\":\"Please upgrade your Feishu client to view this content\"}]]}"}}
+                 "body":{"content":"{\"title\":null,\"elements\":[[{\"tag\":\"text\",\"text\":\"请升级至最新版本客户端，以查看内容\"}]]}"}}
             ]}}"#
             .into(),
             // message_link fixtures: chat-level (plain position), in-thread
@@ -758,7 +758,7 @@ fn extract_history_content_reads_card_markdown() {
     // NOT leak — degrade to the placeholder instead.
     let item = json!({
         "msg_type": "interactive",
-        "body": { "content": r#"{"title":null,"elements":[[{"tag":"img","image_key":"img_v3_x"},{"tag":"text","text":"Please upgrade your Feishu client to view this content"},{"tag":"text","text":""}]]}"# }
+        "body": { "content": r#"{"title":null,"elements":[[{"tag":"img","image_key":"img_v3_x"},{"tag":"text","text":"请升级至最新版本客户端，以查看内容"},{"tag":"text","text":""}]]}"# }
     });
     let (text, _) = super::FeishuAdapter::extract_history_content(&item);
     assert_eq!(text, "[interactive]");
@@ -767,7 +767,7 @@ fn extract_history_content_reads_card_markdown() {
     // filtered, the real text survives.
     let item = json!({
         "msg_type": "interactive",
-        "body": { "content": r#"{"title":null,"elements":[[{"tag":"text","text":"真实内容"}],[{"tag":"text","text":"Please upgrade your Feishu client to view this content"}]]}"# }
+        "body": { "content": r#"{"title":null,"elements":[[{"tag":"text","text":"真实内容"}],[{"tag":"text","text":"请升级至最新版本客户端，以查看内容"}]]}"# }
     });
     let (text, _) = super::FeishuAdapter::extract_history_content(&item);
     assert_eq!(text, "真实内容");
@@ -1024,7 +1024,7 @@ fn card_event(chat_type: &str, mentions: serde_json::Value) -> serde_json::Value
                 "message_type": "interactive",
                 "create_time": "1700000000000",
                 "mentions": mentions,
-                "content": "{\"title\":null,\"elements\":[[{\"tag\":\"text\",\"text\":\"Please upgrade your Feishu client to view this content\"}]]}",
+                "content": "{\"title\":null,\"elements\":[[{\"tag\":\"text\",\"text\":\"请升级至最新版本客户端，以查看内容\"}]]}",
             }
         }
     })

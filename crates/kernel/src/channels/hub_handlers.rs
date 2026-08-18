@@ -646,7 +646,7 @@ pub(crate) async fn tail_shell_output(path: &str, max_lines: usize) -> String {
             .chars()
             .skip(tail.chars().count() - MAX_TOTAL_CHARS)
             .collect();
-        format!("…(前面已截断)\n{kept}")
+        format!("…(truncated)\n{kept}")
     } else {
         tail
     }
