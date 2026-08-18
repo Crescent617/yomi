@@ -51,6 +51,9 @@ pub enum Msg {
     RecallQueuedMessage, // Pull queued message back into input for editing (Up / Esc)
     SteerQueuedMessage,  // Promote queued message to steer (Enter again / bare /steer)
 
+    /// Kernel mailbox snapshot arrived (pending steer/queue items).
+    MailboxUpdated(kernel::comms::MailboxSnapshot),
+
     // Notification message with level and duration (shown in InfoBar)
     Notification(Notification),
 

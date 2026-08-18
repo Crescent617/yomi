@@ -105,6 +105,13 @@ impl Conductor {
                         }
                     }
                     match envelope.event {
+                        Event::Agent(AgentEvent::MailboxChanged { steer, queued }) => {
+                            let _ = self.notification_bus.send(Notification::MailboxChanged {
+                                session_id: sid.clone(),
+                                steer,
+                                queued,
+                            });
+                        }
                         Event::Agent(AgentEvent::StateChanged { state }) => {
                             if let Some(agent) = self.active.get(&sid) {
                                 *agent.state.lock().unwrap_or_else(|e| e.into_inner()) = state;

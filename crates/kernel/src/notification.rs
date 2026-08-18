@@ -31,6 +31,13 @@ pub enum Notification {
         event_id: String,
         activity: AgentActivity,
     },
+    /// Mailbox pending counts changed (enqueue/consume/remove/clear) —
+    /// session-list pending badges and mailbox views refresh on this.
+    MailboxChanged {
+        session_id: SessionId,
+        steer: usize,
+        queued: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

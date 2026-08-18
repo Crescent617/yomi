@@ -134,8 +134,9 @@ pub struct Model {
     pub(crate) session_title: Option<String>,
     /// Current permission level (can be changed at runtime via YOLO mode)
     pub(crate) permission_level: Level,
-    /// Queued message waiting to be sent when streaming ends (only one allowed)
-    pub(crate) queued_message: Option<Vec<ContentBlock>>,
+    /// Pending mailbox snapshot for the current session (steer + queued
+    /// items awaiting consumption; refreshed on `MailboxChanged` events).
+    pub(crate) mailbox: kernel::comms::MailboxSnapshot,
     /// Last known terminal size to detect resize events
     pub(crate) last_terminal_size: (u16, u16),
     /// Pending async clipboard read handle.
@@ -197,6 +198,19 @@ pub fn model_picker_items(
         }
     }
     items
+}
+
+/// Flatten a mailbox snapshot for display: steer first, then queue (both
+/// FIFO). Shared by the model's component sync and tests.
+pub(crate) fn merged_pending(
+    snapshot: &kernel::comms::MailboxSnapshot,
+) -> Vec<kernel::comms::MailboxItem> {
+    snapshot
+        .steer
+        .iter()
+        .chain(snapshot.queue.iter())
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]

@@ -28,7 +28,7 @@
   import SidebarToggle from "../layout/SidebarToggle.svelte";
   import PermissionBar from "./PermissionBar.svelte";
   import AskUserBar from "./AskUserBar.svelte";
-  import QueuedInputBar from "./QueuedInputBar.svelte";
+  import PendingBar from "./PendingBar.svelte";
   import ModelSelector from "./ModelSelector.svelte";
   import {
     ChevronDown,
@@ -62,7 +62,7 @@
   import PermissionSelector from "./PermissionSelector.svelte";
 
   import { buildContentBlocks } from "../../types";
-  import { steerQueuedMessage } from "../../queued-messages.svelte";
+  import { steerQueueHead } from "../../mailbox.svelte";
   import { isActiveSessionPhase } from "../../session-phase";
   import {
     guiPreferences,
@@ -683,21 +683,14 @@
     }
   }
 
-  /**
-   * Promote the queued message: steer it into the current run, or send it
-   * as a normal message when the session is idle. Keeps the queue on failure.
-   */
+  /** 把 queue 队首提升为 steer 注入当前 run。 */
   async function steerQueued() {
     const session = activeSession;
     if (!session) return;
-    const streaming = isActiveSessionPhase(session.phase);
     try {
-      const sent = await steerQueuedMessage(session.id, streaming);
+      const sent = await steerQueueHead(session.id);
       if (sent) {
-        showNotification(
-          streaming ? "Steer message queued for next step" : "Message sent",
-          "info",
-        );
+        showNotification("Steer message queued for next step", "info");
       }
     } catch {
       showNotification("Failed to send steer", "error");
@@ -1485,12 +1478,9 @@
           </div>
           <div class="shrink-0 w-full">
             <div class="mx-auto w-full max-w-4xl px-4 lg:px-6">
-              <QueuedInputBar
+              <PendingBar
                 session={activeSession}
                 onEdit={(text) => chatInputRef?.setContent?.(text)}
-                onSteer={() => {
-                  void steerQueued();
-                }}
               />
               <PermissionBar />
               <AskUserBar />

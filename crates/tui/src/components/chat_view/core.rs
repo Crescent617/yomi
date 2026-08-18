@@ -14,7 +14,7 @@ use tuirealm::{
 };
 
 use crate::components::chat_view::message_renderer::{
-    get_message_pretty_json, get_message_raw_content, render_message, render_queued_message,
+    get_message_pretty_json, get_message_raw_content, render_message, render_pending_items,
     render_thinking_lines,
 };
 use crate::components::chat_view::{
@@ -160,8 +160,8 @@ pub struct ChatView {
 
     // Expand all mode (ctrl-o): show all thinking and tool details
     expand_all: bool,
-    // Queued message waiting to be sent (displayed at bottom during streaming)
-    queued_message: Option<Vec<ContentBlock>>,
+    // Pending mailbox items displayed at the bottom (steer + queued)
+    pending_items: Vec<kernel::comms::MailboxItem>,
     // Track visible height for scroll calculations
     last_visible_height: usize,
     // Per-message rendered lines. Replaced on invalidate, pushed on new msg.
@@ -203,7 +203,7 @@ impl Default for ChatView {
             md_renderer: StreamingMarkdownRenderer::new(),
 
             expand_all: false,
-            queued_message: None,
+            pending_items: Vec::new(),
             last_visible_height: 0,
             msg_cache: Vec::new(),
             flat_lines: Vec::new(),
@@ -296,14 +296,9 @@ impl ChatView {
         self.is_selecting = false;
     }
 
-    /// Set queued message to display during streaming
-    pub fn set_queued_message(&mut self, blocks: Vec<ContentBlock>) {
-        self.queued_message = Some(blocks);
-    }
-
-    /// Clear the queued message
-    pub fn clear_queued_message(&mut self) {
-        self.queued_message = None;
+    /// Set the pending mailbox items (steer + queued) to display.
+    pub fn set_pending_items(&mut self, items: Vec<kernel::comms::MailboxItem>) {
+        self.pending_items = items;
     }
 
     pub fn add_user_message(&mut self, content_blocks: Vec<ContentBlock>) {
@@ -1286,8 +1281,9 @@ impl Component for ChatView {
             let streaming_lines = self.render_streaming(width);
             self.all_lines.extend(streaming_lines);
         }
-        if let Some(ref queued) = self.queued_message {
-            self.all_lines.extend(render_queued_message(queued));
+        if !self.pending_items.is_empty() {
+            self.all_lines
+                .extend(render_pending_items(&self.pending_items));
         }
 
         // 3. Rebuild wrap cache
@@ -1360,7 +1356,7 @@ impl Component for ChatView {
             }
             Attribute::Custom(attr::IS_EMPTY) => {
                 let empty =
-                    self.messages.is_empty() && !self.is_streaming && self.queued_message.is_none();
+                    self.messages.is_empty() && !self.is_streaming && self.pending_items.is_empty();
                 Some(QueryResult::Owned(AttrValue::Flag(empty)))
             }
             _ => self
@@ -1492,19 +1488,16 @@ impl Component for ChatView {
                 self.clear_all_caches();
                 self.messages.clear();
                 self.scroll_offset = 0;
-                self.queued_message = None;
+                self.pending_items.clear();
             }
-            attr::SET_QUEUED_MESSAGE => {
-                if let AttrValue::String(blocks_json) = value {
-                    if let Ok(content_blocks) =
-                        serde_json::from_str::<Vec<ContentBlock>>(&blocks_json)
+            attr::SET_PENDING_ITEMS => {
+                if let AttrValue::String(items_json) = value {
+                    if let Ok(items) =
+                        serde_json::from_str::<Vec<kernel::comms::MailboxItem>>(&items_json)
                     {
-                        self.set_queued_message(content_blocks);
+                        self.set_pending_items(items);
                     }
                 }
-            }
-            attr::CLEAR_QUEUED_MESSAGE => {
-                self.clear_queued_message();
             }
             attr::INIT_SUBAGENT => {
                 if let AttrValue::String(text) = value {

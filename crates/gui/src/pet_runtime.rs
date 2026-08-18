@@ -259,6 +259,11 @@ fn apply_notification(
             // The caller refreshes the authoritative running-session snapshot.
             false
         }
+        Notification::MailboxChanged { .. } => {
+            // Mailbox state doesn't shape pet behavior; the chat view
+            // consumes the same notification for its pending rendering.
+            false
+        }
         Notification::AgentActivity {
             session_id,
             event_id,

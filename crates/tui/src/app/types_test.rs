@@ -59,3 +59,34 @@ fn test_format_short_id() {
     assert_eq!(format_short_id("123456789012"), "123456789012");
     assert_eq!(format_short_id("1234567890123456"), "123456...3456");
 }
+
+// ── merged_pending ────────────────────────────────────────────────────
+
+use super::merged_pending;
+use kernel::comms::{MailboxItem, MailboxItemKind, MailboxSnapshot};
+use kernel::types::MailboxItemId;
+
+fn item(kind: MailboxItemKind, preview: &str) -> MailboxItem {
+    MailboxItem {
+        id: MailboxItemId::new(),
+        kind,
+        preview: preview.to_string(),
+        text: Some(preview.to_string()),
+        blocks_len: 1,
+        enqueued_at: chrono::Utc::now(),
+    }
+}
+
+#[test]
+fn merged_pending_is_steer_first_then_fifo_queue() {
+    let snapshot = MailboxSnapshot {
+        steer: vec![item(MailboxItemKind::Steer, "s1")],
+        queue: vec![
+            item(MailboxItemKind::Queue, "q1"),
+            item(MailboxItemKind::Queue, "q2"),
+        ],
+    };
+    let merged = merged_pending(&snapshot);
+    let previews: Vec<&str> = merged.iter().map(|i| i.preview.as_str()).collect();
+    assert_eq!(previews, ["s1", "q1", "q2"]);
+}

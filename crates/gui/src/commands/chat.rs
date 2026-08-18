@@ -360,6 +360,44 @@ pub async fn send_steer(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn mailbox_snapshot(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<kernel::comms::MailboxSnapshot, GuiError> {
+    let coord = state.kernel_snapshot();
+    let sid = SessionId::from(session_id);
+    coord.mailbox_snapshot(&sid).await.map_err(GuiError::kernel)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn remove_mailbox_item(
+    state: State<'_, AppState>,
+    session_id: String,
+    item_id: String,
+) -> Result<bool, GuiError> {
+    let coord = state.kernel_snapshot();
+    let sid = SessionId::from(session_id);
+    coord
+        .remove_mailbox_item(&sid, &item_id)
+        .await
+        .map_err(GuiError::kernel)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn steer_mailbox_item(
+    state: State<'_, AppState>,
+    session_id: String,
+    item_id: String,
+) -> Result<bool, GuiError> {
+    let coord = state.kernel_snapshot();
+    let sid = SessionId::from(session_id);
+    coord
+        .steer_mailbox_item(&sid, &item_id)
+        .await
+        .map_err(GuiError::kernel)
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn continue_session(
     state: State<'_, AppState>,
     session_id: String,

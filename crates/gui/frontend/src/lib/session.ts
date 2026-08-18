@@ -1,6 +1,7 @@
 import * as api from "./api";
 import type { SessionMessage } from "./api";
 import type { TaggedContentBlock } from "./types";
+import { refreshMailbox } from "./mailbox.svelte";
 import {
   getSession,
   pinnedSessionMeta,
@@ -174,6 +175,7 @@ export function setActiveSession(id: string | null) {
   if (id) {
     streamingMessages[id] = [];
     api.subscribe(id, null).catch(() => {});
+    void refreshMailbox(id);
     const nextSession = getSession(id);
     if (nextSession) {
       nextSession.streaming_tool_name = undefined;

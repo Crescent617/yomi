@@ -270,6 +270,14 @@ impl KernelServer {
                 let removed = self.kernel.remove_mailbox_item(&sid, &item_id).await;
                 ok_body(serde_json::json!({ "removed": removed }))
             }
+            ReqMethod::SteerMailboxItem {
+                session_id,
+                item_id,
+            } => {
+                let sid = SessionId::from(session_id);
+                let moved = self.kernel.steer_mailbox_item(&sid, &item_id).await;
+                ok_body(serde_json::json!({ "moved": moved }))
+            }
             ReqMethod::ClearMailbox { session_id, scope } => {
                 let sid = SessionId::from(session_id);
                 let removed = self.kernel.clear_mailbox(&sid, scope).await;

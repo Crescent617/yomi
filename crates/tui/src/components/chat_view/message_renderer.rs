@@ -824,40 +824,48 @@ pub fn extract_text_from_blocks(blocks: &[ContentBlock]) -> String {
         .join("\n")
 }
 
-/// Render queued message to be displayed at the bottom during streaming
-pub fn render_queued_message(blocks: &[ContentBlock]) -> Vec<Arc<Line<'static>>> {
-    const MAX_LINES: usize = 3;
+/// Render pending mailbox items (steer + queued) at the bottom: one
+/// header plus a row per item (kind marker + preview), capped with an
+/// overflow hint.
+pub fn render_pending_items(items: &[kernel::comms::MailboxItem]) -> Vec<Arc<Line<'static>>> {
+    const MAX_ROWS: usize = 3;
     let mut lines = Vec::new();
 
-    let text_content = extract_text_from_blocks(blocks);
-
-    // Render header with indicator
     lines.push(Arc::new(Line::from(vec![Span::styled(
-        "󰔟 Queued (Enter again: steer · ↑/Esc: edit · auto-send at stream end)",
+        format!(
+            "󰔟 Pending ({}) (Enter again: steer · ↑/Esc: edit · auto-send at stream end)",
+            items.len()
+        ),
         Style::default()
             .fg(colors::text_secondary())
             .add_modifier(Modifier::ITALIC),
     )])));
 
-    // Render content with dimmed style (max 3 lines, show ... if more)
-    for (i, line) in text_content.lines().take(MAX_LINES + 1).enumerate() {
-        if i >= MAX_LINES {
+    for (i, item) in items.iter().enumerate() {
+        if i >= MAX_ROWS {
             lines.push(Arc::new(Line::from(vec![
                 Span::styled(
                     chars::MSG_INDENT_GUIDE,
                     Style::default().fg(colors::text_secondary()),
                 ),
-                Span::styled("...", Style::default().fg(colors::text_secondary())),
+                Span::styled(
+                    format!("… and {} more", items.len() - MAX_ROWS),
+                    Style::default().fg(colors::text_secondary()),
+                ),
             ])));
             break;
         }
+        let marker = match item.kind {
+            kernel::comms::MailboxItemKind::Steer => "↳ steer",
+            kernel::comms::MailboxItemKind::Queue => "⏱ queue",
+        };
         lines.push(Arc::new(Line::from(vec![
             Span::styled(
                 chars::MSG_INDENT_GUIDE,
                 Style::default().fg(colors::text_secondary()),
             ),
             Span::styled(
-                preprocess(line),
+                format!("{marker} · {}", preprocess(&item.preview)),
                 Style::default().fg(colors::text_secondary()),
             ),
         ])));

@@ -1290,6 +1290,23 @@ impl Kernel {
         removed
     }
 
+    /// Promote a queued user message to a steer (atomic server-side move —
+    /// the content never round-trips through the client). Returns false
+    /// when the item is gone or not a queued user message.
+    pub async fn steer_mailbox_item(&self, session_id: &SessionId, item_id: &str) -> bool {
+        let Some(mb) = self.conductor.mailbox(session_id) else {
+            return false;
+        };
+        let Some(AgentInput::User { content }) =
+            mb.take(&crate::types::MailboxItemId::from(item_id)).await
+        else {
+            return false;
+        };
+        mb.push_steer(mark_user_steer(content)).await;
+        self.conductor.emit_mailbox_changed(session_id, &mb).await;
+        true
+    }
+
     /// Clear pending items by scope without cancelling the agent (unlike
     /// `cancel`, which clears both queues AND stops the run). Returns
     /// the number removed.

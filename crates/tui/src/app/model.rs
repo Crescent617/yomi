@@ -8,7 +8,7 @@ use tuirealm::{
     terminal::{CrosstermTerminalAdapter, TerminalAdapter},
 };
 
-use crate::{attr, components::info_bar::Notification, id::Id};
+use crate::{attr, components::info_bar::Notification, id::Id, msg::Msg};
 use kernel::client::KernelApi;
 use kernel::comms::EventBusSubscriber;
 use kernel::event::Command;
@@ -50,7 +50,7 @@ impl Model {
 
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        Ok(Self {
+        let model = Self {
             app,
             state: AppState {
                 quit: false,
@@ -77,7 +77,7 @@ impl Model {
             session_id,
             session_title: None,
             permission_level: crate::config().auto_approve,
-            queued_message: None,
+            mailbox: kernel::comms::MailboxSnapshot::default(),
             last_terminal_size: (0, 0),
             clipboard_handle: None,
             signal_quit: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -88,7 +88,9 @@ impl Model {
             context_window: 0,
             active_subagents: std::collections::HashSet::new(),
             background_shell_count: 0,
-        })
+        };
+        model.refresh_mailbox();
+        Ok(model)
     }
 
     /// Show an ask-user question in the select dialog.
@@ -461,22 +463,69 @@ impl Model {
         self.state.should_redraw = true;
     }
 
-    /// Set a queued message to be sent when streaming ends
-    pub(crate) fn set_queued_message(&mut self, blocks: Vec<ContentBlock>) {
-        // Check if there's already a queued message
-        if self.queued_message.is_some() {
-            tracing::info!("Overwriting existing queued message with new one");
-        }
-        // Serialize the queued message for display in ChatView
-        let blocks_json = serde_json::to_string(&blocks).unwrap_or_default();
+    // ── Pending mailbox（kernel 管理面；本地不再持有队列） ─────────────
+
+    /// Refresh the pending-mailbox snapshot (session start/switch and on
+    /// every `MailboxChanged` event).
+    pub(crate) fn refresh_mailbox(&self) {
+        let kernel = Arc::clone(&self.kernel);
+        let sid = kernel::types::SessionId::from(self.session_id.clone());
+        let tx = self.cmd_tx.clone();
+        tokio::spawn(async move {
+            if let Ok(snapshot) = kernel.mailbox_snapshot(&sid).await {
+                let _ = tx.send(Msg::MailboxUpdated(snapshot));
+            }
+        });
+    }
+
+    /// Apply a fresh snapshot to state + dependent components.
+    pub(crate) fn apply_mailbox(&mut self, snapshot: kernel::comms::MailboxSnapshot) {
+        self.mailbox = snapshot;
+        let items = super::types::merged_pending(&self.mailbox);
         if let Err(e) = self.app.attr(
             &Id::ChatView,
-            Attribute::Custom(attr::SET_QUEUED_MESSAGE),
-            AttrValue::String(blocks_json),
+            Attribute::Custom(attr::SET_PENDING_ITEMS),
+            AttrValue::String(serde_json::to_string(&items).unwrap_or_default()),
         ) {
-            tracing::warn!("Failed to set queued message in ChatView: {}", e);
+            tracing::warn!("Failed to set pending items in ChatView: {}", e);
         }
-        // Update InputComponent to know there's a queued message
+        if let Err(e) = self.app.attr(
+            &Id::InputBox,
+            Attribute::Custom(attr::HAS_QUEUED_MESSAGE),
+            AttrValue::Flag(!self.mailbox.queue.is_empty()),
+        ) {
+            tracing::warn!("Failed to set has_queued_message in InputBox: {}", e);
+        }
+        self.state.should_redraw = true;
+    }
+
+    /// The queue head — the item local gestures act on (FIFO oldest).
+    fn queue_head(&self) -> Option<&kernel::comms::MailboxItem> {
+        self.mailbox.queue.first()
+    }
+
+    /// Queue a message for when the run ends (Enter while streaming).
+    /// Single-slot semantics preserved: an existing queued message is
+    /// replaced (the TUI's historical overwrite behavior).
+    pub(crate) fn queue_for_idle(&mut self, blocks: Vec<ContentBlock>) {
+        let kernel = Arc::clone(&self.kernel);
+        let sid = kernel::types::SessionId::from(self.session_id.clone());
+        let input_tx = self.input_tx.clone();
+        let old = self.queue_head().map(|i| i.id.clone());
+        tokio::spawn(async move {
+            if let Some(id) = old {
+                let _ = kernel.remove_mailbox_item(&sid, id.as_str()).await;
+            }
+            if let Err(e) = input_tx.send(blocks).await {
+                tracing::warn!("Failed to send queued message to kernel: {}", e);
+            }
+        });
+        // Optimistically mark the input hint now (the old local-queue code
+        // did this synchronously): the authoritative sync rides the
+        // MailboxChanged event, but the gesture window would otherwise let
+        // a fast double-Enter slip through. Residual: an overwrite within
+        // that window can't know the previous item's id yet, so both
+        // briefly coexist until the snapshot lands (user can retract).
         if let Err(e) = self.app.attr(
             &Id::InputBox,
             Attribute::Custom(attr::HAS_QUEUED_MESSAGE),
@@ -484,104 +533,61 @@ impl Model {
         ) {
             tracing::warn!("Failed to set has_queued_message in InputBox: {}", e);
         }
-        self.queued_message = Some(blocks);
         self.state.should_redraw = true;
     }
 
-    /// Take the queued message out, clearing its display state in ChatView/InputBox.
-    fn take_queued_message(&mut self) -> Option<Vec<ContentBlock>> {
-        let blocks = self.queued_message.take()?;
-        if let Err(e) = self.app.attr(
-            &Id::ChatView,
-            Attribute::Custom(attr::CLEAR_QUEUED_MESSAGE),
-            AttrValue::Flag(true),
-        ) {
-            tracing::warn!("Failed to clear queued message in ChatView: {}", e);
-        }
-        if let Err(e) = self.app.attr(
-            &Id::InputBox,
-            Attribute::Custom(attr::HAS_QUEUED_MESSAGE),
-            AttrValue::Flag(false),
-        ) {
-            tracing::warn!("Failed to clear has_queued_message in InputBox: {}", e);
-        }
-        self.state.should_redraw = true;
-        Some(blocks)
-    }
-
-    /// Clear the queued message (e.g., when session is interrupted)
-    pub(crate) fn clear_queued_message(&mut self) {
-        self.take_queued_message();
-    }
-
-    /// Send the queued message if any, returns true if a message was sent
-    pub(crate) fn send_queued_message(&mut self) -> bool {
-        if let Some(blocks) = self.take_queued_message() {
-            // Send to kernel (streaming will be started by ModelEvent::Request)
-            if let Err(e) = self.input_tx.try_send(blocks) {
-                tracing::error!("Failed to send queued message to kernel: {}", e);
-            }
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Promote the queued message to a steer message (Enter again / bare `/steer`).
-    ///
-    /// While streaming, the message is injected before the next streaming step.
-    /// When idle, a steer would sit in the mailbox until the next run, so the
-    /// message is sent normally instead.
+    /// Promote the queue head to a steer (Enter again / bare `/steer`) —
+    /// an atomic server-side move, so the content never round-trips.
     pub(crate) fn steer_queued_message(&mut self) {
-        let Some(blocks) = self.take_queued_message() else {
+        let Some(head) = self.queue_head() else {
             self.show_notification(&Notification::info(
                 "No queued message — usage: /steer <content>",
                 3000,
             ));
             return;
         };
-        if self.state.is_streaming {
-            match self.ctrl_tx.try_send(Command::Steer { content: blocks }) {
-                Ok(()) => {
-                    self.show_notification(&Notification::info(
-                        "Steer message queued for next step",
-                        3000,
-                    ));
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to send steer command: {}", e);
-                    // Restore so the message is not lost
-                    if let Command::Steer { content } = e.into_inner() {
-                        self.set_queued_message(content);
-                    }
-                    self.show_notification(&Notification::error(
-                        "Failed to send steer. Session may be disconnected.",
-                        5000,
-                    ));
-                }
+        let kernel = Arc::clone(&self.kernel);
+        let sid = kernel::types::SessionId::from(self.session_id.clone());
+        let id = head.id.clone();
+        tokio::spawn(async move {
+            if let Err(e) = kernel.steer_mailbox_item(&sid, id.as_str()).await {
+                tracing::warn!("Failed to steer mailbox item: {}", e);
             }
-        } else if let Err(e) = self.input_tx.try_send(blocks) {
-            tracing::warn!("Failed to send message: {}", e);
-            // Restore so the message is not lost
-            self.set_queued_message(e.into_inner());
-            self.show_notification(&Notification::error(
-                "Failed to send message. Session may be disconnected.",
-                5000,
-            ));
-        } else {
-            self.show_notification(&Notification::info("Queued message sent", 3000));
-        }
+        });
+        // Fire-and-forget like the old ctrl channel: the panel confirms
+        // via the change event.
+        self.show_notification(&Notification::info(
+            "Steer message queued for next step",
+            3000,
+        ));
     }
 
-    /// Pull the queued message back into the input box for editing (Up / Esc).
+    /// Pull the queue head back into the input box for editing (Up / Esc).
     pub(crate) fn recall_queued_message(&mut self) {
-        let Some(blocks) = self.take_queued_message() else {
+        let Some(head) = self.queue_head() else {
             return;
         };
-        let has_attachments = blocks
-            .iter()
-            .any(|b| !matches!(b, ContentBlock::Text { .. }));
-        let text = crate::components::chat_view::extract_text_from_blocks(&blocks);
+        let text = head.text.clone().unwrap_or_else(|| head.preview.clone());
+        let has_attachments = head.blocks_len > 1;
+        let kernel = Arc::clone(&self.kernel);
+        let sid = kernel::types::SessionId::from(self.session_id.clone());
+        let id = head.id.clone();
+        tokio::spawn(async move {
+            if let Err(e) = kernel.remove_mailbox_item(&sid, id.as_str()).await {
+                tracing::warn!("Failed to retract mailbox item: {}", e);
+            }
+        });
+        // Same optimistic hint sync as queue_for_idle: recalling the only
+        // queued item clears the flag ahead of the event.
+        if self.mailbox.queue.len() <= 1 {
+            if let Err(e) = self.app.attr(
+                &Id::InputBox,
+                Attribute::Custom(attr::HAS_QUEUED_MESSAGE),
+                AttrValue::Flag(false),
+            ) {
+                tracing::warn!("Failed to clear has_queued_message in InputBox: {}", e);
+            }
+        }
         let _ = self.app.attr(
             &Id::InputBox,
             Attribute::Custom(attr::INPUT_CONTENT),

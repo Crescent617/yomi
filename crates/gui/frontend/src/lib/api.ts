@@ -665,6 +665,51 @@ export async function sendSteer(
   return invokeCmd("send_steer", { session_id: session_id, blocks });
 }
 
+// ── Mailbox（pending 消息管理面） ──
+
+export interface MailboxItem {
+  id: string;
+  kind: "steer" | "queue";
+  /** 展示用预览（拍平截断） */
+  preview: string;
+  /** 首个文本块全文（编辑重发用），非文本消息为 null */
+  text: string | null;
+  blocks_len: number;
+  enqueued_at: string;
+}
+
+export interface MailboxSnapshot {
+  steer: MailboxItem[];
+  queue: MailboxItem[];
+}
+
+export async function mailboxSnapshot(
+  session_id: string,
+): Promise<MailboxSnapshot> {
+  return invokeCmd("mailbox_snapshot", { session_id: session_id });
+}
+
+export async function removeMailboxItem(
+  session_id: string,
+  item_id: string,
+): Promise<boolean> {
+  return invokeCmd("remove_mailbox_item", {
+    session_id: session_id,
+    item_id: item_id,
+  });
+}
+
+/** 把排队消息提升为 steer（服务端原子移动，内容不经客户端往返） */
+export async function steerMailboxItem(
+  session_id: string,
+  item_id: string,
+): Promise<boolean> {
+  return invokeCmd("steer_mailbox_item", {
+    session_id: session_id,
+    item_id: item_id,
+  });
+}
+
 export async function continueSession(session_id: string): Promise<void> {
   return invokeCmd("continue_session", { session_id: session_id });
 }

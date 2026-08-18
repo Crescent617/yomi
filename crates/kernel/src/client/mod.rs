@@ -207,6 +207,8 @@ pub trait KernelApi: Send + Sync {
     /// Retract one pending mailbox item (best-effort: already consumed
     /// → false).
     async fn remove_mailbox_item(&self, session_id: &SessionId, item_id: &str) -> Result<bool>;
+    /// Promote a queued user message to a steer (atomic server-side move).
+    async fn steer_mailbox_item(&self, session_id: &SessionId, item_id: &str) -> Result<bool>;
     /// Clear pending mailbox items by scope without cancelling the run.
     /// Returns the number removed.
     async fn clear_mailbox(
@@ -557,6 +559,10 @@ impl KernelApi for Kernel {
 
     async fn remove_mailbox_item(&self, session_id: &SessionId, item_id: &str) -> Result<bool> {
         Ok(Self::remove_mailbox_item(self, session_id, item_id).await)
+    }
+
+    async fn steer_mailbox_item(&self, session_id: &SessionId, item_id: &str) -> Result<bool> {
+        Ok(Self::steer_mailbox_item(self, session_id, item_id).await)
     }
 
     async fn clear_mailbox(
@@ -1739,6 +1745,16 @@ impl KernelApi for RemoteKernel {
             })
             .await?;
         Ok(value["removed"].as_bool().unwrap_or(false))
+    }
+
+    async fn steer_mailbox_item(&self, session_id: &SessionId, item_id: &str) -> Result<bool> {
+        let value = self
+            .call(ReqMethod::SteerMailboxItem {
+                session_id: session_id.0.to_string(),
+                item_id: item_id.to_string(),
+            })
+            .await?;
+        Ok(value["moved"].as_bool().unwrap_or(false))
     }
 
     async fn clear_mailbox(

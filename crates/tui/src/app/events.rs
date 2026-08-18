@@ -419,6 +419,10 @@ impl Model {
                     ));
                     self.state.should_redraw = true;
                 }
+                // Mailbox 内容变化（入队/消费/撤回/清空）→ 刷新 pending 快照。
+                Event::Agent(kernel::event::AgentEvent::MailboxChanged { .. }) => {
+                    self.refresh_mailbox();
+                }
                 // Messages were replaced wholesale (rewind/undo, /clear, or
                 // compaction) — reload the full history from the kernel.
                 Event::Agent(kernel::event::AgentEvent::MessageReplaced { .. }) => {

@@ -59,8 +59,6 @@ impl Model {
                     Attribute::Custom(attr::STOP_STREAMING),
                     AttrValue::Flag(true),
                 );
-                // Send queued message if any
-                self.send_queued_message();
             }
             StreamingStatus::Cancelled
             | StreamingStatus::Failed
@@ -76,8 +74,10 @@ impl Model {
                     Attribute::Custom(attr::CANCEL_STREAMING),
                     AttrValue::Flag(true),
                 );
-                // Clear queued message on interruption
-                self.clear_queued_message();
+                // 中断时 TUI 不再清 pending：cancel 由 kernel 侧清空
+                // mailbox（并经 MailboxChanged 刷新面板）；Failed/
+                // MaxIterations 留下的排队消息按 mailbox 语义在 idle
+                // 后照常消费。
             }
         }
         self.clear_streaming_state();

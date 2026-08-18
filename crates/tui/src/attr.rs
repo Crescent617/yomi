@@ -39,12 +39,10 @@ pub const APPEND_THINKING: &str = "append_thinking";
 // Queued Message
 // =============================================================================
 
-/// Attribute for setting queued message.
-pub const SET_QUEUED_MESSAGE: &str = "set_queued_message";
-/// Attribute for clearing queued message.
-pub const CLEAR_QUEUED_MESSAGE: &str = "clear_queued_message";
 /// Attribute for setting whether there's a queued message.
 pub const HAS_QUEUED_MESSAGE: &str = "has_queued_message";
+/// Feed the ChatView the pending mailbox items (JSON `Vec<MailboxItem>`).
+pub const SET_PENDING_ITEMS: &str = "set_pending_items";
 
 // =============================================================================
 // Scrolling

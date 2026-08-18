@@ -62,8 +62,9 @@ impl Model {
 
                     // Check if we're currently streaming
                     if self.state.is_streaming {
-                        // Queue the message to be sent when streaming ends (only one allowed)
-                        self.set_queued_message(blocks);
+                        // Queue into the kernel mailbox (single-slot
+                        // overwrite semantics preserved).
+                        self.queue_for_idle(blocks);
                     } else if let Err(e) = self.input_tx.try_send(blocks) {
                         tracing::warn!("Failed to send input: {}", e);
                         self.show_notification(&Notification::error(
@@ -75,7 +76,7 @@ impl Model {
                 }
                 Msg::InputEnterEmpty => {
                     // "Enter again" gesture: empty input steers the queued message
-                    if self.queued_message.is_some() {
+                    if !self.mailbox.queue.is_empty() {
                         self.steer_queued_message();
                     }
                     None
@@ -118,6 +119,10 @@ impl Model {
                 }
                 Msg::SteerQueuedMessage => {
                     self.steer_queued_message();
+                    None
+                }
+                Msg::MailboxUpdated(snapshot) => {
+                    self.apply_mailbox(snapshot);
                     None
                 }
                 Msg::Redraw => {

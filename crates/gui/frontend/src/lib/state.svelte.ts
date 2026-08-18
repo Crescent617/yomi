@@ -26,9 +26,10 @@ import {
   setSessionPhase,
 } from "./session-phase";
 import {
-  clearQueuedMessage,
-  flushQueuedMessage,
-} from "./queued-messages.svelte";
+  mailboxBySession,
+  onMailboxChanged,
+  pendingCounts,
+} from "./mailbox.svelte";
 
 // ── Kernel notification listener ─────────────────────────────────────────
 
@@ -175,6 +176,11 @@ export async function startNotificationListener(): Promise<() => void> {
           session_id: string;
           activity: { kind: string; reason?: StopReason };
         };
+        mailbox_changed?: {
+          session_id: string;
+          steer: number;
+          queued: number;
+        };
       };
     }) => {
       const payload = e.payload;
@@ -201,19 +207,14 @@ export async function startNotificationListener(): Promise<() => void> {
         if (session_id.startsWith("sub_")) refreshSubagentParent(session_id);
         void refreshRunningSessions();
       }
-      if (payload.agent_activity) {
-        const { session_id, activity } = payload.agent_activity;
-        // Auto-send the queued message only after a successful run; on
-        // failure/cancel it stays queued for the user to review.
-        if (
-          activity.kind === "stopped" &&
-          activity.reason &&
-          "completed" in activity.reason
-        ) {
-          void flushQueuedMessage(session_id).then((ok) => {
-            if (!ok) showNotification("Failed to send queued message", "error");
-          });
-        }
+      if (payload.mailbox_changed) {
+        const { session_id, steer, queued } = payload.mailbox_changed;
+        onMailboxChanged(
+          session_id,
+          steer,
+          queued,
+          sessionState.activeSessionId,
+        );
       }
       if (payload.title_updated) {
         const { session_id, title } = payload.title_updated;
@@ -634,7 +635,8 @@ export const inputDrafts = $state<Record<string, string>>({});
  * so stale entries never linger or resurface for a reused id.
  */
 export function purgeSessionLocalState(sessionId: string): void {
-  clearQueuedMessage(sessionId);
+  delete mailboxBySession[sessionId];
+  delete pendingCounts[sessionId];
   delete inputDrafts[sessionId];
   delete unreadSessions[sessionId];
   delete pinnedSessionMeta[sessionId];

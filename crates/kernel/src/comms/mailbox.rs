@@ -41,11 +41,14 @@ pub enum MailboxItemKind {
 }
 
 /// 快照里的单条 pending 项（wire payload；预览在入队内容里截取）。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MailboxItem {
     pub id: MailboxItemId,
     pub kind: MailboxItemKind,
+    /// 展示用预览（拍平 + ≤80 字符）。
     pub preview: String,
+    /// 首个文本块的全文（供前端"编辑后重发"）；非文本消息为 None。
+    pub text: Option<String>,
     pub blocks_len: usize,
     pub enqueued_at: chrono::DateTime<chrono::Utc>,
 }
@@ -62,26 +65,28 @@ pub enum MailboxScope {
 }
 
 /// 双队列快照：steer + queue（用户消息），均按 FIFO。
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MailboxSnapshot {
     pub steer: Vec<MailboxItem>,
     pub queue: Vec<MailboxItem>,
 }
 
-/// 从内容块里取预览：首个文本块拍平截断。
-fn preview_of(blocks: &[ContentBlock]) -> (String, usize) {
+/// 从内容块里取预览与全文：首个文本块；预览拍平截断。
+fn texts_of(blocks: &[ContentBlock]) -> (String, Option<String>, usize) {
     let text = blocks.iter().find_map(|b| match b {
-        ContentBlock::Text { text } => Some(text.as_str()),
+        ContentBlock::Text { text } => Some(text.clone()),
         _ => None,
     });
-    let flat = text.map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "));
+    let flat = text
+        .as_deref()
+        .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "));
     let preview = match flat {
         Some(f) if f.chars().count() > 80 => format!("{}…", f.chars().take(79).collect::<String>()),
         Some(f) => f,
         None if blocks.is_empty() => String::new(),
         None => "[non-text content]".to_string(),
     };
-    (preview, blocks.len())
+    (preview, text, blocks.len())
 }
 
 impl fmt::Debug for Mailbox {
@@ -171,11 +176,12 @@ impl Mailbox {
                 AgentInput::Steer(blocks) | AgentInput::User { content: blocks } => blocks,
                 _ => return None,
             };
-            let (preview, blocks_len) = preview_of(blocks);
+            let (preview, text, blocks_len) = texts_of(blocks);
             Some(MailboxItem {
                 id: entry.id.clone(),
                 kind,
                 preview,
+                text,
                 blocks_len,
                 enqueued_at: entry.enqueued_at,
             })
@@ -199,17 +205,22 @@ impl Mailbox {
 
     /// 撤回一条 pending（best-effort：已被消费则 false）。
     pub async fn remove(&self, id: &MailboxItemId) -> bool {
-        let mut q = self.steer.lock().await;
-        let before = q.len();
-        q.retain(|e| &e.id != id);
-        if q.len() < before {
-            return true;
+        {
+            let mut q = self.steer.lock().await;
+            if let Some(index) = q.iter().position(|e| &e.id == id) {
+                q.remove(index);
+                return true;
+            }
         }
-        drop(q);
+        self.take(id).await.is_some()
+    }
+
+    /// 从 normal 队列取出一条（移动语义；steer 队列不参与——steer 已
+    /// 是最高优先，没有"再提升"的对象）。
+    pub async fn take(&self, id: &MailboxItemId) -> Option<AgentInput> {
         let mut q = self.normal.lock().await;
-        let before = q.len();
-        q.retain(|e| &e.id != id);
-        q.len() < before
+        let index = q.iter().position(|e| &e.id == id)?;
+        Some(q.remove(index).expect("index from position").input)
     }
 
     /// 按范围清空（管理面操作；不同于 cancel 的全清，不影响 agent 运行）。

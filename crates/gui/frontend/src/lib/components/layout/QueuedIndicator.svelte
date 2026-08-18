@@ -1,9 +1,10 @@
 <script lang="ts">
   import { Send } from "lucide-svelte";
-  import { queuedMessages } from "../../queued-messages.svelte";
+  import { pendingOf } from "../../mailbox.svelte";
 
   /**
-   * Queued-message indicator for session lists.
+   * Pending indicator for session lists (event-driven: the mailbox_changed
+   * notification keeps the counts fresh).
    * - icon: small send glyph for list rows
    * - dot: corner badge for avatar stacks
    */
@@ -15,10 +16,10 @@
     variant?: "icon" | "dot";
   } = $props();
 
-  const queued = $derived(!!queuedMessages[session_id]);
+  const pending = $derived(pendingOf(session_id) > 0);
 </script>
 
-{#if queued}
+{#if pending}
   {#if variant === "dot"}
     <span
       class="absolute -bottom-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-muted-foreground ring-2 ring-card"

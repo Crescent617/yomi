@@ -17,11 +17,7 @@
     showNotification,
     inputDrafts,
   } from "../../state.svelte";
-  import {
-    queueMessage,
-    queuedMessages,
-    steerQueuedMessage,
-  } from "../../queued-messages.svelte";
+  import { enqueue, queueHead, steerQueueHead } from "../../mailbox.svelte";
   import { forkSession, textFromBlocks } from "../../session";
   import { isActiveSessionPhase } from "../../session-phase";
   import { SLASH_COMMANDS } from "../../commands";
@@ -195,10 +191,10 @@
     requestAnimationFrame(autoResize);
   }
 
-  /** Steer the queued message into the current run; keeps the queue on failure. */
+  /** Steer the queued message into the current run. */
   async function steerQueued(sessionId: string) {
     try {
-      const sent = await steerQueuedMessage(sessionId, true);
+      const sent = await steerQueueHead(sessionId);
       if (sent) {
         showNotification("Steer message queued for next step", "info");
       }
@@ -207,29 +203,33 @@
     }
   }
 
-  function queueInput() {
+  async function queueInput() {
     if (isSending) return;
     const session = activeSession;
     if (!session || !content.trim()) return;
     const text = content.trim();
-    const queued = queueMessage(session.id, {
-      text,
-      blocks:
+    try {
+      const queued = await enqueue(
+        session.id,
+        text,
         inlineImages.length > 0
           ? buildContentBlocks(text, inlineImages)
           : undefined,
-    });
-    if (!queued) {
-      showNotification(
-        "A message is already queued — edit or cancel it first",
-        "warning",
       );
-      return;
+      if (!queued) {
+        showNotification(
+          "A message is already queued — edit or cancel it first",
+          "warning",
+        );
+        return;
+      }
+      content = "";
+      clearInlineImages();
+      fileAttachments = [];
+      autoResize();
+    } catch {
+      showNotification("Failed to queue the message", "error");
     }
-    content = "";
-    clearInlineImages();
-    fileAttachments = [];
-    autoResize();
   }
 
   function openHistoryPicker() {
@@ -730,7 +730,7 @@
           session &&
           !text &&
           inlineImages.length === 0 &&
-          queuedMessages[session.id]
+          queueHead(session.id)
         ) {
           void steerQueued(session.id);
         } else {

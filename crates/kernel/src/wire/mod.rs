@@ -167,6 +167,12 @@ pub enum ReqMethod {
         session_id: String,
         item_id: String,
     },
+    /// Promote a queued user message to a steer (atomic server-side
+    /// move). Result: `{ moved: bool }`.
+    SteerMailboxItem {
+        session_id: String,
+        item_id: String,
+    },
     /// Clear pending mailbox items by scope without cancelling the run.
     /// Result: `{ removed: usize }`.
     ClearMailbox {
