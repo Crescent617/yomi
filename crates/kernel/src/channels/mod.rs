@@ -1,3 +1,31 @@
+//! External channel adapters (Feishu/Telegram/doc comments) and the hub
+//! that routes their messages into kernel sessions.
+//!
+//! ## Card design rules (Feishu)
+//!
+//! Verified against real clients, Android dark mode included — keep every
+//! card consistent with these:
+//!
+//! - **Buttons are always `size: "small"`** (smallest of
+//!   small/medium/large). Primary/destructive actions use a bordered
+//!   type (`default`/`primary`/`danger`); inline row actions (❌ retract)
+//!   may use `type: "text"` — but note text buttons render in the plain
+//!   text color on Android dark mode (no link-blue), which reads as
+//!   unclickable for anything that must be discovered.
+//! - **User-facing copy is English**: command acks, card titles, bucket
+//!   labels, hints. Ack style: ✅ success / ⏹ stopped / 🧹 cleared /
+//!   ⚠️ refused.
+//! - **Trace traffic arrows are user-centric** (speedtest-style):
+//!   `↑` = prompt tokens sent to the model, `↓` = completion received.
+//! - Panel header titles accept `text_size: "notation"` (verified) — use
+//!   it for auxiliary stats lines; don't re-wrap in grey, small is
+//!   enough de-emphasis.
+//! - **No `<font color='blue'>` in card markdown** — Android renders the
+//!   raw tag instead of the color (`grey` works).
+//! - The message GET API strips button `behaviors` and `text_size` from
+//!   read-back card JSON — never assert those via read-back; verify by
+//!   rendering and real clicks.
+
 use crate::permission::Level;
 use crate::types::{ContentBlock, Result as KernelResult, SessionId};
 use serde::{Deserialize, Serialize};
