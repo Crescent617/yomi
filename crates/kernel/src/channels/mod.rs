@@ -224,6 +224,15 @@ impl PlatformConfig {
         }
     }
 
+    /// Case-insensitive platform-name match (`feishu` / `telegram`) for
+    /// CLI-side channel selection.
+    pub(crate) fn name_is(&self, name: &str) -> bool {
+        match self {
+            Self::Feishu { .. } => name.eq_ignore_ascii_case("feishu"),
+            Self::Telegram { .. } => name.eq_ignore_ascii_case("telegram"),
+        }
+    }
+
     /// Ack reaction for a `/queue`d message — "noted, queued for later".
     /// Deliberately not the run-trigger ack: `OneSecond`/"👀" promises
     /// imminent processing, which a queue makes no claim about. (Feishu

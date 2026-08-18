@@ -587,6 +587,31 @@ impl KernelServer {
                 let channels = self.kernel.list_channels();
                 ok_body(channels)
             }
+            ReqMethod::ChannelNewThread {
+                channel,
+                platform,
+                chat_id,
+                title,
+                text,
+            } => rpc_body(
+                "channel_new_thread_failed",
+                match self.kernel.channel_manager() {
+                    Some(hub) => {
+                        hub.create_thread_in_chat(
+                            &self.kernel,
+                            channel.as_deref(),
+                            platform.as_deref().unwrap_or("feishu"),
+                            &chat_id,
+                            title.as_deref(),
+                            &text,
+                        )
+                        .await
+                    }
+                    None => Err(crate::types::KernelError::Config(
+                        "no channels are running".to_string(),
+                    )),
+                },
+            ),
 
             // ── Model ──────────────────────────────────────────────────────
             ReqMethod::ListModels => {

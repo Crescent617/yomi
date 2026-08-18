@@ -44,6 +44,8 @@ enum Commands {
     Rpc(RpcArgs),
     /// Manage cron jobs
     Cron(CronArgs),
+    /// Drive platform channels (open a thread with a fresh session)
+    Channel(commands::channel::ChannelArgs),
     /// Show version
     Version,
     /// Manage daemon (internal use)
@@ -326,6 +328,7 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Rpc(args)) => commands::rpc::run(args).await,
         Some(Commands::Cron(args)) => run_cron(args).await,
+        Some(Commands::Channel(args)) => commands::channel::run(args).await,
         Some(Commands::Version) => {
             println!("v{}", env!("CARGO_PKG_VERSION"));
             Ok(())

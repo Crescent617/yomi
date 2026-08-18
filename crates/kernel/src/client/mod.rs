@@ -294,6 +294,19 @@ pub trait KernelApi: Send + Sync {
     async fn delete_cron_job(&self, id: &crate::cron::CronJobId) -> Result<bool>;
     async fn trigger_cron_job(&self, id: &crate::cron::CronJobId) -> Result<()>;
 
+    // ── Channels ───────────────────────────────────────────────────────
+    /// Open a platform thread in `chat_id` and run `text` in a fresh
+    /// session bound to it. Returns the session id, anchor message id
+    /// and thread jump link.
+    async fn channel_new_thread(
+        &self,
+        channel: Option<String>,
+        platform: Option<String>,
+        chat_id: String,
+        title: Option<String>,
+        text: String,
+    ) -> Result<serde_json::Value>;
+
     // ── Model ──────────────────────────────────────────────────────────────
     async fn list_models(&self) -> Result<Vec<crate::kernel::ModelInfo>>;
     async fn get_session_model(&self, session_id: &SessionId) -> Result<String>;
@@ -700,6 +713,28 @@ impl KernelApi for Kernel {
 
     async fn trigger_cron_job(&self, id: &crate::cron::CronJobId) -> Result<()> {
         Self::trigger_cron_job(self, id).await
+    }
+
+    async fn channel_new_thread(
+        &self,
+        channel: Option<String>,
+        platform: Option<String>,
+        chat_id: String,
+        title: Option<String>,
+        text: String,
+    ) -> Result<serde_json::Value> {
+        let hub = self.channel_manager().ok_or_else(|| {
+            crate::types::KernelError::Config("no channels are running".to_string())
+        })?;
+        hub.create_thread_in_chat(
+            self,
+            channel.as_deref(),
+            platform.as_deref().unwrap_or("feishu"),
+            &chat_id,
+            title.as_deref(),
+            &text,
+        )
+        .await
     }
 
     async fn list_models(&self) -> Result<Vec<crate::kernel::ModelInfo>> {
@@ -1982,6 +2017,24 @@ impl KernelApi for RemoteKernel {
         })
         .await?;
         Ok(())
+    }
+
+    async fn channel_new_thread(
+        &self,
+        channel: Option<String>,
+        platform: Option<String>,
+        chat_id: String,
+        title: Option<String>,
+        text: String,
+    ) -> Result<serde_json::Value> {
+        self.call(ReqMethod::ChannelNewThread {
+            channel,
+            platform,
+            chat_id,
+            title,
+            text,
+        })
+        .await
     }
 
     async fn list_models(&self) -> Result<Vec<crate::kernel::ModelInfo>> {

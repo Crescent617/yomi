@@ -1,7 +1,7 @@
 use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, ToolEvent};
 use crate::kernel::Kernel;
 
-use crate::types::{Result, SessionId};
+use crate::types::{ContentBlock, Result, SessionId};
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -10,7 +10,9 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use super::hub_context::{advance_history_cursor, record_passive_receipt};
+use super::hub_context::{
+    advance_history_cursor, prepare_trigger, record_passive_receipt, TriggerKind,
+};
 use super::hub_deliver::{
     deliver_reply, notify_run_subscribers, send_command_reply, RunEndStatus, SettleKind,
 };
@@ -730,6 +732,143 @@ impl ChannelHub {
                 }
             })
             .collect()
+    }
+
+    /// `yomi channel new-thread`: post an anchor message in `chat_id` and
+    /// fire a `/thread`-style one-shot trigger off it — the task runs in a
+    /// fresh session keyed by the anchor, and the run's replies open the
+    /// platform thread under it. `title` sets a short root text and posts
+    /// the task as the thread's opener (default: the task text is the
+    /// root). Returns the session id, anchor id and jump link.
+    pub async fn create_thread_in_chat(
+        &self,
+        kernel: &Kernel,
+        channel: Option<&str>,
+        platform: &str,
+        chat_id: &str,
+        title: Option<&str>,
+        text: &str,
+    ) -> Result<serde_json::Value> {
+        // Resolve the channel instance: explicit name, or the sole
+        // channel of the requested platform.
+        let (name, config, adapter) = match channel {
+            Some(name) => {
+                let entry = self.instances.get(name).ok_or_else(|| {
+                    crate::types::KernelError::Config(format!("no such channel: `{name}`"))
+                })?;
+                (
+                    name.to_string(),
+                    entry.config.clone(),
+                    Arc::clone(&entry.adapter),
+                )
+            }
+            None => {
+                let matches: Vec<_> = self
+                    .instances
+                    .iter()
+                    .filter(|e| e.config.platform.name_is(platform))
+                    .map(|e| (e.key().clone(), e.config.clone(), Arc::clone(&e.adapter)))
+                    .collect();
+                match matches.as_slice() {
+                    [] => {
+                        return Err(crate::types::KernelError::Config(format!(
+                            "no {platform} channel is running"
+                        )));
+                    }
+                    [one] => one.clone(),
+                    _ => {
+                        return Err(crate::types::KernelError::Config(format!(
+                            "multiple {platform} channels are running — pass --channel"
+                        )));
+                    }
+                }
+            }
+        };
+        // Threads are a Feishu capability for now.
+        if !matches!(config.platform, super::PlatformConfig::Feishu { .. }) {
+            return Err(crate::types::KernelError::Config(format!(
+                "channel `{name}` does not support threads"
+            )));
+        }
+
+        // 1. The anchor (thread root): the task text, or the short title.
+        let root_id = adapter
+            .send_message(
+                chat_id,
+                vec![ContentBlock::Text {
+                    text: title.unwrap_or(text).to_string(),
+                }],
+                None,
+            )
+            .await?
+            .ok_or_else(|| {
+                crate::types::KernelError::Io("platform returned no anchor message id".into())
+            })?;
+        // 2. With an explicit title, the task itself opens the thread.
+        if title.is_some() {
+            adapter
+                .send_message(
+                    chat_id,
+                    vec![ContentBlock::Text {
+                        text: text.to_string(),
+                    }],
+                    Some(&root_id),
+                )
+                .await?;
+        }
+
+        // 3. A synthetic top-level trigger keyed by (and anchored to) the
+        // anchor message — the `/thread` flow minus its human message.
+        let msg = ChannelMessage {
+            external_chat_id: chat_id.to_string(),
+            external_user_id: "yomi-cli".to_string(),
+            external_message_id: Some(root_id.clone()),
+            is_mention: true,
+            raw_text: Some(text.to_string()),
+            content: vec![],
+            image_keys: vec![],
+            thread_id: None,
+            root_id: None,
+            parent_id: None,
+            is_group: true,
+            create_time: Some(chrono::Utc::now().timestamp_millis()),
+            doc_comment: None,
+        };
+        send_gate_reaction(
+            &adapter,
+            &config,
+            &msg,
+            Some(config.platform.ack_reaction()),
+        )
+        .await;
+        let (sid, mut blocks) = prepare_trigger(
+            &name,
+            &config,
+            &self.store,
+            kernel,
+            &adapter,
+            &self.obs,
+            &msg,
+            TriggerKind::OneShotThread,
+        )
+        .await?;
+        kernel.note_title_input(&sid, text);
+        blocks.push(ContentBlock::Text {
+            text: text.to_string(),
+        });
+        kernel.send_steer(&sid, blocks).await;
+
+        Ok(serde_json::json!({
+            "session_id": sid.0,
+            "channel": name,
+            "chat_id": chat_id,
+            "root_id": root_id,
+            // The thread opens with the run's first in-thread reply, so a
+            // thread link can't exist yet — the anchor's message link is
+            // where the thread will appear (Feishu backfills thread_id on
+            // the root then).
+            "thread_url": adapter.message_link(chat_id, &root_id).await,
+        }))
     }
 
     /// Get routing info and adapter for a session.

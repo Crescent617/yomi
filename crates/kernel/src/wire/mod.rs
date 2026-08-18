@@ -238,6 +238,23 @@ pub enum ReqMethod {
 
     // ── Channel ────────────────────────────────────────────────────
     ListChannels,
+    /// Open a platform thread in a chat and run `text` in a fresh
+    /// session bound to it (a `/thread` trigger without a human
+    /// message). Result: session id, anchor (root) message id and
+    /// thread jump link.
+    ChannelNewThread {
+        /// Channel name from the config; default: the sole channel of
+        /// `platform`.
+        channel: Option<String>,
+        /// Platform selector (default: feishu) used to resolve the
+        /// channel when `channel` is absent.
+        platform: Option<String>,
+        chat_id: String,
+        /// Short thread-root title (default: the task text); with a
+        /// title set, the task text is posted as the thread's opener.
+        title: Option<String>,
+        text: String,
+    },
 
     // ── Model ────────────────────────────────────────────────────────
     ListModels,

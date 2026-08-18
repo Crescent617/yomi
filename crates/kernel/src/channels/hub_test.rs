@@ -38,6 +38,11 @@ pub struct MockAdapter {
     pub cards: tokio::sync::Mutex<Vec<(String, String, Option<String>)>>,
     /// Gates `supports_status_card` (default false → text fallback).
     pub status_card_ok: std::sync::atomic::AtomicBool,
+    /// When true, `send_message` returns synthetic ids (msg-1, msg-2, …)
+    /// — off by default so existing send-result-agnostic tests are
+    /// unaffected.
+    pub issue_ids: std::sync::atomic::AtomicBool,
+    pub send_counter: std::sync::atomic::AtomicUsize,
 }
 
 impl MockAdapter {
@@ -55,6 +60,8 @@ impl MockAdapter {
             thread_root_cache: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             cards: tokio::sync::Mutex::new(Vec::new()),
             status_card_ok: std::sync::atomic::AtomicBool::new(false),
+            issue_ids: std::sync::atomic::AtomicBool::new(false),
+            send_counter: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 }
@@ -94,7 +101,18 @@ impl PlatformAdapter for MockAdapter {
             .lock()
             .await
             .push((external_chat_id.to_string(), blocks));
-        Ok(None)
+        let id = self
+            .issue_ids
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .then(|| {
+                format!(
+                    "msg-{}",
+                    self.send_counter
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                        + 1
+                )
+            });
+        Ok(id)
     }
 
     async fn send_reaction(
@@ -1951,6 +1969,106 @@ async fn thread_command_titles_session_from_payload_text() {
         .expect("session created");
     let title = wait_for_title(&kernel, &sid).await;
     assert_eq!(title, "看看这个");
+    kernel.stop();
+}
+
+/// `yomi channel new-thread`: posts the anchor, creates a session keyed
+/// by it (in-thread follow-ups adopt it), injects the task — and with a
+/// `--title`, the task is posted separately as the thread opener.
+#[tokio::test]
+async fn channel_new_thread_runs_task_in_session_keyed_by_anchor() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    mock.issue_ids
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "fake".into(),
+            app_secret: "fake".into(),
+        },
+        require_mention: false,
+        ..Default::default()
+    };
+    let hub = ChannelHub::new(Arc::clone(&store));
+    hub.instances.insert(
+        "mock".to_string(),
+        ChannelInstance {
+            config: config.clone(),
+            status: Arc::new(AtomicU8::new(STATUS_IDLE)),
+            adapter: Arc::clone(&adapter),
+        },
+    );
+
+    // Default: the task text itself is the anchor.
+    let out = hub
+        .create_thread_in_chat(&kernel, None, "feishu", "oc_1", None, "调研 X")
+        .await
+        .unwrap();
+    assert_eq!(out["root_id"].as_str(), Some("msg-1"));
+    assert_eq!(out["thread_url"].as_str(), Some("link://oc_1/msg-1"));
+    assert_eq!(last_outgoing_text(&mock).await, "调研 X");
+    let sid = out["session_id"].as_str().unwrap().to_string();
+    let mapped = store
+        .find_mapping("mock", "msg-1")
+        .await
+        .unwrap()
+        .expect("session created");
+    assert_eq!(mapped.0.as_str(), sid);
+    let title = wait_for_title(&kernel, &SessionId::from(sid.clone())).await;
+    assert_eq!(title, "调研 X");
+
+    // With --title: the root carries the title, the task opens the thread.
+    let out = hub
+        .create_thread_in_chat(&kernel, None, "feishu", "oc_1", Some("📌 X"), "调研 X 详情")
+        .await
+        .unwrap();
+    assert_eq!(out["root_id"].as_str(), Some("msg-2"));
+    let outgoing = mock.outgoing.lock().await;
+    let texts: Vec<String> = outgoing
+        .iter()
+        .filter_map(|(_, blocks)| match blocks.first() {
+            Some(ContentBlock::Text { text }) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts, vec!["调研 X", "📌 X", "调研 X 详情"]);
+    drop(outgoing);
+
+    // Resolution errors: unknown channel, unsupported platform.
+    assert!(hub
+        .create_thread_in_chat(&kernel, Some("nope"), "feishu", "oc_1", None, "x")
+        .await
+        .is_err());
+    hub.instances.insert(
+        "tg".to_string(),
+        ChannelInstance {
+            config: ChannelConfig {
+                name: "tg".to_string(),
+                platform: PlatformConfig::Telegram {
+                    token: "fake".into(),
+                },
+                ..config.clone()
+            },
+            status: Arc::new(AtomicU8::new(STATUS_IDLE)),
+            adapter: Arc::clone(&adapter),
+        },
+    );
+    let err = hub
+        .create_thread_in_chat(&kernel, Some("tg"), "telegram", "chat", None, "x")
+        .await;
+    assert!(err.is_err(), "telegram has no threads");
     kernel.stop();
 }
 

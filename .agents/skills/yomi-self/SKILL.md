@@ -29,6 +29,7 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 - `session list` 默认只列当前目录的会话，`-a` 列全部。
 - `session cat [-s <id>]` 读会话消息日志：默认友好输出（user/assistant 文本，图片显示 asset 真实文件路径）；`--tools` 加工具调用行；`--raw` 输出 JSONL。直接读文件，不依赖 daemon。
 - `session send` 往会话注消息，时机语义不同：不加 flag = **执行完才收到**（排队成新用户消息，起新任务用它）；`--steer` = **执行中即收到**（注入当前 run，回合间生效）——补充信息、中途纠偏用 steer，不打断也不另起回合。
+- 新话题里起新会话干活：`channel new-thread --chat <oc_> --text <任务>`（飞书；`--platform` 默认 feishu，`--title` 给话题根起短标题；返回 session_id/thread_url，可接 `send --steer` 或 `session-wait`）。
 - `session cancel` 停 agent loop，会话保留。
 - 观察运行态（都走 `yomi rpc`）：
   - `get_session '{"session_id":"sess_…"}'`：单会话 `phase`（idle/streaming/executing_tool/compacting）。
