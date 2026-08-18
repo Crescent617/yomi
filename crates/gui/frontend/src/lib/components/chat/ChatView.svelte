@@ -62,8 +62,6 @@
   import PermissionSelector from "./PermissionSelector.svelte";
 
   import { buildContentBlocks } from "../../types";
-  import { steerQueueHead } from "../../mailbox.svelte";
-  import { isActiveSessionPhase } from "../../session-phase";
   import {
     guiPreferences,
     scheduleGuiPreferencesSave,
@@ -680,20 +678,6 @@
     const container = e.currentTarget as HTMLElement;
     if (!container.contains(e.relatedTarget as Node)) {
       showCommands = false;
-    }
-  }
-
-  /** 把 queue 队首提升为 steer 注入当前 run。 */
-  async function steerQueued() {
-    const session = activeSession;
-    if (!session) return;
-    try {
-      const sent = await steerQueueHead(session.id);
-      if (sent) {
-        showNotification("Steer message queued for next step", "info");
-      }
-    } catch {
-      showNotification("Failed to send steer", "error");
     }
   }
 

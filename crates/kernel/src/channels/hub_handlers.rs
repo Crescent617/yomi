@@ -652,7 +652,8 @@ pub(crate) async fn tail_shell_output(path: &str, max_lines: usize) -> String {
     }
 }
 
-/// `/bind`: show or retarget the current scope's session binding./// Retargeting is admin-only. A session already routed elsewhere is
+/// `/bind`: show or retarget the current scope's session binding.
+/// Retargeting is admin-only. A session already routed elsewhere is
 /// refused: for chat scopes that means another chat/channel (a reply
 /// could land in the wrong chat); for doc-comment scopes, ANY other
 /// mapping (the delivery target comes from the mapping row itself, so
