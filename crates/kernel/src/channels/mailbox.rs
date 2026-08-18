@@ -24,13 +24,6 @@ pub(crate) enum MailboxSub {
     Retract(usize),
 }
 
-fn kind_label(item: &MailboxItem) -> &'static str {
-    match item.kind {
-        crate::comms::MailboxItemKind::Steer => "↳",
-        crate::comms::MailboxItemKind::Queue => "⏱",
-    }
-}
-
 fn merged(snapshot: &MailboxSnapshot) -> Vec<&MailboxItem> {
     snapshot.steer.iter().chain(snapshot.queue.iter()).collect()
 }
@@ -54,24 +47,31 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
         }));
     }
     for item in items.iter().take(VISIBLE_ROWS) {
-        // steer 前缀是注入时的注入标记，管理面上是冗余噪声。
+        // steer 前缀是注入时的注入标记，管理面上是冗余噪声；kind 标记
+        // 只用 steer 的灰色小字后缀（排队是默认态，不占视觉）。
         let preview = item
             .preview
             .strip_prefix("[From User] ")
             .unwrap_or(&item.preview);
+        let line = match item.kind {
+            crate::comms::MailboxItemKind::Steer => {
+                format!("{preview} <font color='grey'>· steer</font>")
+            }
+            crate::comms::MailboxItemKind::Queue => preview.to_string(),
+        };
         elements.push(serde_json::json!({
             "tag": "column_set",
             "columns": [
                 {
                     "tag": "column", "width": "weighted", "weight": 1,
-                    "elements": [{ "tag": "markdown", "text_size": "notation", "content": format!("`{}` · {}", kind_label(item), preview) }],
+                    "elements": [{ "tag": "markdown", "text_size": "notation", "content": line }],
                 },
                 {
                     "tag": "column", "width": "auto",
                     "elements": [{
                         "tag": "button",
                         "text": { "tag": "plain_text", "content": "✕" },
-                        "type": "default",
+                        "type": "text",
                         "behaviors": [{ "type": "callback", "value": { "action": "mb_retract", "sid": sid.0, "item": item.id } }],
                     }],
                 },
@@ -94,7 +94,7 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
                     "elements": [{
                         "tag": "button",
                         "text": { "tag": "plain_text", "content": "🔄 刷新" },
-                        "type": "default",
+                        "type": "text",
                         "behaviors": [{ "type": "callback", "value": { "action": "mb_refresh", "sid": sid.0 } }],
                     }],
                 },
@@ -103,7 +103,7 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
                     "elements": [{
                         "tag": "button",
                         "text": { "tag": "plain_text", "content": "🧹 清空" },
-                        "type": "danger",
+                        "type": "text",
                         "behaviors": [{ "type": "callback", "value": { "action": "mb_clear", "sid": sid.0, "scope": "all" } }],
                     }],
                 },
@@ -117,7 +117,7 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
                 "elements": [{
                     "tag": "button",
                     "text": { "tag": "plain_text", "content": "🔄 刷新" },
-                    "type": "default",
+                    "type": "text",
                     "behaviors": [{ "type": "callback", "value": { "action": "mb_refresh", "sid": sid.0 } }],
                 }],
             }],
@@ -131,7 +131,15 @@ pub(super) fn pending_text(snapshot: &MailboxSnapshot) -> String {
     let items = merged(snapshot);
     let mut lines = Vec::new();
     for item in items.iter().take(VISIBLE_ROWS) {
-        lines.push(format!("- `{}` · {}", kind_label(item), item.preview));
+        let preview = item
+            .preview
+            .strip_prefix("[From User] ")
+            .unwrap_or(&item.preview);
+        let suffix = match item.kind {
+            crate::comms::MailboxItemKind::Steer => " · `steer`",
+            crate::comms::MailboxItemKind::Queue => "",
+        };
+        lines.push(format!("- {preview}{suffix}"));
     }
     let overflow = items.len().saturating_sub(VISIBLE_ROWS);
     if overflow > 0 {
