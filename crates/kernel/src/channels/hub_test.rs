@@ -7201,3 +7201,22 @@ async fn tail_shell_output_reads_last_lines() {
     let missing = tail_shell_output("/nonexistent/output.log", 40).await;
     assert!(missing.contains("failed to read"), "{missing}");
 }
+
+#[tokio::test]
+async fn tail_shell_output_caps_total_length() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+    // 3 行 × 10KB 长行：行数没超，总量超 16KB 上限 → 前部截断。
+    let content: String = (1..=3)
+        .map(|i| format!("line{i} {}\n", "x".repeat(10_000)))
+        .collect();
+    tokio::fs::write(&path, content).await.unwrap();
+
+    let tail = tail_shell_output(&path, 40).await;
+    assert!(
+        tail.starts_with("…(前面已截断)"),
+        "truncation marker missing"
+    );
+    assert!(tail.len() <= 16_100, "still too long: {}", tail.len());
+    assert!(tail.contains("line3"), "the tail end is kept");
+}

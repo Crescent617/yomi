@@ -616,10 +616,12 @@ pub(crate) async fn handle_incoming_message(
 }
 
 /// Read the last `max_lines` of a background shell's output (capped at
-/// the last 64KB).
+/// the last 64KB, and at ~16KB total so the reply card stays well under
+/// Feishu's 30KB markdown limit even with very long lines).
 pub(crate) async fn tail_shell_output(path: &str, max_lines: usize) -> String {
     use tokio::io::{AsyncReadExt, AsyncSeekExt};
     const MAX_BYTES: u64 = 64 * 1024;
+    const MAX_TOTAL_CHARS: usize = 16_000;
     let mut file = match tokio::fs::File::open(path).await {
         Ok(f) => f,
         Err(e) => return format!("(failed to read output: {e})"),
@@ -638,8 +640,16 @@ pub(crate) async fn tail_shell_output(path: &str, max_lines: usize) -> String {
     }
     let text = String::from_utf8_lossy(&buf);
     let lines: Vec<&str> = text.lines().collect();
-    let tail = &lines[lines.len().saturating_sub(max_lines)..];
-    tail.join("\n")
+    let tail = lines[lines.len().saturating_sub(max_lines)..].join("\n");
+    if tail.chars().count() > MAX_TOTAL_CHARS {
+        let kept: String = tail
+            .chars()
+            .skip(tail.chars().count() - MAX_TOTAL_CHARS)
+            .collect();
+        format!("…(前面已截断)\n{kept}")
+    } else {
+        tail
+    }
 }
 
 /// `/bind`: show or retarget the current scope's session binding./// Retargeting is admin-only. A session already routed elsewhere is
