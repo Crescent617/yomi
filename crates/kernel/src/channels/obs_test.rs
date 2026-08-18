@@ -1067,7 +1067,7 @@ async fn terminal_receipt_title_matches_live_segments() {
 
     // Live run with model/usage/failure: the settled receipt's trace
     // title must render the very same segments the live card showed
-    // (only expand differs; the ~-marked ↑ estimate is live-only, real
+    // (only expand differs; the ~-marked ↓ estimate is live-only, real
     // usage renders identically on both).
     tracker.set_model(&sid, "k3-hs".to_string());
     tracker
@@ -1095,7 +1095,7 @@ async fn terminal_receipt_title_matches_live_segments() {
     let patches = mock.patches.lock().await;
     let live = patches.last().unwrap().1.clone();
     assert!(
-        live.contains("🐾 0s · 💬 1 · 10.0k↓ · 2.3k↑ · ❌ 1 · k3-hs · 6%"),
+        live.contains("🐾 0s · 💬 1 · 10.0k↑ · 2.3k↓ · ❌ 1 · k3-hs · 6%"),
         "live title: {live}"
     );
     drop(patches);
@@ -1112,7 +1112,7 @@ async fn terminal_receipt_title_matches_live_segments() {
     let patches = mock.patches.lock().await;
     let terminal = &patches.last().unwrap().1;
     assert!(
-        terminal.contains("🐾 0s · 💬 1 · 10.0k↓ · 2.3k↑ · ❌ 1 · k3-hs · 6%"),
+        terminal.contains("🐾 0s · 💬 1 · 10.0k↑ · 2.3k↓ · ❌ 1 · k3-hs · 6%"),
         "terminal title matches live: {terminal}"
     );
 }
@@ -1357,7 +1357,7 @@ async fn thinking_only_stream_shows_estimate_on_placeholder_card() {
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
     assert!(!last.contains("⏱"), "bare placeholder: {last}");
-    assert!(!last.contains('↑'), "no estimate yet: {last}");
+    assert!(!last.contains('↓'), "no estimate yet: {last}");
     drop(patches);
 
     // Thinking-only stream: the placeholder card gains stats + estimate.
@@ -1373,7 +1373,7 @@ async fn thinking_only_stream_shows_estimate_on_placeholder_card() {
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
     assert!(last.contains("⏱"), "stats joined the placeholder: {last}");
-    assert!(last.contains("~100↑"), "live estimate: {last}");
+    assert!(last.contains("~100↓"), "live estimate: {last}");
     assert!(!last.contains('%'), "no real usage yet: {last}");
 }
 
@@ -1401,7 +1401,7 @@ async fn retried_request_discards_failed_attempt_estimate() {
         .await;
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
-    assert!(last.contains("~100↑"), "first attempt: {last}");
+    assert!(last.contains("~100↓"), "first attempt: {last}");
     drop(patches);
 
     // Stream fails; the retry re-fires Request and the failed attempt's
@@ -1411,7 +1411,7 @@ async fn retried_request_discards_failed_attempt_estimate() {
         .await;
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
-    assert!(!last.contains('↑'), "discarded at retry: {last}");
+    assert!(!last.contains('↓'), "discarded at retry: {last}");
     drop(patches);
 
     tracker
@@ -1419,8 +1419,8 @@ async fn retried_request_discards_failed_attempt_estimate() {
         .await;
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
-    assert!(last.contains("~10↑"), "restarted from zero: {last}");
-    assert!(!last.contains("~110↑"), "no double count: {last}");
+    assert!(last.contains("~10↓"), "restarted from zero: {last}");
+    assert!(!last.contains("~110↓"), "no double count: {last}");
 }
 
 #[tokio::test]
@@ -1448,7 +1448,7 @@ async fn tool_call_deltas_count_toward_estimate() {
 
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
-    assert!(last.contains("~100↑"), "json estimate: {last}");
+    assert!(last.contains("~100↓"), "json estimate: {last}");
 }
 
 #[tokio::test]
@@ -1469,7 +1469,7 @@ async fn estimate_accumulates_across_the_run() {
         .await;
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
-    assert!(last.contains("~10↑"), "estimate while streaming: {last}");
+    assert!(last.contains("~10↓"), "estimate while streaming: {last}");
     drop(patches);
 
     // Response ends: the estimate folds into the run total — it persists
@@ -1479,7 +1479,7 @@ async fn estimate_accumulates_across_the_run() {
         .await;
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
-    assert!(last.contains("~10↑"), "folded at end: {last}");
+    assert!(last.contains("~10↓"), "folded at end: {last}");
     drop(patches);
 
     // Next request: the run total carries over, new streaming adds on
@@ -1502,9 +1502,9 @@ async fn estimate_accumulates_across_the_run() {
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
     assert!(last.contains("6%"), "real usage: {last}");
-    // Real total (2_345) plus the in-flight estimate (~10) ride one ↑
+    // Real total (2_345) plus the in-flight estimate (~10) ride one ↓
     // segment; the folded estimate was zeroed when real usage landed.
-    assert!(last.contains("2.4k↑"), "real + in-flight estimate: {last}");
+    assert!(last.contains("2.4k↓"), "real + in-flight estimate: {last}");
 }
 
 // ── Last tool & whisper ─────────────────────────────────────────────
@@ -2967,7 +2967,7 @@ async fn usage_event_before_end_fold_never_double_counts() {
     // Production order: TokenUsage arrives inside the stream, BEFORE the
     // response's End (provider usage chunks ride the stream tail). Real
     // usage zeroes the whole estimate, so the End fold that follows
-    // adds 0 — the ↑ segment never re-folds the same response's estimate
+    // adds 0 — the ↓ segment never re-folds the same response's estimate
     // on top of its true completion count.
     let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
     let mock = MockAdapter::new();
@@ -3005,9 +3005,9 @@ async fn usage_event_before_end_fold_never_double_counts() {
 
     let patches = mock.patches.lock().await;
     let last = patches.last().unwrap().1.clone();
-    assert!(last.contains("10.0k↓"), "prompt total: {last}");
+    assert!(last.contains("10.0k↑"), "prompt total: {last}");
     assert!(
-        last.contains("2.3k↑"),
+        last.contains("2.3k↓"),
         "true completion only, no estimate re-fold: {last}"
     );
     assert!(

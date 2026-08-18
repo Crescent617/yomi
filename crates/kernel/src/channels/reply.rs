@@ -522,25 +522,27 @@ pub(crate) struct TraceTitle<'a> {
 /// (model, ctx) that callers may grey out. Zero/absent parts omitted;
 /// the elapsed prefix is left to the caller (its icon differs per
 /// surface). Tool totals are deliberately not shown — the traffic
-/// segments (`12.3k↓` / `636↑`, `~` marking a live estimate until the
-/// first response's real usage lands) carry the run's cost shape.
+/// segments (`12.3k↑` prompt sent / `636↓` completion received, `~`
+/// marking a live estimate until the first response's real usage lands)
+/// carry the run's cost shape. Arrows are user-centric, speedtest-style:
+/// ↑ = up to the model, ↓ = back down from it.
 pub(crate) fn summary_segments(t: &TraceTitle<'_>) -> (Vec<String>, Vec<String>) {
     let mut head = Vec::new();
     if t.steps > 0 {
         head.push(format!("💬 {}", t.steps));
     }
     if t.usage_in > 0 {
-        head.push(format!("{}↓", fmt_tokens(t.usage_in)));
+        head.push(format!("{}↑", fmt_tokens(t.usage_in)));
     }
-    // ↑ shows real totals plus the in-flight estimate (the estimate's
+    // ↓ shows real totals plus the in-flight estimate (the estimate's
     // folded run part is zeroed when real usage lands, so no double
     // counting); `~` marks "all estimate, no real usage yet".
     let out = t.usage_out + u64::from(t.out_estimate);
     if out > 0 {
         if t.usage_out == 0 {
-            head.push(format!("~{}↑", fmt_tokens(out)));
+            head.push(format!("~{}↓", fmt_tokens(out)));
         } else {
-            head.push(format!("{}↑", fmt_tokens(out)));
+            head.push(format!("{}↓", fmt_tokens(out)));
         }
     }
     if t.failed > 0 {
