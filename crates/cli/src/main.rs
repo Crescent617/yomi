@@ -13,7 +13,7 @@ use commands::tui;
 
 #[derive(Parser)]
 #[command(name = "yomi")]
-#[command(about = "AI coding assistant CLI")]
+#[command(about = "AI coding assistant CLI", version)]
 struct Args {
     #[command(flatten)]
     tui: tui::TuiArgs,
