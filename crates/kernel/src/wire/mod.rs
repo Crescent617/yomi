@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 // ── Wire Protocol ────────────────────────────────────────────────────────
 
 /// Wire protocol version. Bumped on any breaking change to the IPC schema.
-pub const WIRE_PROTOCOL_VERSION: u32 = 25;
+pub const WIRE_PROTOCOL_VERSION: u32 = 26;
 
 /// All operations a client can request from the daemon.
 ///
@@ -157,6 +157,21 @@ pub enum ReqMethod {
     },
     ClearSession {
         session_id: String,
+    },
+    /// Pending mailbox contents (steer + queued user messages), FIFO.
+    MailboxSnapshot {
+        session_id: String,
+    },
+    /// Retract one pending mailbox item. Result: `{ removed: bool }`.
+    RemoveMailboxItem {
+        session_id: String,
+        item_id: String,
+    },
+    /// Clear pending mailbox items by scope without cancelling the run.
+    /// Result: `{ removed: usize }`.
+    ClearMailbox {
+        session_id: String,
+        scope: crate::comms::MailboxScope,
     },
 
     // ── Favorites ────────────────────────────────────────────────────────

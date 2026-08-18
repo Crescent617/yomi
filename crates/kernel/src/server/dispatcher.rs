@@ -258,6 +258,23 @@ impl KernelServer {
                         .map(|()| serde_json::Value::Null),
                 )
             }
+            ReqMethod::MailboxSnapshot { session_id } => {
+                let sid = SessionId::from(session_id);
+                ok_body(self.kernel.mailbox_snapshot(&sid).await)
+            }
+            ReqMethod::RemoveMailboxItem {
+                session_id,
+                item_id,
+            } => {
+                let sid = SessionId::from(session_id);
+                let removed = self.kernel.remove_mailbox_item(&sid, &item_id).await;
+                ok_body(serde_json::json!({ "removed": removed }))
+            }
+            ReqMethod::ClearMailbox { session_id, scope } => {
+                let sid = SessionId::from(session_id);
+                let removed = self.kernel.clear_mailbox(&sid, scope).await;
+                ok_body(serde_json::json!({ "removed": removed }))
+            }
             ReqMethod::ListSessions {
                 project_id,
                 scope,

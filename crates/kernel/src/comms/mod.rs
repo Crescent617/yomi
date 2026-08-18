@@ -11,7 +11,7 @@ pub mod input_bus;
 pub use input_bus::{InputBus, InputBusSubscriber};
 
 pub mod mailbox;
-pub use mailbox::Mailbox;
+pub use mailbox::{Mailbox, MailboxItem, MailboxItemKind, MailboxScope, MailboxSnapshot};
 
 #[cfg(test)]
 mod mailbox_test;

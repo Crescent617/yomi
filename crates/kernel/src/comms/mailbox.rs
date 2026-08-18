@@ -4,14 +4,84 @@ use tokio::sync::Mutex;
 use tokio::sync::Notify;
 
 use crate::agent::AgentInput;
-use crate::types::ContentBlock;
+use crate::types::{ContentBlock, MailboxItemId};
 
 /// 与 Agent 1:1 绑定的双队列缓冲。
 /// steer 高优先级，在 Streaming 前批量消费；normal 普通消息，Idle 时逐条消费。
 pub struct Mailbox {
-    steer: Mutex<VecDeque<Vec<ContentBlock>>>,
-    normal: Mutex<VecDeque<AgentInput>>,
+    steer: Mutex<VecDeque<MailboxEntry>>,
+    normal: Mutex<VecDeque<MailboxEntry>>,
     notify: Notify,
+}
+
+/// 一条 pending 条目：push 时发放 id（ULID，天然不重用），供管理面寻址。
+pub struct MailboxEntry {
+    pub id: MailboxItemId,
+    pub enqueued_at: chrono::DateTime<chrono::Utc>,
+    pub input: AgentInput,
+}
+
+impl MailboxEntry {
+    fn new(input: AgentInput) -> Self {
+        Self {
+            id: MailboxItemId::new(),
+            enqueued_at: chrono::Utc::now(),
+            input,
+        }
+    }
+}
+
+/// 管理面暴露的条目类别：steer（优先队列）/ queue（normal 里的用户消息）。
+/// 控制输入（Compact/Rewind/Clear/Continue/Shutdown）留在内部，不出现在快照里。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MailboxItemKind {
+    Steer,
+    Queue,
+}
+
+/// 快照里的单条 pending 项（wire payload；预览在入队内容里截取）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MailboxItem {
+    pub id: MailboxItemId,
+    pub kind: MailboxItemKind,
+    pub preview: String,
+    pub blocks_len: usize,
+    pub enqueued_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// `clear_mailbox` 的范围。
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum MailboxScope {
+    Steer,
+    Queue,
+    All,
+}
+
+/// 双队列快照：steer + queue（用户消息），均按 FIFO。
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct MailboxSnapshot {
+    pub steer: Vec<MailboxItem>,
+    pub queue: Vec<MailboxItem>,
+}
+
+/// 从内容块里取预览：首个文本块拍平截断。
+fn preview_of(blocks: &[ContentBlock]) -> (String, usize) {
+    let text = blocks.iter().find_map(|b| match b {
+        ContentBlock::Text { text } => Some(text.as_str()),
+        _ => None,
+    });
+    let flat = text.map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "));
+    let preview = match flat {
+        Some(f) if f.chars().count() > 80 => format!("{}…", f.chars().take(79).collect::<String>()),
+        Some(f) => f,
+        None if blocks.is_empty() => String::new(),
+        None => "[non-text content]".to_string(),
+    };
+    (preview, blocks.len())
 }
 
 impl fmt::Debug for Mailbox {
@@ -33,12 +103,15 @@ impl Mailbox {
     }
 
     pub async fn push(&self, input: AgentInput) {
-        self.normal.lock().await.push_back(input);
+        self.normal.lock().await.push_back(MailboxEntry::new(input));
         self.notify.notify_one();
     }
 
     pub async fn push_steer(&self, content: Vec<ContentBlock>) {
-        self.steer.lock().await.push_back(content);
+        self.steer
+            .lock()
+            .await
+            .push_back(MailboxEntry::new(AgentInput::Steer(content)));
         self.notify.notify_one();
     }
 
@@ -49,7 +122,11 @@ impl Mailbox {
         let messages: Vec<_> = q.drain(..n).collect();
         let mut merged = Vec::new();
 
-        for (index, message) in messages.into_iter().enumerate() {
+        for (index, entry) in messages.into_iter().enumerate() {
+            let AgentInput::Steer(message) = entry.input else {
+                debug_assert!(false, "steer queue holds only Steer inputs");
+                continue;
+            };
             if index > 0 {
                 merged.push(ContentBlock::Text {
                     text: "\n\n".to_string(),
@@ -65,7 +142,7 @@ impl Mailbox {
     pub async fn try_pull(&self, count: usize) -> Vec<AgentInput> {
         let mut q = self.normal.lock().await;
         let n = count.min(q.len());
-        q.drain(..n).collect()
+        q.drain(..n).map(|entry| entry.input).collect()
     }
 
     /// 只读检查 steer 是否为空（Idle 分支插队判断）
@@ -77,6 +154,79 @@ impl Mailbox {
     pub fn is_empty(&self) -> bool {
         self.steer.try_lock().is_ok_and(|m| m.is_empty())
             && self.normal.try_lock().is_ok_and(|m| m.is_empty())
+    }
+
+    /// 双队列长度（steer, normal）——`MailboxChanged` 事件的载荷。
+    pub async fn lens(&self) -> (usize, usize) {
+        (
+            self.steer.lock().await.len(),
+            self.normal.lock().await.len(),
+        )
+    }
+
+    /// 管理面快照：steer + normal 里的用户消息（控制输入不暴露）。
+    pub async fn snapshot(&self) -> MailboxSnapshot {
+        let item = |kind: MailboxItemKind, entry: &MailboxEntry| -> Option<MailboxItem> {
+            let blocks: &[ContentBlock] = match &entry.input {
+                AgentInput::Steer(blocks) | AgentInput::User { content: blocks } => blocks,
+                _ => return None,
+            };
+            let (preview, blocks_len) = preview_of(blocks);
+            Some(MailboxItem {
+                id: entry.id.clone(),
+                kind,
+                preview,
+                blocks_len,
+                enqueued_at: entry.enqueued_at,
+            })
+        };
+        let steer = self
+            .steer
+            .lock()
+            .await
+            .iter()
+            .filter_map(|e| item(MailboxItemKind::Steer, e))
+            .collect();
+        let queue = self
+            .normal
+            .lock()
+            .await
+            .iter()
+            .filter_map(|e| item(MailboxItemKind::Queue, e))
+            .collect();
+        MailboxSnapshot { steer, queue }
+    }
+
+    /// 撤回一条 pending（best-effort：已被消费则 false）。
+    pub async fn remove(&self, id: &MailboxItemId) -> bool {
+        let mut q = self.steer.lock().await;
+        let before = q.len();
+        q.retain(|e| &e.id != id);
+        if q.len() < before {
+            return true;
+        }
+        drop(q);
+        let mut q = self.normal.lock().await;
+        let before = q.len();
+        q.retain(|e| &e.id != id);
+        q.len() < before
+    }
+
+    /// 按范围清空（管理面操作；不同于 cancel 的全清，不影响 agent 运行）。
+    /// normal 队列只清用户消息：控制输入（Compact/Rewind/…）是内部瞬态项
+    /// （且 Rewind 带挂起的 result_tx），不动它们。
+    pub async fn clear_scope(&self, scope: MailboxScope) -> usize {
+        let mut removed = 0;
+        if matches!(scope, MailboxScope::Steer | MailboxScope::All) {
+            removed += self.steer.lock().await.drain(..).count();
+        }
+        if matches!(scope, MailboxScope::Queue | MailboxScope::All) {
+            let mut q = self.normal.lock().await;
+            let before = q.len();
+            q.retain(|e| !matches!(e.input, AgentInput::User { .. }));
+            removed += before - q.len();
+        }
+        removed
     }
 
     /// 清空双队列（cancel 时使用）

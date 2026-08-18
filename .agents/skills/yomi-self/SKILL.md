@@ -29,13 +29,14 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 - `session list` 默认只列当前目录的会话，`-a` 列全部。
 - `session cat [-s <id>]` 读会话消息日志：默认友好输出（user/assistant 文本，图片显示 asset 真实文件路径）；`--tools` 加工具调用行；`--raw` 输出 JSONL。直接读文件，不依赖 daemon。
 - `session send` 往会话注消息，时机语义不同：不加 flag = **执行完才收到**（排队成新用户消息，起新任务用它）；`--steer` = **执行中即收到**（注入当前 run，回合间生效）——补充信息、中途纠偏用 steer，不打断也不另起回合。
+- pending 队列管理：`session mailbox` 查看，`session mailbox-remove <mbx_>` 撤回单条，`session mailbox-clear [--steer|--queue]` 按队列清空——只动 pending、不杀 run（区别于 cancel）。前端经 rpc（mailbox_snapshot / remove / clear）管理，`mailbox_changed` 事件（附双队列计数）触发刷新。
 - 新话题起新会话干活：`channel new-thread --chat <oc_> --text <任务>`——话题里的后续发言进同一会话；返回 session_id/thread_url，可接 `send --steer` / `session-wait`。`--channel` 选填，仅同平台多通道时消歧用。
 - `session cancel` 停 agent loop，会话保留。
 - 观察运行态（都走 `yomi rpc`）：
   - `get_session '{"session_id":"sess_…"}'`：单会话 `phase`（idle/streaming/executing_tool/compacting）。
   - `list_running_sessions`：在跑会话（有后台任务的 idle 会话也在列）；后台 shell 任务嵌在 `background_shells` 字段（task_id/pid/command/output_path/started_at），无独立 rpc。
   - `list_subagents '{"parent_session_id":"sess_…"}'`：直接子 agent（`is_running`）；会话不存在返回空数组而非报错。
-- **等待跑完**：`scripts/session-wait <session_id>`——轮询（无超时）至 `phase=idle` 且无 running subagent、无后台 shell；退出码 0 安静 / 2 用法错或首查失败。盲区：mailbox 排队长度 rpc 不可见（"安静"≠队列空）。`session send` + `session-wait` = 驱动兄弟会话干活并等它完成的最小回路。
+- **等待跑完**：`scripts/session-wait <session_id>`——轮询（无超时）至 `phase=idle` 且无 running subagent、无后台 shell；退出码 0 安静 / 2 用法错或首查失败。`session send` + `session-wait` = 驱动兄弟会话干活并等它完成的最小回路。
 - checkpoint：列表走 `rpc get_checkpoints`；回滚在 TUI `/rewind`；无属主备份由 `gc` 孤儿 sweep 清理。
 
 ## cron（自己的闹钟）

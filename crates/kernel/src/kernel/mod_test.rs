@@ -198,3 +198,102 @@ async fn create_session_inherits_project_dir_when_working_dir_absent() {
 
     kernel.stop();
 }
+
+/// Mailbox 管理面端到端：入队可见、撤回、按范围清空、`MailboxChanged`
+/// 事件计数跟随。本地黑洞 listener（accept 后永不响应）让 agent 挂在
+/// 首个模型请求上，保证 pending 条目不被抢先消费——环境无关的确定性。
+#[tokio::test]
+async fn mailbox_management_snapshot_remove_clear() {
+    // Accept connections and hold them open without ever responding.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((sock, _)) = listener.accept().await {
+            held.push(sock);
+        }
+    });
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        models: vec![crate::provider::ModelConfig {
+            name: "blackhole".into(),
+            endpoint: format!("http://{addr}"),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    config.finalize();
+    let kernel = crate::build_kernel(&config, false).await.unwrap();
+    kernel.start();
+    let sid = crate::types::SessionId::new();
+    kernel
+        .session_store()
+        .await
+        .create(crate::storage::NewSession::new(sid.clone()))
+        .await
+        .unwrap();
+    let text = |t: &str| {
+        vec![ContentBlock::Text {
+            text: t.to_string(),
+        }]
+    };
+
+    // 占住 agent：第一条消息被消费后，模型请求挂起，后续消息全部排队。
+    kernel.send_message(&sid, text("blocker")).await.unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let phase = kernel.get_session(&sid).await.map(|s| s.phase).ok();
+        let empty = kernel.mailbox_snapshot(&sid).await.queue.is_empty();
+        if phase.as_deref() == Some("streaming") && empty {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "agent not blocked yet"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    // 入队可见：queue 一条、steer 一条。
+    kernel.send_message(&sid, text("first task")).await.unwrap();
+    kernel.send_steer(&sid, text("mid-run note")).await;
+    let snap = loop {
+        let snap = kernel.mailbox_snapshot(&sid).await;
+        if snap.queue.len() == 1 && snap.steer.len() == 1 {
+            break snap;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "items never landed: {snap:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    assert_eq!(snap.steer[0].kind, crate::comms::MailboxItemKind::Steer);
+    assert!(snap.steer[0].preview.contains("mid-run note"));
+    assert!(snap.queue[0].preview.contains("first task"));
+
+    // 撤回 queue 条目；steer 存活；重复撤回安全失败。
+    assert!(
+        kernel
+            .remove_mailbox_item(&sid, snap.queue[0].id.as_str())
+            .await
+    );
+    assert!(
+        !kernel
+            .remove_mailbox_item(&sid, snap.queue[0].id.as_str())
+            .await
+    );
+
+    // 按范围清空 steer；然后 All 清空残余。
+    assert_eq!(
+        kernel
+            .clear_mailbox(&sid, crate::comms::MailboxScope::Steer)
+            .await,
+        1
+    );
+    let snap = kernel.mailbox_snapshot(&sid).await;
+    assert!(snap.steer.is_empty() && snap.queue.is_empty());
+    kernel.stop();
+}

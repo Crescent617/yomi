@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- 会话 pending 消息现在可以查看和管理：`yomi session mailbox` 列出 steer 与排队消息，`session mailbox-remove <id>` 撤回单条，`session mailbox-clear [--steer|--queue]` 按队列清空（均只影响待处理消息，不打断当前运行）；前端可经 rpc 管理并订阅 mailbox 变更事件实时刷新。
+
 ## [0.7.95] - 2026-08-18
 
 ### Added

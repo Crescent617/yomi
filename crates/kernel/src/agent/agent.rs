@@ -301,12 +301,16 @@ impl Agent {
                         // steer 插队
                         let steers = self.mailbox.try_pull_steer(20).await;
                         if !steers.is_empty() {
+                            self.emit_mailbox_changed().await;
                             self.inject_user_message(steers, true).await?;
                             continue; // inject_user_message already transitioned to Streaming
                         }
                         // 取一条普通消息
                         match self.mailbox.try_pull(1).await.into_iter().next() {
-                            Some(input) => self.handle_input(input).await,
+                            Some(input) => {
+                                self.emit_mailbox_changed().await;
+                                self.handle_input(input).await
+                            }
                             None => {
                                 tokio::select! {
                                     biased;
@@ -338,6 +342,7 @@ impl Agent {
                         // steer 插队
                         let steers = self.mailbox.try_pull_steer(20).await;
                         if !steers.is_empty() {
+                            self.emit_mailbox_changed().await;
                             self.inject_user_message(steers, true).await?;
                         }
                         self.handle_streaming_with_retry().await
@@ -1181,6 +1186,13 @@ impl Agent {
     /// Emit compaction start/end event.
     fn emit_compaction_event(&self, active: bool) {
         self.emit(Event::Model(ModelEvent::Compacting { active }));
+    }
+
+    /// Notify frontends that the mailbox shrank (this agent just consumed
+    /// pending items); enqueues/consumes by other paths emit their own.
+    async fn emit_mailbox_changed(&self) {
+        let (steer, queued) = self.mailbox.lens().await;
+        self.emit(Event::Agent(AgentEvent::MailboxChanged { steer, queued }));
     }
 
     /// Record compactor token usage

@@ -1267,6 +1267,47 @@ impl Kernel {
         }
     }
 
+    /// Pending mailbox contents (steer + queued user messages), FIFO —
+    /// the management surface for frontends. Empty when no mailbox
+    /// exists (nothing pending); transient control inputs are hidden.
+    pub async fn mailbox_snapshot(&self, session_id: &SessionId) -> crate::comms::MailboxSnapshot {
+        match self.conductor.mailbox(session_id) {
+            Some(mb) => mb.snapshot().await,
+            None => crate::comms::MailboxSnapshot::default(),
+        }
+    }
+
+    /// Retract one pending mailbox item (best-effort: already consumed →
+    /// false). Pending operations never touch session history.
+    pub async fn remove_mailbox_item(&self, session_id: &SessionId, item_id: &str) -> bool {
+        let Some(mb) = self.conductor.mailbox(session_id) else {
+            return false;
+        };
+        let removed = mb.remove(&crate::types::MailboxItemId::from(item_id)).await;
+        if removed {
+            self.conductor.emit_mailbox_changed(session_id, &mb).await;
+        }
+        removed
+    }
+
+    /// Clear pending items by scope without cancelling the agent (unlike
+    /// `cancel`, which clears both queues AND stops the run). Returns
+    /// the number removed.
+    pub async fn clear_mailbox(
+        &self,
+        session_id: &SessionId,
+        scope: crate::comms::MailboxScope,
+    ) -> usize {
+        let Some(mb) = self.conductor.mailbox(session_id) else {
+            return 0;
+        };
+        let removed = mb.clear_scope(scope).await;
+        if removed > 0 {
+            self.conductor.emit_mailbox_changed(session_id, &mb).await;
+        }
+        removed
+    }
+
     /// Feed the session-title path with a user message's own text.
     /// Channel triggers merge context blocks (history, quoted message)
     /// ahead of the user's text before handing content to the agent,

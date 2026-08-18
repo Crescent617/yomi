@@ -199,6 +199,21 @@ pub trait KernelApi: Send + Sync {
     async fn stop_goal(&self, session_id: &SessionId) -> Result<()>;
     async fn delete_session(&self, session_id: &SessionId) -> Result<()>;
     async fn clear_session(&self, session_id: &SessionId) -> Result<()>;
+    /// Pending mailbox contents (steer + queued user messages), FIFO.
+    async fn mailbox_snapshot(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<crate::comms::MailboxSnapshot>;
+    /// Retract one pending mailbox item (best-effort: already consumed
+    /// → false).
+    async fn remove_mailbox_item(&self, session_id: &SessionId, item_id: &str) -> Result<bool>;
+    /// Clear pending mailbox items by scope without cancelling the run.
+    /// Returns the number removed.
+    async fn clear_mailbox(
+        &self,
+        session_id: &SessionId,
+        scope: crate::comms::MailboxScope,
+    ) -> Result<usize>;
     async fn list_messages(
         &self,
         session_id: &SessionId,
@@ -531,6 +546,25 @@ impl KernelApi for Kernel {
 
     async fn clear_session(&self, session_id: &SessionId) -> Result<()> {
         Self::clear_session(self, session_id)
+    }
+
+    async fn mailbox_snapshot(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<crate::comms::MailboxSnapshot> {
+        Ok(Self::mailbox_snapshot(self, session_id).await)
+    }
+
+    async fn remove_mailbox_item(&self, session_id: &SessionId, item_id: &str) -> Result<bool> {
+        Ok(Self::remove_mailbox_item(self, session_id, item_id).await)
+    }
+
+    async fn clear_mailbox(
+        &self,
+        session_id: &SessionId,
+        scope: crate::comms::MailboxScope,
+    ) -> Result<usize> {
+        Ok(Self::clear_mailbox(self, session_id, scope).await)
     }
 
     async fn list_messages(
@@ -1683,6 +1717,42 @@ impl KernelApi for RemoteKernel {
         })
         .await?;
         Ok(())
+    }
+
+    async fn mailbox_snapshot(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<crate::comms::MailboxSnapshot> {
+        let value = self
+            .call(ReqMethod::MailboxSnapshot {
+                session_id: session_id.0.to_string(),
+            })
+            .await?;
+        Ok(serde_json::from_value(value)?)
+    }
+
+    async fn remove_mailbox_item(&self, session_id: &SessionId, item_id: &str) -> Result<bool> {
+        let value = self
+            .call(ReqMethod::RemoveMailboxItem {
+                session_id: session_id.0.to_string(),
+                item_id: item_id.to_string(),
+            })
+            .await?;
+        Ok(value["removed"].as_bool().unwrap_or(false))
+    }
+
+    async fn clear_mailbox(
+        &self,
+        session_id: &SessionId,
+        scope: crate::comms::MailboxScope,
+    ) -> Result<usize> {
+        let value = self
+            .call(ReqMethod::ClearMailbox {
+                session_id: session_id.0.to_string(),
+                scope,
+            })
+            .await?;
+        Ok(value["removed"].as_u64().unwrap_or(0) as usize)
     }
 
     async fn list_messages(

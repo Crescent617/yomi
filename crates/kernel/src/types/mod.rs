@@ -99,6 +99,7 @@ define_id!(ProjectId => "proj_");
 define_id!(MessageId => "msg_");
 define_id!(CronJobId => "cron_");
 define_id!(EventId => "evt_");
+define_id!(MailboxItemId => "mbx_");
 
 // ─── Specialised extensions ─────────────────────────────────────────────
 

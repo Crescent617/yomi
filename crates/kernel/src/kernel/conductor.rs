@@ -269,6 +269,7 @@ impl Conductor {
                 }
                 if let Some(ref mb) = mailbox {
                     mb.clear().await;
+                    self.emit_mailbox_changed(&sid, mb).await;
                 }
                 // A cancelled agent exits its loop instead of resetting. Wait
                 // for the task to finish; if new input arrived while it was
@@ -307,6 +308,7 @@ impl Conductor {
                     .clone();
 
                 Self::push_to_mailbox(&mb, input).await;
+                self.emit_mailbox_changed(&sid, &mb).await;
                 // User activity (message/steer/queue): refresh the session's
                 // recency so session lists order by real use, not creation.
                 if let Some(store) = &self.agent_shared.session_store {
@@ -324,6 +326,24 @@ impl Conductor {
             AgentInput::Steer(content) => mailbox.push_steer(content).await,
             other => mailbox.push(other).await,
         }
+    }
+
+    /// Mailbox access for the management surface (snapshot / remove /
+    /// clear). `None` = no mailbox (nothing pending).
+    pub fn mailbox(&self, sid: &SessionId) -> Option<Arc<Mailbox>> {
+        self.mailboxes.get(sid).map(|mb| Arc::clone(&mb))
+    }
+
+    /// Emit the mailbox-change event frontends refresh on.
+    pub(crate) async fn emit_mailbox_changed(&self, sid: &SessionId, mailbox: &Mailbox) {
+        let (steer, queued) = mailbox.lens().await;
+        let _ = self
+            .event_bus
+            .handle(sid.clone())
+            .try_send(crate::event::Envelope::new(
+                sid.clone(),
+                Event::Agent(AgentEvent::MailboxChanged { steer, queued }),
+            ));
     }
 
     /// Check whether the session or any ancestor is routed from an external

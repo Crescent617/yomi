@@ -99,6 +99,32 @@ enum SessionsCommands {
         #[arg(long)]
         tools: bool,
     },
+    /// List pending mailbox items (steer + queued messages)
+    Mailbox {
+        /// Session ID (defaults to current directory's last session)
+        #[arg(short, long)]
+        session: Option<String>,
+    },
+    /// Retract one pending mailbox item (already-consumed ids fail safely)
+    MailboxRemove {
+        /// Mailbox item id (mbx_...)
+        item_id: String,
+        /// Session ID (defaults to current directory's last session)
+        #[arg(short, long)]
+        session: Option<String>,
+    },
+    /// Clear pending mailbox items without cancelling the run
+    MailboxClear {
+        /// Session ID (defaults to current directory's last session)
+        #[arg(short, long)]
+        session: Option<String>,
+        /// Clear only the steer queue
+        #[arg(long, conflicts_with = "queue")]
+        steer: bool,
+        /// Clear only the normal queue
+        #[arg(long, conflicts_with = "steer")]
+        queue: bool,
+    },
 }
 
 #[derive(Parser)]
@@ -354,6 +380,17 @@ async fn run_session(args: SessionArgs) -> Result<()> {
             raw,
             tools,
         } => commands::session::cat::run(&args.global, session, raw, tools).await,
+        SessionsCommands::Mailbox { session } => {
+            commands::session::mailbox::list(&args.global, session).await
+        }
+        SessionsCommands::MailboxRemove { item_id, session } => {
+            commands::session::mailbox::remove(&args.global, session, item_id).await
+        }
+        SessionsCommands::MailboxClear {
+            session,
+            steer,
+            queue,
+        } => commands::session::mailbox::clear(&args.global, session, steer, queue).await,
     }
 }
 

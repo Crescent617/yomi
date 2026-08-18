@@ -144,6 +144,11 @@ pub enum AgentEvent {
     GoalUpdated { description: String, status: String },
     /// Goal was stopped and removed
     GoalStopped,
+    /// Mailbox contents changed (enqueue / consume / remove / clear).
+    /// Frontends should refresh their mailbox view; the counts double as
+    /// a pending badge. `queued` = normal-queue length (user messages +
+    /// transient control inputs).
+    MailboxChanged { steer: usize, queued: usize },
 }
 
 /// Internal kernel events for persistence and state management.
