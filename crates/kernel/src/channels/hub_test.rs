@@ -6976,6 +6976,25 @@ async fn mailbox_command_show_retract_clear_and_card_actions() {
         );
     }
 
+    // 发卡已进注册表；事件钩子按最新快照 PATCH 注册卡片。
+    assert!(kernel.mailbox_card_registry.contains_key(&sid));
+    crate::channels::mailbox::refresh_tracked_card(
+        &kernel.mailbox_card_registry,
+        &kernel,
+        &adapter,
+        &sid,
+    )
+    .await;
+    {
+        let patches = mock.patches.lock().await;
+        assert!(
+            patches
+                .iter()
+                .any(|(mid, card)| mid == "card-msg-1" && card.contains("Pending (2)")),
+            "auto-refresh patches the tracked card: {patches:?}"
+        );
+    }
+
     // /mailbox retract 1 → 撤掉剩下的 queue 条目（此时 merged=[note C, task B]，#1=note C）。
     let reply = handle(msg("ou_admin", "/mailbox retract 1")).await.unwrap();
     let text = reply.unwrap();

@@ -71,6 +71,8 @@ pub struct Kernel {
     /// Disposable persistent KV cache (`cache.db`), shared with channel adapters.
     pub(crate) kv_cache: Option<Arc<crate::kv_cache::KvCache>>,
     pub(crate) channel_manager: Option<Arc<crate::channels::hub::ChannelHub>>,
+    /// `/mailbox` Pending 卡的自动刷新注册表（session → 卡片位置）。
+    pub(crate) mailbox_card_registry: crate::channels::mailbox::MailboxCardRegistry,
     /// Global notification bus for state changes and other broadcasts.
     notification_bus: Arc<crate::notification::NotificationBus>,
     /// Global shutdown token for graceful stop.
@@ -404,6 +406,7 @@ impl Kernel {
             restart_tx: Arc::new(std::sync::Mutex::new(None)),
             kv_cache: storage.kv_cache(),
             channel_manager,
+            mailbox_card_registry: crate::channels::mailbox::MailboxCardRegistry::default(),
             notification_bus,
             shutdown: tokio_util::sync::CancellationToken::new(),
         }))

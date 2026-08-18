@@ -16,6 +16,38 @@ use super::{CardAction, ChannelConfig, PlatformAdapter};
 /// 卡片/文本可见行数；溢出折叠成提示。
 const VISIBLE_ROWS: usize = 8;
 
+/// `/mailbox` Pending 卡注册表：session → 最新一张卡片的位置。卡片随
+/// `MailboxChanged` 事件原地刷新（否则随消费/入队即刻过期）；新的
+/// `/mailbox` 覆盖旧条目，会话删除后的残留条目无害（PATCH 失败仅告警）。
+pub(crate) type MailboxCardRegistry = dashmap::DashMap<SessionId, MailboxCardRef>;
+
+/// 一张待刷新的 Pending 卡的位置。
+#[derive(Debug, Clone)]
+pub(crate) struct MailboxCardRef {
+    pub chat_id: String,
+    pub msg_id: String,
+}
+
+/// 事件钩子（forwarder 在 `MailboxChanged` 时调用）：取最新快照重渲染
+/// 并 PATCH 注册的卡片。未注册 = no-op。
+pub(crate) async fn refresh_tracked_card(
+    registry: &MailboxCardRegistry,
+    kernel: &Kernel,
+    adapter: &Arc<dyn PlatformAdapter>,
+    sid: &SessionId,
+) {
+    let Some(card_ref) = registry.get(sid).map(|e| e.value().clone()) else {
+        return;
+    };
+    let snapshot = kernel.mailbox_snapshot(sid).await;
+    if let Err(e) = adapter
+        .update_card(&card_ref.msg_id, &pending_card(sid, &snapshot))
+        .await
+    {
+        warn!(session_id = %sid.0, error = %e, "mailbox card auto-refresh failed");
+    }
+}
+
 /// `/mailbox` 的子操作（命令解析产物）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MailboxSub {
@@ -43,14 +75,27 @@ fn parse_scope(v: &serde_json::Value) -> MailboxScope {
     }
 }
 
-/// Pending 卡（info 卡同款蓝头 compact）：每行 kind + preview + 撤回按钮，
-/// 底部 steer/queue/全部三个清空按钮；空队列显示一行占位。
+/// 行内容：全量 text（拍平空白，≤300 字符）——preview 的 80 字符在
+/// 卡片上太挤看不全。
+fn item_text(item: &MailboxItem) -> String {
+    let text = item.text.as_deref().unwrap_or(&item.preview);
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() > 300 {
+        format!("{}…", flat.chars().take(299).collect::<String>())
+    } else {
+        flat
+    }
+}
+
+/// Pending 卡（info 卡同款蓝头 compact）：每行 kind + 全量文本 + 大号
+/// 撤回按钮（primary），底部 steer/queue/全部三个清空按钮；空队列显示
+/// 一行占位。
 pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> String {
     let items = merged(snapshot);
     let mut elements: Vec<serde_json::Value> = Vec::new();
     if items.is_empty() {
         elements.push(serde_json::json!({
-            "tag": "markdown", "content": "Mailbox is empty."
+            "tag": "markdown", "text_size": "notation", "content": "Mailbox is empty."
         }));
     }
     for item in items.iter().take(VISIBLE_ROWS) {
@@ -59,14 +104,14 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
             "columns": [
                 {
                     "tag": "column", "width": "weighted", "weight": 1,
-                    "elements": [{ "tag": "markdown", "content": format!("`{}` · {}", kind_label(item), item.preview) }],
+                    "elements": [{ "tag": "markdown", "text_size": "notation", "content": format!("`{}` · {}", kind_label(item), item_text(item)) }],
                 },
                 {
                     "tag": "column", "width": "auto",
                     "elements": [{
                         "tag": "button",
                         "text": { "tag": "plain_text", "content": "撤回" },
-                        "type": "default",
+                        "type": "primary",
                         "behaviors": [{ "type": "callback", "value": { "action": "mb_retract", "sid": sid.0, "item": item.id } }],
                     }],
                 },
@@ -81,7 +126,7 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
         }));
     }
     if !items.is_empty() {
-        let button = |scope: MailboxScope, label: &str| {
+        let button = |scope: MailboxScope, label: &str, kind: &str| {
             let scope_str = match scope {
                 MailboxScope::Steer => "steer",
                 MailboxScope::Queue => "queue",
@@ -92,7 +137,7 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
                 "elements": [{
                     "tag": "button",
                     "text": { "tag": "plain_text", "content": label },
-                    "type": "default",
+                    "type": kind,
                     "behaviors": [{ "type": "callback", "value": { "action": "mb_clear", "sid": sid.0, "scope": scope_str } }],
                 }],
             })
@@ -100,9 +145,9 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
         elements.push(serde_json::json!({
             "tag": "column_set",
             "columns": [
-                button(MailboxScope::Steer, "🧹 steer"),
-                button(MailboxScope::Queue, "🧹 queue"),
-                button(MailboxScope::All, "🧹 全部"),
+                button(MailboxScope::Steer, "🧹 steer", "default"),
+                button(MailboxScope::Queue, "🧹 queue", "default"),
+                button(MailboxScope::All, "🧹 全部清空", "danger"),
             ],
         }));
     }
@@ -209,13 +254,23 @@ pub(super) async fn handle_mailbox_command(
                 return Ok(Some("Mailbox is empty.".to_string()));
             }
             if msg.doc_comment.is_none() && adapter.supports_status_card() {
-                adapter
+                let msg_id = adapter
                     .send_card(
                         &msg.external_chat_id,
                         &pending_card(sid, &snapshot),
                         reply_msg_id.as_deref(),
                     )
                     .await?;
+                // 注册进自动刷新：此后 mailbox 变动由事件驱动原地 PATCH。
+                if let Some(msg_id) = msg_id {
+                    kernel.mailbox_card_registry.insert(
+                        sid.clone(),
+                        MailboxCardRef {
+                            chat_id: msg.external_chat_id.clone(),
+                            msg_id,
+                        },
+                    );
+                }
                 return Ok(None);
             }
             Ok(Some(pending_text(&snapshot)))
