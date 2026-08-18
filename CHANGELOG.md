@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.95] - 2026-08-18
+
 ### Added
 
 - 新增 `yomi channel new-thread --chat <群id> --text <任务>`：在指定群聊开启一个新话题，并在绑定该话题的新会话中执行任务，后续在话题里的发言进入同一会话（目前仅飞书；`--platform` 默认 `feishu`，`--title` 可给话题根设置短标题）。
