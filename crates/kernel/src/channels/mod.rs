@@ -1129,6 +1129,8 @@ pub(crate) mod hub_routing;
 pub mod telegram;
 
 pub mod feishu;
+pub(crate) mod feishu_events;
+pub(crate) mod feishu_text;
 
 #[cfg(test)]
 mod tests;

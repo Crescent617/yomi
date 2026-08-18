@@ -1,7 +1,6 @@
 use crate::types::ContentBlock;
 use futures::{SinkExt, StreamExt};
 use lru::LruCache;
-use prost::Message as ProstMessage;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
@@ -13,10 +12,8 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use super::{
-    CardAction, ChannelError, ChannelEvent, ChannelMessage, DocPermissionRequest, PlatformAdapter,
-    MAX_RETRY_DELAY,
-};
+use super::feishu_events::{build_ping, FRAME_TIMEOUT, PING_INTERVAL};
+use super::{ChannelError, ChannelEvent, DocPermissionRequest, PlatformAdapter, MAX_RETRY_DELAY};
 
 const FEISHU_BASE_URL: &str = "https://open.feishu.cn";
 
@@ -24,34 +21,14 @@ const FEISHU_BASE_URL: &str = "https://open.feishu.cn";
 /// rejected. All violations surface as Feishu's generic API error 234001,
 /// so the adapter fails fast with a precise reason instead.
 const IMAGE_MAX_BYTES: usize = 10 * 1024 * 1024;
+
 const FILE_MAX_BYTES: usize = 30 * 1024 * 1024;
+
 const RECEIVE_ID_TYPE: &str = "chat_id";
-
-const FRAME_TYPE_CONTROL: i32 = 0;
-const FRAME_TYPE_DATA: i32 = 1;
-const HEADER_TYPE: &str = "type";
-const MSG_TYPE_EVENT: &str = "event";
-const MSG_TYPE_CARD: &str = "card";
-const MSG_TYPE_PING: &str = "ping";
-const MSG_TYPE_PONG: &str = "pong";
-
-const PAYLOAD_GZIP: u8 = 1;
-const PAYLOAD_PB: u8 = 2;
-
-/// Legacy-rendered echo of a schema 2.0 card (real content unavailable).
-const UPGRADE_CLIENT_NOTICE: &str = "请升级至最新版本客户端，以查看内容";
 
 /// Platform error: whole-document comments take no thread replies — the
 /// adapter falls back to posting a new whole comment instead.
 const WHOLE_COMMENT_NO_REPLY: i64 = 1_069_302;
-
-/// Application-level ping cadence; the gateway answers every ping with a pong.
-const PING_INTERVAL: std::time::Duration = std::time::Duration::from_mins(1);
-/// No inbound frame (pongs included) for this long means a zombie
-/// connection (half-open TCP never errors) — reconnect. 2.5× ping interval.
-const FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(150);
-
-// ── Types ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
 struct TokenResp {
@@ -61,7 +38,7 @@ struct TokenResp {
     expire: Option<i64>,
 }
 
-struct TokenCache {
+pub(crate) struct TokenCache {
     token: String,
     expires_at: std::time::Instant,
 }
@@ -69,15 +46,20 @@ struct TokenCache {
 /// Bounded dedup of forwarded message IDs: Feishu resends events whose ACK
 /// was lost; redeliveries land within seconds, so a few thousand is ample.
 const DEDUP_CAP: NonZeroUsize = NonZeroUsize::new(4096).unwrap();
+
 /// Cap for the sent-card text cache (see [`FeishuAdapter::cache_card_text`]).
 const SENT_TEXT_CAP: NonZeroUsize = DEDUP_CAP;
+
 /// Cap for the thread-root cache (thread_id → root message id). Threads
 /// are few and long-lived; a miss just costs one API re-fetch.
 const THREAD_ROOT_CAP: NonZeroUsize = DEDUP_CAP;
+
 /// KV namespace and retention for the sent-card text cache: quoting a
 /// reply happens in the same conversation arc, so a week is ample.
 const SENT_TEXT_NS: &str = "feishu_sent_card_text";
+
 const SENT_TEXT_TTL_MS: i64 = 7 * 24 * 3600 * 1000;
+
 /// The full-table prune is throttled: `update_card` fires per status-card
 /// patch, so per-write pruning would churn cache.db.
 const PRUNE_INTERVAL: std::time::Duration = std::time::Duration::from_hours(1);
@@ -91,7 +73,7 @@ pub struct FeishuAdapter {
     base_url: String,
     token_cache: Mutex<Option<TokenCache>>,
     bot_open_id: tokio::sync::Mutex<Option<String>>,
-    seen_messages: Mutex<LruCache<String, ()>>,
+    pub(crate) seen_messages: Mutex<LruCache<String, ()>>,
     sent_texts: Mutex<LruCache<String, String>>,
     /// Persistent backstop for `sent_texts` (survives restarts); `None`
     /// in tests and when the kernel has no cache db.
@@ -101,6 +83,41 @@ pub struct FeishuAdapter {
     /// Thread id → root message id, filled by `thread_root_id`. Memory
     /// only: a cold cache after restart costs one refetch per thread.
     thread_roots: tokio::sync::Mutex<LruCache<String, String>>,
+}
+
+pub(crate) fn cached_token(cache: Option<&TokenCache>) -> Option<String> {
+    cache.and_then(|c| {
+        if std::time::Instant::now() < c.expires_at {
+            Some(c.token.clone())
+        } else {
+            None
+        }
+    })
+}
+
+pub(crate) fn api_err(action: &str, e: impl std::fmt::Display) -> ChannelError {
+    let e = format!("{e}");
+    if e.is_empty() {
+        ChannelError::Platform(action.to_string())
+    } else {
+        ChannelError::Platform(format!("{action}: {e}"))
+    }
+}
+
+/// Extract `data.<key>` as an owned string from a Feishu API response.
+pub(crate) fn resp_data_str(resp: &serde_json::Value, key: &str) -> Option<String> {
+    resp["data"][key].as_str().map(str::to_string)
+}
+
+pub(crate) fn check_api_resp(resp: serde_json::Value) -> Result<serde_json::Value, ChannelError> {
+    let code = resp["code"].as_i64().unwrap_or(-1);
+    if code != 0 {
+        return Err(ChannelError::Platform(format!(
+            "API error {code}: {}",
+            resp["msg"].as_str().unwrap_or("unknown")
+        )));
+    }
+    Ok(resp)
 }
 
 impl FeishuAdapter {
@@ -135,7 +152,7 @@ impl FeishuAdapter {
         self
     }
 
-    async fn ensure_bot_open_id(&self, token: &str) -> Option<String> {
+    pub(crate) async fn ensure_bot_open_id(&self, token: &str) -> Option<String> {
         // Fast path: check cache.
         {
             let guard = self.bot_open_id.lock().await;
@@ -163,7 +180,7 @@ impl FeishuAdapter {
 
     // ── Token ────────────────────────────────────────────────────────
 
-    async fn get_token(&self) -> Result<String, ChannelError> {
+    pub(crate) async fn get_token(&self) -> Result<String, ChannelError> {
         // Try cache first.
         {
             let cache = self.token_cache.lock().await;
@@ -595,9 +612,126 @@ impl FeishuAdapter {
 
         Ok((url, service_id))
     }
-}
 
-// ── PlatformAdapter impl ────────────────────────────────────────────
+    /// Post a new whole-document comment carrying `body` (a reply-shaped
+    /// content payload) and return its comment id.
+    async fn create_whole_comment(
+        &self,
+        token: &str,
+        file_token: &str,
+        file_type: &str,
+        body: &serde_json::Value,
+    ) -> Result<Option<String>, ChannelError> {
+        // The create-comment API wraps the reply in a `reply_list`
+        // (E2E-verified: a bare `{content}` body is rejected with
+        // 9499 "Missing required parameter: ReplyList").
+        let create_body = json!({ "reply_list": { "replies": [body] } });
+        let resp = self
+            .api_post(
+                token,
+                &format!(
+                    "{}/open-apis/drive/v1/files/{file_token}/comments?file_type={file_type}&user_id_type=open_id",
+                    self.base_url
+                ),
+                create_body,
+            )
+            .await?;
+        Ok(resp_data_str(&resp, "comment_id"))
+    }
+
+    /// The working body of `fetch_doc_comment` (split out so the caller
+    /// can wrap the whole thing in one 5s timeout).
+    async fn fetch_doc_comment_inner(
+        &self,
+        token: &str,
+        file_token: &str,
+        file_type: &str,
+        comment_id: &str,
+    ) -> Result<Option<super::DocCommentDetail>, ChannelError> {
+        let replies_url = format!(
+            "{}/open-apis/drive/v1/files/{file_token}/comments/{comment_id}/replies",
+            self.base_url
+        );
+        let batch_url = format!(
+            "{}/open-apis/drive/v1/files/{file_token}/comments/batch_query?file_type={file_type}&user_id_type=open_id",
+            self.base_url
+        );
+        let mut query = vec![
+            ("file_type", file_type.to_string()),
+            ("user_id_type", "open_id".to_string()),
+            ("page_size", "50".to_string()),
+        ];
+        // The timeline (list endpoint) is required; quote/is_whole ride
+        // batch_query (its only source). Both lag the event — the caller
+        // retries while the trigger reply or is_whole is unreadable.
+        let (first_page, batch_resp) = tokio::join!(
+            self.api_get(token, &replies_url, &query),
+            self.api_post(token, &batch_url, json!({ "comment_ids": [comment_id] })),
+        );
+        let batch_item = batch_resp.ok().and_then(|resp| {
+            resp["data"]["items"]
+                .as_array()
+                .and_then(|a| a.first().cloned())
+        });
+        // Pages are chronological; long threads need the later pages (the
+        // triggering reply is the newest). Bounded at 5 pages.
+        let mut page = first_page?;
+        let mut reply_items = Vec::new();
+        for _ in 0..5 {
+            let Some(items) = page["data"]["items"].as_array() else {
+                break;
+            };
+            reply_items.extend(items.iter().cloned());
+            if !page["data"]["has_more"].as_bool().unwrap_or(false) {
+                break;
+            }
+            let Some(page_token) = page["data"]["page_token"].as_str().map(str::to_string) else {
+                break;
+            };
+            query.retain(|(k, _)| *k != "page_token");
+            query.push(("page_token", page_token));
+            page = self.api_get(token, &replies_url, &query).await?;
+        }
+        if reply_items.is_empty() {
+            return Ok(None);
+        }
+        let bot_open_id = self.ensure_bot_open_id(token).await;
+        let replies = reply_items
+            .iter()
+            .map(|r| {
+                let user_id = r["user_id"].as_str().unwrap_or_default().to_string();
+                super::DocCommentReplyLite {
+                    is_from_bot: bot_open_id.as_deref() == Some(user_id.as_str())
+                        && !user_id.is_empty(),
+                    user_id,
+                    reply_id: r["reply_id"].as_str().unwrap_or_default().to_string(),
+                    create_time: r["create_time"]
+                        .as_i64()
+                        .or_else(|| r["create_time"].as_str()?.parse().ok())
+                        .unwrap_or_default(),
+                    text: Self::extract_reply_text(
+                        r["content"]["elements"].as_array(),
+                        bot_open_id.as_deref(),
+                    ),
+                }
+            })
+            .collect();
+        Ok(Some(super::DocCommentDetail {
+            // None = batch_query has not caught up with the event yet
+            // (the caller retries — the session mapping keys off this).
+            is_whole: batch_item
+                .as_ref()
+                .map(|item| item["is_whole"].as_bool().unwrap_or_default()),
+            quote: batch_item.as_ref().and_then(|item| {
+                item["quote"]
+                    .as_str()
+                    .filter(|q| !q.is_empty())
+                    .map(str::to_string)
+            }),
+            replies,
+        }))
+    }
+}
 
 #[async_trait::async_trait]
 impl PlatformAdapter for FeishuAdapter {
@@ -1344,972 +1478,6 @@ impl PlatformAdapter for FeishuAdapter {
 
 // ── Message handlers ────────────────────────────────────────────────
 
-impl FeishuAdapter {
-    /// Handle one binary frame. The `write` lock is held only around the
-    /// ACK send — parsing (token HTTP, queue send) must not starve pings.
-    async fn handle_binary<S>(
-        &self,
-        data: &[u8],
-        incoming: &mpsc::Sender<ChannelEvent>,
-        write: &Mutex<S>,
-    ) -> Result<(), ChannelError>
-    where
-        S: futures::Sink<tungstenite::Message, Error = tungstenite::Error> + Unpin,
-    {
-        if data.is_empty() {
-            return Ok(());
-        }
-
-        let (body, is_gzip) =
-            if data.len() > 1 && (data[0] == PAYLOAD_GZIP || data[0] == PAYLOAD_PB) {
-                (&data[1..], data[0] == PAYLOAD_GZIP)
-            } else {
-                (data, false)
-            };
-
-        if is_gzip {
-            warn!("gzip protobuf not supported");
-            return Ok(());
-        }
-
-        let frame = lark_websocket_protobuf::pbbp2::Frame::decode(body)
-            .map_err(|e| api_err("protobuf decode", e))?;
-
-        let msg_type = frame
-            .headers
-            .iter()
-            .find(|h| h.key == HEADER_TYPE)
-            .map_or("", |h| h.value.as_str());
-
-        match frame.method {
-            FRAME_TYPE_CONTROL if msg_type == MSG_TYPE_PONG => {
-                debug!("pong received");
-            }
-            FRAME_TYPE_DATA => {
-                let ack = build_ack(&frame);
-                write
-                    .lock()
-                    .await
-                    .send(tungstenite::Message::Binary(ack.into()))
-                    .await
-                    .map_err(|e| api_err("ACK", e))?;
-
-                let Some(ref payload) = frame.payload else {
-                    return Ok(());
-                };
-                let text = String::from_utf8_lossy(payload);
-                match msg_type {
-                    MSG_TYPE_EVENT => {
-                        debug!(payload = %text, "event payload");
-                        // The frame is already ACKed — a parse failure
-                        // loses the event for good, so at least log it.
-                        if let Err(e) = self.parse_event(&text, incoming).await {
-                            warn!(error = %e, "event parse failed, event lost");
-                        }
-                    }
-                    MSG_TYPE_CARD => {
-                        debug!(payload = %text, "card callback payload");
-                        if let Err(e) = Self::forward_card_action_str(&text, incoming).await {
-                            warn!(error = %e, "card action parse failed, action lost");
-                        }
-                    }
-                    _ => {
-                        debug!(msg_type, "ignoring unknown data frame type");
-                    }
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    async fn handle_text(
-        &self,
-        text: &str,
-        incoming: &mpsc::Sender<ChannelEvent>,
-    ) -> Result<(), ChannelError> {
-        let msg: serde_json::Value =
-            serde_json::from_str(text).map_err(|e| api_err("JSON parse", e))?;
-        match msg["type"].as_str().unwrap_or("") {
-            "event" => {
-                let _ = self.parse_event_json(&msg, incoming).await;
-                Ok(())
-            }
-            MSG_TYPE_CARD => Self::forward_card_action(&msg, incoming).await,
-            "ping" | "pong" | "auth_result" => {
-                debug!(msg_type = msg["type"].as_str(), "control msg");
-                Ok(())
-            }
-            _ => Ok(()),
-        }
-    }
-
-    /// Parse event from protobuf payload (JSON string).
-    async fn parse_event(
-        &self,
-        payload: &str,
-        incoming: &mpsc::Sender<ChannelEvent>,
-    ) -> Result<Option<String>, ChannelError> {
-        let msg: serde_json::Value =
-            serde_json::from_str(payload).map_err(|e| api_err("event JSON", e))?;
-        self.parse_event_json(&msg, incoming).await
-    }
-
-    /// Extract display text and image keys from a history item in one
-    /// pass: text messages get their content, posts get concatenated text
-    /// runs, everything else becomes a `[msg_type]` placeholder; image
-    /// keys come from `image` message bodies and post `img` runs.
-    fn extract_history_content(item: &serde_json::Value) -> (String, Vec<String>) {
-        let msg_type = item["msg_type"].as_str().unwrap_or("unknown");
-        let content: serde_json::Value = item["body"]["content"]
-            .as_str()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or_default();
-        let text = match msg_type {
-            "text" => content["text"].as_str().unwrap_or("").to_string(),
-            "post" => {
-                let text = Self::extract_post_text(&content);
-                if text.is_empty() {
-                    "[post]".to_string()
-                } else {
-                    text
-                }
-            }
-            // Bot replies are cards — quoting one must yield its markdown
-            // body, not a bare placeholder.
-            "interactive" => {
-                let text = Self::extract_card_text(&content);
-                if text.is_empty() {
-                    "[interactive]".to_string()
-                } else {
-                    text
-                }
-            }
-            other => format!("[{other}]"),
-        };
-        let image_keys = match msg_type {
-            "image" => content["image_key"]
-                .as_str()
-                .map(|k| vec![k.to_string()])
-                .unwrap_or_default(),
-            "post" => Self::extract_post_image_keys(&content),
-            _ => Vec::new(),
-        };
-        (text, image_keys)
-    }
-
-    /// Locate the post body node: the first known locale with a content
-    /// array, else the content itself (bare `{title, content}` form).
-    fn post_node(content: &serde_json::Value) -> &serde_json::Value {
-        ["zh_cn", "en_us", "ja_jp"]
-            .iter()
-            .map(|k| &content[*k])
-            .find(|n| n["content"].is_array())
-            .unwrap_or(content)
-    }
-
-    /// Extract readable text from a card (interactive) message body.
-    /// Two shapes: the sent card JSON (markdown elements — schema 2.0
-    /// `body.elements` or legacy v1 top-level `elements`), and the
-    /// get-message API echo (legacy-rendered paragraphs of text runs —
-    /// v1 cards keep their real text there). With `card_msg_content_type`
-    /// the API echoes the real schema 2.0 body; without it the echo degrades
-    /// to the "upgrade client" notice, which must not leak into context.
-    /// The header title counts as readable text: for yomi's own status
-    /// cards it is the *only* transient signal — the live body rides
-    /// inside a collapsible panel (stripped here), so a running card
-    /// reads as e.g. "🐾 Typing…" instead of nothing.
-    fn extract_card_text(content: &serde_json::Value) -> String {
-        let title = content["header"]["title"]["content"]
-            .as_str()
-            .map(str::trim)
-            .filter(|t| !t.is_empty())
-            .unwrap_or("");
-        let with_title = |body: String| {
-            if title.is_empty() {
-                body
-            } else if body.is_empty() {
-                title.to_string()
-            } else {
-                format!("{title}\n{body}")
-            }
-        };
-        let from_markdown = content["body"]["elements"]
-            .as_array()
-            .or_else(|| content["elements"].as_array())
-            .map(|els| {
-                els.iter()
-                    .filter(|e| e["tag"].as_str() == Some("markdown"))
-                    .filter_map(|e| e["content"].as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })
-            .unwrap_or_default();
-        if !from_markdown.is_empty() {
-            return with_title(rewrite_card_at_tags(&from_markdown));
-        }
-        let from_runs = content["elements"]
-            .as_array()
-            .map(|paras| {
-                paras
-                    .iter()
-                    .map(|para| {
-                        para.as_array()
-                            .map(|runs| {
-                                runs.iter()
-                                    .filter_map(|r| r["text"].as_str())
-                                    .filter(|t| *t != UPGRADE_CLIENT_NOTICE)
-                                    .collect::<String>()
-                            })
-                            .unwrap_or_default()
-                    })
-                    .filter(|line| !line.is_empty())
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })
-            .unwrap_or_default();
-        with_title(from_runs)
-    }
-
-    /// Concatenate a post message's title and paragraph text runs (posts
-    /// in other locales degrade to `[post]`).
-    fn extract_post_text(content: &serde_json::Value) -> String {
-        let node = Self::post_node(content);
-        let mut parts = Vec::new();
-        if let Some(title) = node["title"]
-            .as_str()
-            .map(str::trim)
-            .filter(|t| !t.is_empty())
-        {
-            parts.push(title.to_string());
-        }
-        if let Some(paragraphs) = node["content"].as_array() {
-            for para in paragraphs {
-                let line: String = para
-                    .as_array()
-                    .map(|runs| {
-                        runs.iter()
-                            .filter_map(|r| r["text"].as_str())
-                            .collect::<String>()
-                    })
-                    .unwrap_or_default();
-                if !line.is_empty() {
-                    parts.push(line);
-                }
-            }
-        }
-        parts.join("\n")
-    }
-
-    /// Collect the `image_key`s of a post's `img` runs, in paragraph order.
-    fn extract_post_image_keys(content: &serde_json::Value) -> Vec<String> {
-        Self::post_node(content)["content"]
-            .as_array()
-            .map(|paras| {
-                paras
-                    .iter()
-                    .flat_map(|p| p.as_array().into_iter().flatten())
-                    .filter(|r| r["tag"].as_str() == Some("img"))
-                    .filter_map(|r| r["image_key"].as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// Post a new whole-document comment carrying `body` (a reply-shaped
-    /// content payload) and return its comment id.
-    async fn create_whole_comment(
-        &self,
-        token: &str,
-        file_token: &str,
-        file_type: &str,
-        body: &serde_json::Value,
-    ) -> Result<Option<String>, ChannelError> {
-        // The create-comment API wraps the reply in a `reply_list`
-        // (E2E-verified: a bare `{content}` body is rejected with
-        // 9499 "Missing required parameter: ReplyList").
-        let create_body = json!({ "reply_list": { "replies": [body] } });
-        let resp = self
-            .api_post(
-                token,
-                &format!(
-                    "{}/open-apis/drive/v1/files/{file_token}/comments?file_type={file_type}&user_id_type=open_id",
-                    self.base_url
-                ),
-                create_body,
-            )
-            .await?;
-        Ok(resp_data_str(&resp, "comment_id"))
-    }
-
-    /// The working body of `fetch_doc_comment` (split out so the caller
-    /// can wrap the whole thing in one 5s timeout).
-    async fn fetch_doc_comment_inner(
-        &self,
-        token: &str,
-        file_token: &str,
-        file_type: &str,
-        comment_id: &str,
-    ) -> Result<Option<super::DocCommentDetail>, ChannelError> {
-        let replies_url = format!(
-            "{}/open-apis/drive/v1/files/{file_token}/comments/{comment_id}/replies",
-            self.base_url
-        );
-        let batch_url = format!(
-            "{}/open-apis/drive/v1/files/{file_token}/comments/batch_query?file_type={file_type}&user_id_type=open_id",
-            self.base_url
-        );
-        let mut query = vec![
-            ("file_type", file_type.to_string()),
-            ("user_id_type", "open_id".to_string()),
-            ("page_size", "50".to_string()),
-        ];
-        // The timeline (list endpoint) is required; quote/is_whole ride
-        // batch_query (its only source). Both lag the event — the caller
-        // retries while the trigger reply or is_whole is unreadable.
-        let (first_page, batch_resp) = tokio::join!(
-            self.api_get(token, &replies_url, &query),
-            self.api_post(token, &batch_url, json!({ "comment_ids": [comment_id] })),
-        );
-        let batch_item = batch_resp.ok().and_then(|resp| {
-            resp["data"]["items"]
-                .as_array()
-                .and_then(|a| a.first().cloned())
-        });
-        // Pages are chronological; long threads need the later pages (the
-        // triggering reply is the newest). Bounded at 5 pages.
-        let mut page = first_page?;
-        let mut reply_items = Vec::new();
-        for _ in 0..5 {
-            let Some(items) = page["data"]["items"].as_array() else {
-                break;
-            };
-            reply_items.extend(items.iter().cloned());
-            if !page["data"]["has_more"].as_bool().unwrap_or(false) {
-                break;
-            }
-            let Some(page_token) = page["data"]["page_token"].as_str().map(str::to_string) else {
-                break;
-            };
-            query.retain(|(k, _)| *k != "page_token");
-            query.push(("page_token", page_token));
-            page = self.api_get(token, &replies_url, &query).await?;
-        }
-        if reply_items.is_empty() {
-            return Ok(None);
-        }
-        let bot_open_id = self.ensure_bot_open_id(token).await;
-        let replies = reply_items
-            .iter()
-            .map(|r| {
-                let user_id = r["user_id"].as_str().unwrap_or_default().to_string();
-                super::DocCommentReplyLite {
-                    is_from_bot: bot_open_id.as_deref() == Some(user_id.as_str())
-                        && !user_id.is_empty(),
-                    user_id,
-                    reply_id: r["reply_id"].as_str().unwrap_or_default().to_string(),
-                    create_time: r["create_time"]
-                        .as_i64()
-                        .or_else(|| r["create_time"].as_str()?.parse().ok())
-                        .unwrap_or_default(),
-                    text: Self::extract_reply_text(
-                        r["content"]["elements"].as_array(),
-                        bot_open_id.as_deref(),
-                    ),
-                }
-            })
-            .collect();
-        Ok(Some(super::DocCommentDetail {
-            // None = batch_query has not caught up with the event yet
-            // (the caller retries — the session mapping keys off this).
-            is_whole: batch_item
-                .as_ref()
-                .map(|item| item["is_whole"].as_bool().unwrap_or_default()),
-            quote: batch_item.as_ref().and_then(|item| {
-                item["quote"]
-                    .as_str()
-                    .filter(|q| !q.is_empty())
-                    .map(str::to_string)
-            }),
-            replies,
-        }))
-    }
-
-    /// Extract display text from a comment reply's content elements:
-    /// text runs concatenated, docs links as their URL, @-mentions as
-    /// `@bot` (the bot itself) or `@user:{open_id}`.
-    fn extract_reply_text(
-        elements: Option<&Vec<serde_json::Value>>,
-        bot_open_id: Option<&str>,
-    ) -> String {
-        let Some(elements) = elements else {
-            return String::new();
-        };
-        elements
-            .iter()
-            .map(|e| match e["type"].as_str() {
-                Some("text_run") => e["text_run"]["text"].as_str().unwrap_or("").to_string(),
-                Some("docs_link") => e["docs_link"]["url"].as_str().unwrap_or("").to_string(),
-                Some("person") => {
-                    let uid = e["person"]["user_id"].as_str().unwrap_or("");
-                    if !uid.is_empty() && Some(uid) == bot_open_id {
-                        "@bot".to_string()
-                    } else {
-                        format!("@user:{uid}")
-                    }
-                }
-                _ => String::new(),
-            })
-            .collect()
-    }
-
-    /// Feishu `create_time` is in milliseconds, but some v1.x events may be in
-    /// seconds or microseconds. Normalise to seconds and format.
-    fn parse_feishu_timestamp(value: &serde_json::Value) -> String {
-        let ts = value
-            .as_str()
-            .and_then(|s| s.parse::<i64>().ok())
-            .or_else(|| value.as_i64())
-            .unwrap_or_else(|| chrono::Local::now().timestamp());
-
-        let dt = if ts < 10_000_000_000 {
-            chrono::DateTime::from_timestamp(ts, 0)
-        } else if ts < 10_000_000_000_000 {
-            chrono::DateTime::from_timestamp_millis(ts)
-        } else {
-            chrono::DateTime::from_timestamp_millis(ts / 1000)
-        };
-        dt.map_or_else(
-            || chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-            |dt| dt.format("%Y-%m-%d %H:%M:%S").to_string(),
-        )
-    }
-
-    fn build_card(text: &str) -> String {
-        // Platform-neutral `<@USER_ID>` contract → feishu <at> syntax.
-        let text = super::utils::rewrite_mentions(text, &|id| format!("<at id={id}></at>"));
-        json!({
-            "schema": "2.0",
-            "body": {
-                "elements": [{ "tag": "markdown", "content": text }]
-            }
-        })
-        .to_string()
-    }
-
-    async fn parse_event_json(
-        &self,
-        msg: &serde_json::Value,
-        incoming: &mpsc::Sender<ChannelEvent>,
-    ) -> Result<Option<String>, ChannelError> {
-        // v2.0: header.event_type; v1.x: type
-        let event_type = msg["header"]["event_type"]
-            .as_str()
-            .or_else(|| msg["type"].as_str())
-            .unwrap_or("");
-
-        match event_type {
-            "im.message.receive_v1" => {} // parsed below
-            "drive.file.permission_member_applied_v1" => {
-                return Self::forward_doc_permission_event(&msg["event"], incoming).await;
-            }
-            "drive.notice.comment_add_v1" => {
-                return self.forward_doc_comment_event(msg, incoming).await;
-            }
-            // Card callbacks are normally delivered as `card` data frames,
-            // but tolerate delivery as a plain event too.
-            "card.action.trigger" => {
-                Self::forward_card_action(msg, incoming).await?;
-                return Ok(None);
-            }
-            _ => {
-                debug!(event_type, "ignoring event");
-                return Ok(None);
-            }
-        }
-
-        let event = &msg["event"];
-        let message = &event["message"];
-        let sender = &event["sender"];
-        let chat_id = message["chat_id"]
-            .as_str()
-            .ok_or_else(|| api_err("missing chat_id", ""))?;
-        let msg_id = message["message_id"]
-            .as_str()
-            .ok_or_else(|| api_err("missing message_id", ""))?
-            .to_string();
-        // Redelivery guard (lost ACK → resend): don't trigger the agent
-        // twice. Chat messages only — perm events / card actions dedup in
-        // the store. Relies on the sequential receive loop.
-        if self.seen_messages.lock().await.contains(&msg_id) {
-            info!(chat_id, msg_id, "duplicate event delivery, skipped");
-            return Ok(None);
-        }
-        let user_id = sender["sender_id"]["open_id"].as_str().unwrap_or("unknown");
-        let content_str = message["content"]
-            .as_str()
-            .ok_or_else(|| api_err("missing content", ""))?;
-        let content_json: serde_json::Value =
-            serde_json::from_str(content_str).map_err(|e| api_err("content JSON", e))?;
-        // Rich-text (post) content has no top-level `text` — its body lives
-        // in per-locale paragraphs; images ride along as `img` runs there
-        // or as the whole body of an `image` message.
-        let msg_type = message["message_type"].as_str().unwrap_or("");
-        // Interactive (card) messages: the event content is only a legacy
-        // placeholder, never the real card body — the text is fetched later
-        // via `fetch_message` (with `card_msg_content_type`), but only after
-        // the mention gate so group cards that don't @ the bot stay ignored.
-        let is_card = msg_type == "interactive";
-        let (text, image_keys) = match msg_type {
-            "text" => (
-                content_json["text"].as_str().unwrap_or("").to_string(),
-                Vec::new(),
-            ),
-            "post" => (
-                Self::extract_post_text(&content_json),
-                Self::extract_post_image_keys(&content_json),
-            ),
-            "image" => (
-                String::new(),
-                content_json["image_key"]
-                    .as_str()
-                    .map(|k| vec![k.to_string()])
-                    .unwrap_or_default(),
-            ),
-            _ => (String::new(), Vec::new()),
-        };
-        // Cards defer their content to the mention gate below, so they are
-        // exempt from the empty-content drop here.
-        if !is_card && text.is_empty() && image_keys.is_empty() {
-            debug!(chat_id, msg_type, "ignoring message without usable content");
-            return Ok(None);
-        }
-
-        let thread_id = message["thread_id"].as_str().map(|s| s.to_string());
-        let root_id = message["root_id"].as_str().map(|s| s.to_string());
-        let parent_id = message["parent_id"].as_str().map(|s| s.to_string());
-
-        let ts = Self::parse_feishu_timestamp(&message["create_time"]);
-
-        let token = self.get_token().await?;
-        let bot_open_id = self.ensure_bot_open_id(&token).await;
-
-        let chat_type = message["chat_type"].as_str().unwrap_or("");
-        let is_mention = if chat_type == "p2p" {
-            true
-        } else if let Some(ref bot_id) = bot_open_id {
-            message["mentions"].as_array().is_some_and(|a| {
-                a.iter()
-                    .any(|m| m["id"]["open_id"].as_str() == Some(bot_id))
-            })
-        } else {
-            false
-        };
-
-        // Card messages follow mention semantics: p2p always, group only when
-        // the bot is @'d. Fetch the real body (best-effort); on failure fall
-        // back to the `[interactive]` placeholder but still trigger — never
-        // silently swallow like before.
-        let text = if is_card {
-            if !is_mention {
-                debug!(chat_id, msg_id, "ignoring group card without bot mention");
-                return Ok(None);
-            }
-            match self.fetch_message(&msg_id).await {
-                Ok(Some(h)) if !h.text.is_empty() => h.text,
-                Ok(_) => {
-                    debug!(
-                        chat_id,
-                        msg_id, "card body empty on fetch, using placeholder"
-                    );
-                    "[interactive]".to_string()
-                }
-                Err(e) => {
-                    warn!(chat_id, msg_id, error = %e, "card fetch failed, using placeholder");
-                    "[interactive]".to_string()
-                }
-            }
-        } else {
-            text
-        };
-
-        let thread_part = thread_id
-            .as_ref()
-            .map_or(String::new(), |tid| format!("[thread: {tid}]"));
-        let root_part = root_id
-            .as_ref()
-            .map_or(String::new(), |rid| format!("[root: {rid}]"));
-        let header = format!(
-            "[{ts}][from_user_id: {user_id}][chat_id: {chat_id}]{thread_part}{root_part}[platform: feishu]"
-        );
-        let formatted = if text.is_empty() {
-            header
-        } else {
-            format!("{header}\n{text}")
-        };
-
-        info!(
-            chat_id,
-            msg_id,
-            user_id,
-            is_mention,
-            thread_id = thread_id.as_deref().unwrap_or(""),
-            root_id = root_id.as_deref().unwrap_or(""),
-            text,
-            image_count = image_keys.len(),
-            "Feishu message"
-        );
-
-        let raw_text = strip_bot_mention(
-            &text,
-            message["mentions"].as_array(),
-            bot_open_id.as_deref(),
-        );
-
-        // Images are NOT downloaded here — keys travel with the message
-        // for post-gate download (see `ChannelMessage::image_keys`).
-        let channel_msg = ChannelMessage {
-            external_chat_id: chat_id.to_string(),
-            external_user_id: user_id.to_string(),
-            external_message_id: Some(msg_id.clone()),
-            is_mention,
-            raw_text: Some(raw_text),
-            content: vec![ContentBlock::Text { text: formatted }],
-            image_keys,
-            thread_id,
-            root_id,
-            parent_id,
-            is_group: chat_type == "group",
-            create_time: message["create_time"]
-                .as_str()
-                .and_then(|s| s.parse::<i64>().ok()),
-            doc_comment: None,
-        };
-
-        if incoming
-            .send(ChannelEvent::Message(channel_msg))
-            .await
-            .is_err()
-        {
-            return Err(ChannelError::Platform("incoming closed".to_string()));
-        }
-
-        // Record only after a successful forward, so a copy that failed
-        // mid-parse never blocks a later delivery of the same message.
-        let _ = self.seen_messages.lock().await.put(msg_id.clone(), ());
-
-        Ok(Some(msg_id))
-    }
-
-    /// Parse a `drive.notice.comment_add_v1` event and forward it as a
-    /// [`ChannelEvent::DocCommentAdded`]. Ids only — the comment content is
-    /// fetched by the hub post-policy (deferred, like image keys). The only
-    /// adapter-side filter beyond dedup is the self-authored check (the
-    /// bot's own comment replies must not retrigger it); it needs the bot
-    /// identity, which is adapter domain knowledge, and only costs the
-    /// (cached) bot-info call for mention events — non-mention events are
-    /// forwarded untouched and filtered by the hub's policy instead.
-    async fn forward_doc_comment_event(
-        &self,
-        msg: &serde_json::Value,
-        incoming: &mpsc::Sender<ChannelEvent>,
-    ) -> Result<Option<String>, ChannelError> {
-        let event = &msg["event"];
-        let meta = &event["notice_meta"];
-        let comment_id = event["comment_id"].as_str().unwrap_or_default();
-        let reply_id = event["reply_id"].as_str().unwrap_or_default();
-        // Redelivery guard (lost ACK → resend), keyed like chat messages.
-        let dedup_key = format!("doc_comment:{comment_id}:{reply_id}");
-        if self.seen_messages.lock().await.contains(&dedup_key) {
-            info!(
-                comment_id,
-                reply_id, "duplicate comment event delivery, skipped"
-            );
-            return Ok(None);
-        }
-        let commenter = meta["from_user_id"]["open_id"].as_str().unwrap_or_default();
-        let file_token = meta["file_token"].as_str().unwrap_or_default();
-        let file_type = meta["file_type"].as_str().unwrap_or_default();
-        if comment_id.is_empty() || commenter.is_empty() || file_token.is_empty() {
-            warn!(payload = %msg, "comment event missing ids, ignored");
-            return Ok(None);
-        }
-        let is_mentioned = event["is_mentioned"].as_bool().unwrap_or(false);
-        if is_mentioned {
-            let token = self.get_token().await?;
-            if let Some(bot_id) = self.ensure_bot_open_id(&token).await {
-                if bot_id == commenter {
-                    debug!(comment_id, "self-authored comment event, skipped");
-                    return Ok(None);
-                }
-            }
-        }
-        let notice = super::DocCommentNotice {
-            file_token: file_token.to_string(),
-            file_type: file_type.to_string(),
-            comment_id: comment_id.to_string(),
-            reply_id: if reply_id.is_empty() {
-                None
-            } else {
-                Some(reply_id.to_string())
-            },
-            commenter_open_id: commenter.to_string(),
-            is_mentioned,
-            notice_type: meta["notice_type"].as_str().unwrap_or_default().to_string(),
-            create_time: msg["header"]["create_time"]
-                .as_str()
-                .and_then(|s| s.parse::<i64>().ok()),
-        };
-        info!(
-            comment_id,
-            reply_id, commenter, is_mentioned, file_type, "Feishu doc comment event"
-        );
-        if incoming
-            .send(ChannelEvent::DocCommentAdded(notice))
-            .await
-            .is_err()
-        {
-            return Err(ChannelError::Platform("incoming closed".to_string()));
-        }
-        // Record only after a successful forward (same rule as messages).
-        self.seen_messages.lock().await.put(dedup_key, ());
-        Ok(None)
-    }
-
-    /// Parse a `drive.file.permission_member_applied_v1` event and forward
-    /// it as a [`ChannelEvent::DocPermissionApplied`]. The applicant can be
-    /// any mix of users / chats / departments; all three lists ride along.
-    async fn forward_doc_permission_event(
-        event: &serde_json::Value,
-        incoming: &mpsc::Sender<ChannelEvent>,
-    ) -> Result<Option<String>, ChannelError> {
-        let open_ids = |key: &str| {
-            event[key]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|m| m["open_id"].as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default()
-        };
-        let id_strings = |key: &str| {
-            event[key]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default()
-        };
-        let req = DocPermissionRequest {
-            file_token: event["file_token"].as_str().unwrap_or_default().to_string(),
-            file_type: event["file_type"].as_str().unwrap_or_default().to_string(),
-            permission: event["permission"].as_str().unwrap_or_default().to_string(),
-            remark: event["application_remark"].as_str().map(str::to_string),
-            applicant_users: open_ids("application_user_list"),
-            applicant_chats: id_strings("application_chat_list"),
-            applicant_departments: id_strings("application_department_list"),
-        };
-        if req.file_token.is_empty() {
-            warn!("doc permission event missing file_token, ignored");
-            return Ok(None);
-        }
-        info!(
-            file_token = %req.file_token,
-            file_type = %req.file_type,
-            permission = %req.permission,
-            users = req.applicant_users.len(),
-            chats = req.applicant_chats.len(),
-            departments = req.applicant_departments.len(),
-            "doc permission applied"
-        );
-        if incoming
-            .send(ChannelEvent::DocPermissionApplied(req))
-            .await
-            .is_err()
-        {
-            return Err(ChannelError::Platform("incoming closed".to_string()));
-        }
-        Ok(None)
-    }
-
-    /// Parse a `card.action.trigger` callback from a protobuf `card` frame
-    /// payload (JSON string).
-    async fn forward_card_action_str(
-        payload: &str,
-        incoming: &mpsc::Sender<ChannelEvent>,
-    ) -> Result<(), ChannelError> {
-        let msg: serde_json::Value =
-            serde_json::from_str(payload).map_err(|e| api_err("card action JSON", e))?;
-        Self::forward_card_action(&msg, incoming).await
-    }
-
-    /// Forward a card button callback as a [`ChannelEvent::CardAction`].
-    /// The real `card.action.trigger` payload is a v2 envelope
-    /// (`{schema, header, event: {operator, action, context, token}}`) —
-    /// a bare callback body is tolerated as well. The button value rides
-    /// along opaquely — the hub validates its shape
-    /// (`{"action": "approve"|"deny", "id": N}`).
-    async fn forward_card_action(
-        payload: &serde_json::Value,
-        incoming: &mpsc::Sender<ChannelEvent>,
-    ) -> Result<(), ChannelError> {
-        let body = if payload["event"].is_object() {
-            &payload["event"]
-        } else {
-            payload
-        };
-        let action = CardAction {
-            operator_open_id: body["operator"]["open_id"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
-            chat_id: body["context"]["open_chat_id"].as_str().map(str::to_string),
-            value: body["action"]["value"].clone(),
-        };
-        if action.operator_open_id.is_empty() || action.value.is_null() {
-            warn!(payload = %payload, "card action missing operator or value, ignored");
-            return Ok(());
-        }
-        info!(
-            operator = %action.operator_open_id,
-            value = %action.value,
-            "card action received"
-        );
-        if incoming
-            .send(ChannelEvent::CardAction(action))
-            .await
-            .is_err()
-        {
-            return Err(ChannelError::Platform("incoming closed".to_string()));
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 #[path = "feishu_test.rs"]
 mod tests;
-
-// ── Protobuf helpers ───────────────────────────────────────────────
-
-fn build_ping(service_id: i32) -> Vec<u8> {
-    let frame = lark_websocket_protobuf::pbbp2::Frame {
-        seq_id: 0,
-        log_id: 0,
-        service: service_id,
-        method: FRAME_TYPE_CONTROL,
-        headers: vec![lark_websocket_protobuf::pbbp2::Header {
-            key: HEADER_TYPE.to_string(),
-            value: MSG_TYPE_PING.to_string(),
-        }],
-        payload_encoding: None,
-        payload_type: None,
-        payload: None,
-        log_id_new: None,
-    };
-    let mut buf = Vec::new();
-    frame.encode(&mut buf).expect("protobuf encode");
-    buf
-}
-
-fn build_ack(original: &lark_websocket_protobuf::pbbp2::Frame) -> Vec<u8> {
-    let mut ack = original.clone();
-    ack.payload = Some(r#"{"code":200}"#.as_bytes().to_vec());
-    let mut buf = Vec::new();
-    ack.encode(&mut buf).expect("protobuf encode");
-    buf
-}
-
-// ── Small helpers ──────────────────────────────────────────────────
-
-fn strip_bot_mention(
-    text: &str,
-    mentions: Option<&Vec<serde_json::Value>>,
-    bot_open_id: Option<&str>,
-) -> String {
-    let Some(bot_open_id) = bot_open_id else {
-        return text.trim().to_string();
-    };
-    mentions
-        .into_iter()
-        .flatten()
-        .filter(|mention| mention["id"]["open_id"].as_str() == Some(bot_open_id))
-        .filter_map(|mention| mention["key"].as_str())
-        .fold(text.to_string(), |text, key| text.replace(key, ""))
-        .trim()
-        .to_string()
-}
-
-/// Rewrite a card's native `<at id=ou_x>name</at>` mention tags into the
-/// platform-neutral `<@ou_x>name` contract (see the agent prompt's Mentions
-/// section). The get-message API normalizes the tag to `id=` and drops the
-/// display name, so `<at id=ou_x></at>` degrades to bare `<@ou_x>`. Fenced
-/// code blocks and inline code spans are left untouched (shared walker) so
-/// an example shown literally stays literal. The id attribute tolerates
-/// optional quotes.
-fn rewrite_card_at_tags(text: &str) -> String {
-    super::utils::map_outside_code_spans(text, &mut |segment, out| {
-        rewrite_at_tag_segment(segment, out);
-    })
-}
-
-fn rewrite_at_tag_segment(segment: &str, out: &mut String) {
-    use std::fmt::Write as _;
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    // `<at id=ou_x>name</at>` or `<at id="ou_x">name</at>` — id bounded like
-    // the neutral contract (`{1,64}`); the name is any non-`<` text.
-    let re = RE.get_or_init(|| {
-        regex::Regex::new(
-            r#"<at\s+id=(?:"([A-Za-z0-9_\-]{1,64})"|([A-Za-z0-9_\-]{1,64}))>([^<]*)</at>"#,
-        )
-        .unwrap()
-    });
-    let mut last = 0;
-    for cap in re.captures_iter(segment) {
-        let m = cap.get(0).unwrap();
-        out.push_str(&segment[last..m.start()]);
-        let id = cap.get(1).or_else(|| cap.get(2)).map_or("", |g| g.as_str());
-        let name = cap.get(3).map_or("", |g| g.as_str());
-        let _ = write!(out, "<@{id}>{name}");
-        last = m.end();
-    }
-    out.push_str(&segment[last..]);
-}
-
-fn cached_token(cache: Option<&TokenCache>) -> Option<String> {
-    cache.and_then(|c| {
-        if std::time::Instant::now() < c.expires_at {
-            Some(c.token.clone())
-        } else {
-            None
-        }
-    })
-}
-
-fn api_err(action: &str, e: impl std::fmt::Display) -> ChannelError {
-    let e = format!("{e}");
-    if e.is_empty() {
-        ChannelError::Platform(action.to_string())
-    } else {
-        ChannelError::Platform(format!("{action}: {e}"))
-    }
-}
-
-/// Extract `data.<key>` as an owned string from a Feishu API response.
-fn resp_data_str(resp: &serde_json::Value, key: &str) -> Option<String> {
-    resp["data"][key].as_str().map(str::to_string)
-}
-
-fn check_api_resp(resp: serde_json::Value) -> Result<serde_json::Value, ChannelError> {
-    let code = resp["code"].as_i64().unwrap_or(-1);
-    if code != 0 {
-        return Err(ChannelError::Platform(format!(
-            "API error {code}: {}",
-            resp["msg"].as_str().unwrap_or("unknown")
-        )));
-    }
-    Ok(resp)
-}

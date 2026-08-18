@@ -1,4 +1,4 @@
-use super::strip_bot_mention;
+use crate::channels::feishu_text::strip_bot_mention;
 use crate::channels::PlatformAdapter;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -1821,7 +1821,7 @@ async fn e2e_ws_gateway_pongs_keep_connection_alive() {
         loop {
             interval.tick().await;
             let mut w = ping_write.lock().await;
-            let ping = super::build_ping(service_id);
+            let ping = crate::channels::feishu_events::build_ping(service_id);
             if w.send(tungstenite::Message::Binary(ping.into()))
                 .await
                 .is_err()
