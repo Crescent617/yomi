@@ -70,7 +70,7 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
                     "tag": "column", "width": "auto",
                     "elements": [{
                         "tag": "button",
-                        "text": { "tag": "plain_text", "content": "✕" },
+                        "text": { "tag": "plain_text", "content": "🗑" },
                         "type": "text",
                         "behaviors": [{ "type": "callback", "value": { "action": "mb_retract", "sid": sid.0, "item": item.id } }],
                     }],
