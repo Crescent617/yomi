@@ -7041,3 +7041,111 @@ async fn mailbox_command_show_retract_clear_and_card_actions() {
     ));
     kernel.stop();
 }
+
+/// `/q` 带图：图片经延迟下载进入排队消息（与 /steer 同路径），不被丢弃。
+#[tokio::test]
+async fn queue_command_carries_images() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((s, _)) = listener.accept().await {
+            held.push(s);
+        }
+    });
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        models: vec![crate::provider::ModelConfig {
+            name: "blackhole".into(),
+            endpoint: format!("http://{addr}"),
+            ..Default::default()
+        }],
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+    kernel.start();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    *mock.image_download_ok.lock().await = true;
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "app".into(),
+            app_secret: "secret".into(),
+        },
+        require_mention: true,
+        ..Default::default()
+    };
+    let (sid, _) = get_or_create_session("mock", &store, &kernel, "oc_1", "oc_1", None)
+        .await
+        .unwrap();
+    let text = |t: &str| {
+        vec![ContentBlock::Text {
+            text: t.to_string(),
+        }]
+    };
+    kernel.send_message(&sid, text("blocker")).await.unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if kernel.get_session(&sid).await.unwrap().phase == "streaming" {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "agent not blocked");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    let reply = handle_incoming_message(
+        "mock",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        ChannelMessage {
+            external_chat_id: "oc_1".to_string(),
+            external_user_id: "ou_1".to_string(),
+            external_message_id: Some("m1".to_string()),
+            is_mention: true,
+            raw_text: Some("/q 看图说话".to_string()),
+            content: text("/q 看图说话"),
+            image_keys: vec!["img_1".to_string()],
+            thread_id: None,
+            root_id: None,
+            parent_id: None,
+            is_group: true,
+            create_time: Some(1000),
+            doc_comment: None,
+        },
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert!(reply.is_none(), "/q sends no reply");
+
+    let snap = loop {
+        let snap = kernel.mailbox_snapshot(&sid).await;
+        if snap.queue.len() == 1 {
+            break snap;
+        }
+        assert!(std::time::Instant::now() < deadline, "queue never landed");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    let item = &snap.queue[0];
+    assert!(
+        item.preview.contains("看图说话"),
+        "preview: {}",
+        item.preview
+    );
+    assert!(
+        item.blocks_len >= 2,
+        "image block must ride along: blocks_len={}",
+        item.blocks_len
+    );
+    kernel.stop();
+}

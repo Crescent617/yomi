@@ -1286,6 +1286,8 @@ impl Kernel {
         let removed = mb.remove(&crate::types::MailboxItemId::from(item_id)).await;
         if removed {
             self.conductor.emit_mailbox_changed(session_id, &mb).await;
+        } else {
+            tracing::debug!(session_id = %session_id.0, item_id, "mailbox retract: item not pending");
         }
         removed
     }
@@ -1300,6 +1302,7 @@ impl Kernel {
         let Some(AgentInput::User { content }) =
             mb.take(&crate::types::MailboxItemId::from(item_id)).await
         else {
+            tracing::debug!(session_id = %session_id.0, item_id, "mailbox steer-promote: item not pending");
             return false;
         };
         mb.push_steer(mark_user_steer(content)).await;

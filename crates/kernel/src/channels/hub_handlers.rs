@@ -198,6 +198,15 @@ pub(crate) async fn handle_incoming_message(
             blocks.push(ContentBlock::Text { text });
             // The title was just fed from the user's own text — don't
             // let send_message re-extract it from the merged blocks.
+            // Deferred image download — as for a plain trigger, only
+            // now, after the gate, does an attached image cost bandwidth.
+            append_message_images(
+                adapter,
+                msg.external_message_id.as_deref().unwrap_or(""),
+                &msg.image_keys,
+                &mut blocks,
+            )
+            .await;
             kernel.send_message_inner(&sid, blocks, false).await?;
             Ok(None)
         }

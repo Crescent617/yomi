@@ -15,9 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.96] - 2026-08-18
+
 ### Added
 
-- 会话 pending 消息现在可以查看和管理：`yomi session mailbox` 列出 steer 与排队消息，`session mailbox-remove <id>` 撤回单条，`session mailbox-clear [--steer|--queue]` 按队列清空（均只影响待处理消息，不打断当前运行）；前端可经 rpc 管理并订阅 mailbox 变更事件实时刷新。
+- 会话 pending 消息（steer/排队）可查看和管理：CLI `yomi session mailbox` 查看、`session mailbox-remove` 撤回、`session mailbox-clear` 清空；飞书 `/mailbox`（`/mb`）卡片命令（每条消息一行小字，🗑 删除单条，🔄 刷新 / 🧹 清空按钮，仅 admin）；GUI/TUI 的 pending 面板支持多条显示、撤回、转 steer、编辑重发。均只影响待处理消息，不打断当前运行；前端可经 rpc 管理并订阅 mailbox 变更事件实时刷新。
+- `/q`（`/queue`）排队消息现在携带图片附件（此前静默丢弃）。
 
 ## [0.7.95] - 2026-08-18
 
