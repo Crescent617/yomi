@@ -114,3 +114,18 @@ async fn preview_flattens_and_truncates() {
     assert!(snap.queue[0].preview.ends_with('…'));
     assert!(snap.queue[0].preview.chars().count() <= 80);
 }
+
+#[test]
+fn mailbox_item_deserializes_without_has_image() {
+    // 旧 daemon（0.7.96）的快照没有 has_image：新前端必须能反序列化。
+    let json = serde_json::json!({
+        "id": "mbx_1",
+        "kind": "queue",
+        "preview": "hello",
+        "text": "hello",
+        "blocks_len": 1,
+        "enqueued_at": "2026-08-18T00:00:00Z"
+    });
+    let item: crate::comms::MailboxItem = serde_json::from_value(json).unwrap();
+    assert!(!item.has_image);
+}

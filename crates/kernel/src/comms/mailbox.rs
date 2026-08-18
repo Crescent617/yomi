@@ -49,7 +49,9 @@ pub struct MailboxItem {
     pub preview: String,
     /// 首个文本块的全文（供前端"编辑后重发"）；非文本消息为 None。
     pub text: Option<String>,
-    /// 是否含非文本块（图片等附件）——面板显示 📎 用。
+    /// 是否含非文本块（图片等附件）——面板显示 📎 用。default：兼容
+    /// 还没有该字段的旧 daemon。
+    #[serde(default)]
     pub has_image: bool,
     pub blocks_len: usize,
     pub enqueued_at: chrono::DateTime<chrono::Utc>,
