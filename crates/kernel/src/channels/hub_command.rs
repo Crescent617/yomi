@@ -1,9 +1,11 @@
 //! Channel slash-command definitions, parsing, and reply formatting.
 
-use crate::storage::format_age;
 use std::fmt::Write as _;
 
+use crate::storage::format_age;
+
 use super::obs::fmt_k;
+use super::reply::ctx_footer;
 
 pub(crate) const CMD_MODELS: &str = "/models";
 
@@ -463,10 +465,10 @@ pub(crate) fn format_session_info(
     let context = match context_tokens {
         Some(tokens) => match found {
             Some(m) => format!(
-                "{}/{} ({:.0}%)",
+                "{}/{} ({})",
                 fmt_k(tokens),
                 fmt_k(m.context_window),
-                f64::from(tokens) * 100.0 / f64::from(m.context_window.max(1))
+                ctx_footer(tokens, m.context_window)
             ),
             None => fmt_k(tokens),
         },

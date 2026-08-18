@@ -980,17 +980,14 @@ pub(crate) fn sessions_card(offset: usize, entries: &[SessionEntry], has_more: b
             "content": format!("下一页 → `/sessions {}`", offset + SESSIONS_PAGE_SIZE)
         }));
     }
-    serde_json::json!({
-        "schema": "2.0",
-        "config": { "width_mode": "compact" },
-        "header": {
-            "template": "blue",
-            "title": {"tag": "plain_text",
-                "content": format!("📋 Recent sessions ({}–{})", offset + 1, offset + entries.len())},
-        },
-        "body": { "elements": elements },
-    })
-    .to_string()
+    super::hub_deliver::info_card_envelope(
+        &format!(
+            "📋 Recent sessions ({}–{})",
+            offset + 1,
+            offset + entries.len()
+        ),
+        elements,
+    )
 }
 
 /// The display title for a `/sessions` line: sanitized (see

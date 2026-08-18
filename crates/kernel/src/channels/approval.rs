@@ -95,7 +95,6 @@ pub(super) async fn handle_doc_permission_applied(
 
 // ── Commands ───────────────────────────────────────────────────────
 
-/// `/permits` — list this channel's pending applications (admin only).
 /// The `/permits` list body (no admin check — the caller gates).
 pub(super) async fn pending_list_body(
     channel_name: &str,

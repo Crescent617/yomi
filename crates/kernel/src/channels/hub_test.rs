@@ -3800,16 +3800,8 @@ async fn model_commands_do_not_claim_fresh_thread() {
     .await
     .unwrap();
     assert!(reply.is_none(), "info replies go through the adapter");
-    {
-        let outgoing = mock.outgoing.lock().await;
-        let Some((_, blocks)) = outgoing.last() else {
-            panic!("/models sent nothing")
-        };
-        let Some(ContentBlock::Text { text }) = blocks.first() else {
-            panic!("not a text reply")
-        };
-        assert!(text.contains("`m1`"), "models list: {text}");
-    }
+    let text = last_outgoing_text(&mock).await;
+    assert!(text.contains("`m1`"), "models list: {text}");
     assert!(!thread_claimed().await, "/models must not claim the thread");
 
     // /info: degrades to the resolved model, no mapping created.

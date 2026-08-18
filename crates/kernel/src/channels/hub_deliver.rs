@@ -354,6 +354,11 @@ pub(crate) async fn send_command_reply(
 /// Info-command reply: a header-titled compact card on card-capable
 /// platforms (the `/sessions` style — title lives in the blue header);
 /// plain text with the title as a bold first line everywhere else.
+///
+/// Sent inline, so the dispatch loop waits one platform RTT (the same
+/// shape `/sessions` has always had): the command's feedback lands in
+/// order, and a failed send surfaces as a handler error (leaving the
+/// history cursor put) instead of a fire-and-forget log line.
 pub(crate) async fn send_info_reply(
     adapter: &Arc<dyn PlatformAdapter>,
     msg: &ChannelMessage,
@@ -371,9 +376,10 @@ pub(crate) async fn send_info_reply(
     send_command_reply(adapter, msg, reply_msg_id, format!("**{title}**\n\n{body}")).await
 }
 
-/// The shared info card: blue header + single markdown body (mirrors
-/// [`sessions_card`](super::hub_handlers::sessions_card)'s compact style).
-fn info_card(title: &str, body_md: &str) -> String {
+/// The shared info-card envelope: blue header + compact body — the
+/// `/sessions` style, reused by every info card (single-markdown-body
+/// via [`info_card`], multi-element via `/sessions`).
+pub(crate) fn info_card_envelope(title: &str, elements: Vec<serde_json::Value>) -> String {
     serde_json::json!({
         "schema": "2.0",
         "config": { "width_mode": "compact" },
@@ -381,9 +387,16 @@ fn info_card(title: &str, body_md: &str) -> String {
             "template": "blue",
             "title": { "tag": "plain_text", "content": title },
         },
-        "body": { "elements": [ { "tag": "markdown", "content": body_md } ] },
+        "body": { "elements": elements },
     })
     .to_string()
+}
+
+fn info_card(title: &str, body_md: &str) -> String {
+    info_card_envelope(
+        title,
+        vec![serde_json::json!({ "tag": "markdown", "content": body_md })],
+    )
 }
 
 /// How a run ends, for reply-delivery purposes.
