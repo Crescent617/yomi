@@ -37,7 +37,8 @@ fn parse_scope(v: &serde_json::Value) -> MailboxScope {
 }
 
 /// Pending 卡（info 卡同款蓝头 compact）：每行小字内容（preview ≤80
-/// 字符）+ 一个 ✕ 小按钮；底部仅 刷新/清空 两个按钮，按钮极简化。
+/// 字符）+ 行尾 ❌ 撤回按钮（text 型无边框）；底部 刷新/清空 为
+/// default 边框 small 按钮。
 pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> String {
     let items = merged(snapshot);
     let mut elements: Vec<serde_json::Value> = Vec::new();
@@ -70,7 +71,7 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
                     "tag": "column", "width": "auto",
                     "elements": [{
                         "tag": "button",
-                        "text": { "tag": "plain_text", "content": "🗑" },
+                        "text": { "tag": "plain_text", "content": "❌" },
                         "type": "text",
                         "behaviors": [{ "type": "callback", "value": { "action": "mb_retract", "sid": sid.0, "item": item.id } }],
                     }],
@@ -94,7 +95,8 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
                     "elements": [{
                         "tag": "button",
                         "text": { "tag": "plain_text", "content": "🔄 刷新" },
-                        "type": "text",
+                        "type": "default",
+                        "size": "small",
                         "behaviors": [{ "type": "callback", "value": { "action": "mb_refresh", "sid": sid.0 } }],
                     }],
                 },
@@ -103,7 +105,8 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
                     "elements": [{
                         "tag": "button",
                         "text": { "tag": "plain_text", "content": "🧹 清空" },
-                        "type": "text",
+                        "type": "default",
+                        "size": "small",
                         "behaviors": [{ "type": "callback", "value": { "action": "mb_clear", "sid": sid.0, "scope": "all" } }],
                     }],
                 },
@@ -117,7 +120,8 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
                 "elements": [{
                     "tag": "button",
                     "text": { "tag": "plain_text", "content": "🔄 刷新" },
-                    "type": "text",
+                    "type": "default",
+                    "size": "small",
                     "behaviors": [{ "type": "callback", "value": { "action": "mb_refresh", "sid": sid.0 } }],
                 }],
             }],
@@ -266,5 +270,82 @@ pub(super) async fn handle_mailbox_command(
                 Ok(Some(format!("#{n} is already gone (consumed).")))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::comms::{MailboxItem, MailboxItemKind};
+    use crate::types::MailboxItemId;
+
+    fn item(kind: MailboxItemKind, preview: &str) -> MailboxItem {
+        MailboxItem {
+            id: MailboxItemId::new(),
+            kind,
+            preview: preview.to_string(),
+            text: Some(preview.to_string()),
+            has_image: false,
+            blocks_len: 1,
+            enqueued_at: chrono::Utc::now(),
+        }
+    }
+
+    /// 递归收集卡片里全部 button 节点。
+    fn buttons_of(card: &str) -> Vec<serde_json::Value> {
+        fn walk(v: &serde_json::Value, out: &mut Vec<serde_json::Value>) {
+            if v["tag"] == "button" {
+                out.push(v.clone());
+            }
+            if let Some(arr) = v.as_array() {
+                for e in arr {
+                    walk(e, out);
+                }
+            }
+            if let Some(obj) = v.as_object() {
+                for e in obj.values() {
+                    walk(e, out);
+                }
+            }
+        }
+        let v: serde_json::Value = serde_json::from_str(card).unwrap();
+        let mut out = Vec::new();
+        walk(&v, &mut out);
+        out
+    }
+
+    #[test]
+    fn footer_buttons_are_small_bordered_row_buttons_stay_text() {
+        let sid = SessionId::new();
+        let snapshot = MailboxSnapshot {
+            steer: vec![item(MailboxItemKind::Steer, "[From User] 快点")],
+            queue: vec![item(MailboxItemKind::Queue, "条目甲")],
+        };
+        let card = pending_card(&sid, &snapshot);
+        let btns = buttons_of(&card);
+        // 两行 ❌ + 底部刷新/清空。
+        assert_eq!(btns.len(), 4, "{card}");
+        for b in btns.iter().filter(|b| b["text"]["content"] != "❌") {
+            assert_eq!(b["type"], "default", "底部按钮带边框: {b}");
+            assert_eq!(b["size"], "small", "底部按钮小号: {b}");
+        }
+        for b in btns.iter().filter(|b| b["text"]["content"] == "❌") {
+            assert_eq!(b["type"], "text", "行尾 ❌ 保持无边框: {b}");
+        }
+        // steer 行剥离 [From User] 前缀 + 灰色后缀。
+        assert!(
+            card.contains("快点 <font color='grey'>· steer</font>"),
+            "{card}"
+        );
+    }
+
+    #[test]
+    fn empty_state_refresh_button_is_small_bordered() {
+        let sid = SessionId::new();
+        let card = pending_card(&sid, &MailboxSnapshot::default());
+        let btns = buttons_of(&card);
+        assert_eq!(btns.len(), 1, "{card}");
+        assert_eq!(btns[0]["type"], "default");
+        assert_eq!(btns[0]["size"], "small");
     }
 }
