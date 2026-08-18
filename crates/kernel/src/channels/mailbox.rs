@@ -76,6 +76,7 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
                         "tag": "button",
                         "text": { "tag": "plain_text", "content": "❌" },
                         "type": "text",
+                        "size": "small",
                         "behaviors": [{ "type": "callback", "value": { "action": "mb_retract", "sid": sid.0, "item": item.id } }],
                     }],
                 },
@@ -332,6 +333,7 @@ mod tests {
         }
         for b in btns.iter().filter(|b| b["text"]["content"] == "❌") {
             assert_eq!(b["type"], "text", "行尾 ❌ 保持无边框: {b}");
+            assert_eq!(b["size"], "small", "行尾 ❌ 同样小号: {b}");
         }
         // steer 行剥离 [From User] 前缀 + 灰色后缀。
         assert!(
