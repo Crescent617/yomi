@@ -510,6 +510,13 @@
         bind:this={fileTabsElement}
         role="tablist"
         aria-label="Changed files"
+        onwheel={(e) => {
+          // 竖向滚轮转横向滚动：overflow-x 容器对鼠标竖轮天然无响应。
+          if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+            e.preventDefault();
+            e.currentTarget.scrollLeft += e.deltaY;
+          }
+        }}
       >
         {#each files as file (file.path)}
           <button
