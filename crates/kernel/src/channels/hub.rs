@@ -716,26 +716,6 @@ impl ChannelHub {
                             ).await;
                         }
 
-                        // `/mailbox` Pending 卡自动刷新：mailbox 内容变化
-                        // （入队/消费/撤回/清空）时原地 PATCH 注册的卡片。
-                        if matches!(envelope.event, Event::Agent(AgentEvent::MailboxChanged { .. }))
-                        {
-                            let (kernel_weak, adapter_mb, sid_mb) =
-                                (kernel.clone(), Arc::clone(&adapter), session_id.clone());
-                            tokio::spawn(async move {
-                                let Some(k) = kernel_weak.upgrade() else {
-                                    return;
-                                };
-                                super::mailbox::refresh_tracked_card(
-                                    &k.mailbox_card_registry,
-                                    &k,
-                                    &adapter_mb,
-                                    &sid_mb,
-                                )
-                                .await;
-                            });
-                        }
-
                         // Typing indicator as the fallback progress signal on
                         // platforms without status cards (or when
                         // observability is disabled).

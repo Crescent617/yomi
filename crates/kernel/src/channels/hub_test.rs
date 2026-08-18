@@ -6976,22 +6976,25 @@ async fn mailbox_command_show_retract_clear_and_card_actions() {
         );
     }
 
-    // 发卡已进注册表；事件钩子按最新快照 PATCH 注册卡片。
-    assert!(kernel.mailbox_card_registry.contains_key(&sid));
-    crate::channels::mailbox::refresh_tracked_card(
-        &kernel.mailbox_card_registry,
+    // 🔄 刷新按钮：无变更也原地刷新一次（PATCH 到按钮所在卡片）。
+    crate::channels::mailbox::handle_card_action(
+        "mock",
+        &config,
         &kernel,
         &adapter,
-        &sid,
+        crate::channels::CardAction {
+            operator_open_id: "ou_admin".to_string(),
+            chat_id: Some("oc_1".to_string()),
+            message_id: Some("om_card".to_string()),
+            value: serde_json::json!({"action": "mb_refresh", "sid": sid.0}),
+        },
     )
     .await;
     {
         let patches = mock.patches.lock().await;
         assert!(
-            patches
-                .iter()
-                .any(|(mid, card)| mid == "card-msg-1" && card.contains("Pending (2)")),
-            "auto-refresh patches the tracked card: {patches:?}"
+            patches.iter().filter(|(mid, _)| mid == "om_card").count() >= 2,
+            "refresh button re-patches the card: {patches:?}"
         );
     }
 

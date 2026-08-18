@@ -16,38 +16,6 @@ use super::{CardAction, ChannelConfig, PlatformAdapter};
 /// 卡片/文本可见行数；溢出折叠成提示。
 const VISIBLE_ROWS: usize = 8;
 
-/// `/mailbox` Pending 卡注册表：session → 最新一张卡片的位置。卡片随
-/// `MailboxChanged` 事件原地刷新（否则随消费/入队即刻过期）；新的
-/// `/mailbox` 覆盖旧条目，会话删除后的残留条目无害（PATCH 失败仅告警）。
-pub(crate) type MailboxCardRegistry = dashmap::DashMap<SessionId, MailboxCardRef>;
-
-/// 一张待刷新的 Pending 卡的位置。
-#[derive(Debug, Clone)]
-pub(crate) struct MailboxCardRef {
-    pub chat_id: String,
-    pub msg_id: String,
-}
-
-/// 事件钩子（forwarder 在 `MailboxChanged` 时调用）：取最新快照重渲染
-/// 并 PATCH 注册的卡片。未注册 = no-op。
-pub(crate) async fn refresh_tracked_card(
-    registry: &MailboxCardRegistry,
-    kernel: &Kernel,
-    adapter: &Arc<dyn PlatformAdapter>,
-    sid: &SessionId,
-) {
-    let Some(card_ref) = registry.get(sid).map(|e| e.value().clone()) else {
-        return;
-    };
-    let snapshot = kernel.mailbox_snapshot(sid).await;
-    if let Err(e) = adapter
-        .update_card(&card_ref.msg_id, &pending_card(sid, &snapshot))
-        .await
-    {
-        warn!(session_id = %sid.0, error = %e, "mailbox card auto-refresh failed");
-    }
-}
-
 /// `/mailbox` 的子操作（命令解析产物）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MailboxSub {
@@ -151,6 +119,20 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
             ],
         }));
     }
+    // 手动刷新：卡片不自动跟踪 mailbox 变化（多卡片并存时注册表难以
+    // 维护），需要时用户点一下或重发 `/mailbox`。
+    elements.push(serde_json::json!({
+        "tag": "column_set",
+        "columns": [{
+            "tag": "column", "width": "weighted", "weight": 1,
+            "elements": [{
+                "tag": "button",
+                "text": { "tag": "plain_text", "content": "🔄 刷新" },
+                "type": "default",
+                "behaviors": [{ "type": "callback", "value": { "action": "mb_refresh", "sid": sid.0 } }],
+            }],
+        }],
+    }));
     info_card_envelope(&format!("⏳ Pending ({})", items.len()), elements)
 }
 
@@ -172,11 +154,11 @@ pub(super) fn pending_text(snapshot: &MailboxSnapshot) -> String {
     lines.join("\n")
 }
 
-/// 按钮回调（`mb_retract` / `mb_clear`）：执行后尽量原地刷新卡片
-/// （read-modify-write 后刷新一次快照——与并发事件交错时可能不是最
-/// 新，但 mailbox_changed 事件链保证各端最终收敛；与 approval 的
-/// read-then-write 同级假设）；拿不到消息 id 时静默（用户可 `/mailbox`
-/// 再看）；失败回一条反馈。
+/// 按钮回调（`mb_retract` / `mb_clear` / `mb_refresh`）：执行后原地
+/// 刷新这张卡片（read-modify-write 后取一次快照——与并发事件交错时
+/// 可能不是最新，但 mailbox_changed 事件链保证各端最终收敛）。卡片
+/// 不跟踪 mailbox 变化自动刷新：多卡片并存时注册表难维护，需要最新
+/// 状态点 🔄 或重发 `/mailbox`。
 pub(super) async fn handle_card_action(
     channel_name: &str,
     config: &ChannelConfig,
@@ -224,6 +206,7 @@ async fn handle_card_action_inner(
                 .clear_mailbox(&sid, parse_scope(&value["scope"]))
                 .await;
         }
+        Some("mb_refresh") => {}
         other => {
             warn!(value = %value, "unrecognized mailbox card action {other:?}");
             return Ok(());
@@ -254,23 +237,13 @@ pub(super) async fn handle_mailbox_command(
                 return Ok(Some("Mailbox is empty.".to_string()));
             }
             if msg.doc_comment.is_none() && adapter.supports_status_card() {
-                let msg_id = adapter
+                adapter
                     .send_card(
                         &msg.external_chat_id,
                         &pending_card(sid, &snapshot),
                         reply_msg_id.as_deref(),
                     )
                     .await?;
-                // 注册进自动刷新：此后 mailbox 变动由事件驱动原地 PATCH。
-                if let Some(msg_id) = msg_id {
-                    kernel.mailbox_card_registry.insert(
-                        sid.clone(),
-                        MailboxCardRef {
-                            chat_id: msg.external_chat_id.clone(),
-                            msg_id,
-                        },
-                    );
-                }
                 return Ok(None);
             }
             Ok(Some(pending_text(&snapshot)))
