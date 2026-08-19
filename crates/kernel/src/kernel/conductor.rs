@@ -491,21 +491,24 @@ impl Conductor {
 
         let is_sub_agent = sid.starts_with(crate::types::SUB_PREFIX);
 
-        // ask_user needs an interactive user to answer: channel sessions
-        // (and their subagent descendants) have none, and sub-agents never
-        // talk to the user directly — they report to the parent (async
-        // ones via post_message), which relays questions instead.
-        // Temporary heuristic until per-session tool_blocklist is persisted
-        // in session meta at creation time.
+        // ask_user needs an interactive surface to answer on: sub-agents
+        // never talk to the user directly (they report to the parent), and
+        // channel sessions get the tool only when their channel renders
+        // the question card (Feishu); on plain platforms it would time out
+        // after 2 minutes, so it stays blocked there.
         // Channel routing shapes two decisions below (ask_user blocklist,
         // mention prompt section) — resolve it once. Subagent sessions
         // carry no mapping of their own; the parent chain is walked.
         let channel_routed = self.is_channel_routed(sid, session_info.as_ref()).await;
+        let ask_card_capable = match &self.agent_shared.channel_hub {
+            Some(hub) if !is_sub_agent => hub.session_channel_supports_cards(sid).await,
+            _ => false,
+        };
         let mut tool_blocklist = self.agent_config.tool_blocklist.clone();
         if !tool_blocklist
             .iter()
             .any(|p| p == crate::tools::ask_user::ASK_USER_TOOL_NAME)
-            && (is_sub_agent || channel_routed)
+            && (is_sub_agent || (channel_routed && !ask_card_capable))
         {
             tool_blocklist.push(crate::tools::ask_user::ASK_USER_TOOL_NAME.to_string());
         }

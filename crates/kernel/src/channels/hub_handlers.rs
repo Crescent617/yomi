@@ -252,15 +252,7 @@ pub(crate) async fn handle_incoming_message(
                     .await?
                     .is_none();
             if chat_level {
-                set_chat_model(
-                    channel_name,
-                    store,
-                    &kernel,
-                    &chat_id,
-                    Some(&key),
-                    adapter.supports_status_card(),
-                )
-                .await?;
+                set_chat_model(channel_name, store, &kernel, &chat_id, Some(&key)).await?;
                 return Ok(Some(format!(
                     "Switched all threads in this chat to `{key}`. It takes effect on the next model invocation."
                 )));
@@ -274,7 +266,6 @@ pub(crate) async fn handle_incoming_message(
                 &chat_id,
                 &mapping_key,
                 reply_msg_id.as_deref(),
-                adapter.supports_status_card(),
             )
             .await?;
             kernel.set_session_model(&sid, &key).await?;
@@ -1131,18 +1122,9 @@ pub(crate) async fn set_chat_model(
     kernel: &Arc<Kernel>,
     chat_id: &str,
     key: Option<&str>,
-    supports_cards: bool,
 ) -> Result<()> {
-    let (chat_sid, _) = get_or_create_session(
-        channel_name,
-        store,
-        kernel,
-        chat_id,
-        chat_id,
-        None,
-        supports_cards,
-    )
-    .await?;
+    let (chat_sid, _) =
+        get_or_create_session(channel_name, store, kernel, chat_id, chat_id, None).await?;
     match key {
         Some(k) => kernel.set_session_model(&chat_sid, k).await?,
         None => kernel.clear_session_model(&chat_sid).await?,

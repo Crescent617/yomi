@@ -278,22 +278,19 @@ async fn handle_card_action_inner(
             // Same pseudo-option rule: a configured key switches, anything
             // else (the "default (...)" label) resets.
             let key = state_model_key(kernel, opt).await;
-            // The settings card only exists on card-capable platforms.
             super::hub_handlers::set_chat_model(
                 channel_name,
                 store,
                 kernel,
                 chat_id,
                 key.as_deref(),
-                true,
             )
             .await?;
         }
         Some("cfg_reset_all") => {
             store.clear_mention_override(channel_name, chat_id).await?;
             store.clear_rit_override(channel_name, chat_id).await?;
-            super::hub_handlers::set_chat_model(channel_name, store, kernel, chat_id, None, true)
-                .await?;
+            super::hub_handlers::set_chat_model(channel_name, store, kernel, chat_id, None).await?;
         }
         Some("cfg_refresh") => {}
         other => {

@@ -6904,7 +6904,7 @@ async fn mailbox_command_show_retract_clear_and_card_actions() {
     assert!(reply.unwrap().contains("No session yet"));
 
     // 建会话并占住 agent（首个模型请求挂起）。
-    let (sid, _) = get_or_create_session("mock", &store, &kernel, "oc_1", "oc_1", None, true)
+    let (sid, _) = get_or_create_session("mock", &store, &kernel, "oc_1", "oc_1", None)
         .await
         .unwrap();
     let text = |t: &str| {
@@ -7087,7 +7087,7 @@ async fn queue_command_carries_images() {
         require_mention: true,
         ..Default::default()
     };
-    let (sid, _) = get_or_create_session("mock", &store, &kernel, "oc_1", "oc_1", None, true)
+    let (sid, _) = get_or_create_session("mock", &store, &kernel, "oc_1", "oc_1", None)
         .await
         .unwrap();
     let text = |t: &str| {

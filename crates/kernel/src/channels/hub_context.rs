@@ -287,7 +287,6 @@ pub(crate) async fn prepare_trigger(
         &chat_id,
         &mapping_key,
         reply_msg_id.as_deref(),
-        adapter.supports_status_card(),
     )
     .await?;
     record_receipt(config, obs, kernel, &sid, msg);

@@ -1000,6 +1000,19 @@ impl ChannelHub {
             Ok(Some(_))
         )
     }
+
+    /// Whether the channel this session routes to can render cards —
+    /// the ask_user question card exists only on such surfaces (text
+    /// platforms keep the tool blocked to avoid the 2-minute timeout).
+    /// `false` for unrouted sessions and unknown channels alike.
+    pub async fn session_channel_supports_cards(&self, session_id: &SessionId) -> bool {
+        let Ok(Some(routing)) = self.store.find_routing_by_session(session_id).await else {
+            return false;
+        };
+        self.instances
+            .get(&routing.channel_name)
+            .is_some_and(|instance| instance.adapter.supports_status_card())
+    }
 }
 
 fn build_adapter(

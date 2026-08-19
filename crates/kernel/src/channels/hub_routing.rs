@@ -310,7 +310,6 @@ pub(crate) async fn get_or_create_session(
     chat_id: &str,
     mapping_key: &str,
     reply_msg_id: Option<&str>,
-    supports_cards: bool,
 ) -> Result<(SessionId, bool)> {
     if let Some(sid) = store.find_mapping(channel_name, mapping_key).await? {
         info!(channel = %channel_name, mapping_key, session_id = %sid.0, "reusing session");
@@ -333,14 +332,11 @@ pub(crate) async fn get_or_create_session(
             project_id: None,
             working_dir: None,
             auto_approve_level: Some(crate::permission::Level::Dangerous),
-            // ask_user needs a card-capable surface to render its
-            // question card; on plain platforms it would just time out
-            // after 2 minutes, so it stays blocked there.
-            tool_blocklist: if supports_cards {
-                vec![]
-            } else {
-                vec![crate::tools::ask_user::ASK_USER_TOOL_NAME.to_string()]
-            },
+            // NB: ask_user is not blocked here — the conductor decides at
+            // agent start, based on whether the routed channel can render
+            // the question card (CreateSessionInput::tool_blocklist is a
+            // reserved field, currently unused).
+            tool_blocklist: vec![],
             model_key,
         })
         .await?;
