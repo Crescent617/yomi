@@ -332,10 +332,11 @@ pub(crate) async fn get_or_create_session(
             project_id: None,
             working_dir: None,
             auto_approve_level: Some(crate::permission::Level::Dangerous),
-            // NB: ask_user is not blocked here — the conductor decides at
-            // agent start, based on whether the routed channel can render
-            // the question card (CreateSessionInput::tool_blocklist is a
-            // reserved field, currently unused).
+            // NB: ask_user 已整体下线（tools/mod.rs 不注册）；conductor
+            // 的 blocklist heuristic 随之惰性（历史上按"路由 channel 能否
+            // 渲染问题卡"判定）。
+            // (CreateSessionInput::tool_blocklist is a reserved field,
+            // currently unused).
             tool_blocklist: vec![],
             model_key,
         })

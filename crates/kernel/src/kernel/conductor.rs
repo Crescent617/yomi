@@ -508,6 +508,9 @@ impl Conductor {
         // channel sessions get the tool only when their channel renders
         // the question card (Feishu); on plain platforms it would time out
         // after 2 minutes, so it stays blocked there.
+        // NB (2026-08): ask_user 已整体下线（tools/mod.rs 不再注册），
+        // 本 heuristic 随之惰性（blocklist 匹配不到任何已注册工具），
+        // 保留仅以便工具回归时恢复。
         // Channel routing shapes two decisions below (ask_user blocklist,
         // mention prompt section) — resolve it once. Subagent sessions
         // carry no mapping of their own; the parent chain is walked.

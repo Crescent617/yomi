@@ -354,13 +354,11 @@ impl ToolRegistry {
             }
         }
 
-        // Register ask_user tool if input_bus is available
-        if let Some(input_bus) = config.input_bus {
-            self.register(AskUserTool::new(
-                config.event_bus.clone(),
-                Arc::clone(input_bus),
-            ));
-        }
+        // ask_user 整体下线（2026-08）：交互价值不抵问题（多题聚合、
+        // 长 label 截断、自定义文本三缺陷），所有端一律不注册。工具
+        // 本体、AskUserQuestion/Ack 事件、channel 决策卡渲染与 RPC
+        // 应答面全部保留（不接线），恢复时只需还原本段注册；聚合/文
+        // 本回答修复存于分支 ask-user-fix-wip。
 
         // Apply tool blocklist (regex patterns) — remove matching tools from the registry.
         // Patterns compile individually: a bad entry is skipped with a warn,

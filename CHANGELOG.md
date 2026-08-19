@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- `ask_user` 工具整体下线：agent 不再能在任何端（GUI / CLI / TUI / 飞书等渠道）向用户发起选择题提问；已有会话里模型会感知到该工具不存在，改为直接在回复中提问。
+
 ## [0.8.1] - 2026-08-19
 
 ### Added
