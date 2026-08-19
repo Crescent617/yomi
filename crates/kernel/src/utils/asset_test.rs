@@ -180,3 +180,65 @@ async fn process_marks_missing_asset_unavailable_without_annotation() {
     };
     assert!(text.starts_with("[image unavailable:"), "{text}");
 }
+
+#[test]
+fn strip_drops_annotations_but_keeps_user_text_and_images() {
+    let img = || crate::types::ContentBlock::ImageUrl {
+        image_url: "data:image/png;base64,xx".to_string().into(),
+    };
+    let txt = |s: &str| crate::types::ContentBlock::Text {
+        text: s.to_string(),
+    };
+    let blocks = vec![
+        txt("check this"),
+        img(),
+        txt("[image 1: /Users/x/.yomi/assets/ab.jpg]"),
+        txt("and this stays"),
+        img(),
+        txt("[image 2: /abs/cd.png]"),
+        txt("[image 1: not-an-abs-path]"),
+        txt("[image x: /abs]"),
+    ];
+    let out = strip_image_annotations(&blocks);
+    let texts: Vec<&str> = out
+        .iter()
+        .filter_map(|b| match b {
+            crate::types::ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "check this",
+            "and this stays",
+            "[image 1: not-an-abs-path]", // no "N: /" shape → not ours
+            "[image x: /abs]",            // non-digit → not ours
+        ],
+        "{texts:?}"
+    );
+    assert_eq!(
+        out.iter()
+            .filter(|b| matches!(b, crate::types::ContentBlock::ImageUrl { .. }))
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn process_strip_process_roundtrip_annotates_exactly_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let blocks = vec![crate::types::ContentBlock::ImageUrl {
+        image_url: to_data_url("image/png", b"roundtrip").into(),
+    }];
+    let first = process_image_blocks(blocks, dir.path()).await;
+    assert_eq!(first.len(), 2, "image + annotation: {first:?}");
+    // Strip (as persistence does), then process again (as read-back does).
+    let stripped = strip_image_annotations(&first);
+    let second = process_image_blocks(stripped, dir.path()).await;
+    let annotations = second
+        .iter()
+        .filter(|b| matches!(b, crate::types::ContentBlock::Text { text } if text.starts_with("[image 1: /")))
+        .count();
+    assert_eq!(annotations, 1, "no annotation growth: {second:?}");
+}

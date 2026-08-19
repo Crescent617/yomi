@@ -510,15 +510,18 @@ impl Agent {
         content: &[crate::types::ContentBlock],
         is_steer: bool,
     ) {
+        // Annotations are model-context decor — the user's own bubble
+        // must not show them (nor the host paths they carry).
+        let content = crate::utils::asset::strip_image_annotations(content);
         let event = if is_steer {
             crate::event::UserEvent::Steer {
                 message_id: message_id.clone(),
-                content: content.to_vec(),
+                content,
             }
         } else {
             crate::event::UserEvent::Message {
                 message_id: message_id.clone(),
-                content: content.to_vec(),
+                content,
             }
         };
         self.emit(Event::User(event));

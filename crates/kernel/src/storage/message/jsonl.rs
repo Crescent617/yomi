@@ -62,6 +62,9 @@ impl JsonlMessageStore {
 
     /// Serialize a message (extracting inline images) and write it to the file.
     async fn write_message(&self, file: &mut File, msg: &mut Message) -> Result<()> {
+        // Annotations are regenerated at read time — never persist them,
+        // or every read-back would add one more copy.
+        msg.content = crate::utils::asset::strip_image_annotations(&msg.content);
         crate::utils::asset::extract_inline_image(msg, &self.data_dir).await;
         let line = serde_json::to_string(msg).map_err(|e| storage_err(e.to_string()))?;
         file.write_all(line.as_bytes())

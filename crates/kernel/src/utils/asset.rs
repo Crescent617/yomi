@@ -60,9 +60,11 @@ pub async fn store_inline_image(url: &str, data_dir: &Path) -> Option<String> {
 
 /// Resolve an `asset://{hash}.{ext}` URL back to a base64 data URL.
 pub async fn resolve_asset_url(url: &str, data_dir: &Path) -> Option<String> {
-    let hash_ext = url.strip_prefix("asset://")?;
-    let path = data_dir.join("assets").join(hash_ext);
+    // asset_path performs the traversal check (flat {hash}.{ext} only) —
+    // never read outside the assets directory.
+    let path = asset_path(url, data_dir)?;
     let bytes = fs::read(&path).await.ok()?;
+    let hash_ext = url.strip_prefix("asset://")?;
     let ext = hash_ext.rsplit_once('.').map_or("bin", |(_, e)| e);
     let mime = mime_from_ext(ext);
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
@@ -97,6 +99,41 @@ pub async fn extract_inline_image(msg: &mut crate::types::Message, data_dir: &Pa
             }
         }
     }
+}
+
+/// The annotation format [`process_image_blocks`] appends after each
+/// resolved image — machine-recognizable so the blocks can be stripped
+/// back out wherever the pristine content is needed.
+fn is_image_annotation(text: &str) -> bool {
+    let Some(rest) = text.strip_prefix("[image ") else {
+        return false;
+    };
+    let Some((digits, suffix)) = rest.split_once(':') else {
+        return false;
+    };
+    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) && suffix.starts_with(" /")
+}
+
+/// Drop annotation blocks inserted by [`process_image_blocks`] (a
+/// `[image N: /…]` Text immediately following an ImageUrl block).
+/// Annotations are model-context decor, not message content: persistence
+/// (jsonl write) and user-facing rendering (live user events) strip them
+/// so the annotation is regenerated exactly once per read-back — never
+/// duplicated, never shown to the user as their own text.
+pub fn strip_image_annotations(
+    blocks: &[crate::types::ContentBlock],
+) -> Vec<crate::types::ContentBlock> {
+    let mut out = Vec::with_capacity(blocks.len());
+    let mut prev_was_image = false;
+    for block in blocks {
+        let is_annotation = prev_was_image
+            && matches!(block, crate::types::ContentBlock::Text { text } if is_image_annotation(text));
+        if !is_annotation {
+            out.push(block.clone());
+        }
+        prev_was_image = matches!(block, crate::types::ContentBlock::ImageUrl { .. });
+    }
+    out
 }
 
 /// Get the absolute filesystem path for an asset URL.
