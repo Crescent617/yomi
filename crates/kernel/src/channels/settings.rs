@@ -77,14 +77,15 @@ fn on_off(v: bool) -> &'static str {
     }
 }
 
-/// One label + select_static row (auto width — the select sizes itself
-/// to its longest option; weighted columns would stretch it unevenly).
-/// A STABLE `element_id` is mandatory: the client tracks per-select
-/// chosen state by it, and auto-assigned ids shift on every patch —
-/// without one the visible selection drifts to a wrong option and the
-/// client may even skip the callback ("no change"). The current value
-/// rides `value` (the option value, not `initial_index`: that one is
-/// 1-based in practice and displayed the wrong option — verified).
+/// One label + select_static row: label `auto` (natural width), select
+/// `weighted` (stretches over the rest — an auto select gets squeezed
+/// invisible in the narrow thread side panel, verified). A STABLE
+/// `element_id` is mandatory: the client tracks per-select chosen state
+/// by it, and auto-assigned ids shift on every patch — without one the
+/// visible selection drifts to a wrong option and the client may even
+/// skip the callback ("no change"). The current value rides `value`
+/// (the option value, not `initial_index`: that one is 1-based in
+/// practice and displayed the wrong option — verified).
 fn select_row(
     element_id: &str,
     label: &str,
@@ -105,11 +106,14 @@ fn select_row(
         "tag": "column_set",
         "columns": [
             {
-                "tag": "column", "width": "weighted", "weight": 1, "vertical_align": "center",
+                "tag": "column", "width": "auto", "vertical_align": "center",
                 "elements": [{ "tag": "markdown", "text_size": "notation", "content": label }],
             },
             {
-                "tag": "column", "width": "auto", "vertical_align": "center",
+                // weighted (not auto): in the narrow thread side panel an
+                // auto column gets squeezed until the selected key is
+                // invisible — a weighted column always keeps its share.
+                "tag": "column", "width": "weighted", "weight": 1, "vertical_align": "center",
                 "elements": [{
                     "tag": "select_static",
                     "element_id": element_id,

@@ -19,7 +19,9 @@
 //!   patch — without one the visible selection drifts to a wrong option
 //!   and callbacks may be skipped ("no change"). Applies to
 //!   `select_static`/`checker` & friends; buttons are stateless and
-//!   don't care.
+//!   don't care. Wide widgets (selects) also need a `weighted` column —
+//!   `auto` works for narrow content (emoji buttons, short labels) but a
+//!   wide auto column gets squeezed invisible in the thread side panel.
 //! - **Read-back caveat**: the message GET API strips button `behaviors`
 //!   and `text_size` — verify those by rendering and real clicks only.
 
