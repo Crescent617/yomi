@@ -79,7 +79,12 @@ fn on_off(v: bool) -> &'static str {
 
 /// One label + select_static row (auto width — the select sizes itself
 /// to its longest option; weighted columns would stretch it unevenly).
+/// A STABLE `element_id` is mandatory: the client tracks per-select
+/// chosen state by it, and auto-assigned ids shift on every patch —
+/// without one the visible selection drifts to a wrong option and the
+/// client may even skip the callback ("no change").
 fn select_row(
+    element_id: &str,
     label: &str,
     options: &[String],
     initial: usize,
@@ -105,6 +110,7 @@ fn select_row(
                 "tag": "column", "width": "auto", "vertical_align": "center",
                 "elements": [{
                     "tag": "select_static",
+                    "element_id": element_id,
                     "placeholder": { "tag": "plain_text", "content": options[initial] },
                     "options": opts,
                     "initial_index": initial,
@@ -130,12 +136,14 @@ fn settings_card(chat_id: &str, state: &SettingsState) -> String {
     };
     let mut elements = vec![
         select_row(
+            "cfg_mention",
             "Mention required",
             &tri_options(state.default_mention),
             tri_initial(state.mention_override),
             json!({ "action": "cfg_set", "key": "mention", "scope": chat_id }),
         ),
         select_row(
+            "cfg_threads",
             "Reply in thread",
             &tri_options(state.default_rit),
             tri_initial(state.rit_override),
@@ -154,6 +162,7 @@ fn settings_card(chat_id: &str, state: &SettingsState) -> String {
         None => state.models.len(),
     };
     elements.push(select_row(
+        "cfg_model",
         "Model",
         &model_options,
         model_initial,

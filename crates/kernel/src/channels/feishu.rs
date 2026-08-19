@@ -14,6 +14,12 @@
 //!   (user-centric, speedtest-style).
 //! - **Panel titles**: `text_size: "notation"` for stats lines; small is
 //!   enough, don't add grey.
+//! - **Stateful widgets need a stable `element_id`**: the client tracks
+//!   per-widget chosen state by it, and auto-assigned ids shift on every
+//!   patch — without one the visible selection drifts to a wrong option
+//!   and callbacks may be skipped ("no change"). Applies to
+//!   `select_static`/`checker` & friends; buttons are stateless and
+//!   don't care.
 //! - **Read-back caveat**: the message GET API strips button `behaviors`
 //!   and `text_size` — verify those by rendering and real clicks only.
 
