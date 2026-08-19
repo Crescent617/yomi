@@ -7170,57 +7170,22 @@ fn unknown_command_suggests_close_match() {
 }
 
 #[test]
-fn shell_command_parse() {
+fn bg_command_parse() {
+    assert!(matches!(
+        parse_channel_command(Some("/bg")),
+        ChannelCommand::BackgroundTasks { all: false }
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/bg --all")),
+        ChannelCommand::BackgroundTasks { all: true }
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/bg -a")),
+        ChannelCommand::BackgroundTasks { all: true }
+    ));
+    // `/shell` kept as an alias for the same panel.
     assert!(matches!(
         parse_channel_command(Some("/shell")),
-        ChannelCommand::Shell(None)
+        ChannelCommand::BackgroundTasks { all: false }
     ));
-    assert!(matches!(
-        parse_channel_command(Some("/shell 2")),
-        ChannelCommand::Shell(Some(2))
-    ));
-    assert!(matches!(
-        parse_channel_command(Some("/shell 0")),
-        ChannelCommand::InvalidShellCommand
-    ));
-    assert!(matches!(
-        parse_channel_command(Some("/shell x")),
-        ChannelCommand::InvalidShellCommand
-    ));
-}
-
-#[tokio::test]
-async fn tail_shell_output_reads_last_lines() {
-    let tmp = tempfile::NamedTempFile::new().unwrap();
-    let path = tmp.path().to_str().unwrap().to_string();
-    let content: String = (1..=50).map(|i| format!("line {i}\n")).collect();
-    tokio::fs::write(&path, content).await.unwrap();
-
-    let tail = tail_shell_output(&path, 40).await;
-    let lines: Vec<&str> = tail.lines().collect();
-    assert_eq!(lines.len(), 40);
-    assert_eq!(lines.first(), Some(&"line 11"));
-    assert_eq!(lines.last(), Some(&"line 50"));
-
-    let missing = tail_shell_output("/nonexistent/output.log", 40).await;
-    assert!(missing.contains("failed to read"), "{missing}");
-}
-
-#[tokio::test]
-async fn tail_shell_output_caps_total_length() {
-    let tmp = tempfile::NamedTempFile::new().unwrap();
-    let path = tmp.path().to_str().unwrap().to_string();
-    // 3 行 × 10KB 长行：行数没超，总量超 16KB 上限 → 前部截断。
-    let content: String = (1..=3)
-        .map(|i| format!("line{i} {}\n", "x".repeat(10_000)))
-        .collect();
-    tokio::fs::write(&path, content).await.unwrap();
-
-    let tail = tail_shell_output(&path, 40).await;
-    assert!(
-        tail.starts_with("…(truncated)"),
-        "truncation marker missing"
-    );
-    assert!(tail.len() <= 16_100, "still too long: {}", tail.len());
-    assert!(tail.contains("line3"), "the tail end is kept");
 }

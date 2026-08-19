@@ -272,12 +272,12 @@ impl ChannelHub {
                                             return;
                                         };
                                         super::obs::handle_stop_action(&kernel, &action);
-                                    } else if ns.starts_with("sh_") {
+                                    } else if ns.starts_with("bg_") {
                                         let Some(kernel) = kernel_weak.upgrade() else {
                                             return;
                                         };
-                                        super::hub_handlers::handle_shell_action(
-                                            &name, &config, &kernel, &adapter, &action,
+                                        super::hub_handlers::handle_bg_action(
+                                            &name, &kernel, &adapter, &action,
                                         )
                                         .await;
                                     } else if ns.starts_with("pg_") {

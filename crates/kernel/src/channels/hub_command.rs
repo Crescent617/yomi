@@ -45,7 +45,7 @@ pub(crate) const CMD_THREADS: &str = "/threads";
 
 pub(crate) const CMD_MAILBOX: &str = "/mailbox";
 
-pub(crate) const CMD_SHELL: &str = "/shell";
+pub(crate) const CMD_SHELL: &str = "/bg";
 pub(crate) const CMD_SETTINGS: &str = "/settings";
 
 pub(crate) const CMD_BIND: &str = "/bind";
@@ -71,7 +71,7 @@ pub(crate) const COMMANDS: &[(&str, &[&str])] = &[
     (CMD_MENTION, &[]),
     (CMD_THREADS, &[]),
     (CMD_MAILBOX, &["/mb"]),
-    (CMD_SHELL, &[]),
+    (CMD_SHELL, &["/shell"]),
     (CMD_SETTINGS, &[]),
     (CMD_BIND, &[]),
     (CMD_SESSIONS, &[]),
@@ -87,7 +87,7 @@ pub(crate) const HELP_TEXT: &str = "\
 `/help` (`/h`) — this help
 `/info` (`/i`) — current session info
 `/mailbox` (`/mb`) — pending steer/queued messages; `/mailbox retract <n>` · `/mailbox clear [steer|queue|all]` (admin)
-`/shell` — list background shells; `/shell <n>` shows shell n's recent output (admin)
+`/bg` — background tasks (shells + running subagents) with stop buttons (admin)
 `/models` — list configured models (current one marked)
 `/model` (`/m`) — show current model; `/model <key>` to switch
 `/sessions` — recent 10 sessions of this channel with jump links; `/sessions <offset>` for the next page (admin)
@@ -188,10 +188,13 @@ pub(crate) enum ChannelCommand {
     Mailbox(super::mailbox::MailboxSub),
     /// A malformed `/mailbox` command.
     InvalidMailboxCommand,
-    /// Show a background shell's recent output (`/shell <n>`, admin).
-    Shell(Option<usize>),
-    /// A malformed `/shell` command.
-    InvalidShellCommand,
+    /// Background tasks panel (`/bg [--all]`, admin): shells + running
+    /// subagents with per-row stop buttons and a refresh. `--all` spans
+    /// every session.
+    BackgroundTasks {
+        /// Show tasks across all sessions (`--all` / `-a`).
+        all: bool,
+    },
     /// Chat-scope settings panel card (`/settings`, admin): mention /
     /// reply-in-thread / model overrides as select dropdowns.
     Settings,
@@ -371,12 +374,9 @@ pub(crate) fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
             _ => ChannelCommand::InvalidMailboxCommand,
         },
         CMD_SHELL => match (parts.next(), parts.next()) {
-            (None, None) => ChannelCommand::Shell(None),
-            (Some(n), None) => match n.parse::<usize>() {
-                Ok(n) if n > 0 => ChannelCommand::Shell(Some(n)),
-                _ => ChannelCommand::InvalidShellCommand,
-            },
-            _ => ChannelCommand::InvalidShellCommand,
+            (None, None) => ChannelCommand::BackgroundTasks { all: false },
+            (Some("--all" | "-a"), None) => ChannelCommand::BackgroundTasks { all: true },
+            _ => ChannelCommand::Unknown(CMD_SHELL.to_string()),
         },
         CMD_BIND => match (parts.next(), parts.next()) {
             (None, None) => ChannelCommand::Bind(None),

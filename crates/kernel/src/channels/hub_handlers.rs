@@ -343,78 +343,67 @@ pub(crate) async fn handle_incoming_message(
             )
             .await
         }
-        ChannelCommand::Shell(n) => {
+        ChannelCommand::BackgroundTasks { all } => {
             if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
                 return Ok(Some(deny));
             }
             let chat_level = is_chat_level_message(&msg, rit);
             let key = if chat_level { &chat_id } else { &mapping_key };
-            let Some(sid) = store.find_mapping(channel_name, key).await? else {
-                return Ok(Some(format!(
-                    "No session yet in this {}.",
-                    if chat_level { "chat" } else { "thread" },
-                )));
+            let (sid, shells, subagents) = if all {
+                let shells = kernel.list_all_background_shells();
+                let subagents = kernel.list_all_running_subagents().await?;
+                (None, shells, subagents)
+            } else {
+                let Some(sid) = store.find_mapping(channel_name, key).await? else {
+                    return Ok(Some(format!(
+                        "No session yet in this {}.",
+                        if chat_level { "chat" } else { "thread" },
+                    )));
+                };
+                let shells = kernel.list_background_shells(&sid);
+                let subagents = running_subagents(&kernel, &sid).await;
+                (Some(sid), shells, subagents)
             };
-            let shells = kernel.list_background_shells(&sid);
-            if shells.is_empty() {
-                return Ok(Some("No background shells in this session.".to_string()));
+            if shells.is_empty() && subagents.is_empty() {
+                return Ok(Some(if all {
+                    "No background tasks.".to_string()
+                } else {
+                    "No background tasks in this session.".to_string()
+                }));
             }
-            match n {
-                None => {
-                    if msg.doc_comment.is_none() && adapter.supports_status_card() {
-                        let card = shells_card(&sid, &shells);
-                        adapter
-                            .send_card(&msg.external_chat_id, &card, reply_msg_id.as_deref())
-                            .await?;
-                        return Ok(None);
-                    }
-                    let mut lines = Vec::new();
-                    for (i, s) in shells.iter().enumerate() {
-                        lines.push(format!(
-                            "- **#{}** `{}` · pid {} · {}",
-                            i + 1,
-                            s.command,
-                            s.pid,
-                            crate::storage::format_age(s.started_at)
-                        ));
-                    }
-                    lines.push(String::new());
-                    lines.push("View output: `/shell <n>`".to_string());
-                    send_info_reply(
-                        adapter,
-                        &msg,
-                        reply_msg_id,
-                        "🖥 Background shells",
-                        lines.join("\n"),
-                    )
+            if msg.doc_comment.is_none() && adapter.supports_status_card() {
+                let card = background_tasks_card(sid.as_ref(), &shells, &subagents, all);
+                adapter
+                    .send_card(&msg.external_chat_id, &card, reply_msg_id.as_deref())
                     .await?;
-                    Ok(None)
-                }
-                Some(n) => {
-                    let Some(shell) = n.checked_sub(1).and_then(|i| shells.get(i)) else {
-                        return Ok(Some(format!(
-                            "No background shell #{n} ({} shell(s) in this session).",
-                            shells.len()
-                        )));
-                    };
-                    let tail = tail_shell_output(&shell.output_path, 40).await;
-                    let body = format!(
-                        "`{}` · pid {} · {}\n\n```\n{}\n```",
-                        shell.command,
-                        shell.pid,
-                        crate::storage::format_age(shell.started_at),
-                        tail.replace("```", "` ` `")
-                    );
-                    send_info_reply(adapter, &msg, reply_msg_id, &format!("🖥 Shell #{n}"), body)
-                        .await?;
-                    Ok(None)
-                }
+                return Ok(None);
             }
+            let mut lines = Vec::new();
+            for (i, s) in shells.iter().enumerate() {
+                lines.push(format!(
+                    "- **#{}** ⚙️ `{}` · pid {} · {}",
+                    i + 1,
+                    s.command,
+                    s.pid,
+                    crate::storage::format_age(s.started_at)
+                ));
+            }
+            for (i, s) in subagents.iter().enumerate() {
+                lines.push(format!(
+                    "- **#{}** 🤖 {} · {}",
+                    shells.len() + i + 1,
+                    s.alias.as_deref().unwrap_or("(untitled)"),
+                    crate::storage::format_age(s.created_at)
+                ));
+            }
+            let title = if all {
+                "🖥 Background tasks (all sessions)"
+            } else {
+                "🖥 Background tasks"
+            };
+            send_info_reply(adapter, &msg, reply_msg_id, title, lines.join("\n")).await?;
+            Ok(None)
         }
-        ChannelCommand::InvalidShellCommand => Ok(Some(
-            "Usage: `/shell` to list background shells; `/shell <n>` for shell n's output (admin)."
-                .to_string(),
-        )),
         ChannelCommand::Info => {
             // Chat-level messages show the chat session, in-thread ones
             // the thread's. Read-only: never creates a session or mapping.
@@ -618,43 +607,6 @@ pub(crate) async fn handle_incoming_message(
             kernel.send_steer(&sid, content).await;
             Ok(None)
         }
-    }
-}
-
-/// Read the last `max_lines` of a background shell's output (capped at
-/// the last 64KB, and at ~16KB total so the reply card stays well under
-/// Feishu's 30KB markdown limit even with very long lines).
-pub(crate) async fn tail_shell_output(path: &str, max_lines: usize) -> String {
-    use tokio::io::{AsyncReadExt, AsyncSeekExt};
-    const MAX_BYTES: u64 = 64 * 1024;
-    const MAX_TOTAL_CHARS: usize = 16_000;
-    let mut file = match tokio::fs::File::open(path).await {
-        Ok(f) => f,
-        Err(e) => return format!("(failed to read output: {e})"),
-    };
-    let len = file.metadata().await.map(|m| m.len()).unwrap_or(0);
-    if file
-        .seek(std::io::SeekFrom::Start(len.saturating_sub(MAX_BYTES)))
-        .await
-        .is_err()
-    {
-        return "(failed to seek output)".to_string();
-    }
-    let mut buf = Vec::new();
-    if file.take(MAX_BYTES).read_to_end(&mut buf).await.is_err() {
-        return "(failed to read output)".to_string();
-    }
-    let text = String::from_utf8_lossy(&buf);
-    let lines: Vec<&str> = text.lines().collect();
-    let tail = lines[lines.len().saturating_sub(max_lines)..].join("\n");
-    if tail.chars().count() > MAX_TOTAL_CHARS {
-        let kept: String = tail
-            .chars()
-            .skip(tail.chars().count() - MAX_TOTAL_CHARS)
-            .collect();
-        format!("…(truncated)\n{kept}")
-    } else {
-        tail
     }
 }
 
@@ -1278,12 +1230,72 @@ pub(crate) async fn handle_sessions_action(
     }
 }
 
-/// `/shell` 列表卡：每行 #n · command · pid · age + 行尾 ⏹ kill（text
-/// 小号无边框），底部提示行。卡片与 `sh_kill` 回调共用同一渲染——kill
-/// 后原地刷新就是重跑它。
-pub(crate) fn shells_card(sid: &SessionId, shells: &[crate::agent::BackgroundShellTask]) -> String {
+/// 当前 session 运行中的 subagent（`is_running` 过滤——列表管理面只
+/// 关心活着的）。
+async fn running_subagents(
+    kernel: &Kernel,
+    sid: &SessionId,
+) -> Vec<crate::types::SubagentResponse> {
+    match kernel.list_subagents(sid).await {
+        Ok(subs) => subs.into_iter().filter(|s| s.is_running).collect(),
+        Err(e) => {
+            warn!(error = %e, "list subagents failed");
+            Vec::new()
+        }
+    }
+}
+
+/// `/bg` 后台任务卡：shell 行（⚙️ command · pid · age）+ subagent 行
+/// （🤖 任务名 · age），行尾 ⏹（shell=SIGTERM 进程组，sub=cancel），
+/// 底部 🔄 Refresh；`all` 时跨 session 行尾灰字标注归属短 sid，所有
+/// 回调 value 都带 `all`（刷新保持原视图）。卡片与 `bg_*` 回调共用
+/// 同一渲染——操作后原地刷新就是重跑它。
+pub(crate) fn background_tasks_card(
+    sid: Option<&SessionId>,
+    shells: &[crate::agent::BackgroundShellTask],
+    subagents: &[crate::types::SubagentResponse],
+    all: bool,
+) -> String {
     let mut elements = Vec::new();
-    for (i, s) in shells.iter().enumerate() {
+    let mut rows: Vec<(String, serde_json::Value)> = Vec::new();
+    let owner = |owner_sid: &SessionId| {
+        if all {
+            format!(
+                " <font color='grey'>[{}]</font>",
+                &owner_sid.0[..12.min(owner_sid.0.len())]
+            )
+        } else {
+            String::new()
+        }
+    };
+    for s in shells.iter().take(20) {
+        rows.push((
+            format!(
+                "⚙️ `{}` · pid {} · {}{}",
+                s.command,
+                s.pid,
+                crate::storage::format_age(s.started_at),
+                owner(&s.session_id),
+            ),
+            serde_json::json!({ "action": "bg_kill_shell", "sid": s.session_id.0, "task": s.task_id, "all": all }),
+        ));
+    }
+    for s in subagents
+        .iter()
+        .take(20usize.saturating_sub(rows.len().min(20)))
+    {
+        rows.push((
+            format!(
+                "🤖 {} · {}{}",
+                s.alias.as_deref().unwrap_or("(untitled)"),
+                crate::storage::format_age(s.created_at),
+                owner(&s.parent_session_id),
+            ),
+            serde_json::json!({ "action": "bg_stop_sub", "sid": s.id.0, "parent": s.parent_session_id.0, "all": all }),
+        ));
+    }
+    let capped = rows.len() >= 20;
+    for (i, (content, value)) in rows.into_iter().enumerate() {
         elements.push(serde_json::json!({
             "tag": "column_set",
             "columns": [
@@ -1291,7 +1303,7 @@ pub(crate) fn shells_card(sid: &SessionId, shells: &[crate::agent::BackgroundShe
                     "tag": "column", "width": "weighted", "weight": 1, "vertical_align": "center",
                     "elements": [{
                         "tag": "markdown", "text_size": "notation",
-                        "content": format!("**#{}** `{}` · pid {} · {}", i + 1, s.command, s.pid, crate::storage::format_age(s.started_at)),
+                        "content": format!("**#{}** {content}", i + 1),
                     }],
                 },
                 {
@@ -1301,64 +1313,126 @@ pub(crate) fn shells_card(sid: &SessionId, shells: &[crate::agent::BackgroundShe
                         "text": { "tag": "plain_text", "content": "⏹" },
                         "type": "text",
                         "size": "small",
-                        "behaviors": [{ "type": "callback", "value": { "action": "sh_kill", "sid": sid.0, "task": s.task_id } }],
+                        "behaviors": [{ "type": "callback", "value": value }],
                     }],
                 },
             ],
         }));
     }
+    if capped {
+        elements.push(serde_json::json!({
+            "tag": "markdown", "text_size": "notation",
+            "content": "<font color='grey'>… capped at 20 rows</font>",
+        }));
+    }
+    let refresh_value = match sid {
+        Some(sid) => serde_json::json!({ "action": "bg_refresh", "sid": sid.0, "all": all }),
+        None => serde_json::json!({ "action": "bg_refresh", "all": true }),
+    };
     elements.push(serde_json::json!({
-        "tag": "markdown", "text_size": "notation",
-        "content": "<font color='grey'>View output: `/shell <n>` · ⏹ SIGTERMs the process</font>",
+        "tag": "column_set",
+        "columns": [{
+            "tag": "column", "width": "weighted", "weight": 1,
+            "elements": [{
+                "tag": "button",
+                "text": { "tag": "plain_text", "content": "🔄 Refresh" },
+                "type": "default",
+                "size": "small",
+                "behaviors": [{ "type": "callback", "value": refresh_value }],
+            }],
+        }],
     }));
-    super::hub_deliver::info_card_envelope("🖥 Background shells", elements)
+    let title = if all {
+        "🖥 Background tasks (all sessions)"
+    } else {
+        "🖥 Background tasks"
+    };
+    super::hub_deliver::info_card_envelope(title, elements)
 }
 
-/// `sh_kill` 按钮回调（/shell 列表行尾 ⏹）：SIGTERM 目标进程后原地
-/// 刷新列表。admin 门槛（与 /shell 命令同档）。
-pub(crate) async fn handle_shell_action(
+/// `bg_*` 按钮回调（/bg 卡行尾 ⏹ 与底部 🔄）：shell=SIGTERM 进程组，
+/// sub=cancel 该 subagent session，然后原地刷新列表。停止动作只需
+/// 路由层的 user 门限（与 /stop 同档），不叠加 admin。
+pub(crate) async fn handle_bg_action(
     channel_name: &str,
-    config: &ChannelConfig,
     kernel: &Arc<Kernel>,
     adapter: &Arc<dyn PlatformAdapter>,
     action: &super::CardAction,
 ) {
-    if let Some(deny) = super::approval::check_admin(config, &action.operator_open_id) {
-        super::approval::send_action_denial(adapter, action, deny).await;
-        return;
-    }
     let value = &action.value;
-    if value["action"].as_str() != Some("sh_kill") {
-        warn!(value = %value, "unrecognized shell card action");
-        return;
-    }
-    let sid = SessionId::from(value["sid"].as_str().unwrap_or_default().to_string());
-    let task = value["task"].as_str().unwrap_or_default();
-    if sid.0.is_empty() || task.is_empty() {
-        warn!(value = %value, "shell kill action missing sid/task");
-        return;
-    }
-    if !kernel.kill_background_shell(&sid, task).await {
-        warn!(channel = %channel_name, task, "shell kill: task unknown or SIGTERM failed");
-    }
-    // Give the process a moment to actually die before re-listing (the
-    // tracker's cleanup rides the shell guard's Drop).
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-    if let Some(message_id) = &action.message_id {
-        let shells = kernel.list_background_shells(&sid);
-        let card = if shells.is_empty() {
-            super::hub_deliver::info_card_envelope(
-                "🖥 Background shells",
-                vec![serde_json::json!({
-                    "tag": "markdown", "text_size": "notation",
-                    "content": "No background shells in this session.",
-                })],
-            )
-        } else {
-            shells_card(&sid, &shells)
-        };
-        if let Err(e) = adapter.update_card(message_id, &card).await {
-            warn!(channel = %channel_name, error = %e, "shell card refresh failed");
+    match value["action"].as_str() {
+        Some("bg_kill_shell") => {
+            let sid = SessionId::from(value["sid"].as_str().unwrap_or_default().to_string());
+            let task = value["task"].as_str().unwrap_or_default();
+            if sid.0.is_empty() || task.is_empty() {
+                warn!(value = %value, "bg kill action missing sid/task");
+                return;
+            }
+            if !kernel.kill_background_shell(&sid, task).await {
+                warn!(channel = %channel_name, task, "bg kill: task unknown or SIGTERM failed");
+            }
+            // Give the process group a moment to actually die before
+            // re-listing (the tracker's cleanup rides the guard's Drop).
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         }
+        Some("bg_stop_sub") => {
+            let sub_sid = SessionId::from(value["sid"].as_str().unwrap_or_default().to_string());
+            if sub_sid.0.is_empty() {
+                warn!(value = %value, "bg stop action missing sid");
+                return;
+            }
+            kernel.cancel(&sub_sid);
+        }
+        Some("bg_refresh") => {}
+        other => {
+            warn!(value = %value, "unrecognized bg card action {other:?}");
+            return;
+        }
+    }
+    let Some(message_id) = &action.message_id else {
+        return;
+    };
+    let all = value["all"].as_bool().unwrap_or(false);
+    let (shells, subagents) = if all {
+        let shells = kernel.list_all_background_shells();
+        let subs = kernel
+            .list_all_running_subagents()
+            .await
+            .unwrap_or_default();
+        (shells, subs)
+    } else {
+        // bg_stop_sub carries the subagent's own sid in `sid` and the
+        // list's owner in `parent`; everything else keys off `sid`.
+        let parent_sid = if value["action"].as_str() == Some("bg_stop_sub") {
+            SessionId::from(value["parent"].as_str().unwrap_or_default().to_string())
+        } else {
+            SessionId::from(value["sid"].as_str().unwrap_or_default().to_string())
+        };
+        if parent_sid.0.is_empty() {
+            return;
+        }
+        let shells = kernel.list_background_shells(&parent_sid);
+        let subs = running_subagents(kernel, &parent_sid).await;
+        (shells, subs)
+    };
+    let card = if shells.is_empty() && subagents.is_empty() {
+        super::hub_deliver::info_card_envelope(
+            if all {
+                "🖥 Background tasks (all sessions)"
+            } else {
+                "🖥 Background tasks"
+            },
+            vec![serde_json::json!({
+                "tag": "markdown", "text_size": "notation",
+                "content": "No background tasks.",
+            })],
+        )
+    } else {
+        let sid = SessionId::from(value["sid"].as_str().unwrap_or_default().to_string());
+        let sid_ref = (!sid.0.is_empty() && !all).then_some(&sid);
+        background_tasks_card(sid_ref, &shells, &subagents, all)
+    };
+    if let Err(e) = adapter.update_card(message_id, &card).await {
+        warn!(channel = %channel_name, error = %e, "bg card refresh failed");
     }
 }

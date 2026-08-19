@@ -130,7 +130,64 @@ impl Kernel {
             .shell_tasks_for(session_id)
     }
 
-    /// SIGTERM a background shell by task id. Only signals: cleanup
+    /// List ALL tracked background shell tasks across sessions
+    /// (`/bg --all`).
+    pub fn list_all_background_shells(&self) -> Vec<crate::agent::BackgroundShellTask> {
+        self.agent_shared.background_tasks.shell_tasks()
+    }
+
+    /// List running subagents across ALL parent sessions (`/bg --all`):
+    /// `sub_`-prefixed sessions whose phase is not idle.
+    pub async fn list_all_running_subagents(&self) -> Result<Vec<crate::types::SubagentResponse>> {
+        let mut out = Vec::new();
+        let mut before = None;
+        loop {
+            let page = self
+                .list_sessions(
+                    None,
+                    crate::storage::session::SessionListScope::All,
+                    before,
+                    50,
+                )
+                .await?;
+            let page_has_more = page.next_cursor.is_some();
+            let last_updated = page.sessions.last().map(|s| s.updated_at);
+            for info in page.sessions {
+                if !info.id.0.starts_with(crate::types::SUB_PREFIX) {
+                    continue;
+                }
+                let session = self.session_response(info);
+                if session.phase == "idle" {
+                    continue;
+                }
+                let parent = session
+                    .parent_id
+                    .clone()
+                    .unwrap_or_else(|| SessionId::from(String::new()));
+                out.push(crate::types::SubagentResponse {
+                    id: session.id,
+                    alias: session.title,
+                    parent_session_id: parent,
+                    phase: session.phase,
+                    is_running: true,
+                    model_key: session.model_key,
+                    created_at: session.created_at,
+                });
+            }
+            if !page_has_more {
+                break;
+            }
+            let Some(ts) = last_updated else { break };
+            before = Some(ts);
+        }
+        Ok(out)
+    }
+
+    /// SIGTERM a background shell's whole process GROUP by task id. The
+    /// child called `setsid` at spawn (shell.rs), so its pid doubles as
+    /// the process-group id and signaling the group can't hit the daemon
+    /// — but DOES reach grandchildren (`sh -c "sleep 60"`'s sleep),
+    /// which would otherwise survive as orphans. Only signals: cleanup
     /// (tracker removal + `BackgroundTasksChanged`) rides the normal
     /// guard lifecycle when the process actually exits — decrementing
     /// anything here would double-count against the guard's own Drop.
@@ -144,7 +201,7 @@ impl Kernel {
             return false;
         };
         match tokio::process::Command::new("kill")
-            .args(["-TERM", &task.pid.to_string()])
+            .args(["-TERM", "--", &format!("-{}", task.pid)])
             .status()
             .await
         {
