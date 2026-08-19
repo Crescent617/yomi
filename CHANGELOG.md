@@ -15,6 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-08-19
+
+### Added
+
+- 发给模型的图片现在附带本地绝对路径标注（`[image 1: /…/assets/xx.jpg]`）：图片照常内联可见，模型还能用 Read 等文件工具直接操作原文件（读取、转换、作为附件投递）。
+
+### Fixed
+
+- 飞书 `/settings` 卡片在话题侧边栏（窄面板）中下拉框被挤压到选中项不可见。
+- 图片路径标注不再出现在用户自己的消息气泡中（也不再写入会话历史，避免逐轮重复）。
+
 ## [0.8.0] - 2026-08-19
 
 ### Added
