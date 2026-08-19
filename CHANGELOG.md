@@ -15,6 +15,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-19
+
+### Added
+
+- 飞书 `/settings` 设置面板卡（admin）：Mention / Reply-in-thread / Model 三项下拉直接点选（含 `default (x)` 跟随渠道默认项），底部 ♻️ Reset all 一键恢复默认、🔄 Refresh 手动刷新；选择后卡片原地更新。
+- agent 可通过 `ask_user` 工具在飞书发起多选问答：选项渲染为按钮，点击即作答，agent 拿到选择继续工作；超时未答自动关闭卡片（此前该工具在飞书被禁用）。
+- 飞书 `/bg` 后台任务管理卡（admin）：统一列出后台 Shell 与运行中的 subagent，行尾 ⏹ 停止、🔄 刷新；`/bg --all`（`-a`）查看全部会话的任务并标注归属；`/shell` 保留为别名。
+- 飞书 `/mailbox` 排队消息行尾 ⏫ 按钮：一键提升为 steer 优先注入当前运行。
+- 飞书 `/sessions` 卡片底部 ◀ Prev / Next ▶ 按钮原地翻页（替代输入偏移量）。
+- 文档权限审批卡改为级别按钮组：[view] [edit] [full_access]，申请的级别高亮为推荐项，替代输入 `/approve <id> <perm>`。
+
+### Changed
+
+- 卡片按钮回调统一接入用户权限门限（blocked / allowed_users，与消息入口同一规则）；管理类按钮在此之上要求 admin。
+- 后台 Shell 的停止（⏹）现在终止整个进程组（此前只结束 shell 本身，子进程会残留）。
+- 停止后台任务（Shell/subagent）的按钮只需为频道允许用户，不再要求 admin。
+
+### Removed
+
+- 移除 `/shell <n>` 输出查看子命令（管理面收敛为 `/bg` 卡片）。
+
 ## [0.7.99] - 2026-08-19
 
 ### Added
