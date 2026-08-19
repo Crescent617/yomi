@@ -82,7 +82,9 @@ fn on_off(v: bool) -> &'static str {
 /// A STABLE `element_id` is mandatory: the client tracks per-select
 /// chosen state by it, and auto-assigned ids shift on every patch —
 /// without one the visible selection drifts to a wrong option and the
-/// client may even skip the callback ("no change").
+/// client may even skip the callback ("no change"). The current value
+/// rides `value` (the option value, not `initial_index`: that one is
+/// 1-based in practice and displayed the wrong option — verified).
 fn select_row(
     element_id: &str,
     label: &str,
@@ -113,7 +115,7 @@ fn select_row(
                     "element_id": element_id,
                     "placeholder": { "tag": "plain_text", "content": options[initial] },
                     "options": opts,
-                    "initial_index": initial,
+                    "value": options[initial],
                     "behaviors": [{ "type": "callback", "value": callback_value }],
                 }],
             },
@@ -341,11 +343,11 @@ mod tests {
         }
     }
 
-    /// Collect every select_static in the card: (placeholder, options, initial_index, callback value).
-    fn selects_of(card: &str) -> Vec<(String, Vec<String>, u64, serde_json::Value)> {
+    /// Collect every select_static in the card: (placeholder, options, current value, callback value).
+    fn selects_of(card: &str) -> Vec<(String, Vec<String>, String, serde_json::Value)> {
         fn walk(
             v: &serde_json::Value,
-            out: &mut Vec<(String, Vec<String>, u64, serde_json::Value)>,
+            out: &mut Vec<(String, Vec<String>, String, serde_json::Value)>,
         ) {
             if v["tag"] == "select_static" {
                 out.push((
@@ -356,7 +358,7 @@ mod tests {
                         .iter()
                         .map(|o| o["value"].as_str().unwrap().to_string())
                         .collect(),
-                    v["initial_index"].as_u64().unwrap(),
+                    v["value"].as_str().unwrap().to_string(),
                     v["behaviors"][0]["value"].clone(),
                 ));
             }
@@ -390,18 +392,18 @@ mod tests {
             ["on", "off", "default (on)"],
             "default label carries the channel default"
         );
-        assert_eq!(s[0].2, 1);
+        assert_eq!(s[0].2, "off", "current value rides `value`");
         assert_eq!(s[0].3["key"], "mention");
         assert_eq!(s[0].3["scope"], "oc_1");
 
         // Rit unset → the default pseudo-option, labeled with the default.
         assert_eq!(s[1].0, "default (off)");
-        assert_eq!(s[1].2, 2);
+        assert_eq!(s[1].2, "default (off)");
 
         // Model override → that key; options carry the default tail.
         assert_eq!(s[2].0, "opus-4-6");
         assert_eq!(s[2].1, ["k3-hs", "opus-4-6", "default (k3-hs)"]);
-        assert_eq!(s[2].2, 1);
+        assert_eq!(s[2].2, "opus-4-6");
     }
 
     #[test]
@@ -410,9 +412,9 @@ mod tests {
         let s = selects_of(&card);
         assert_eq!(s[0].0, "default (on)");
         assert_eq!(s[1].0, "default (off)");
-        // No override: the default pseudo-option sits past the real keys.
+        // No override: the default pseudo-option is the current value.
         assert_eq!(s[2].0, "default (k3-hs)");
-        assert_eq!(s[2].2, 2);
+        assert_eq!(s[2].2, "default (k3-hs)");
     }
 
     #[test]
