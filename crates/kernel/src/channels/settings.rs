@@ -259,44 +259,47 @@ async fn handle_card_action_inner(
     match value["action"].as_str() {
         Some("cfg_set") => {
             let key = value["key"].as_str().unwrap_or_default();
-            // select_static reports the chosen option's value; the reset
-            // pseudo-option's value is the literal "default (...)" label —
-            // treat any non-on/off value as reset.
             let opt = value["option"].as_str().unwrap_or_default();
-            match (key, opt) {
-                ("mention", "on") => {
-                    store
-                        .set_mention_override(channel_name, chat_id, true)
-                        .await?
+            match (key, map_cfg_set(opt)) {
+                ("mention", CfgSetOp::Set(v)) => {
+                    store.set_mention_override(channel_name, chat_id, v).await?
                 }
-                ("mention", "off") => {
-                    store
-                        .set_mention_override(channel_name, chat_id, false)
-                        .await?
+                ("mention", CfgSetOp::Clear) => {
+                    store.clear_mention_override(channel_name, chat_id).await?
                 }
-                ("mention", _) => store.clear_mention_override(channel_name, chat_id).await?,
-                ("threads", "on") => store.set_rit_override(channel_name, chat_id, true).await?,
-                ("threads", "off") => store.set_rit_override(channel_name, chat_id, false).await?,
-                ("threads", _) => store.clear_rit_override(channel_name, chat_id).await?,
-                other => {
-                    warn!(?other, "unknown cfg_set key");
+                ("threads", CfgSetOp::Set(v)) => {
+                    store.set_rit_override(channel_name, chat_id, v).await?
+                }
+                ("threads", CfgSetOp::Clear) => {
+                    store.clear_rit_override(channel_name, chat_id).await?
+                }
+                (key, op) => {
+                    warn!(key, ?op, "unknown cfg_set key/option");
                     return Ok(());
                 }
             }
         }
         Some("cfg_model") => {
             let opt = value["option"].as_str().unwrap_or_default();
-            // Same pseudo-option rule: a configured key switches, anything
-            // else (the "default (...)" label) resets.
-            let key = state_model_key(kernel, opt).await;
-            super::hub_handlers::set_chat_model(
-                channel_name,
-                store,
-                kernel,
-                chat_id,
-                key.as_deref(),
-            )
-            .await?;
+            // A transient list_models failure must NOT fall through to a
+            // reset — nothing is touched unless we can tell keys apart.
+            let models: Vec<String> = match kernel.list_models().await {
+                Ok(ms) => ms.into_iter().map(|m| m.name).collect(),
+                Err(e) => {
+                    warn!(error = %e, "cfg_model: list_models failed, model untouched");
+                    return Ok(());
+                }
+            };
+            match map_cfg_model(&models, opt) {
+                Some(key) => {
+                    super::hub_handlers::set_chat_model(channel_name, store, kernel, chat_id, key)
+                        .await?
+                }
+                None => {
+                    warn!(opt, "cfg_model: unknown option, model untouched");
+                    return Ok(());
+                }
+            }
         }
         Some("cfg_reset_all") => {
             store.clear_mention_override(channel_name, chat_id).await?;
@@ -318,12 +321,35 @@ async fn handle_card_action_inner(
     Ok(())
 }
 
-/// `Some(key)` when `opt` names a configured model; `None` (reset)
-/// otherwise — the reset pseudo-option's label is not a key.
-async fn state_model_key(kernel: &Arc<Kernel>, opt: &str) -> Option<String> {
-    match kernel.list_models().await {
-        Ok(models) if models.iter().any(|m| m.name == opt) => Some(opt.to_string()),
-        _ => None,
+/// cfg_set tri-state mapping: `on`/`off` set the override, the
+/// `default (…)` pseudo-option clears it, anything else (missing or
+/// malformed option) is a no-op — never an accidental reset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CfgSetOp {
+    Set(bool),
+    Clear,
+    Noop,
+}
+
+fn map_cfg_set(opt: &str) -> CfgSetOp {
+    match opt {
+        "on" => CfgSetOp::Set(true),
+        "off" => CfgSetOp::Set(false),
+        o if o.starts_with("default (") => CfgSetOp::Clear,
+        _ => CfgSetOp::Noop,
+    }
+}
+
+/// cfg_model mapping: `Some(Some(key))` switch, `Some(None)` reset
+/// (the `default (…)` pseudo-option), `None` no-op. Callers must not
+/// reach here on a `list_models` failure (handled upstream).
+fn map_cfg_model<'a>(models: &[String], opt: &'a str) -> Option<Option<&'a str>> {
+    if opt.starts_with("default (") {
+        Some(None)
+    } else if models.iter().any(|m| m == opt) {
+        Some(Some(opt))
+    } else {
+        None
     }
 }
 
@@ -433,5 +459,30 @@ mod tests {
         assert!(json.contains("♻️ Reset all"), "{json}");
         assert!(json.contains("🔄 Refresh"), "{json}");
         assert_eq!(json.matches("\"size\":\"small\"").count(), 2, "{json}");
+    }
+
+    #[test]
+    fn cfg_set_mapping_only_resets_on_default_pseudo_label() {
+        assert_eq!(map_cfg_set("on"), CfgSetOp::Set(true));
+        assert_eq!(map_cfg_set("off"), CfgSetOp::Set(false));
+        assert_eq!(map_cfg_set("default (on)"), CfgSetOp::Clear);
+        assert_eq!(map_cfg_set("default (off)"), CfgSetOp::Clear);
+        // Missing/malformed values must never fall through to a reset.
+        assert_eq!(map_cfg_set(""), CfgSetOp::Noop);
+        assert_eq!(map_cfg_set("k3"), CfgSetOp::Noop);
+        assert_eq!(map_cfg_set("default"), CfgSetOp::Noop);
+    }
+
+    #[test]
+    fn cfg_model_mapping_distinguishes_keys_reset_and_noop() {
+        let models = vec!["k3-hs".to_string(), "opus-4-6".to_string()];
+        assert_eq!(map_cfg_model(&models, "k3-hs"), Some(Some("k3-hs")));
+        assert_eq!(
+            map_cfg_model(&models, "default (k3-hs)"),
+            Some(None),
+            "pseudo-label resets"
+        );
+        assert_eq!(map_cfg_model(&models, "no-such-model"), None);
+        assert_eq!(map_cfg_model(&models, ""), None);
     }
 }

@@ -1294,7 +1294,7 @@ pub(crate) fn background_tasks_card(
             serde_json::json!({ "action": "bg_stop_sub", "sid": s.id.0, "parent": s.parent_session_id.0, "all": all }),
         ));
     }
-    let capped = rows.len() >= 20;
+    let capped = rows.len() == 20 && shells.len() + subagents.len() > 20;
     for (i, (content, value)) in rows.into_iter().enumerate() {
         elements.push(serde_json::json!({
             "tag": "column_set",
@@ -1393,26 +1393,32 @@ pub(crate) async fn handle_bg_action(
         return;
     };
     let all = value["all"].as_bool().unwrap_or(false);
+    // The session the refreshed list belongs to (drives both the listing
+    // and the next Refresh button's scope): `parent` for bg_stop_sub
+    // (whose `sid` is the subagent itself), otherwise `sid`.
+    let owner_sid = if value["action"].as_str() == Some("bg_stop_sub") {
+        SessionId::from(value["parent"].as_str().unwrap_or_default().to_string())
+    } else {
+        SessionId::from(value["sid"].as_str().unwrap_or_default().to_string())
+    };
     let (shells, subagents) = if all {
         let shells = kernel.list_all_background_shells();
-        let subs = kernel
-            .list_all_running_subagents()
-            .await
-            .unwrap_or_default();
+        let subs = match kernel.list_all_running_subagents().await {
+            Ok(s) => s,
+            Err(e) => {
+                // Keep the old card rather than painting a misleading
+                // empty state over a transient store error.
+                warn!(channel = %channel_name, error = %e, "bg --all subagent listing failed");
+                return;
+            }
+        };
         (shells, subs)
     } else {
-        // bg_stop_sub carries the subagent's own sid in `sid` and the
-        // list's owner in `parent`; everything else keys off `sid`.
-        let parent_sid = if value["action"].as_str() == Some("bg_stop_sub") {
-            SessionId::from(value["parent"].as_str().unwrap_or_default().to_string())
-        } else {
-            SessionId::from(value["sid"].as_str().unwrap_or_default().to_string())
-        };
-        if parent_sid.0.is_empty() {
+        if owner_sid.0.is_empty() {
             return;
         }
-        let shells = kernel.list_background_shells(&parent_sid);
-        let subs = running_subagents(kernel, &parent_sid).await;
+        let shells = kernel.list_background_shells(&owner_sid);
+        let subs = running_subagents(kernel, &owner_sid).await;
         (shells, subs)
     };
     let card = if shells.is_empty() && subagents.is_empty() {
@@ -1428,8 +1434,7 @@ pub(crate) async fn handle_bg_action(
             })],
         )
     } else {
-        let sid = SessionId::from(value["sid"].as_str().unwrap_or_default().to_string());
-        let sid_ref = (!sid.0.is_empty() && !all).then_some(&sid);
+        let sid_ref = (!all && !owner_sid.0.is_empty()).then_some(&owner_sid);
         background_tasks_card(sid_ref, &shells, &subagents, all)
     };
     if let Err(e) = adapter.update_card(message_id, &card).await {
