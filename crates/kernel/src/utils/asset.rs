@@ -70,46 +70,12 @@ pub async fn resolve_asset_url(url: &str, data_dir: &Path) -> Option<String> {
 }
 
 /// Replace `asset://` image references in a message with inline base64 data
-/// URLs, for building model context. Best-effort per image: missing or
-/// pathologically large (> [`crate::utils::image::MAX_IMAGE_SIZE`]) assets
-/// degrade to a text placeholder; oversized-but-decodable ones (legacy,
-/// from before ingress compression) are recompressed so the context
-/// always holds the compressed form.
+/// URLs, for building model context. Each resolved image also gains an
+/// absolute-path annotation block — see [`process_image_blocks`] for the
+/// full semantics (pathological-asset guard, unavailable placeholders).
 pub async fn inline_assets_in_message(msg: &mut crate::types::Message, data_dir: &Path) {
-    for block in &mut msg.content {
-        let crate::types::ContentBlock::ImageUrl { image_url } = block else {
-            continue;
-        };
-        if !image_url.url.starts_with("asset://") {
-            continue;
-        }
-        let url = image_url.url.clone();
-        // Refuse only pathological assets outright (decode-bomb guard).
-        let pathological = match asset_path(&url, data_dir) {
-            Some(path) => fs::metadata(&path)
-                .await
-                .is_ok_and(|m| m.len() > crate::utils::image::MAX_IMAGE_SIZE),
-            None => false,
-        };
-        if pathological {
-            *block = crate::types::ContentBlock::Text {
-                text: format!("[image omitted: too large, {url}]"),
-            };
-            continue;
-        }
-        match resolve_asset_url(&url, data_dir).await {
-            Some(data_url) => {
-                image_url.url = crate::utils::image::normalize_data_url_async(&data_url)
-                    .await
-                    .unwrap_or(data_url);
-            }
-            None => {
-                *block = crate::types::ContentBlock::Text {
-                    text: format!("[image unavailable: {url}]"),
-                };
-            }
-        }
-    }
+    let blocks = std::mem::take(&mut msg.content);
+    msg.content = process_image_blocks(blocks, data_dir).await;
 }
 
 /// Extract inline base64 images from a single message and replace with `asset://` references.
@@ -147,6 +113,94 @@ pub fn asset_path(url: &str, data_dir: &Path) -> Option<std::path::PathBuf> {
         }
         _ => None,
     }
+}
+
+/// Unified image-block processing on the way INTO the model:
+/// - `data:` inline images are normalized (compressed) and persisted to
+///   `assets/` (blake3-deduped), staying inline for vision;
+/// - `asset://` references resolve back to inline data URLs (pathological
+///   oversized ones are refused, missing ones degrade to placeholders);
+/// - every successfully resolved image gets a trailing text block with
+///   its **absolute path** (`[image N: /…/assets/{hash}.{ext}]`), so the
+///   model can Read it or use file tools on it (attachments, convert…).
+/// Used by the jsonl read-back path and by the conductor's input entry,
+/// so both the current turn and history carry paths.
+pub async fn process_image_blocks(
+    blocks: Vec<crate::types::ContentBlock>,
+    data_dir: &Path,
+) -> Vec<crate::types::ContentBlock> {
+    use crate::types::ContentBlock;
+    let mut out = Vec::with_capacity(blocks.len());
+    let mut n = 0usize;
+    for block in blocks {
+        let ContentBlock::ImageUrl { image_url } = &block else {
+            out.push(block);
+            continue;
+        };
+        let url = image_url.url.clone();
+        if url.starts_with("asset://") {
+            // Refuse only pathological assets outright (decode-bomb guard).
+            let pathological = match asset_path(&url, data_dir) {
+                Some(path) => fs::metadata(&path)
+                    .await
+                    .is_ok_and(|m| m.len() > crate::utils::image::MAX_IMAGE_SIZE),
+                None => false,
+            };
+            if pathological {
+                out.push(ContentBlock::Text {
+                    text: format!("[image omitted: too large, {url}]"),
+                });
+                continue;
+            }
+            match resolve_asset_url(&url, data_dir).await {
+                Some(data_url) => {
+                    let data_url = crate::utils::image::normalize_data_url_async(&data_url)
+                        .await
+                        .unwrap_or(data_url);
+                    out.push(ContentBlock::ImageUrl {
+                        image_url: data_url.into(),
+                    });
+                    if let Some(abs) = asset_path(&url, data_dir) {
+                        n += 1;
+                        out.push(ContentBlock::Text {
+                            text: format!("[image {n}: {}]", abs.display()),
+                        });
+                    }
+                }
+                None => {
+                    out.push(ContentBlock::Text {
+                        text: format!("[image unavailable: {url}]"),
+                    });
+                }
+            }
+        } else if url.starts_with("data:") {
+            let normalized = crate::utils::image::normalize_data_url_async(&url)
+                .await
+                .unwrap_or(url);
+            match store_inline_image(&normalized, data_dir).await {
+                Some(asset_url) => match asset_path(&asset_url, data_dir) {
+                    Some(abs) => {
+                        out.push(ContentBlock::ImageUrl {
+                            image_url: normalized.into(),
+                        });
+                        n += 1;
+                        out.push(ContentBlock::Text {
+                            text: format!("[image {n}: {}]", abs.display()),
+                        });
+                    }
+                    None => out.push(ContentBlock::ImageUrl {
+                        image_url: normalized.into(),
+                    }),
+                },
+                None => out.push(ContentBlock::ImageUrl {
+                    image_url: normalized.into(),
+                }),
+            }
+        } else {
+            out.push(block);
+        }
+    }
+    out
 }
 
 #[cfg(test)]

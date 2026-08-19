@@ -308,6 +308,18 @@ impl Conductor {
             // Checker / AskUserTool via input_bus subscription; do not queue them.
             AgentInput::PermissionResponse { .. } | AgentInput::AskUserResponse { .. } => {}
             input => {
+                // 图片落盘 + 绝对路径标注（当前轮进模型即可 Read/文件
+                // 操作；历史读回经 inline_assets_in_message 有同款标注）。
+                let input = match input {
+                    AgentInput::User { content } => AgentInput::User {
+                        content: crate::utils::asset::process_image_blocks(content, &self.data_dir)
+                            .await,
+                    },
+                    AgentInput::Steer(content) => AgentInput::Steer(
+                        crate::utils::asset::process_image_blocks(content, &self.data_dir).await,
+                    ),
+                    other => other,
+                };
                 let mb = self
                     .mailboxes
                     .entry(sid.clone())

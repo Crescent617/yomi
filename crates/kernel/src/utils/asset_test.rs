@@ -92,3 +92,91 @@ async fn inline_keeps_small_asset_byte_identical() {
     };
     assert_eq!(image_url.url, data_url, "untouched");
 }
+
+#[tokio::test]
+async fn process_persists_data_url_and_annotates_absolute_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let blocks = vec![
+        crate::types::ContentBlock::Text {
+            text: "look".to_string(),
+        },
+        crate::types::ContentBlock::ImageUrl {
+            image_url: to_data_url("image/png", b"hello-png").into(),
+        },
+        crate::types::ContentBlock::ImageUrl {
+            image_url: to_data_url("image/png", b"hello-png-2").into(),
+        },
+    ];
+
+    let out = process_image_blocks(blocks, dir.path()).await;
+
+    // text, img, [image 1: …], img, [image 2: …]
+    assert_eq!(out.len(), 5, "{out:?}");
+    for (idx, marker) in [(2usize, "[image 1: "), (4usize, "[image 2: ")] {
+        let crate::types::ContentBlock::Text { text } = &out[idx] else {
+            panic!("expected annotation at {idx}, got {:?}", out[idx]);
+        };
+        assert!(text.starts_with(marker), "{text}");
+        let path = text.trim_start_matches(marker).trim_end_matches(']');
+        let path = std::path::Path::new(path);
+        assert!(path.is_absolute(), "{path:?} must be absolute");
+        assert!(path.exists(), "{path:?} must exist on disk");
+        assert!(path.starts_with(dir.path().join("assets")));
+    }
+    // Images stay inline for vision.
+    assert!(matches!(
+        &out[1],
+        crate::types::ContentBlock::ImageUrl { image_url } if image_url.url.starts_with("data:")
+    ));
+    // Dedup: same bytes → same asset file.
+    let p1 = match &out[2] {
+        crate::types::ContentBlock::Text { text } => text.clone(),
+        _ => panic!(),
+    };
+    assert!(
+        p1.contains(".png") || p1.contains(".jpg") || p1.contains(".jpeg"),
+        "{p1}"
+    );
+}
+
+#[tokio::test]
+async fn process_resolves_asset_url_and_annotates() {
+    let dir = tempfile::tempdir().unwrap();
+    let asset_url = store_inline_image("data:image/png;base64,aGVsbG8=", dir.path())
+        .await
+        .expect("stored");
+    let abs = asset_path(&asset_url, dir.path()).unwrap();
+    let blocks = vec![crate::types::ContentBlock::ImageUrl {
+        image_url: asset_url.into(),
+    }];
+
+    let out = process_image_blocks(blocks, dir.path()).await;
+
+    assert_eq!(out.len(), 2, "{out:?}");
+    let crate::types::ContentBlock::ImageUrl { image_url } = &out[0] else {
+        panic!("expected image block");
+    };
+    assert!(image_url.url.starts_with("data:"), "resolved inline");
+    let crate::types::ContentBlock::Text { text } = &out[1] else {
+        panic!("expected annotation");
+    };
+    assert_eq!(*text, format!("[image 1: {}]", abs.display()));
+}
+
+#[tokio::test]
+async fn process_marks_missing_asset_unavailable_without_annotation() {
+    let dir = tempfile::tempdir().unwrap();
+    let blocks = vec![crate::types::ContentBlock::ImageUrl {
+        image_url: "asset://deadbeef0123456789abcdef0123456789abcdef0123456789abcdef0123456789.png"
+            .to_string()
+            .into(),
+    }];
+
+    let out = process_image_blocks(blocks, dir.path()).await;
+
+    assert_eq!(out.len(), 1, "{out:?}");
+    let crate::types::ContentBlock::Text { text } = &out[0] else {
+        panic!("expected placeholder");
+    };
+    assert!(text.starts_with("[image unavailable:"), "{text}");
+}
