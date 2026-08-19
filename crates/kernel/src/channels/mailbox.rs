@@ -63,7 +63,7 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
             }
             crate::comms::MailboxItemKind::Queue => preview.to_string(),
         };
-        // Row actions: ⬆ promotes a queued message to steer (absent on
+        // Row actions: ⏫ promotes a queued message to steer (absent on
         // steer rows — already there); ❌ retracts. Text-type small
         // buttons stay visually quiet next to the notation line.
         let mut row_columns = vec![serde_json::json!({
@@ -75,7 +75,7 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
                 "tag": "column", "width": "auto",
                 "elements": [{
                     "tag": "button",
-                    "text": { "tag": "plain_text", "content": "⬆" },
+                    "text": { "tag": "plain_text", "content": "⏫" },
                     "type": "text",
                     "size": "small",
                     "behaviors": [{ "type": "callback", "value": { "action": "mb_steer", "sid": sid.0, "item": item.id } }],
@@ -335,20 +335,20 @@ mod tests {
         };
         let card = pending_card(&sid, &snapshot);
         let btns = buttons_of(&card);
-        // steer 行 ❌；queue 行 ⬆ + ❌；底部刷新/清空。
+        // steer 行 ❌；queue 行 ⏫ + ❌；底部刷新/清空。
         assert_eq!(btns.len(), 5, "{card}");
-        // ⬆ only rides queue rows (a steer row is already steered).
+        // ⏫ only rides queue rows (a steer row is already steered).
         let steer_btns: Vec<_> = btns
             .iter()
-            .filter(|b| b["text"]["content"] == "⬆")
+            .filter(|b| b["text"]["content"] == "⏫")
             .collect();
         assert_eq!(steer_btns.len(), 1, "{card}");
         assert_eq!(steer_btns[0]["behaviors"][0]["value"]["action"], "mb_steer");
-        assert_eq!(steer_btns[0]["type"], "text", "行尾 ⬆ 无边框小号");
+        assert_eq!(steer_btns[0]["type"], "text", "行尾 ⏫ 无边框小号");
         assert_eq!(steer_btns[0]["size"], "small");
         for b in btns
             .iter()
-            .filter(|b| b["text"]["content"] != "❌" && b["text"]["content"] != "⬆")
+            .filter(|b| b["text"]["content"] != "❌" && b["text"]["content"] != "⏫")
         {
             assert_eq!(b["type"], "default", "底部按钮带边框: {b}");
             assert_eq!(b["size"], "small", "底部按钮小号: {b}");
