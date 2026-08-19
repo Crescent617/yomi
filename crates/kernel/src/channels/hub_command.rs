@@ -46,6 +46,7 @@ pub(crate) const CMD_THREADS: &str = "/threads";
 pub(crate) const CMD_MAILBOX: &str = "/mailbox";
 
 pub(crate) const CMD_SHELL: &str = "/shell";
+pub(crate) const CMD_SETTINGS: &str = "/settings";
 
 pub(crate) const CMD_BIND: &str = "/bind";
 
@@ -71,6 +72,7 @@ pub(crate) const COMMANDS: &[(&str, &[&str])] = &[
     (CMD_THREADS, &[]),
     (CMD_MAILBOX, &["/mb"]),
     (CMD_SHELL, &[]),
+    (CMD_SETTINGS, &[]),
     (CMD_BIND, &[]),
     (CMD_SESSIONS, &[]),
     (CMD_PERMITS, &[]),
@@ -103,6 +105,7 @@ pub(crate) const HELP_TEXT: &str = "\
 **Chat admin**
 `/mention` — show the @-requirement here; `/mention on|off|reset` to override it
 `/threads` — show reply-in-thread mode for this chat; `/threads on|off|reset` to override it
+`/settings` — settings panel card: mention / reply-in-thread / model overrides as dropdowns
 `/bind` — show this conversation's session id; `/bind <session_id>` to retarget it
 `/permits` — list pending doc-permission requests
 `/approve <id> [perm]` — approve a doc-permission request
@@ -189,6 +192,9 @@ pub(crate) enum ChannelCommand {
     Shell(Option<usize>),
     /// A malformed `/shell` command.
     InvalidShellCommand,
+    /// Chat-scope settings panel card (`/settings`, admin): mention /
+    /// reply-in-thread / model overrides as select dropdowns.
+    Settings,
     /// List this channel's recent sessions (admin), with the page offset.
     Sessions(usize),
     /// A malformed `/sessions` command.
@@ -343,6 +349,7 @@ pub(crate) fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
             (Some("reset"), None) => ChannelCommand::Threads(Some(OverrideMode::Reset)),
             _ => ChannelCommand::InvalidThreadsCommand,
         },
+        CMD_SETTINGS => ChannelCommand::Settings,
         CMD_MAILBOX => match (parts.next(), parts.next(), parts.next()) {
             (None, None, None) => ChannelCommand::Mailbox(super::mailbox::MailboxSub::Show),
             (Some("clear"), scope, None) => match scope {

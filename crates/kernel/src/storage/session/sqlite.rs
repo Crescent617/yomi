@@ -71,6 +71,17 @@ impl SessionStore for SqliteSessionStore {
         Ok(result.rows_affected())
     }
 
+    async fn clear_model_key(&self, id: &SessionId) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE sessions SET model_key = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        )
+        .bind(&*id.0)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("failed to clear session model key: {e}")))?;
+        Ok(result.rows_affected())
+    }
+
     async fn get(&self, id: &SessionId) -> Result<Option<SessionInfo>> {
         let row = sqlx::query_as::<_, SessionRow>(
             "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template

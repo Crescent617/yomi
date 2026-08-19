@@ -252,23 +252,15 @@ pub(crate) async fn handle_incoming_message(
                     .await?
                     .is_none();
             if chat_level {
-                // Switch the whole chat: update every existing thread
-                // session routed to this chat, and persist the choice on
-                // the chat-level session so future threads inherit it.
-                let (chat_sid, _) =
-                    get_or_create_session(channel_name, store, &kernel, &chat_id, &chat_id, None)
-                        .await?;
-                kernel.set_session_model(&chat_sid, &key).await?;
-                for (mk, sid) in store.list_mappings(channel_name).await? {
-                    if mk == chat_id {
-                        continue;
-                    }
-                    if let Ok(Some(routing)) = store.find_routing_by_session(&sid).await {
-                        if routing.external_chat_id == chat_id {
-                            kernel.set_session_model(&sid, &key).await?;
-                        }
-                    }
-                }
+                set_chat_model(
+                    channel_name,
+                    store,
+                    &kernel,
+                    &chat_id,
+                    Some(&key),
+                    adapter.supports_status_card(),
+                )
+                .await?;
                 return Ok(Some(format!(
                     "Switched all threads in this chat to `{key}`. It takes effect on the next model invocation."
                 )));
@@ -282,6 +274,7 @@ pub(crate) async fn handle_incoming_message(
                 &chat_id,
                 &mapping_key,
                 reply_msg_id.as_deref(),
+                adapter.supports_status_card(),
             )
             .await?;
             kernel.set_session_model(&sid, &key).await?;
@@ -344,6 +337,21 @@ pub(crate) async fn handle_incoming_message(
             "Usage: `/mailbox` to show pending messages; `/mailbox retract <n>` · `/mailbox clear [steer|queue|all]` (admin)."
                 .to_string(),
         )),
+        ChannelCommand::Settings => {
+            if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
+                return Ok(Some(deny));
+            }
+            super::settings::handle_settings_command(
+                channel_name,
+                config,
+                &kernel,
+                store,
+                adapter,
+                &msg,
+                reply_msg_id,
+            )
+            .await
+        }
         ChannelCommand::Shell(n) => {
             if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
                 return Ok(Some(deny));
@@ -362,6 +370,13 @@ pub(crate) async fn handle_incoming_message(
             }
             match n {
                 None => {
+                    if msg.doc_comment.is_none() && adapter.supports_status_card() {
+                        let card = shells_card(&sid, &shells);
+                        adapter
+                            .send_card(&msg.external_chat_id, &card, reply_msg_id.as_deref())
+                            .await?;
+                        return Ok(None);
+                    }
                     let mut lines = Vec::new();
                     for (i, s) in shells.iter().enumerate() {
                         lines.push(format!(
@@ -918,96 +933,14 @@ pub(crate) async fn handle_sessions_command(
     if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
         return Ok(Some(deny));
     }
-    // Channel-routed sessions only — a jump needs a delivery target.
-    let routed: std::collections::HashSet<String> = store
-        .list_mappings(channel_name)
-        .await?
-        .into_iter()
-        .map(|(_, sid)| sid.0.to_string())
-        .collect();
-
-    // Sessions paginate by cursor (updated_at desc); offset pages over
-    // the *routed* matches.
-    let mut picked: Vec<crate::storage::session::SessionInfo> = Vec::new();
-    let mut skipped = 0usize;
-    let mut before = None;
-    let mut has_more = false;
-    'scan: loop {
-        let page = kernel
-            .list_sessions(
-                None,
-                crate::storage::session::SessionListScope::All,
-                before,
-                SESSIONS_SCAN_LIMIT,
-            )
-            .await?;
-        let page_has_more = page.next_cursor.is_some();
-        let Some(last) = page.sessions.last() else {
-            break;
-        };
-        before = Some(last.updated_at);
-        for info in page.sessions {
-            if info.id.0.starts_with("sub_") || !routed.contains(info.id.0.as_str()) {
-                continue;
-            }
-            if skipped < offset {
-                skipped += 1;
-                continue;
-            }
-            if picked.len() < SESSIONS_PAGE_SIZE {
-                picked.push(info);
-            } else {
-                has_more = true;
-                break 'scan;
-            }
-        }
-        if !page_has_more {
-            break;
-        }
-    }
-
-    if picked.is_empty() {
+    let (entries, has_more) =
+        collect_session_entries(channel_name, store, kernel, adapter, offset).await?;
+    if entries.is_empty() {
         return Ok(Some(if offset == 0 {
             "This channel has no sessions yet.".to_string()
         } else {
             format!("No more sessions beyond offset {offset}.")
         }));
-    }
-
-    // One call for the whole page: "active" = running or holding
-    // background tasks (the same semantics as `list_running_sessions`).
-    let running: std::collections::HashSet<String> = kernel
-        .list_running_sessions()
-        .await?
-        .into_iter()
-        .map(|s| s.id.0.to_string())
-        .collect();
-
-    let mut entries = Vec::with_capacity(picked.len());
-    let now = chrono::Utc::now();
-    // Fetch all jump links concurrently — a serial loop would stall the
-    // channel's single dispatch loop for one API call per row.
-    let links = futures::future::join_all(
-        picked
-            .iter()
-            .map(|info| session_jump_link(store, adapter, &info.id)),
-    )
-    .await;
-    for (info, link) in picked.iter().zip(links) {
-        let active = running.contains(info.id.0.as_str());
-        let marker = if active {
-            "⚡"
-        } else if link.as_ref().is_some_and(|(_, is_thread)| *is_thread) {
-            "🧵"
-        } else {
-            "💬"
-        };
-        entries.push(SessionEntry {
-            marker,
-            title: session_link_title(info),
-            bucket: session_time_bucket(info.updated_at, now),
-            link: link.map(|(url, _thread)| url),
-        });
     }
 
     // Card-capable platforms get the fancy card; everyone else gets the
@@ -1108,12 +1041,34 @@ pub(crate) fn sessions_card(offset: usize, entries: &[SessionEntry], has_more: b
         };
         elements.push(serde_json::json!({ "tag": "markdown", "content": title_md }));
     }
-    if has_more {
+    if has_more || offset > 0 {
         elements.push(serde_json::json!({ "tag": "hr" }));
-        elements.push(serde_json::json!({
-            "tag": "markdown", "text_size": "notation",
-            "content": format!("Next page → `/sessions {}`", offset + SESSIONS_PAGE_SIZE)
-        }));
+        let mut cols = Vec::new();
+        if offset > 0 {
+            cols.push(serde_json::json!({
+                "tag": "column", "width": "weighted", "weight": 1,
+                "elements": [{
+                    "tag": "button",
+                    "text": { "tag": "plain_text", "content": "◀ Prev" },
+                    "type": "default",
+                    "size": "small",
+                    "behaviors": [{ "type": "callback", "value": { "action": "pg_sessions", "offset": offset.saturating_sub(SESSIONS_PAGE_SIZE) } }],
+                }],
+            }));
+        }
+        if has_more {
+            cols.push(serde_json::json!({
+                "tag": "column", "width": "weighted", "weight": 1,
+                "elements": [{
+                    "tag": "button",
+                    "text": { "tag": "plain_text", "content": "Next ▶" },
+                    "type": "default",
+                    "size": "small",
+                    "behaviors": [{ "type": "callback", "value": { "action": "pg_sessions", "offset": offset + SESSIONS_PAGE_SIZE } }],
+                }],
+            }));
+        }
+        elements.push(serde_json::json!({ "tag": "column_set", "columns": cols }));
     }
     super::hub_deliver::info_card_envelope(
         &format!(
@@ -1162,5 +1117,266 @@ pub(crate) fn sanitize_session_title(raw: &str) -> String {
         format!("{truncated}…")
     } else {
         truncated
+    }
+}
+
+/// Chat-scope model switch: update the chat-level session and every
+/// existing thread session routed to this chat (future threads inherit
+/// via the chat session's model key). `None` clears the override so the
+/// chat follows the configured default again. Shared by `/model <key>`
+/// (chat level) and the settings card.
+pub(crate) async fn set_chat_model(
+    channel_name: &str,
+    store: &Arc<dyn ChannelStore>,
+    kernel: &Arc<Kernel>,
+    chat_id: &str,
+    key: Option<&str>,
+    supports_cards: bool,
+) -> Result<()> {
+    let (chat_sid, _) = get_or_create_session(
+        channel_name,
+        store,
+        kernel,
+        chat_id,
+        chat_id,
+        None,
+        supports_cards,
+    )
+    .await?;
+    match key {
+        Some(k) => kernel.set_session_model(&chat_sid, k).await?,
+        None => kernel.clear_session_model(&chat_sid).await?,
+    }
+    for (mk, sid) in store.list_mappings(channel_name).await? {
+        if mk == chat_id {
+            continue;
+        }
+        if let Ok(Some(routing)) = store.find_routing_by_session(&sid).await {
+            if routing.external_chat_id == chat_id {
+                match key {
+                    Some(k) => kernel.set_session_model(&sid, k).await?,
+                    None => kernel.clear_session_model(&sid).await?,
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `/sessions` 一页的条目收集（命令与翻页回调共用）：channel-routed
+/// 过滤、游标扫描、并发取跳转链接、⚡/🧵/💬 标记与分桶。
+async fn collect_session_entries(
+    channel_name: &str,
+    store: &Arc<dyn ChannelStore>,
+    kernel: &Arc<Kernel>,
+    adapter: &Arc<dyn PlatformAdapter>,
+    offset: usize,
+) -> Result<(Vec<SessionEntry>, bool)> {
+    // Channel-routed sessions only — a jump needs a delivery target.
+    let routed: std::collections::HashSet<String> = store
+        .list_mappings(channel_name)
+        .await?
+        .into_iter()
+        .map(|(_, sid)| sid.0.to_string())
+        .collect();
+
+    // Sessions paginate by cursor (updated_at desc); offset pages over
+    // the *routed* matches.
+    let mut picked: Vec<crate::storage::session::SessionInfo> = Vec::new();
+    let mut skipped = 0usize;
+    let mut before = None;
+    let mut has_more = false;
+    'scan: loop {
+        let page = kernel
+            .list_sessions(
+                None,
+                crate::storage::session::SessionListScope::All,
+                before,
+                SESSIONS_SCAN_LIMIT,
+            )
+            .await?;
+        let page_has_more = page.next_cursor.is_some();
+        let Some(last) = page.sessions.last() else {
+            break;
+        };
+        before = Some(last.updated_at);
+        for info in page.sessions {
+            if info.id.0.starts_with("sub_") || !routed.contains(info.id.0.as_str()) {
+                continue;
+            }
+            if skipped < offset {
+                skipped += 1;
+                continue;
+            }
+            if picked.len() < SESSIONS_PAGE_SIZE {
+                picked.push(info);
+            } else {
+                has_more = true;
+                break 'scan;
+            }
+        }
+        if !page_has_more {
+            break;
+        }
+    }
+
+    // One call for the whole page: "active" = running or holding
+    // background tasks (the same semantics as `list_running_sessions`).
+    let running: std::collections::HashSet<String> = kernel
+        .list_running_sessions()
+        .await?
+        .into_iter()
+        .map(|s| s.id.0.to_string())
+        .collect();
+
+    let mut entries = Vec::with_capacity(picked.len());
+    let now = chrono::Utc::now();
+    // Fetch all jump links concurrently — a serial loop would stall the
+    // channel's single dispatch loop for one API call per row.
+    let links = futures::future::join_all(
+        picked
+            .iter()
+            .map(|info| session_jump_link(store, adapter, &info.id)),
+    )
+    .await;
+    for (info, link) in picked.iter().zip(links) {
+        let active = running.contains(info.id.0.as_str());
+        let marker = if active {
+            "⚡"
+        } else if link.as_ref().is_some_and(|(_, is_thread)| *is_thread) {
+            "🧵"
+        } else {
+            "💬"
+        };
+        entries.push(SessionEntry {
+            marker,
+            title: session_link_title(info),
+            bucket: session_time_bucket(info.updated_at, now),
+            link: link.map(|(url, _thread)| url),
+        });
+    }
+    Ok((entries, has_more))
+}
+
+/// `pg_sessions` 翻页回调（/sessions 卡底部 ◀ ▶）：重取目标页并原地
+/// 刷新。admin 门槛（与 /sessions 命令同档）。
+pub(crate) async fn handle_sessions_action(
+    channel_name: &str,
+    config: &ChannelConfig,
+    store: &Arc<dyn ChannelStore>,
+    kernel: &Arc<Kernel>,
+    adapter: &Arc<dyn PlatformAdapter>,
+    action: &super::CardAction,
+) {
+    if let Some(deny) = super::approval::check_admin(config, &action.operator_open_id) {
+        super::approval::send_action_denial(adapter, action, deny).await;
+        return;
+    }
+    let Some(message_id) = &action.message_id else {
+        return;
+    };
+    let offset = action.value["offset"].as_u64().unwrap_or(0) as usize;
+    let page = collect_session_entries(channel_name, store, kernel, adapter, offset).await;
+    let card = match page {
+        Ok((entries, has_more)) if !entries.is_empty() => sessions_card(offset, &entries, has_more),
+        Ok(_) => super::hub_deliver::info_card_envelope(
+            "📋 Recent sessions",
+            vec![serde_json::json!({
+                "tag": "markdown", "text_size": "notation",
+                "content": format!("No more sessions beyond offset {offset}."),
+            })],
+        ),
+        Err(e) => {
+            warn!(channel = %channel_name, error = %e, "sessions page fetch failed");
+            return;
+        }
+    };
+    if let Err(e) = adapter.update_card(message_id, &card).await {
+        warn!(channel = %channel_name, error = %e, "sessions page card refresh failed");
+    }
+}
+
+/// `/shell` 列表卡：每行 #n · command · pid · age + 行尾 ⏹ kill（text
+/// 小号无边框），底部提示行。卡片与 `sh_kill` 回调共用同一渲染——kill
+/// 后原地刷新就是重跑它。
+pub(crate) fn shells_card(sid: &SessionId, shells: &[crate::agent::BackgroundShellTask]) -> String {
+    let mut elements = Vec::new();
+    for (i, s) in shells.iter().enumerate() {
+        elements.push(serde_json::json!({
+            "tag": "column_set",
+            "columns": [
+                {
+                    "tag": "column", "width": "weighted", "weight": 1, "vertical_align": "center",
+                    "elements": [{
+                        "tag": "markdown", "text_size": "notation",
+                        "content": format!("**#{}** `{}` · pid {} · {}", i + 1, s.command, s.pid, crate::storage::format_age(s.started_at)),
+                    }],
+                },
+                {
+                    "tag": "column", "width": "auto", "vertical_align": "center",
+                    "elements": [{
+                        "tag": "button",
+                        "text": { "tag": "plain_text", "content": "⏹" },
+                        "type": "text",
+                        "size": "small",
+                        "behaviors": [{ "type": "callback", "value": { "action": "sh_kill", "sid": sid.0, "task": s.task_id } }],
+                    }],
+                },
+            ],
+        }));
+    }
+    elements.push(serde_json::json!({
+        "tag": "markdown", "text_size": "notation",
+        "content": "<font color='grey'>View output: `/shell <n>` · ⏹ SIGTERMs the process</font>",
+    }));
+    super::hub_deliver::info_card_envelope("🖥 Background shells", elements)
+}
+
+/// `sh_kill` 按钮回调（/shell 列表行尾 ⏹）：SIGTERM 目标进程后原地
+/// 刷新列表。admin 门槛（与 /shell 命令同档）。
+pub(crate) async fn handle_shell_action(
+    channel_name: &str,
+    config: &ChannelConfig,
+    kernel: &Arc<Kernel>,
+    adapter: &Arc<dyn PlatformAdapter>,
+    action: &super::CardAction,
+) {
+    if let Some(deny) = super::approval::check_admin(config, &action.operator_open_id) {
+        super::approval::send_action_denial(adapter, action, deny).await;
+        return;
+    }
+    let value = &action.value;
+    if value["action"].as_str() != Some("sh_kill") {
+        warn!(value = %value, "unrecognized shell card action");
+        return;
+    }
+    let sid = SessionId::from(value["sid"].as_str().unwrap_or_default().to_string());
+    let task = value["task"].as_str().unwrap_or_default();
+    if sid.0.is_empty() || task.is_empty() {
+        warn!(value = %value, "shell kill action missing sid/task");
+        return;
+    }
+    if !kernel.kill_background_shell(&sid, task).await {
+        warn!(channel = %channel_name, task, "shell kill: task unknown or SIGTERM failed");
+    }
+    // Give the process a moment to actually die before re-listing (the
+    // tracker's cleanup rides the shell guard's Drop).
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    if let Some(message_id) = &action.message_id {
+        let shells = kernel.list_background_shells(&sid);
+        let card = if shells.is_empty() {
+            super::hub_deliver::info_card_envelope(
+                "🖥 Background shells",
+                vec![serde_json::json!({
+                    "tag": "markdown", "text_size": "notation",
+                    "content": "No background shells in this session.",
+                })],
+            )
+        } else {
+            shells_card(&sid, &shells)
+        };
+        if let Err(e) = adapter.update_card(message_id, &card).await {
+            warn!(channel = %channel_name, error = %e, "shell card refresh failed");
+        }
     }
 }

@@ -17,7 +17,11 @@ pub(crate) mod attachments;
 
 pub(crate) mod approval;
 
+pub(crate) mod ask;
+
 pub(crate) mod mailbox;
+
+pub(crate) mod settings;
 
 pub(crate) mod comment;
 

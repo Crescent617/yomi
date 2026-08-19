@@ -168,16 +168,24 @@ fn request_card_carries_button_values() {
     assert_eq!(v["header"]["template"], "orange");
     assert_eq!(v["header"]["title"]["content"], "📄 Doc permission #7");
 
-    // Buttons sit on one row inside a column_set.
-    let columns = &v["body"]["elements"][1]["columns"];
-    let approve_btn = &columns[0]["elements"][0];
-    assert_eq!(approve_btn["tag"], "button");
-    assert_eq!(
-        approve_btn["behaviors"][0]["value"],
-        json!({ "action": "approve", "id": 7 })
-    );
-    let deny_btn = &columns[1]["elements"][0];
+    // Level buttons + deny sit on one row inside a column_set; the
+    // requested level (view, per the fixture) is the highlighted primary.
+    let columns = &v["body"]["elements"][1]["columns"].as_array().unwrap();
+    assert_eq!(columns.len(), 4, "{columns:?}");
+    for (i, level) in ["view", "edit", "full_access"].iter().enumerate() {
+        let btn = &columns[i]["elements"][0];
+        assert_eq!(btn["tag"], "button");
+        assert_eq!(btn["size"], "small");
+        assert_eq!(
+            btn["behaviors"][0]["value"],
+            json!({ "action": "approve", "id": 7, "perm": level })
+        );
+        let expected_type = if i == 0 { "primary" } else { "default" };
+        assert_eq!(btn["type"], expected_type, "level {level} button type");
+    }
+    let deny_btn = &columns[3]["elements"][0];
     assert_eq!(deny_btn["tag"], "button");
+    assert_eq!(deny_btn["type"], "danger");
     assert_eq!(
         deny_btn["behaviors"][0]["value"],
         json!({ "action": "deny", "id": 7 })
@@ -192,8 +200,8 @@ fn request_card_carries_button_values() {
     assert!(md.contains("**Requested permission** view"), "{md}");
     assert!(md.contains("**Remark** 求权限"), "{md}");
 
-    let hint = v["body"]["elements"][2]["content"].as_str().unwrap();
-    assert!(hint.contains("/approve 7"), "{hint}");
+    // No command-hint row: the level buttons carry the choice inline.
+    assert_eq!(v["body"]["elements"].as_array().unwrap().len(), 2);
 }
 
 #[tokio::test]

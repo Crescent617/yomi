@@ -21,8 +21,8 @@ use super::hub_handlers::handle_incoming_message;
 use super::hub_routing::{reply_anchor, resolve_reply_in_thread};
 
 use super::{
-    obs::ObsTracker, reply, ChannelConfig, ChannelEvent, ChannelInfo, ChannelMessage,
-    ChannelStatus, ChannelStore, PlatformAdapter, SessionRouting,
+    ask::AskCardRegistry, obs::ObsTracker, reply, ChannelConfig, ChannelEvent, ChannelInfo,
+    ChannelMessage, ChannelStatus, ChannelStore, PlatformAdapter, SessionRouting,
 };
 
 const STATUS_IDLE: u8 = 0;
@@ -52,6 +52,7 @@ pub struct ChannelHub {
     store: Arc<dyn ChannelStore>,
     instances: Arc<DashMap<String, ChannelInstance>>,
     obs: Arc<ObsTracker>,
+    ask: Arc<AskCardRegistry>,
 }
 
 impl ChannelHub {
@@ -60,6 +61,7 @@ impl ChannelHub {
             store,
             instances: Arc::new(DashMap::new()),
             obs: Arc::new(ObsTracker::new()),
+            ask: Arc::new(AskCardRegistry::new()),
         }
     }
 
@@ -165,6 +167,7 @@ impl ChannelHub {
         let adapter_gate = Arc::clone(&adapter);
         let name_gate = name.clone();
         let config_gate = config.clone();
+        let ask_gate = Arc::clone(&self.ask);
 
         // Gated messages awaiting serial dispatch (session routing,
         // history backfill, receipts) — bounded like the incoming queue.
@@ -220,12 +223,13 @@ impl ChannelHub {
                                 continue;
                             }
                             ChannelEvent::CardAction(action) => {
-                                let (name, config, store, adapter, kernel_weak) = (
+                                let (name, config, store, adapter, kernel_weak, ask_reg) = (
                                     name_gate.clone(),
                                     config_gate.clone(),
                                     Arc::clone(&store),
                                     Arc::clone(&adapter_gate),
                                     kernel.clone(),
+                                    Arc::clone(&ask_gate),
                                 );
                                 tokio::spawn(async move {
                                     // Card-action gate: button clicks
@@ -246,10 +250,16 @@ impl ChannelHub {
                                         return;
                                     }
                                     // 按钮命名空间路由：mb_* 归 mailbox
-                                    // 管理面，act_* 归状态卡动作（stop
-                                    // 等），其余归权限审批。
+                                    // 管理面，act_*/sh_*/pg_*/ask_* 各归
+                                    // 其动作面，cfg_* 归设置面板，其余
+                                    // 归权限审批。
                                     let ns = action.value["action"].as_str().unwrap_or_default();
-                                    if ns.starts_with("mb_") {
+                                    if ns.starts_with("ask_") {
+                                        let Some(kernel) = kernel_weak.upgrade() else {
+                                            return;
+                                        };
+                                        ask_reg.handle_answer(&kernel, &adapter, &action).await;
+                                    } else if ns.starts_with("mb_") {
                                         let Some(kernel) = kernel_weak.upgrade() else {
                                             return;
                                         };
@@ -262,6 +272,30 @@ impl ChannelHub {
                                             return;
                                         };
                                         super::obs::handle_stop_action(&kernel, &action);
+                                    } else if ns.starts_with("sh_") {
+                                        let Some(kernel) = kernel_weak.upgrade() else {
+                                            return;
+                                        };
+                                        super::hub_handlers::handle_shell_action(
+                                            &name, &config, &kernel, &adapter, &action,
+                                        )
+                                        .await;
+                                    } else if ns.starts_with("pg_") {
+                                        let Some(kernel) = kernel_weak.upgrade() else {
+                                            return;
+                                        };
+                                        super::hub_handlers::handle_sessions_action(
+                                            &name, &config, &store, &kernel, &adapter, &action,
+                                        )
+                                        .await;
+                                    } else if ns.starts_with("cfg_") {
+                                        let Some(kernel) = kernel_weak.upgrade() else {
+                                            return;
+                                        };
+                                        super::settings::handle_card_action(
+                                            &name, &config, &kernel, &store, &adapter, action,
+                                        )
+                                        .await;
                                     } else {
                                         super::approval::handle_card_action(
                                             &name, &config, &store, &adapter, action,
@@ -446,6 +480,7 @@ impl ChannelHub {
         let store = Arc::clone(&self.store);
         let instances = Arc::clone(&self.instances);
         let obs = Arc::clone(&self.obs);
+        let ask = Arc::clone(&self.ask);
 
         tokio::spawn(async move {
             // `ToolCallDelta` floods (e.g. thousands of argument deltas for a
@@ -727,6 +762,31 @@ impl ChannelHub {
                             )
                             .await;
                             continue;
+                        }
+
+                        // agent 决策卡（ask_user）：问题渲染成按钮卡；
+                        // Ack（应答/超时/取消）关闭残留卡片。独立于
+                        // observability——它是交互面不是观察面。
+                        match &envelope.event {
+                            Event::Agent(AgentEvent::AskUserQuestion {
+                                req_id,
+                                questions,
+                                ..
+                            }) if supports_cards && !is_doc_comment => {
+                                ask.send_question_cards(
+                                    &adapter,
+                                    &routing.external_chat_id,
+                                    routing.reply_msg_id.as_deref(),
+                                    &session_id,
+                                    req_id,
+                                    questions,
+                                )
+                                .await;
+                            }
+                            Event::Agent(AgentEvent::AskUserAck { req_id }) => {
+                                ask.close_cards(&adapter, req_id).await;
+                            }
+                            _ => {}
                         }
 
                         // Observability: cheap state updates + throttled

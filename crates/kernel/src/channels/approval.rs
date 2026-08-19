@@ -223,7 +223,17 @@ async fn handle_card_action_inner(
         }));
     }
     let resolution = if action_type == "approve" {
-        Resolution::Approved(None)
+        // Level buttons carry the chosen level; an explicitly invalid one
+        // refuses to run rather than silently granting the requested level.
+        let perm = action.value["perm"].as_str();
+        match perm {
+            None => Resolution::Approved(None),
+            Some(p) if PERM_LEVELS.contains(&p) => Resolution::Approved(Some(p)),
+            Some(_) => {
+                warn!(value = %action.value, "approve button with invalid perm");
+                return Ok(None);
+            }
+        }
     } else {
         Resolution::Denied
     };
@@ -509,45 +519,48 @@ fn build_request_card(id: i64, req: &DocPermissionRequest, doc_title: Option<&st
         &format!("📄 Doc permission #{id}"),
         &[
             json!({ "tag": "markdown", "text_size": "notation", "content": lines.join("\n") }),
-            // Schema 2.0 dropped the `action` container tag — buttons are
-            // body elements in their own right (verified: API error 200861);
-            // a column_set puts them on one row.
-            json!({
-                "tag": "column_set",
-                "columns": [
-                    {
-                        "tag": "column",
-                        "width": "weighted",
-                        "weight": 1,
-                        "elements": [{
-                            "tag": "button",
-                            "text": { "tag": "plain_text", "content": "✅ Approve" },
-                            "type": "primary",
-                            "size": "small",
-                            "behaviors": [{ "type": "callback", "value": { "action": "approve", "id": id } }],
-                        }],
-                    },
-                    {
-                        "tag": "column",
-                        "width": "weighted",
-                        "weight": 1,
-                        "elements": [{
-                            "tag": "button",
-                            "text": { "tag": "plain_text", "content": "❌ Deny" },
-                            "type": "danger",
-                            "size": "small",
-                            "behaviors": [{ "type": "callback", "value": { "action": "deny", "id": id } }],
-                        }],
-                    },
-                ],
-            }),
-            json!({
-                "tag": "markdown",
-                "text_size": "notation",
-                "content": format!("<font color='grey'>Approve with a different level: `/approve {id} [view|edit|full_access]`</font>"),
-            }),
+            // Level buttons: the requested level is highlighted (primary)
+            // as the one-tap default; the others stay quiet (default).
+            // Deny trails the row. All small per the card design rules.
+            approval_buttons(id, &req.permission),
         ],
     )
+}
+
+/// Per-level approve buttons + deny, one row: the requested level gets
+/// `type: "primary"` (the guided default), the rest `default`.
+fn approval_buttons(id: i64, requested: &str) -> serde_json::Value {
+    let mut columns: Vec<serde_json::Value> = PERM_LEVELS
+        .iter()
+        .map(|level| {
+            let button_type = if *level == requested { "primary" } else { "default" };
+            json!({
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "elements": [{
+                    "tag": "button",
+                    "text": { "tag": "plain_text", "content": level },
+                    "type": button_type,
+                    "size": "small",
+                    "behaviors": [{ "type": "callback", "value": { "action": "approve", "id": id, "perm": level } }],
+                }],
+            })
+        })
+        .collect();
+    columns.push(json!({
+        "tag": "column",
+        "width": "weighted",
+        "weight": 1,
+        "elements": [{
+            "tag": "button",
+            "text": { "tag": "plain_text", "content": "❌ Deny" },
+            "type": "danger",
+            "size": "small",
+            "behaviors": [{ "type": "callback", "value": { "action": "deny", "id": id } }],
+        }],
+    }));
+    json!({ "tag": "column_set", "columns": columns })
 }
 
 /// Terminal-state card (no buttons): approved in green, denied in grey.

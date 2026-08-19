@@ -99,6 +99,10 @@ pub trait SessionStore: Send + Sync {
     /// Update session `model_key`
     async fn update_model_key(&self, id: &SessionId, key: &str) -> Result<u64>;
 
+    /// Clear the session's model override (`model_key = NULL` — back to
+    /// following the configured default).
+    async fn clear_model_key(&self, id: &SessionId) -> Result<u64>;
+
     /// Get session metadata by ID
     async fn get(&self, id: &SessionId) -> Result<Option<SessionInfo>>;
 

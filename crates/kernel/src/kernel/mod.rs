@@ -130,6 +130,32 @@ impl Kernel {
             .shell_tasks_for(session_id)
     }
 
+    /// SIGTERM a background shell by task id. Only signals: cleanup
+    /// (tracker removal + `BackgroundTasksChanged`) rides the normal
+    /// guard lifecycle when the process actually exits — decrementing
+    /// anything here would double-count against the guard's own Drop.
+    /// Returns false when the task id is unknown (already gone).
+    pub async fn kill_background_shell(&self, session_id: &SessionId, task_id: &str) -> bool {
+        let Some(task) = self
+            .list_background_shells(session_id)
+            .into_iter()
+            .find(|t| t.task_id == task_id)
+        else {
+            return false;
+        };
+        match tokio::process::Command::new("kill")
+            .args(["-TERM", &task.pid.to_string()])
+            .status()
+            .await
+        {
+            Ok(status) => status.success(),
+            Err(e) => {
+                tracing::warn!(pid = task.pid, error = %e, "failed to SIGTERM background shell");
+                false
+            }
+        }
+    }
+
     /// Get favorite answer store
     pub fn favorite_store(&self) -> Arc<dyn crate::storage::FavoriteStore> {
         self.favorite_store.clone()
@@ -668,6 +694,23 @@ impl Kernel {
             .session_store()
             .await
             .update_model_key(session_id, key)
+            .await?;
+        if rows_affected == 0 {
+            return Err(SessionError::NotFound {
+                session_id: session_id.0.to_string(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+
+    /// Clear the session's model override — it follows the configured
+    /// default again (and picks up future default changes).
+    pub async fn clear_session_model(&self, session_id: &SessionId) -> Result<()> {
+        let rows_affected = self
+            .session_store()
+            .await
+            .clear_model_key(session_id)
             .await?;
         if rows_affected == 0 {
             return Err(SessionError::NotFound {

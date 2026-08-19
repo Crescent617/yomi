@@ -6636,9 +6636,14 @@ fn sessions_render_groups_by_time_bucket() {
     ];
 
     let card = sessions_card(0, &entries, true);
-    for label in ["6h ago", "1d ago", "1w ago", "Next page"] {
+    for label in ["6h ago", "1d ago", "1w ago", "Next ▶"] {
         assert!(card.contains(label), "{label} in {card}");
     }
+    // Next-page rides a small bordered callback button, not a text hint.
+    assert!(
+        card.contains(r#"{"action":"pg_sessions","offset":10}"#),
+        "pg button in {card}"
+    );
     let text = sessions_text(0, &entries, true);
     for label in ["── 6h ago ──", "── 1d ago ──", "── 1w ago ──"] {
         assert!(text.contains(label), "{label} in {text}");
@@ -6899,7 +6904,7 @@ async fn mailbox_command_show_retract_clear_and_card_actions() {
     assert!(reply.unwrap().contains("No session yet"));
 
     // 建会话并占住 agent（首个模型请求挂起）。
-    let (sid, _) = get_or_create_session("mock", &store, &kernel, "oc_1", "oc_1", None)
+    let (sid, _) = get_or_create_session("mock", &store, &kernel, "oc_1", "oc_1", None, true)
         .await
         .unwrap();
     let text = |t: &str| {
@@ -7082,7 +7087,7 @@ async fn queue_command_carries_images() {
         require_mention: true,
         ..Default::default()
     };
-    let (sid, _) = get_or_create_session("mock", &store, &kernel, "oc_1", "oc_1", None)
+    let (sid, _) = get_or_create_session("mock", &store, &kernel, "oc_1", "oc_1", None, true)
         .await
         .unwrap();
     let text = |t: &str| {

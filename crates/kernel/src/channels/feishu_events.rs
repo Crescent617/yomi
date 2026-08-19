@@ -518,6 +518,19 @@ impl FeishuAdapter {
         } else {
             payload
         };
+        // Select/checker components report the chosen state NEXT TO the
+        // static button value (verified: `option` = chosen option value,
+        // `checked` = post-click state) — fold them into the value so
+        // handlers read a single JSON document.
+        let mut value = body["action"]["value"].clone();
+        if value.is_object() {
+            if let Some(opt) = body["action"]["option"].as_str() {
+                value["option"] = serde_json::json!(opt);
+            }
+            if let Some(checked) = body["action"]["checked"].as_bool() {
+                value["checked"] = serde_json::json!(checked);
+            }
+        }
         let action = CardAction {
             operator_open_id: body["operator"]["open_id"]
                 .as_str()
@@ -527,7 +540,7 @@ impl FeishuAdapter {
             message_id: body["context"]["open_message_id"]
                 .as_str()
                 .map(str::to_string),
-            value: body["action"]["value"].clone(),
+            value,
         };
         if action.operator_open_id.is_empty() || action.value.is_null() {
             warn!(payload = %payload, "card action missing operator or value, ignored");
