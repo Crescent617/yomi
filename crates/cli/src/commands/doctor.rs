@@ -121,16 +121,14 @@ pub async fn run(global: &GlobalArgs) -> Result<()> {
                     checks.push(check(Level::Ok, "channels", "none configured"));
                 }
                 for info in &infos {
-                    let status = serde_json::to_string(&info.status)
-                        .unwrap_or_default()
-                        .trim_matches('"')
-                        .to_string();
-                    let level = match info.status {
-                        kernel::channels::ChannelStatus::Error => Level::Fail,
-                        kernel::channels::ChannelStatus::Connecting => Level::Warn,
-                        kernel::channels::ChannelStatus::Idle => Level::Ok,
+                    // STATUS_CONNECTING 的语义是"receiver 活着"（ws 在收），
+                    // 即健康运行态；Idle 才是"receiver 已退出"（不在收）。
+                    let (level, note) = match info.status {
+                        kernel::channels::ChannelStatus::Error => (Level::Fail, "error"),
+                        kernel::channels::ChannelStatus::Connecting => (Level::Ok, "receiving"),
+                        kernel::channels::ChannelStatus::Idle => (Level::Warn, "not receiving"),
                     };
-                    checks.push(check(level, &format!("channel:{}", info.name), status));
+                    checks.push(check(level, &format!("channel:{}", info.name), note));
                 }
             }
             Err(e) => checks.push(check(Level::Warn, "channels", format!("query failed: {e}"))),
@@ -146,17 +144,24 @@ pub async fn run(global: &GlobalArgs) -> Result<()> {
                     .iter()
                     .filter(|j| j.status == kernel::cron::CronJobStatus::Failed)
                     .count();
-                let next = jobs.iter().filter_map(|j| j.next_run_at).min().map_or_else(
-                    || "none scheduled".to_string(),
-                    |t| {
-                        let mins = (t - chrono::Utc::now()).num_minutes();
-                        if mins < 0 {
-                            "overdue".to_string()
-                        } else {
-                            format!("next in {mins}m")
-                        }
-                    },
-                );
+                // "下一次触发"只统计 active job——completed/paused 的
+                // next_run_at 是历史值，会误报 overdue。
+                let next = jobs
+                    .iter()
+                    .filter(|j| j.status == kernel::cron::CronJobStatus::Active)
+                    .filter_map(|j| j.next_run_at)
+                    .min()
+                    .map_or_else(
+                        || "none scheduled".to_string(),
+                        |t| {
+                            let mins = (t - chrono::Utc::now()).num_minutes();
+                            if mins < 0 {
+                                "overdue".to_string()
+                            } else {
+                                format!("next in {mins}m")
+                            }
+                        },
+                    );
                 let level = if failed > 0 { Level::Warn } else { Level::Ok };
                 checks.push(check(
                     level,
