@@ -37,31 +37,48 @@ fn check(level: Level, label: &str, detail: impl Into<String>) -> Check {
     }
 }
 
+/// 未 finalize 的原始配置：finalize 会静默补默认 model、重置无效
+/// `default_model`——健康检查必须在归一化之前看配置。
+fn load_config_unfinalized(global: &GlobalArgs) -> Result<kernel::config::Config> {
+    let mut config = if let Some(path) = global.config.as_ref() {
+        kernel::config::Config::from_file(path)?
+    } else {
+        kernel::config::Config::discover_file()
+            .map(|path| kernel::config::Config::from_file(&path))
+            .transpose()?
+            .unwrap_or_default()
+    };
+    config.inject_env()?;
+    config.apply_env_overrides();
+    Ok(config)
+}
+
 pub async fn run(global: &GlobalArgs) -> Result<()> {
     let mut checks = Vec::new();
 
     // ── Config ────────────────────────────────────────────────────────
-    let config = match crate::utils::load_config(global.config.as_ref()) {
-        Ok(c) => {
-            let mut detail = format!("{} model(s) configured", c.models.len());
-            if c.models.is_empty() {
+    let config = match load_config_unfinalized(global) {
+        Ok(raw) => {
+            if raw.models.is_empty() {
                 checks.push(check(Level::Fail, "config", "no [[models]] configured"));
-            } else if !c.models.iter().any(|m| m.name == c.agent.default_model) {
+            } else if !raw.models.iter().any(|m| m.name == raw.agent.default_model) {
                 checks.push(check(
                     Level::Fail,
                     "config",
                     format!(
                         "default_model '{}' not found in [[models]]",
-                        c.agent.default_model
+                        raw.agent.default_model
                     ),
                 ));
             } else {
-                if c.channels.is_empty() {
+                let mut detail = format!("{} model(s) configured", raw.models.len());
+                if raw.channels.is_empty() {
                     detail.push_str(", no channels");
                 }
                 checks.push(check(Level::Ok, "config", detail));
             }
-            Some(c)
+            // 后续检查用完整归一化配置（data_dir 等由 finalize 定型）。
+            crate::utils::load_config(global.config.as_ref()).ok()
         }
         Err(e) => {
             checks.push(check(Level::Fail, "config", format!("failed to load: {e}")));
@@ -166,7 +183,7 @@ pub async fn run(global: &GlobalArgs) -> Result<()> {
     if let Some(config) = &config {
         match kernel::StorageSet::open_with_config(&config.data_dir, config).await {
             Ok(storage) => {
-                let count = storage
+                match storage
                     .session_store()
                     .list(
                         None,
@@ -175,21 +192,30 @@ pub async fn run(global: &GlobalArgs) -> Result<()> {
                         500,
                     )
                     .await
-                    .map_or(0, |(v, _)| v.len());
-                let db = config.data_dir.join("yomi.db");
-                let db_mb = std::fs::metadata(&db)
-                    .map(|m| m.len() as f64 / 1_048_576.0)
-                    .unwrap_or(0.0);
-                let level = if db_mb > 1024.0 {
-                    Level::Warn
-                } else {
-                    Level::Ok
-                };
-                checks.push(check(
-                    level,
-                    "storage",
-                    format!("{count} session(s), db {db_mb:.1} MiB"),
-                ));
+                {
+                    Ok((v, _)) => {
+                        let db = config.data_dir.join("yomi.db");
+                        let db_mb = std::fs::metadata(&db)
+                            .map(|m| m.len() as f64 / 1_048_576.0)
+                            .unwrap_or(0.0);
+                        let level = if db_mb > 1024.0 {
+                            Level::Warn
+                        } else {
+                            Level::Ok
+                        };
+                        checks.push(check(
+                            level,
+                            "storage",
+                            format!("{} session(s), db {db_mb:.1} MiB", v.len()),
+                        ));
+                    }
+                    // 查询失败不能报成"0 会话"的假健康。
+                    Err(e) => checks.push(check(
+                        Level::Warn,
+                        "storage",
+                        format!("session list failed: {e}"),
+                    )),
+                }
             }
             Err(e) => checks.push(check(Level::Fail, "storage", format!("open failed: {e}"))),
         }

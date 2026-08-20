@@ -30,7 +30,7 @@
 | `wire` | `src/wire.rs` | IPC 序列化协议（JSON），定义 `RequestMethod`/`ResponseBody`/`WireMsg`，当前协议版本 `WIRE_PROTOCOL_VERSION = 6` |
 | `server` | `src/server/mod.rs` | Daemon 服务端：`KernelServer` 通过 Unix socket 监听客户端连接，管理 cron 调度器和 channel 生命周期 |
 | `client` | `src/client/mod.rs` | 客户端：`KernelApi` trait + 基于 socket 的 IPC 实现，含心跳、重连、RPC 超时（30s） |
-| `app` | `src/app/` | `Kernel`（会话/项目/目标管理的对外 API）和 `Conductor`（Agent 生命周期唯一管理者） |
+| `app` | `src/app/` | `Kernel`（会话/项目管理的对外 API）和 `Conductor`（Agent 生命周期唯一管理者） |
 | `channels` | `src/channels/` | 外部渠道接入：飞书（Feishu）、Telegram；支持消息收发与会话映射 |
 | `cron` | `src/cron/` | 定时任务系统：`CronScheduler` + `CronWorker`，支持 cron 表达式调度任务 |
 | `task` | `src/task/` | 任务管理子系统：创建、更新、查询、列表工具 |
@@ -140,7 +140,7 @@ graph TD
     end
 
     subgraph "Application Layer"
-        Kernel["app::Kernel<br/>会话/项目/目标管理"]
+        Kernel["app::Kernel<br/>会话/项目管理"]
         Conductor["app::Conductor<br/>Agent 生命周期管理者"]
     end
 

@@ -23,7 +23,7 @@ use tracing::{info, Instrument};
 pub enum AgentInput {
     /// User message with multi-modal content blocks
     User { content: Vec<ContentBlock> },
-    /// Continue the agent from Idle to Streaming (e.g. cron-fired runs)
+    /// Continue the agent from Idle to Streaming (`/continue` via RPC: GUI/CLI/TUI)
     Continue,
     /// Cancel current operation; the agent loop exits once the cancellation
     /// is observed (the next input respawns the agent with fresh context)

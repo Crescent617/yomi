@@ -87,16 +87,10 @@ struct RgMatch {
 }
 
 fn rg_matches(query: &str, sessions_dir: &std::path::Path) -> Option<Vec<RgMatch>> {
+    // 非 UTF-8 路径宁可走慢路径，也不让 rg 拿替换符路径静默报"无命中"。
+    let dir = sessions_dir.to_str()?;
     let out = std::process::Command::new("rg")
-        .args([
-            "-iF",
-            "--json",
-            "--glob",
-            "*.jsonl",
-            "--",
-            query,
-            &sessions_dir.to_string_lossy(),
-        ])
+        .args(["-iF", "--json", "--glob", "*.jsonl", "--", query, dir])
         .output()
         .ok()?;
     // rg: 0=有命中, 1=无命中（合法，空列表）, 其他=错误（回退慢路径）
@@ -135,10 +129,23 @@ fn snippet(text: &str, needle_lower: &str, ctx: usize) -> Option<String> {
     let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let flat_lower = flat.to_lowercase();
     let byte_pos = flat_lower.find(needle_lower)?;
+    // 命中点在 flat 中的 char 位置：to_lowercase 可展开字符（'İ'→2 字
+    // 符），lower 串的 char 数与 flat 串不对应，必须双串并行 walk 映射。
+    let target = flat_lower[..byte_pos].chars().count();
+    let mut match_pos = 0usize;
+    let mut lower_seen = 0usize;
+    for (i, c) in flat.chars().enumerate() {
+        if lower_seen >= target {
+            match_pos = i;
+            break;
+        }
+        lower_seen += c.to_lowercase().count();
+        match_pos = i + 1;
+    }
     let chars: Vec<char> = flat.chars().collect();
-    let approx = flat_lower[..byte_pos].chars().count();
-    let start = approx.saturating_sub(ctx);
-    let end = (approx + needle_lower.chars().count() + ctx).min(chars.len());
+    let start = match_pos.saturating_sub(ctx);
+    let end = (match_pos + needle_lower.chars().count() + ctx).min(chars.len());
+    let start = start.min(end);
     let mut out = String::new();
     if start > 0 {
         out.push('…');
@@ -163,10 +170,14 @@ fn harvest_text(line: &serde_json::Value, verbose: bool, out: &mut Vec<(String, 
 }
 
 fn harvest_strs(v: &serde_json::Value, verbose: bool, buf: &mut String) {
+    // 单字符串上限：base64 图片等大负载不进索引（防护意图保留）。
+    const MAX_STR: usize = 64 * 1024;
     match v {
         serde_json::Value::String(s) => {
-            buf.push_str(s);
-            buf.push('\n');
+            if s.len() <= MAX_STR {
+                buf.push_str(s);
+                buf.push('\n');
+            }
         }
         serde_json::Value::Array(items) => {
             for item in items {
@@ -174,16 +185,19 @@ fn harvest_strs(v: &serde_json::Value, verbose: bool, buf: &mut String) {
             }
         }
         serde_json::Value::Object(map) => {
-            // 只采文本类字段，跳过 base64 图片等重负载；thinking 默认不采
-            // （--verbose 才纳入，与 cat 的口径一致）。
-            let mut keys: Vec<&str> = vec!["text", "name", "arguments", "input"];
-            if verbose {
-                keys.push("thinking");
-            }
-            for key in keys {
-                if let Some(val) = map.get(key) {
-                    harvest_strs(val, verbose, buf);
+            for (key, val) in map {
+                // 已知重负载/不可检索字段跳过；thinking 默认不采
+                // （--verbose 才纳入，与 cat 口径一致）。其余键值全采——
+                // 工具 arguments 是任意 object（command/file_path/…），
+                // 白名单会把它们丢光。
+                if matches!(
+                    key.as_str(),
+                    "image_url" | "url" | "data" | "source" | "signature"
+                ) || (key == "thinking" && !verbose)
+                {
+                    continue;
                 }
+                harvest_strs(val, verbose, buf);
             }
         }
         _ => {}
@@ -274,6 +288,8 @@ pub async fn run(
         println!("No sessions directory at {}", sessions_dir.display());
         return Ok(());
     }
+    // 空 query：rg 会匹配每一行、把整个语料（含 base64 行）读进内存。
+    anyhow::ensure!(!query.trim().is_empty(), "query must not be empty");
     let needle_lower = query.to_lowercase();
 
     let mut results: Vec<SessionHits> = Vec::new();
@@ -457,3 +473,7 @@ pub struct SearchArgs {
     #[arg(long)]
     pub verbose: bool,
 }
+
+#[cfg(test)]
+#[path = "search_test.rs"]
+mod tests;

@@ -47,7 +47,7 @@ pub async fn run(
         let total = content.lines().count();
         anyhow::ensure!(n >= 1 && n <= total, "Line {n} out of range (1..={total})");
         let lo = n.saturating_sub(context).max(1);
-        let hi = (n + context).min(total);
+        let hi = n.saturating_add(context).min(total);
         // 全量解析再按行过滤：tool 配对靠跨消息索引，切片先转会让
         // "结果在窗内、调用在窗外"的 tool 消息整条消失。
         let mut parsed: Vec<(Option<usize>, Message)> = Vec::new();
