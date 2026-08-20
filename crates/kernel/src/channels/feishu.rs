@@ -85,7 +85,7 @@ pub struct FeishuAdapter {
     app_secret: String,
     client: Client,
     base_url: String,
-    token_cache: Mutex<Option<TokenCache>>,
+    token_cache: Mutex<Option<TokenCache>>, // tenant_access_token 内存缓存（2h 有效期）
     bot_open_id: tokio::sync::Mutex<Option<String>>,
     pub(crate) seen_messages: Mutex<LruCache<String, ()>>,
     /// Thread id → root message id, filled by `thread_root_id`. Memory
