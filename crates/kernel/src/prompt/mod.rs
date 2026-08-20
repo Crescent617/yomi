@@ -138,7 +138,11 @@ impl<'a> SystemPromptBuilder<'a> {
         }
 
         prompt.push_str("# Environment\n");
-        let _ = write!(prompt, "Date: {}", Local::now().format("%Y-%m-%d"));
+        let _ = write!(
+            prompt,
+            "agent kernel: Yomi\nDate: {}",
+            Local::now().format("%Y-%m-%d")
+        );
         if let Some(cwd) = self.working_dir {
             let _ = write!(prompt, "\nCWD: {}", cwd.display());
         }
