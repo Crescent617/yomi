@@ -387,38 +387,6 @@ impl Model {
                     ));
                     self.state.should_redraw = true;
                 }
-                Event::Agent(kernel::event::AgentEvent::GoalUpdated {
-                    description,
-                    status,
-                }) => {
-                    let goal_str = format!("{status}\x00{description}");
-                    if let Err(e) = self.app.attr(
-                        &Id::TodoList,
-                        Attribute::Custom(attr::SET_GOAL),
-                        AttrValue::String(goal_str),
-                    ) {
-                        tracing::warn!("Failed to update goal status on TodoList: {e}");
-                    }
-                    self.show_notification(&crate::components::info_bar::Notification::info(
-                        format!("Goal {status}: {description}"),
-                        3000,
-                    ));
-                    self.state.should_redraw = true;
-                }
-                Event::Agent(kernel::event::AgentEvent::GoalStopped) => {
-                    if let Err(e) = self.app.attr(
-                        &Id::TodoList,
-                        Attribute::Custom(attr::SET_GOAL),
-                        AttrValue::String(String::new()),
-                    ) {
-                        tracing::warn!("Failed to clear goal status on TodoList: {e}");
-                    }
-                    self.show_notification(&crate::components::info_bar::Notification::info(
-                        "Goal stopped",
-                        3000,
-                    ));
-                    self.state.should_redraw = true;
-                }
                 // Mailbox 内容变化（入队/消费/撤回/清空）→ 刷新 pending 快照。
                 Event::Agent(kernel::event::AgentEvent::MailboxChanged { .. }) => {
                     self.refresh_mailbox();

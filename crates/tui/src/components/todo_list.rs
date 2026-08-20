@@ -1,9 +1,7 @@
 //! Todo list floating panel component
 //!
-//! Displays active goal and pending todos on the right side.
+//! Displays pending todos on the right side.
 //! Title is always "Tasks".
-//! If a goal exists, it renders at the top (wrapped, max 3 lines).
-//! Todos render below with a separator line.
 
 use kernel::storage::todo::TodoListData;
 pub use kernel::storage::todo::{TodoItem, TodoStatus};
@@ -16,7 +14,7 @@ use tuirealm::{
         layout::Rect,
         style::{Modifier, Style},
         text::{Line, Span},
-        widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Widget},
+        widgets::{Block, BorderType, Borders, Clear, List, ListItem, Widget},
         Frame,
     },
     state::State,
@@ -32,25 +30,14 @@ const MIN_SCREEN_WIDTH: u16 = 60;
 const PANEL_MARGIN: u16 = 3;
 /// Icon width: "○ " or "● " = 2 chars
 const ICON_WIDTH: usize = 2;
-/// Maximum goal lines to show
-const MAX_GOAL_LINES: usize = 3;
 
-/// Goal info shown in the task panel
-#[derive(Debug, Clone)]
-struct GoalInfo {
-    description: String,
-    status: String,
-}
-
-/// Task panel floating component (goal + todos)
+/// Task panel floating component (todos)
 #[derive(Debug, Default)]
 pub struct TodoList {
     todos: Vec<TodoItem>,
     visible: bool,
     /// User manually toggled visibility (overrides auto-show)
     manually_hidden: bool,
-    /// Current goal (rendered at the top of the panel)
-    goal: Option<GoalInfo>,
 }
 
 impl TodoList {
@@ -59,7 +46,6 @@ impl TodoList {
             todos: Vec::new(),
             visible: false,
             manually_hidden: false,
-            goal: None,
         }
     }
 
@@ -70,13 +56,12 @@ impl TodoList {
     }
 
     /// Update visible state based on content and manual hide
-    /// Show when there are pending todos OR an active goal
+    /// Show when there are pending todos
     fn update_visible(&mut self) {
         let has_content = self
             .todos
             .iter()
-            .any(|t| matches!(t.status, TodoStatus::Pending | TodoStatus::InProgress))
-            || self.goal.is_some();
+            .any(|t| matches!(t.status, TodoStatus::Pending | TodoStatus::InProgress));
         self.visible = has_content && !self.manually_hidden;
     }
 
@@ -99,21 +84,6 @@ impl TodoList {
         self.todos.clear();
         self.visible = false;
         self.manually_hidden = false;
-        self.goal = None;
-    }
-
-    /// Update goal info from raw string "status\0description"
-    pub fn update_goal(&mut self, value: &str) {
-        let parts: Vec<&str> = value.split('\x00').collect();
-        if parts.len() == 2 && !parts[0].is_empty() {
-            self.goal = Some(GoalInfo {
-                status: parts[0].to_string(),
-                description: parts[1].to_string(),
-            });
-        } else {
-            self.goal = None;
-        }
-        self.update_visible();
     }
 
     /// Check if panel should be visible
@@ -155,32 +125,10 @@ impl Component for TodoList {
             .max()
             .unwrap_or(0);
 
-        let goal_width = if let Some(ref goal) = self.goal {
-            let text = format!("🎯 {}", goal.description);
-            unicode_width::UnicodeWidthStr::width(text.as_str())
-        } else {
-            0
-        };
-
-        let max_content_width = max_todo_width.max(goal_width);
-        let panel_width = (max_content_width as u16 + PANEL_MARGIN).min(area.width * 2 / 5);
-
-        // Estimate goal height (max 3 lines)
-        let estimated_inner_width = panel_width.saturating_sub(2) as usize;
-        let estimated_goal_lines = if let Some(ref goal) = self.goal {
-            let text = format!("🎯 {}", goal.description);
-            let text_width = unicode_width::UnicodeWidthStr::width(text.as_str());
-            let width = estimated_inner_width.max(1);
-            text_width.div_ceil(width).min(MAX_GOAL_LINES) as u16
-        } else {
-            0
-        };
+        let panel_width = (max_todo_width as u16 + PANEL_MARGIN).min(area.width * 2 / 5);
 
         // Calculate total height
         let mut total_height = 2; // border
-        if estimated_goal_lines > 0 {
-            total_height += estimated_goal_lines + 1; // +1 for separator
-        }
         total_height += display_todos as u16;
         if hidden_todos > 0 {
             total_height += 1;
@@ -208,62 +156,10 @@ impl Component for TodoList {
 
         let inner = block.inner(panel_area);
 
-        // Render goal at the top
-        let mut y = inner.y;
-        if let Some(ref goal) = self.goal {
-            let status_fg = match goal.status.as_str() {
-                "active" => colors::accent_success(),
-                "paused" => colors::accent_warning(),
-                "blocked" => colors::accent_error(),
-                _ => colors::text_muted(),
-            };
-
-            let text = format!("🎯 {}", goal.description);
-            let text_width = unicode_width::UnicodeWidthStr::width(text.as_str());
-            let width = inner.width.max(1) as usize;
-            let goal_lines = text_width.div_ceil(width).min(MAX_GOAL_LINES) as u16;
-
-            let goal_line = Line::from(vec![Span::styled(
-                format!("🎯 {}", goal.description),
-                Style::default().fg(status_fg).add_modifier(Modifier::BOLD),
-            )]);
-
-            let goal_area = Rect {
-                x: inner.x,
-                y,
-                width: inner.width,
-                height: goal_lines,
-            };
-
-            frame.render_widget(
-                Paragraph::new(goal_line).wrap(tuirealm::ratatui::widgets::Wrap { trim: true }),
-                goal_area,
-            );
-            y += goal_lines;
-
-            // Separator between goal and todos
-            if !self.todos.is_empty() {
-                let sep_area = Rect {
-                    x: inner.x,
-                    y,
-                    width: inner.width,
-                    height: 1,
-                };
-                let sep = "─".repeat(inner.width as usize);
-                frame.render_widget(
-                    Paragraph::new(Line::from(vec![Span::styled(
-                        sep,
-                        Style::default().fg(colors::border()),
-                    )])),
-                    sep_area,
-                );
-                y += 1;
-            }
-        }
-
-        // Render todo list below
+        // Render todo list
         if !self.todos.is_empty() {
-            let remaining_height = inner.height.saturating_sub(y - inner.y);
+            let y = inner.y;
+            let remaining_height = inner.height;
             let list_area = Rect {
                 x: inner.x,
                 y,
@@ -328,10 +224,6 @@ impl Component for TodoList {
                 self.clear();
             } else if *name == attr::TOGGLE_TODOS {
                 self.toggle();
-            } else if *name == attr::SET_GOAL {
-                if let AttrValue::String(value_str) = value {
-                    self.update_goal(&value_str);
-                }
             }
         }
     }

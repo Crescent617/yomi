@@ -2,7 +2,7 @@
 //!
 //! Removes all resources associated with sessions whose `updated_at` is older
 //! than the cutoff: sqlite rows (sessions, channel mappings), message history,
-//! todos, goals, file states, checkpoint directories and unreferenced assets. Also sweeps
+//! todos, file states, checkpoint directories and unreferenced assets. Also sweeps
 //! orphan files left behind by past bugs or interrupted writes.
 //!
 //! The `token_usage` table is never touched.

@@ -1,6 +1,5 @@
 use crate::checkpoint::RewindTarget;
 use crate::event::Command;
-use crate::goal::GoalState;
 use crate::kernel::CreateSessionInput;
 use crate::kernel::Kernel;
 use crate::notification::Notification;
@@ -191,12 +190,6 @@ pub trait KernelApi: Send + Sync {
         offset: usize,
     ) -> Result<Vec<crate::storage::FavoriteAnswer>>;
     async fn update_favorite_note(&self, id: &str, note: Option<String>) -> Result<()>;
-    async fn start_goal(&self, session_id: &SessionId, state: GoalState) -> Result<()>;
-    async fn pause_goal(&self, session_id: &SessionId) -> Result<()>;
-    async fn resume_goal(&self, session_id: &SessionId) -> Result<()>;
-    async fn get_goal(&self, session_id: &SessionId) -> Result<Option<crate::goal::GoalState>>;
-    async fn update_goal(&self, session_id: &SessionId, description: String) -> Result<()>;
-    async fn stop_goal(&self, session_id: &SessionId) -> Result<()>;
     async fn delete_session(&self, session_id: &SessionId) -> Result<()>;
     async fn clear_session(&self, session_id: &SessionId) -> Result<()>;
     /// Pending mailbox contents (steer + queued user messages), FIFO.
@@ -516,30 +509,6 @@ impl KernelApi for Kernel {
 
     async fn update_favorite_note(&self, id: &str, note: Option<String>) -> Result<()> {
         Self::update_favorite_note(self, id, note).await
-    }
-
-    async fn start_goal(&self, session_id: &SessionId, state: GoalState) -> Result<()> {
-        Self::start_goal(self, session_id, state).await
-    }
-
-    async fn pause_goal(&self, session_id: &SessionId) -> Result<()> {
-        Self::pause_goal(self, session_id).await
-    }
-
-    async fn resume_goal(&self, session_id: &SessionId) -> Result<()> {
-        Self::resume_goal(self, session_id).await
-    }
-
-    async fn get_goal(&self, session_id: &SessionId) -> Result<Option<crate::goal::GoalState>> {
-        Self::get_goal(self, session_id).await
-    }
-
-    async fn update_goal(&self, session_id: &SessionId, description: String) -> Result<()> {
-        Self::update_goal(self, session_id, description).await
-    }
-
-    async fn stop_goal(&self, session_id: &SessionId) -> Result<()> {
-        Self::stop_goal(self, session_id).await
     }
 
     async fn delete_session(&self, session_id: &SessionId) -> Result<()> {
@@ -1648,62 +1617,6 @@ impl KernelApi for RemoteKernel {
         self.call(ReqMethod::UpdateFavoriteNote {
             favorite_id: id.to_string(),
             note,
-        })
-        .await?;
-        Ok(())
-    }
-
-    async fn start_goal(&self, session_id: &SessionId, state: GoalState) -> Result<()> {
-        self.call(ReqMethod::Command {
-            session_id: session_id.0.to_string(),
-            cmd: Command::StartGoal(state),
-        })
-        .await?;
-        Ok(())
-    }
-
-    async fn pause_goal(&self, session_id: &SessionId) -> Result<()> {
-        self.call(ReqMethod::Command {
-            session_id: session_id.0.to_string(),
-            cmd: Command::PauseGoal,
-        })
-        .await?;
-        Ok(())
-    }
-
-    async fn resume_goal(&self, session_id: &SessionId) -> Result<()> {
-        self.call(ReqMethod::Command {
-            session_id: session_id.0.to_string(),
-            cmd: Command::ResumeGoal,
-        })
-        .await?;
-        Ok(())
-    }
-
-    async fn get_goal(&self, session_id: &SessionId) -> Result<Option<crate::goal::GoalState>> {
-        let result = self
-            .call(ReqMethod::Command {
-                session_id: session_id.0.to_string(),
-                cmd: Command::GetGoal,
-            })
-            .await?;
-        let goal: Option<crate::goal::GoalState> = serde_json::from_value(result)?;
-        Ok(goal)
-    }
-
-    async fn update_goal(&self, session_id: &SessionId, description: String) -> Result<()> {
-        self.call(ReqMethod::Command {
-            session_id: session_id.0.to_string(),
-            cmd: Command::EditGoal { description },
-        })
-        .await?;
-        Ok(())
-    }
-
-    async fn stop_goal(&self, session_id: &SessionId) -> Result<()> {
-        self.call(ReqMethod::Command {
-            session_id: session_id.0.to_string(),
-            cmd: Command::StopGoal,
         })
         .await?;
         Ok(())

@@ -243,7 +243,6 @@ fn tool_label_uses_camel_case_for_multi_word_tools() {
     assert_eq!(tool_label("post_message"), "PostMessage");
     assert_eq!(tool_label("ask_user"), "AskUser");
     assert_eq!(tool_label("task_create"), "TaskCreate");
-    assert_eq!(tool_label("update_goal"), "UpdateGoal");
     // single-word tools keep their plain label
     assert_eq!(tool_label("read"), "Read");
     // unknown tools are humanized the same way

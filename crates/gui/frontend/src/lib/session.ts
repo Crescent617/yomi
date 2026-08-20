@@ -139,7 +139,6 @@ export function createSessionState(
     pending_permissions: [],
     pending_ask_users: [],
     updated_at: new Date().toISOString(),
-    goal: null,
     todos: [],
     subagents: [],
     ...partial,
@@ -201,10 +200,9 @@ export function upsertSession(session: SessionState) {
 
 async function hydrateSession(sessionId: string, session: SessionState) {
   const phaseRevisionAtRequest = session.phase_revision;
-  const [info, msgs, goal, todos] = await Promise.all([
+  const [info, msgs, todos] = await Promise.all([
     api.getSession(sessionId),
     api.getMessages(sessionId),
-    api.getGoal(sessionId).catch(() => null),
     api.getTodos(sessionId).catch(() => ({ todos: [] })),
     refreshSubagents(sessionId),
   ]);
@@ -217,7 +215,6 @@ async function hydrateSession(sessionId: string, session: SessionState) {
     info.auto_approve_level ?? session.permission_level;
   session.model_key = info.model_key ?? session.model_key;
   session.updated_at = info.updated_at;
-  session.goal = goal;
   session.todos = todos.todos;
   syncSessionStatus(sessionId, info, phaseRevisionAtRequest);
   loadSessionMessages(sessionId, msgs);
@@ -336,7 +333,6 @@ export function refreshSessions() {
           current.permission_level =
             s.auto_approve_level ?? current.permission_level;
           current.model_key = s.model_key ?? current.model_key;
-          current.goal ??= null;
           current.todos ??= [];
         }
       }
@@ -375,7 +371,6 @@ export function loadPinnedSessions() {
           session.alias = p.title ?? session.alias ?? "Untitled";
           session.updated_at = p.updated_at ?? session.updated_at;
           session.project_id = p.project_id ?? session.project_id;
-          session.goal ??= null;
           session.todos ??= [];
         }
       }

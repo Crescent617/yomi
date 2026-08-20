@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const apiMocks = vi.hoisted(() => ({
   forkSession: vi.fn(),
-  getGoal: vi.fn(),
   getMessages: vi.fn(),
   getSession: vi.fn(),
   getTodos: vi.fn(),
@@ -49,7 +48,6 @@ describe("forkSession", () => {
     apiMocks.forkSession.mockResolvedValue("forked");
     apiMocks.getSession.mockResolvedValue(hydratedSession);
     apiMocks.getMessages.mockResolvedValue([]);
-    apiMocks.getGoal.mockResolvedValue(null);
     apiMocks.getTodos.mockResolvedValue({ todos: [] });
     apiMocks.listRunningSessions.mockResolvedValue([]);
     apiMocks.listSubagents.mockResolvedValue([]);

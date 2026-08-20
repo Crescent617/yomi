@@ -37,6 +37,8 @@ const ASSET_STALE_SECS: u64 = 3600;
 const SESSION_FILE_KINDS: &[(&str, &str)] = &[
     ("", "jsonl"), // {id}.jsonl — message history
     ("todos", "json"),
+    // legacy: goal mode was removed (2026-08); keep this entry only to
+    // clean up pre-existing sessions/goals/*.json files.
     ("goals", "json"),
     ("file_states", "jsonl"),
 ];

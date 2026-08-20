@@ -47,15 +47,3 @@ fn test_parse_todo_with_escapes() {
     assert_eq!(list.todos.len(), 1);
     assert_eq!(list.todos[0].content, "Line 1\nLine 2\tTabbed");
 }
-
-#[test]
-fn test_goal_triggers_visibility() {
-    let mut list = TodoList::new();
-    assert!(!list.is_visible());
-
-    list.update_goal("active\x00Implement auth");
-    assert!(list.is_visible());
-
-    list.update_goal("");
-    assert!(!list.is_visible());
-}

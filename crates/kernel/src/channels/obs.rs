@@ -32,7 +32,7 @@
 //! silently (the morph above) additionally reacts on the session's
 //! **latest user message** — ✅ done / ❌ failed; the chat-list
 //! "回应了你的消息" surfacing stands in for a completion ping. Runs
-//! without a fresh trigger (goal continuations, cron-fired runs, API
+//! without a fresh trigger (cron-fired runs, API
 //! steers) react on the last recorded user message instead of a run
 //! trigger. No reaction when the reply lands as a new message (mid-run
 //! posts) — that message notifies by itself. Repeated settles on the
@@ -117,7 +117,7 @@ enum Phase {
     Typing,
     /// Humanized tool name (e.g. "Bash").
     Tool(String),
-    /// Retry/error/goal/compact/fallback — informative text as-is.
+    /// Retry/error/compact/fallback — informative text as-is.
     Text(String),
 }
 
@@ -350,7 +350,7 @@ pub(crate) struct ObsTracker {
     receipts: DashMap<SessionId, Vec<String>>,
     /// The session's settle-reaction target (its latest user message).
     /// Sticky across runs (settlement does NOT clear it), so async runs
-    /// without a fresh trigger (goal continuations, cron-fired runs, API
+    /// without a fresh trigger (cron-fired runs, API
     /// steers) still have a message to react on.
     last_user_msg: DashMap<SessionId, ReactionTarget>,
     patch_interval: Duration,
@@ -523,10 +523,6 @@ impl ObsTracker {
             Event::Agent(AgentEvent::Error { error, .. }) => {
                 let phase = Phase::Text(format!("⚠️ Error: {}", truncate_by_chars(error, 30, "…")));
                 // Never settles — a mid-retry error may still recover (see design §3).
-                self.update_running(session_id, |s| s.phase = phase).await;
-            }
-            Event::Agent(AgentEvent::GoalUpdated { status, .. }) => {
-                let phase = Phase::Text(format!("🎯 Goal: {status}"));
                 self.update_running(session_id, |s| s.phase = phase).await;
             }
             Event::Model(ModelEvent::Compacting { active }) => {

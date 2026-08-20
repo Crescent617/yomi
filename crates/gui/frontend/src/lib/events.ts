@@ -579,15 +579,6 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
     refreshCheckpoints(session.id);
     showNotification("Session message replaced", "info");
     return true;
-  } else if (event.goal_updated) {
-    session.goal = {
-      description: event.goal_updated.description,
-      status: event.goal_updated.status,
-    };
-    return true;
-  } else if (event.goal_stopped !== undefined) {
-    session.goal = null;
-    return true;
   }
   return false;
 }

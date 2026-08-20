@@ -43,7 +43,6 @@
     Zap,
     GitBranch,
     FileDiff,
-    Command,
     Copy,
     FolderOpen,
     Info,
@@ -157,22 +156,6 @@
   let homeInput = $state("");
   let submitting = $state(false);
   let homeFileAttachments = $state<string[]>([]);
-
-  let homeTextareaRef: HTMLTextAreaElement | null = $state(null);
-
-  // ── home command picker (only /goal on home screen) ──
-  let showCommands = $state(false);
-  let commandFilter = $state("");
-  let selectedCommandIdx = $state(0);
-  let homeCommandListRef: HTMLDivElement | null = $state(null);
-  const HOME_COMMANDS: readonly (readonly [string, string])[] = [
-    ["/goal", "<description> Start goal mode with optional description"],
-  ];
-  const filteredHomeCommands = $derived(
-    HOME_COMMANDS.filter(([cmd]) =>
-      cmd.toLowerCase().includes(commandFilter.toLowerCase()),
-    ),
-  );
 
   // ── home inline images (clipboard paste) ──
   let modelSelectorRef: ReturnType<typeof ModelSelector> | undefined = $state();
@@ -304,21 +287,7 @@
   async function handleHomeSubmit() {
     if (submitting || !homeInput.trim()) return;
 
-    // Validate /goal before clearing any state
     const baseText = homeInput.trim();
-    const isGoal =
-      baseText.toLowerCase() === "/goal" ||
-      baseText.toLowerCase().startsWith("/goal ");
-    if (isGoal) {
-      const description = baseText.slice(5).trim();
-      if (!description) {
-        showNotification(
-          "Please provide a goal description: /goal <description>",
-          "error",
-        );
-        return;
-      }
-    }
 
     let level = permission_level;
     if (!level) {
@@ -418,14 +387,6 @@
         syncSessionStatus(id, sessionInfo, phaseRevisionAtRequest);
         loadSessionMessages(id, msgs);
         refreshCheckpoints(id);
-        api
-          .getGoal(id)
-          .then((g) => {
-            session.goal = g;
-          })
-          .catch(() => {
-            session.goal = null;
-          });
         const buf = streamingMessages[id] ?? [];
         if (buf.length > 0) {
           appendSessionMessages(session, buf);
@@ -442,28 +403,7 @@
       const text = baseText + fileSuffix;
       homeFileAttachments = [];
       const hasImages = homeInlineImages.length > 0;
-      if (isGoal) {
-        const description = baseText.slice(5).trim();
-        await api.startGoal(id, description);
-        {
-          const session = sessionState.sessions.find((s) => s.id === id);
-          if (session) {
-            api
-              .getGoal(id)
-              .then((g) => {
-                session.goal = g;
-              })
-              .catch(() => {});
-          }
-        }
-        // rename_session will emit TitleUpdated event — alias is synced there
-        try {
-          await api.renameSession(id, description);
-        } catch {
-          // ignore rename failure
-        }
-        console.log("Goal mode activated — agent will work autonomously");
-      } else if (hasImages) {
+      if (hasImages) {
         const blocks = buildContentBlocks(text, homeInlineImages);
         await api.sendMessageBlocks(id, blocks);
       } else {
@@ -632,55 +572,6 @@
     }
   });
 
-  $effect(() => {
-    if (showCommands && homeCommandListRef) {
-      const buttons = homeCommandListRef.querySelectorAll("button");
-      const selected = buttons[selectedCommandIdx];
-      if (selected) {
-        selected.scrollIntoView({ block: "nearest", inline: "nearest" });
-      }
-    }
-  });
-
-  $effect(() => {
-    if (selectedCommandIdx >= filteredHomeCommands.length) {
-      selectedCommandIdx = Math.max(0, filteredHomeCommands.length - 1);
-    }
-  });
-
-  function detectHomeCompletion() {
-    if (!homeTextareaRef) return;
-
-    // ── command: starts with / ──
-    if (homeInput.startsWith("/")) {
-      const query = homeInput.slice(1);
-      const valid = /^[a-zA-Z0-9_\-:]*$/.test(query);
-      if (valid) {
-        showCommands = true;
-        commandFilter = query;
-        selectedCommandIdx = 0;
-      } else {
-        showCommands = false;
-      }
-      return;
-    } else {
-      showCommands = false;
-    }
-  }
-
-  function acceptHomeCommand(cmd: string) {
-    homeInput = cmd + " ";
-    showCommands = false;
-    homeTextareaRef?.focus();
-  }
-
-  function handleHomeFocusOut(e: FocusEvent) {
-    const container = e.currentTarget as HTMLElement;
-    if (!container.contains(e.relatedTarget as Node)) {
-      showCommands = false;
-    }
-  }
-
   function handleChatClick(e: MouseEvent) {
     let node: Node | null = e.target as Node;
     const container = e.currentTarget as HTMLElement;
@@ -715,36 +606,6 @@
     // Ignore key events while IME is composing or right after composition ends
     if (e.isComposing || homeComposing) {
       return;
-    }
-
-    // Command picker navigation
-    if (showCommands) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        if (filteredHomeCommands.length === 0) return;
-        selectedCommandIdx =
-          (selectedCommandIdx + 1) % filteredHomeCommands.length;
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        if (filteredHomeCommands.length === 0) return;
-        selectedCommandIdx =
-          (selectedCommandIdx - 1 + filteredHomeCommands.length) %
-          filteredHomeCommands.length;
-        return;
-      }
-      if (e.key === "Tab" || e.key === "Enter") {
-        e.preventDefault();
-        if (filteredHomeCommands.length === 0) return;
-        const cmd = filteredHomeCommands[selectedCommandIdx]?.[0];
-        if (cmd) acceptHomeCommand(cmd);
-        return;
-      }
-      if (e.key === "Escape") {
-        showCommands = false;
-        return;
-      }
     }
 
     if (e.key === "Enter" && !e.shiftKey) {
@@ -1113,15 +974,11 @@
           <!-- Input card -->
           <div
             class="relative rounded-lg border border-border bg-card/70 shadow-sm focus-within:shadow-md focus-within:ring-1 focus-within:ring-ring transition-all"
-            onfocusout={handleHomeFocusOut}
           >
             <div class="p-4">
               <textarea
-                bind:this={homeTextareaRef}
                 bind:value={homeInput}
                 onkeydown={handleHomeKeydown}
-                oninput={detectHomeCompletion}
-                onfocus={detectHomeCompletion}
                 onpaste={handleHomePaste}
                 oncompositionstart={() => (homeComposing = true)}
                 oncompositionend={() => {
@@ -1129,7 +986,7 @@
                   homeIgnoreNextEnter = true;
                   setTimeout(() => (homeIgnoreNextEnter = false), 100);
                 }}
-                placeholder="Ask anything... (/ for commands)"
+                placeholder="Ask anything..."
                 rows={3}
                 disabled={submitting}
                 class="w-full resize-none bg-transparent text-base placeholder:text-muted-foreground focus:outline-none disabled:opacity-50"
@@ -1178,30 +1035,6 @@
                 </div>
               {/if}
             </div>
-            <!-- Home command picker dropdown (floating above input) -->
-            {#if showCommands && filteredHomeCommands.length > 0}
-              <div
-                bind:this={homeCommandListRef}
-                class="absolute bottom-full left-0 right-0 mb-1 mx-3 max-h-48 overflow-y-auto rounded-lg border border-border bg-background shadow-lg z-50"
-              >
-                {#each filteredHomeCommands as [cmd, desc], i (cmd)}
-                  <button
-                    type="button"
-                    class="flex items-center gap-2 w-full px-3 py-2 text-left text-sm transition-colors {i ===
-                    selectedCommandIdx
-                      ? 'bg-secondary'
-                      : 'hover:bg-secondary/50'}"
-                    onclick={() => acceptHomeCommand(cmd)}
-                  >
-                    <Command size={14} class="text-muted-foreground shrink-0" />
-                    <span class="font-mono text-primary shrink-0">{cmd}</span>
-                    <span class="text-muted-foreground text-xs truncate"
-                      >{desc}</span
-                    >
-                  </button>
-                {/each}
-              </div>
-            {/if}
             <div
               class="px-4 py-3 border-t border-border flex items-center justify-between gap-3"
             >

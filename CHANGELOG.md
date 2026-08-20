@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- goal 模式（自主目标循环）整体移除：GUI 目标面板、TUI `/goal` `/goal:stop` 命令、`update_goal` 工具及对应 RPC 一并下线。长期无人使用，且"完成后自动续跑"的循环由一次性 cron、todo 提醒和 steer 更安全地覆盖。wire 协议版本升至 27，旧客户端需升级后才能连接。
+
+## [0.8.2] - 2026-08-19
+
+### Removed
+
 - `ask_user` 工具整体下线：agent 不再能在任何端（GUI / CLI / TUI / 飞书等渠道）向用户发起选择题提问；已有会话里模型会感知到该工具不存在，改为直接在回复中提问。
 
 ## [0.8.1] - 2026-08-19

@@ -23,7 +23,7 @@ use tracing::{info, Instrument};
 pub enum AgentInput {
     /// User message with multi-modal content blocks
     User { content: Vec<ContentBlock> },
-    /// Continue the agent from Idle to Streaming (used by goal auto-start)
+    /// Continue the agent from Idle to Streaming (e.g. cron-fired runs)
     Continue,
     /// Cancel current operation; the agent loop exits once the cancellation
     /// is observed (the next input respawns the agent with fresh context)
@@ -263,28 +263,19 @@ impl Agent {
                     && self.context.iteration_count() >= self.max_iterations
                     && self.context.current_state() == AgentState::Streaming
                 {
-                    let skip_max_iterations = match &self.shared.goal_store {
-                        Some(store) => match store.load(&self.session_id).await {
-                            Ok(Some(goal)) => matches!(goal.status, crate::goal::GoalStatus::Active),
-                            _ => false,
-                        },
-                        None => false,
-                    };
-                    if !skip_max_iterations {
-                        tracing::warn!(
-                            "reached max iterations during streaming, cancelling and returning to waiting for input"
-                        );
-                        // Notify TUI that max iterations reached
-                        self.emit(Event::Agent(AgentEvent::Lifecycle {
-                            state: AgentStatus::Stopped {
-                                reason: StopReason::MaxIterations {
-                                    reached: self.max_iterations,
-                                },
+                    tracing::warn!(
+                        "reached max iterations during streaming, cancelling and returning to waiting for input"
+                    );
+                    // Notify TUI that max iterations reached
+                    self.emit(Event::Agent(AgentEvent::Lifecycle {
+                        state: AgentStatus::Stopped {
+                            reason: StopReason::MaxIterations {
+                                reached: self.max_iterations,
                             },
-                        }));
-                        self.context.transition_to(AgentState::Idle);
-                        continue;
-                    }
+                        },
+                    }));
+                    self.context.transition_to(AgentState::Idle);
+                    continue;
                 }
 
                 // Note: cancel is handled during streaming via select!, not here
@@ -590,7 +581,8 @@ impl Agent {
         }
     }
 
-    /// Shared rewind handler used by both normal input loop and goal idle.
+    /// Rewind handler for `AgentInput::Rewind`: cancels any in-flight
+    /// turn, then truncates context and files back to the checkpoint.
     async fn process_rewind(
         &mut self,
         message_id: MessageId,
@@ -1378,40 +1370,6 @@ impl Agent {
             Some(FinishReason::Stop | FinishReason::Repeat) => {}
             None | Some(FinishReason::ContentFilter | FinishReason::Unknown) => {
                 unreachable!("inconsistent finish reasons returned above")
-            }
-        }
-
-        // A normal text response with an active goal continues unless background
-        // work is still running. Tool calls and abnormal terminal states are
-        // handled above.
-        if let Some(ref store) = self.shared.goal_store {
-            match store.load(&self.session_id).await {
-                Ok(Some(goal)) if matches!(goal.status, crate::goal::GoalStatus::Active) => {
-                    if self.shared.background_tasks.is_running(&self.session_id) {
-                        tracing::info!(
-                            session_id = %self.session_id,
-                            "skipping goal auto-continue while background tasks are running"
-                        );
-                    } else {
-                        self.inject_user_message(
-                            vec![ContentBlock::Text {
-                                text: goal.build_continue_prompt(),
-                            }],
-                            true,
-                        )
-                        .await?;
-                        tracing::info!("active goal continuing session");
-                        return Ok(());
-                    }
-                }
-                Ok(Some(goal)) => {
-                    self.emit(Event::Agent(crate::event::AgentEvent::GoalUpdated {
-                        description: goal.description,
-                        status: goal.status.as_str().to_string(),
-                    }));
-                }
-                Ok(None) => {}
-                Err(e) => tracing::warn!("failed to load goal state: {e}"),
             }
         }
 

@@ -376,54 +376,6 @@
             }
           }
           break;
-        case "/goal:stop":
-          await api.stopGoal(session_id);
-          {
-            const session = getActiveSession();
-            if (session) {
-              api
-                .getGoal(session_id)
-                .then((g) => {
-                  session.goal = g;
-                })
-                .catch(() => {
-                  session.goal = null;
-                });
-            }
-          }
-          console.log("Goal mode stopped");
-          break;
-        case "/goal":
-          {
-            const description = parts.slice(1).join(" ").trim();
-            if (!description) {
-              showNotification(
-                "Please provide a goal description: /goal <description>",
-                "error",
-              );
-              return false;
-            }
-            await api.startGoal(session_id, description);
-            {
-              const session = getActiveSession();
-              if (session) {
-                api
-                  .getGoal(session_id)
-                  .then((g) => {
-                    session.goal = g;
-                  })
-                  .catch(() => {});
-              }
-            }
-            // rename_session will emit TitleUpdated event — alias is synced there
-            try {
-              await api.renameSession(session_id, description);
-            } catch {
-              // ignore rename failure
-            }
-            console.log("Goal mode activated — agent will work autonomously");
-          }
-          break;
         case "/history":
           openHistoryPicker();
           break;

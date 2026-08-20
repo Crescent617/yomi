@@ -1106,7 +1106,6 @@ enum ToolKind {
     Todo,
     Reminder,
     Sleep,
-    UpdateGoal,
     SendMessage,
     Cron,
     TaskCreate,
@@ -1148,7 +1147,6 @@ fn tool_kind(tool_name: &str) -> ToolKind {
         "todo" | "task" => ToolKind::Todo,
         "reminder" => ToolKind::Reminder,
         "sleep" => ToolKind::Sleep,
-        "updategoal" => ToolKind::UpdateGoal,
         "sendmessage" | "message" => ToolKind::SendMessage,
         "cron" => ToolKind::Cron,
         "taskcreate" => ToolKind::TaskCreate,
@@ -1187,7 +1185,6 @@ fn tool_header_summary(tool_name: &str, args: Option<&str>) -> ToolHeaderSummary
             .as_ref()
             .and_then(|v| v["seconds"].as_u64())
             .map(|seconds| format!("{seconds}s")),
-        ToolKind::UpdateGoal => text("status").map(compact),
         ToolKind::SendMessage => text("content")
             .or_else(|| {
                 value
@@ -1412,7 +1409,6 @@ fn tool_label(tool_name: &str) -> String {
         ToolKind::Todo => "Todo",
         ToolKind::Reminder => "Reminder",
         ToolKind::Sleep => "Sleep",
-        ToolKind::UpdateGoal => "UpdateGoal",
         ToolKind::SendMessage => "SendMessage",
         ToolKind::Cron => "Cron",
         ToolKind::TaskCreate => "TaskCreate",

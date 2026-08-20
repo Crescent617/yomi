@@ -72,12 +72,10 @@ pub enum Msg {
     DialogCustomInput(String), // User entered a custom free-text answer
     DialogCancelled,           // Dialog was cancelled
 
-    // Slash commands (String = raw user input, e.g. "/goal do stuff")
+    // Slash commands
     CommandNew,                      // /new - create new session
     CommandFork,                     // /fork - fork current session
     CommandContinue,                 // /continue - trigger agent to continue
-    CommandGoal(String),             // /goal <description> - start autonomous goal mode
-    CommandGoalStop,                 // /goal:stop - stop autonomous goal mode
     CommandYolo,                     // /yolo - toggle yolo mode
     CommandBrowse,                   // /browse - toggle browse mode
     CommandCompact,                  // /compact - force message compaction

@@ -1,5 +1,4 @@
 use kernel::event::{Event, UserEvent};
-use kernel::goal::GoalState;
 use kernel::permission::Level;
 use kernel::tools::AskUserResponse;
 use kernel::types::{ContentBlock, SessionId};
@@ -260,72 +259,6 @@ pub async fn set_permission_level(
         .set_permission_level(&sid, level)
         .await
         .map_err(GuiError::kernel)?;
-    Ok(())
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn get_goal(
-    state: State<'_, AppState>,
-    session_id: String,
-) -> Result<Option<GoalState>, GuiError> {
-    let coord = state.kernel_snapshot();
-    let sid = SessionId::from(session_id);
-    let goal = coord.get_goal(&sid).await.map_err(GuiError::kernel)?;
-    Ok(goal)
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn start_goal(
-    state: State<'_, AppState>,
-    session_id: String,
-    description: String,
-) -> Result<(), GuiError> {
-    let coord = state.kernel_snapshot();
-    let sid = SessionId::from(session_id);
-    let goal_state = GoalState::new(description);
-    coord
-        .start_goal(&sid, goal_state)
-        .await
-        .map_err(GuiError::kernel)?;
-    Ok(())
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn pause_goal(state: State<'_, AppState>, session_id: String) -> Result<(), GuiError> {
-    let coord = state.kernel_snapshot();
-    let sid = SessionId::from(session_id);
-    coord.pause_goal(&sid).await.map_err(GuiError::kernel)?;
-    Ok(())
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn resume_goal(state: State<'_, AppState>, session_id: String) -> Result<(), GuiError> {
-    let coord = state.kernel_snapshot();
-    let sid = SessionId::from(session_id);
-    coord.resume_goal(&sid).await.map_err(GuiError::kernel)?;
-    Ok(())
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn edit_goal(
-    state: State<'_, AppState>,
-    session_id: String,
-    description: String,
-) -> Result<(), GuiError> {
-    let coord = state.kernel_snapshot();
-    let sid = SessionId::from(session_id);
-    coord
-        .update_goal(&sid, description)
-        .await
-        .map_err(GuiError::kernel)?;
-    Ok(())
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn stop_goal(state: State<'_, AppState>, session_id: String) -> Result<(), GuiError> {
-    let coord = state.kernel_snapshot();
-    let sid = SessionId::from(session_id);
-    coord.stop_goal(&sid).await.map_err(GuiError::kernel)?;
     Ok(())
 }
 

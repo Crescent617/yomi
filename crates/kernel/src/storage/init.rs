@@ -26,8 +26,6 @@ pub struct StorageSet {
     message_store: Arc<dyn super::MessageStore>,
     /// Token usage tracking store
     usage_store: Arc<dyn super::UsageStore>,
-    /// Goal state persistence
-    goal_store: Arc<dyn crate::goal::GoalStore>,
     /// Todo list persistence
     todo_store: Arc<dyn super::TodoStore>,
     /// Checkpoint and file history store
@@ -55,7 +53,6 @@ impl std::fmt::Debug for StorageSet {
             .field("session_store", &"<dyn SessionStore>")
             .field("message_store", &"<dyn MessageStore>")
             .field("usage_store", &"<dyn UsageStore>")
-            .field("goal_store", &"<dyn GoalStore>")
             .field("todo_store", &"<dyn TodoStore>")
             .field("checkpoint_store", &"<dyn CheckpointStore>")
             .field("project_store", &"<dyn ProjectStore>")
@@ -145,8 +142,6 @@ impl StorageSet {
         let usage_store: Arc<dyn super::UsageStore> =
             Arc::new(super::SqliteUsageStore::new(pool.clone()));
         let todo_store: Arc<dyn super::TodoStore> = Arc::new(super::JsonTodoStore::new(&data_dir));
-        let goal_store: Arc<dyn crate::goal::GoalStore> =
-            Arc::new(crate::goal::JsonGoalStore::new(&data_dir));
         let project_store: Arc<dyn super::ProjectStore> =
             Arc::new(super::SqliteProjectStore::new(pool.clone()));
         let pinned_session_store: Arc<dyn super::PinnedSessionStore> =
@@ -197,7 +192,6 @@ impl StorageSet {
             session_store,
             message_store,
             usage_store,
-            goal_store,
             todo_store,
             checkpoint_store,
             project_store,
@@ -243,11 +237,6 @@ impl StorageSet {
     /// Get the usage store
     pub fn usage_store(&self) -> Arc<dyn super::UsageStore> {
         self.usage_store.clone()
-    }
-
-    /// Get the goal store
-    pub fn goal_store(&self) -> Arc<dyn crate::goal::GoalStore> {
-        self.goal_store.clone()
     }
 
     /// Get the todo store

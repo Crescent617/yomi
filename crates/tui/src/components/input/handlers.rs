@@ -82,15 +82,6 @@ impl InputComponent {
             "/new" => Some(Msg::CommandNew),
             "/fork" => Some(Msg::CommandFork),
             "/continue" => Some(Msg::CommandContinue),
-            "/goal" => {
-                let description = parts[1..].join(" ");
-                if description.trim().is_empty() {
-                    None // bare /goal is treated as regular message
-                } else {
-                    Some(Msg::CommandGoal(description))
-                }
-            }
-            "/goal:stop" => Some(Msg::CommandGoalStop),
             "/todos" => Some(Msg::CommandTodos),
             "/yolo" => Some(Msg::CommandYolo),
             "/browse" => Some(Msg::CommandBrowse),

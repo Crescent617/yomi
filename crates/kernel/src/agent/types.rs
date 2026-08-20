@@ -369,8 +369,6 @@ pub struct AgentShared {
     pub message_interceptor: Option<Arc<dyn super::UserMsgInterceptor>>,
     /// Channel manager for external platform integrations (Telegram, Feishu, etc.)
     pub channel_hub: Option<Arc<crate::channels::hub::ChannelHub>>,
-    /// Optional goal store for autonomous goal-mode execution
-    pub goal_store: Option<Arc<dyn crate::goal::GoalStore>>,
     /// Global event bus for all agents and sessions
     pub event_bus: Option<Arc<crate::comms::EventBus>>,
     /// Runtime tracker for asynchronous background work grouped by session.
@@ -450,7 +448,6 @@ impl AgentShared {
             checkpoint_store,
             data_dir,
             message_interceptor: None,
-            goal_store: None,
             channel_hub: None,
             event_bus: None,
             background_tasks: Arc::new(BgTaskTracker::default()),
@@ -472,7 +469,6 @@ impl AgentShared {
             permission_state,
             file_state_store,
             checkpoint_store,
-            goal_store: self.goal_store.clone(),
             channel_hub: self.channel_hub.clone(),
             event_bus: self.event_bus.clone(),
             background_tasks: Arc::clone(&self.background_tasks),
@@ -487,13 +483,6 @@ impl AgentShared {
         interceptor: Arc<dyn super::UserMsgInterceptor>,
     ) -> Self {
         self.message_interceptor = Some(interceptor);
-        self
-    }
-
-    /// Set the goal store
-    #[must_use]
-    pub fn with_goal_store(mut self, store: Arc<dyn crate::goal::GoalStore>) -> Self {
-        self.goal_store = Some(store);
         self
     }
 

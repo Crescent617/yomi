@@ -322,14 +322,6 @@ impl Kernel {
             .expect("usage_store not configured")
     }
 
-    /// Get goal store from `agent_shared`
-    pub async fn goal_store(&self) -> Arc<dyn crate::goal::GoalStore> {
-        self.agent_shared
-            .goal_store
-            .clone()
-            .expect("goal_store not configured")
-    }
-
     /// Get todo store from `agent_shared`
     pub async fn todo_store(&self) -> Arc<dyn crate::storage::TodoStore> {
         self.agent_shared
@@ -379,7 +371,6 @@ impl Kernel {
         let project_store = storage.project_store();
         let pinned_session_store = storage.pinned_session_store();
         let favorite_store = storage.favorite_store();
-        let goal_store = storage.goal_store();
 
         // Build model registry (BTreeMap for ordering); reject duplicate names
         // instead of silently letting the last entry win.
@@ -429,7 +420,6 @@ impl Kernel {
             Some(checkpoint_store),
             data_dir,
         )
-        .with_goal_store(goal_store)
         .with_cron(cron_store.clone(), Arc::clone(&cron_scheduler))
         .with_config_auto_approve(config_auto_approve);
 
@@ -682,7 +672,7 @@ impl Kernel {
     }
 
     /// Delete a project **and all its sessions** (including subagent children)
-    /// with their resources: message history, todos, goals, file states,
+    /// with their resources: message history, todos, file states,
     /// checkpoints and channel mappings. `token_usage` rows are kept.
     ///
     /// Running agents of affected sessions are cancelled (best-effort) before
@@ -848,7 +838,7 @@ impl Kernel {
     }
 
     /// Fork a session: create new session with copied history from parent.
-    /// Also copies message history, goal state, todo list, file states, and checkpoints.
+    /// Also copies message history, todo list, file states, and checkpoints.
     #[tracing::instrument(skip(self, auto_approve_level), fields(parent_id = %parent_id.0))]
     pub async fn fork_session(
         &self,
@@ -887,16 +877,6 @@ impl Kernel {
                 } else {
                     tracing::info!("copied {} messages", msgs.len());
                 }
-            }
-        }
-
-        // Copy goal state from parent to child
-        let goal_store = self.goal_store().await;
-        if let Ok(Some(goal)) = goal_store.load(&parent_id.0).await {
-            if let Err(e) = goal_store.save(&new_id.0, &goal).await {
-                tracing::warn!("failed to copy goal state: {}", e);
-            } else {
-                tracing::info!("copied goal state");
             }
         }
 
@@ -1582,161 +1562,6 @@ impl Kernel {
             Some(Err(e)) => Err(KernelError::Checkpoint(e.to_string())),
             None => Err(KernelError::Checkpoint("Rewind channel closed".to_string())),
         }
-    }
-
-    #[tracing::instrument(skip(self, state), fields(session_id = %session_id.0))]
-    pub async fn start_goal(
-        &self,
-        session_id: &SessionId,
-        state: crate::goal::GoalState,
-    ) -> Result<()> {
-        let store = self.goal_store().await;
-        store.save(&session_id.0, &state).await?;
-
-        if let Err(e) = self.input_bus.publish(
-            session_id.clone(),
-            AgentInput::Steer(vec![crate::types::ContentBlock::Text {
-                text: state.build_continue_prompt(),
-            }]),
-        ) {
-            tracing::warn!("Failed to publish goal steer: {}", e);
-        }
-
-        if self.conductor.get_state(session_id) == Some(AgentState::Idle) {
-            if let Err(e) = self
-                .input_bus
-                .publish(session_id.clone(), AgentInput::Continue)
-            {
-                tracing::warn!("Failed to publish goal continue: {}", e);
-            }
-        }
-
-        if let Some(ref bus) = self.event_bus() {
-            let _ = bus
-                .handle(session_id.clone())
-                .try_send(crate::event::Envelope::new(
-                    session_id.clone(),
-                    crate::event::Event::Agent(crate::event::AgentEvent::GoalUpdated {
-                        description: state.description.clone(),
-                        status: state.status.as_str().to_string(),
-                    }),
-                ));
-        }
-        tracing::info!("goal mode started");
-        Ok(())
-    }
-
-    #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
-    pub async fn pause_goal(&self, session_id: &SessionId) -> Result<()> {
-        let store = self.goal_store().await;
-        let mut state = store.load(&session_id.0).await?.ok_or_else(|| {
-            crate::types::SessionError::Other("no active goal to pause".to_string())
-        })?;
-        state.status = crate::goal::GoalStatus::Paused;
-        store.save(&session_id.0, &state).await?;
-
-        if let Some(ref bus) = self.event_bus() {
-            let _ = bus
-                .handle(session_id.clone())
-                .try_send(crate::event::Envelope::new(
-                    session_id.clone(),
-                    crate::event::Event::Agent(crate::event::AgentEvent::GoalUpdated {
-                        description: state.description.clone(),
-                        status: state.status.as_str().to_string(),
-                    }),
-                ));
-        }
-        tracing::info!("goal paused");
-        Ok(())
-    }
-
-    #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
-    pub async fn resume_goal(&self, session_id: &SessionId) -> Result<()> {
-        let store = self.goal_store().await;
-        let mut state = store
-            .load(&session_id.0)
-            .await?
-            .ok_or_else(|| crate::types::SessionError::Other("no goal to resume".to_string()))?;
-        state.status = crate::goal::GoalStatus::Active;
-        store.save(&session_id.0, &state).await?;
-
-        if let Some(ref bus) = self.event_bus() {
-            let _ = bus
-                .handle(session_id.clone())
-                .try_send(crate::event::Envelope::new(
-                    session_id.clone(),
-                    crate::event::Event::Agent(crate::event::AgentEvent::GoalUpdated {
-                        description: state.description.clone(),
-                        status: state.status.as_str().to_string(),
-                    }),
-                ));
-        }
-        tracing::info!("goal resumed");
-        Ok(())
-    }
-
-    #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
-    pub async fn get_goal(&self, session_id: &SessionId) -> Result<Option<crate::goal::GoalState>> {
-        self.goal_store().await.load(&session_id.0).await
-    }
-
-    #[tracing::instrument(skip(self, description), fields(session_id = %session_id.0))]
-    pub async fn update_goal(
-        &self,
-        session_id: &SessionId,
-        description: impl Into<String>,
-    ) -> Result<()> {
-        let description = description.into();
-        let store = self.goal_store().await;
-        let mut state = store
-            .load(&session_id.0)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| crate::goal::GoalState::new(&description));
-
-        state.description = description;
-        state.status = crate::goal::GoalStatus::Active;
-        store.save(&session_id.0, &state).await?;
-
-        let prompt = state.objective_updated_prompt();
-        let blocks = vec![crate::types::ContentBlock::Text { text: prompt }];
-        if let Err(e) = self
-            .input_bus
-            .publish(session_id.clone(), AgentInput::Steer(blocks))
-        {
-            tracing::warn!("Failed to publish goal update steer: {}", e);
-        }
-
-        if let Some(ref bus) = self.event_bus() {
-            let _ = bus
-                .handle(session_id.clone())
-                .try_send(crate::event::Envelope::new(
-                    session_id.clone(),
-                    crate::event::Event::Agent(crate::event::AgentEvent::GoalUpdated {
-                        description: state.description.clone(),
-                        status: state.status.as_str().to_string(),
-                    }),
-                ));
-        }
-        tracing::info!("goal updated: {}", state.description);
-        Ok(())
-    }
-
-    #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
-    pub async fn stop_goal(&self, session_id: &SessionId) -> Result<()> {
-        self.goal_store().await.delete(&session_id.0).await?;
-
-        if let Some(ref bus) = self.event_bus() {
-            let _ = bus
-                .handle(session_id.clone())
-                .try_send(crate::event::Envelope::new(
-                    session_id.clone(),
-                    crate::event::Event::Agent(crate::event::AgentEvent::GoalStopped),
-                ));
-        }
-        tracing::info!("goal mode stopped");
-        Ok(())
     }
 
     /// Delete a session from storage

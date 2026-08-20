@@ -580,13 +580,10 @@ impl Conductor {
 
         // Resolve tool flags here — session-level policy lives in the
         // conductor, not the agent: sub-agent sessions must not spawn
-        // further sub-agents, nor manage cron jobs, nor drive the goal
-        // loop (an active goal would auto-continue the sub past its task,
-        // bypassing max_iterations and hanging a waiting parent).
+        // further sub-agents, nor manage cron jobs.
         let tool_flags =
             crate::tools::ToolFlags::new(self.agent_config.enable_subagent && !is_sub_agent)
                 .with_cron(self.agent_config.enable_cron_tool && !is_sub_agent)
-                .with_goal(!is_sub_agent)
                 .with_todo(self.agent_config.enable_todo_tool);
 
         let args = AgentSpawnArgs::new(base_prompt, sid.0.clone(), mailbox, working_dir)

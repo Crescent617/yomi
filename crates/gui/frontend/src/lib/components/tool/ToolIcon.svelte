@@ -12,7 +12,6 @@
     Bot,
     MessageSquare,
     ListChecks,
-    Target,
     Send,
     CalendarClock,
     Wrench,
@@ -61,8 +60,6 @@
   <MessageSquare class={cls} />
 {:else if name === "todo" || name === "task"}
   <ListChecks class={cls} />
-{:else if name.includes("goal")}
-  <Target class={cls} />
 {:else if name === "post_message"}
   <Send class={cls} />
 {:else if name === "cron"}

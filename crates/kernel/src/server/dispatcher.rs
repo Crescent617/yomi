@@ -856,30 +856,6 @@ async fn dispatch_command(
             kernel.compact_session(sid)?;
             Ok(serde_json::Value::Null)
         }
-        Command::StartGoal(state) => {
-            kernel.start_goal(sid, state).await?;
-            Ok(serde_json::Value::Null)
-        }
-        Command::StopGoal => {
-            kernel.stop_goal(sid).await?;
-            Ok(serde_json::Value::Null)
-        }
-        Command::PauseGoal => {
-            kernel.pause_goal(sid).await?;
-            Ok(serde_json::Value::Null)
-        }
-        Command::ResumeGoal => {
-            kernel.resume_goal(sid).await?;
-            Ok(serde_json::Value::Null)
-        }
-        Command::EditGoal { description } => {
-            kernel.update_goal(sid, description).await?;
-            Ok(serde_json::Value::Null)
-        }
-        Command::GetGoal => {
-            let goal = kernel.get_goal(sid).await?;
-            Ok(serde_json::to_value(goal)?)
-        }
         Command::Rewind { message_id, target } => {
             kernel.rewind_session(sid, message_id, target).await?;
             Ok(serde_json::Value::Null)

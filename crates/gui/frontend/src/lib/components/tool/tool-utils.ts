@@ -92,7 +92,6 @@ export function toolLabel(toolName: string, isSubagent = false): string {
     todo: "Todo",
     reminder: "Reminder",
     sleep: "Sleep",
-    updategoal: "UpdateGoal",
     cron: "Cron",
     taskcreate: "TaskCreate",
     taskget: "TaskGet",
@@ -158,8 +157,6 @@ export function extractTarget(tool_name: string, args: string): string {
       return firstText(parsed.message);
     case "sleep":
       return parsed.seconds == null ? "" : `${parsed.seconds}s`;
-    case "updategoal":
-      return firstText(parsed.status);
     case "taskcreate":
       return firstText(parsed.subject);
     case "tasklist":

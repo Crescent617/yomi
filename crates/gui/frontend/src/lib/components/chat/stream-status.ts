@@ -36,7 +36,6 @@ export function toolVerb(toolName: string, rawArgs = ""): string {
     askuser: "Asking",
     skill: "Invoking",
     postmessage: "Messaging",
-    updategoal: "Updating goal",
     taskcreate: "Creating task",
     tasklist: "Listing tasks",
     taskget: "Reading task",

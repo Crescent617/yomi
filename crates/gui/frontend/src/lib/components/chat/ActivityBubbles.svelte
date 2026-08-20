@@ -8,11 +8,6 @@
     Copy,
     ListChecks,
     Loader2,
-    Pause,
-    Pencil,
-    Play,
-    Square,
-    Target,
     Terminal,
   } from "lucide-svelte";
   import { onDestroy, onMount } from "svelte";
@@ -26,7 +21,6 @@
   import * as api from "../../api";
   import { clock } from "../../clock.svelte";
   import { elapsedLabel } from "../layout/status-activity";
-  import ConfirmDialog from "../ui/ConfirmDialog.svelte";
   import PopoverPanel from "../ui/PopoverPanel.svelte";
   import RunningSubagents from "./RunningSubagents.svelte";
   import { loadedSkills } from "./loaded-skills";
@@ -36,7 +30,6 @@
   } from "./running-subagents";
 
   const activeSession = $derived(getActiveSession());
-  const goal = $derived(activeSession?.goal ?? null);
   const todoItems = $derived(activeSession?.todos ?? []);
   const activeSubagents = $derived(
     runningSubagents(activeSession?.subagents ?? []),
@@ -60,16 +53,13 @@
   );
 
   // One bubble per concern, each visible only while it has something to say.
-  const showGoal = $derived(Boolean(goal));
   const showTodos = $derived(totalCount > 0 && completedCount < totalCount);
   const showAgents = $derived(activeSubagents.length > 0);
   const showShells = $derived(activeShells.length > 0);
   const showSkills = $derived(loadedSkillList.length > 0);
-  const showAny = $derived(
-    showGoal || showTodos || showAgents || showShells || showSkills,
-  );
+  const showAny = $derived(showTodos || showAgents || showShells || showSkills);
 
-  type BubbleKind = "goal" | "todos" | "agents" | "shells" | "skills";
+  type BubbleKind = "todos" | "agents" | "shells" | "skills";
   let expanded = $state<BubbleKind | null>(null);
 
   // Progress ring geometry (r=6 in a 16×16 viewBox).
@@ -78,7 +68,6 @@
   // Close a panel whose bubble lost its reason to exist (e.g. the last todo
   // completed while its list was open).
   $effect(() => {
-    if (expanded === "goal" && !showGoal) expanded = null;
     if (expanded === "todos" && !showTodos) expanded = null;
     if (expanded === "agents" && !showAgents) expanded = null;
     if (expanded === "shells" && !showShells) expanded = null;
@@ -89,11 +78,7 @@
     expanded = expanded === kind ? null : kind;
   }
 
-  // ── Goal state / actions (ported from the old TaskDock) ────────────────
-  let editingGoal = $state(false);
-  let editGoalText = $state("");
-  let pendingAction = $state<"pause" | "resume" | "edit" | "stop" | null>(null);
-  let stopConfirmOpen = $state(false);
+  // ── Panel chrome ───────────────────────────────────────────────────────
   let activeSessionId = $state<string | null>(null);
   let containerRef = $state<HTMLDivElement | null>(null);
 
@@ -110,14 +95,13 @@
 
   onMount(() => {
     function handlePointerDown(event: PointerEvent) {
-      if (!expanded || stopConfirmOpen || !(event.target instanceof Node))
-        return;
+      if (!expanded || !(event.target instanceof Node)) return;
       if (containerRef?.contains(event.target)) return;
       closePanel(false);
     }
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (expanded && !stopConfirmOpen && event.key === "Escape") {
+      if (expanded && event.key === "Escape") {
         event.preventDefault();
         closePanel(true);
       }
@@ -136,94 +120,7 @@
     if (sessionId === activeSessionId) return;
     activeSessionId = sessionId;
     expanded = null;
-    editingGoal = false;
-    editGoalText = "";
-    stopConfirmOpen = false;
-    pendingAction = null;
-    if (sessionId) void loadGoal(sessionId);
   });
-
-  async function loadGoal(sessionId = activeSession?.id) {
-    if (!sessionId) return;
-    const session = activeSession;
-    try {
-      const result = await api.getGoal(sessionId);
-      if (session?.id === sessionId) session.goal = result;
-    } catch {
-      if (session?.id === sessionId) session.goal = null;
-    }
-  }
-
-  function statusClass(status: string): string {
-    switch (status) {
-      case "active":
-        return "text-primary";
-      case "paused":
-        return "text-warning";
-      case "blocked":
-        return "text-error";
-      case "completed":
-        return "text-success";
-      default:
-        return "text-muted-foreground";
-    }
-  }
-
-  async function runGoalAction(
-    action: "pause" | "resume" | "stop",
-    request: (sessionId: string) => Promise<unknown>,
-  ) {
-    if (!activeSession?.id || pendingAction) return;
-    pendingAction = action;
-    const sessionId = activeSession.id;
-    try {
-      await request(sessionId);
-      await loadGoal(sessionId);
-    } catch (error) {
-      showNotification(
-        `Failed to ${action} goal: ${api.errorMessage(error)}`,
-        "error",
-      );
-    } finally {
-      pendingAction = null;
-    }
-  }
-
-  function startEditGoal() {
-    if (!goal || pendingAction) return;
-    editGoalText = goal.description;
-    editingGoal = true;
-  }
-
-  function cancelEditGoal() {
-    if (pendingAction === "edit") return;
-    editingGoal = false;
-    editGoalText = "";
-  }
-
-  async function submitEditGoal() {
-    if (!activeSession?.id || pendingAction || !editGoalText.trim()) return;
-    pendingAction = "edit";
-    const sessionId = activeSession.id;
-    try {
-      await api.editGoal(sessionId, editGoalText.trim());
-      editingGoal = false;
-      editGoalText = "";
-      await loadGoal(sessionId);
-    } catch (error) {
-      showNotification(
-        `Failed to edit goal: ${api.errorMessage(error)}`,
-        "error",
-      );
-    } finally {
-      pendingAction = null;
-    }
-  }
-
-  async function stopGoal() {
-    stopConfirmOpen = false;
-    await runGoalAction("stop", api.stopGoal);
-  }
 
   // ── Background shell log-path copy ──────────────────────────────────────
   let copiedShellPath = $state<string | null>(null);
@@ -264,161 +161,14 @@
 {/snippet}
 
 {#if showAny}
-  <!-- Right-edge activity bubbles: goal / todos / agents, docked to the
+  <!-- Right-edge activity bubbles: todos / agents / shells / skills,
+       docked to the
        chat's right gutter so the message column keeps its full width.
        Top-anchored — the vertical center belongs to the query navigator. -->
   <div
     bind:this={containerRef}
     class="absolute right-2 top-3 z-20 flex flex-col items-end gap-2"
   >
-    {#if showGoal && goal}
-      <div class="relative" transition:fly={{ x: 14, duration: 140 }}>
-        <button
-          type="button"
-          class={bubbleClass}
-          data-bubble="goal"
-          onclick={() => toggle("goal")}
-          aria-expanded={expanded === "goal"}
-          aria-label="Goal details, status {goal.status}"
-          title="Goal ({goal.status}): {goal.description}"
-        >
-          <Target
-            class="size-3.5 shrink-0 {statusClass(goal.status)}"
-            aria-hidden="true"
-          />
-        </button>
-        {#if expanded === "goal"}
-          <div
-            class={panelClass}
-            transition:scale={{ start: 0.9, duration: 130 }}
-          >
-            <PopoverPanel
-              title="Goal"
-              padded
-              bodyClass="max-h-[min(60vh,28rem)] overflow-y-auto"
-            >
-              {#snippet headerActions()}
-                <span
-                  class="flex items-center gap-1.5 text-[10px] font-medium capitalize {statusClass(
-                    goal.status,
-                  )}"
-                >
-                  {#if goal.status === "completed"}
-                    <Check class="size-3" />
-                  {:else}
-                    <span class="size-1.5 rounded-full bg-current"></span>
-                  {/if}
-                  {goal.status}
-                </span>
-              {/snippet}
-
-              {#if editingGoal}
-                <div>
-                  <textarea
-                    bind:value={editGoalText}
-                    rows={3}
-                    disabled={pendingAction === "edit"}
-                    class="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm outline-none transition-shadow focus:ring-2 focus:ring-ring disabled:opacity-50"
-                    aria-label="Goal description"
-                    onkeydown={(event: KeyboardEvent) => {
-                      if (event.key === "Enter" && !event.shiftKey) {
-                        event.preventDefault();
-                        void submitEditGoal();
-                      } else if (event.key === "Escape") {
-                        event.stopPropagation();
-                        cancelEditGoal();
-                      }
-                    }}
-                  ></textarea>
-                  <div class="mt-2 flex justify-end gap-1.5">
-                    <button
-                      type="button"
-                      onclick={cancelEditGoal}
-                      disabled={pendingAction === "edit"}
-                      class="h-8 rounded-md border border-border px-3 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-50"
-                      >Cancel</button
-                    >
-                    <button
-                      type="button"
-                      onclick={submitEditGoal}
-                      disabled={!editGoalText.trim() ||
-                        pendingAction === "edit"}
-                      class="inline-flex h-8 items-center gap-1.5 rounded-md border border-primary/30 bg-primary/10 px-3 text-xs font-medium text-primary transition-colors hover:border-primary/40 hover:bg-primary/15 disabled:opacity-50"
-                    >
-                      {#if pendingAction === "edit"}
-                        <Loader2 class="size-3.5 animate-spin" />
-                      {/if}
-                      Save
-                    </button>
-                  </div>
-                </div>
-              {:else}
-                <p class="text-sm leading-relaxed text-foreground">
-                  {goal.description}
-                </p>
-              {/if}
-
-              {#if goal.status !== "completed" && !editingGoal}
-                <div
-                  class="mt-2.5 flex flex-wrap items-center gap-1.5 border-t border-border pt-2.5"
-                >
-                  {#if goal.status === "active"}
-                    <button
-                      type="button"
-                      onclick={() => runGoalAction("pause", api.pauseGoal)}
-                      disabled={pendingAction !== null}
-                      class="inline-flex h-8 items-center gap-1.5 rounded-md border border-warning/25 bg-warning/5 px-3 text-xs font-medium text-warning transition-colors hover:border-warning/40 hover:bg-warning/10 disabled:opacity-50"
-                    >
-                      {#if pendingAction === "pause"}
-                        <Loader2 class="size-3.5 animate-spin" />
-                      {:else}
-                        <Pause class="size-3.5" />
-                      {/if}
-                      Pause
-                    </button>
-                  {:else if goal.status === "paused"}
-                    <button
-                      type="button"
-                      onclick={() => runGoalAction("resume", api.resumeGoal)}
-                      disabled={pendingAction !== null}
-                      class="inline-flex h-8 items-center gap-1.5 rounded-md border border-success/25 bg-success/5 px-3 text-xs font-medium text-success transition-colors hover:border-success/40 hover:bg-success/10 disabled:opacity-50"
-                    >
-                      {#if pendingAction === "resume"}
-                        <Loader2 class="size-3.5 animate-spin" />
-                      {:else}
-                        <Play class="size-3.5" />
-                      {/if}
-                      Resume
-                    </button>
-                  {/if}
-                  <button
-                    type="button"
-                    onclick={startEditGoal}
-                    disabled={pendingAction !== null}
-                    class="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-50"
-                    ><Pencil class="size-3.5" /> Edit</button
-                  >
-                  <button
-                    type="button"
-                    onclick={() => (stopConfirmOpen = true)}
-                    disabled={pendingAction !== null}
-                    class="ml-auto inline-flex h-8 items-center gap-1.5 rounded-md border border-destructive/25 bg-destructive/5 px-3 text-xs font-medium text-destructive transition-colors hover:border-destructive/40 hover:bg-destructive/10 disabled:opacity-50"
-                  >
-                    {#if pendingAction === "stop"}
-                      <Loader2 class="size-3.5 animate-spin" />
-                    {:else}
-                      <Square class="size-3.5" />
-                    {/if}
-                    Stop
-                  </button>
-                </div>
-              {/if}
-            </PopoverPanel>
-          </div>
-        {/if}
-      </div>
-    {/if}
-
     {#if showTodos}
       <div class="relative" transition:fly={{ x: 14, duration: 140 }}>
         <button
@@ -674,12 +424,3 @@
     {/if}
   </div>
 {/if}
-
-<ConfirmDialog
-  open={stopConfirmOpen}
-  title="Stop current goal?"
-  message="The autonomous goal will stop and no further steps will be started. Existing messages and completed work are preserved."
-  confirmText="Stop goal"
-  onConfirm={stopGoal}
-  onCancel={() => (stopConfirmOpen = false)}
-/>

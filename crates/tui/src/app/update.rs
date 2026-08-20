@@ -362,23 +362,6 @@ impl Model {
                     self.show_notification(&Notification::info("Agent continuing...", 3000));
                     None
                 }
-                Msg::CommandGoal(description) => {
-                    let state = kernel::goal::GoalState::new(description);
-                    let _ = self.ctrl_tx.try_send(Command::StartGoal(state));
-                    self.show_notification(&Notification::info(
-                        "Goal mode activated. Agent will work autonomously. Use /goal:stop to interrupt.",
-                        5000,
-                    ));
-                    None
-                }
-                Msg::CommandGoalStop => {
-                    let _ = self.ctrl_tx.try_send(Command::StopGoal);
-                    self.show_notification(&Notification::info(
-                        "Goal mode stopped. Agent will wait for your input.",
-                        3000,
-                    ));
-                    None
-                }
                 Msg::CommandTodos => {
                     // Toggle todo list visibility
                     let _ = self.app.attr(

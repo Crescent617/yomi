@@ -2,8 +2,6 @@
 export const SLASH_COMMANDS: readonly (readonly [string, string])[] = [
   ["/clear", "Clear session context (messages, file state, todos)"],
   ["/new", "Create new session"],
-  ["/goal", "<description> Start goal mode with optional description"],
-  ["/goal:stop", "Stop goal mode"],
   ["/todos", "Toggle todo list visibility"],
   ["/yolo", "Toggle YOLO mode (auto-approve all tools)"],
   ["/browse", "Toggle browse mode"],

@@ -21,7 +21,7 @@ use crate::utils::strs::truncate_by_chars;
 /// a char budget would let ~3x that size through for CJK text.
 const FINAL_TEXT_MAX_BYTES: usize = 28_000;
 /// Trace entries kept in the buffer (oldest dropped beyond this). Bounds
-/// memory for long goal-mode runs; dropped entries are counted and shown
+/// memory for long runs; dropped entries are counted and shown
 /// as a marker line at render time.
 const BUFFER_MAX_ENTRIES: usize = 100;
 /// Intermediate-text snippet truncation inside the trace panel.

@@ -341,8 +341,8 @@ async fn test_full_compact_reuses_system_history_and_tools_prefix() {
         tool_names: Arc::clone(&captured_tool_names),
     });
     let tools = vec![Arc::new(ToolDefinition {
-        name: "update_goal".to_string(),
-        description: "Update the active goal".to_string(),
+        name: "read".to_string(),
+        description: "Read a file".to_string(),
         parameters: serde_json::json!({"type": "object"}),
         estimated_tokens: 0,
     })];
@@ -377,7 +377,7 @@ async fn test_full_compact_reuses_system_history_and_tools_prefix() {
     );
     assert_eq!(
         *captured_tool_names.lock().expect("tool names lock"),
-        vec!["update_goal".to_string()]
+        vec!["read".to_string()]
     );
 }
 

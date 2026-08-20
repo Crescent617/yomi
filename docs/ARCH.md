@@ -34,7 +34,6 @@
 | `channels` | `src/channels/` | 外部渠道接入：飞书（Feishu）、Telegram；支持消息收发与会话映射 |
 | `cron` | `src/cron/` | 定时任务系统：`CronScheduler` + `CronWorker`，支持 cron 表达式调度任务 |
 | `task` | `src/task/` | 任务管理子系统：创建、更新、查询、列表工具 |
-| `goal` | `src/goal/` | 目标自动执行模式：`GoalState`/`GoalStatus` 状态机，支持自动继续（auto-continue） |
 | `checkpoint` | `src/checkpoint/` | 会话检查点与回滚（`RewindTarget`：对话、文件、或两者） |
 | `permissions` | `src/permissions/` | 工具权限分级（safe / caution / dangerous / ask）及 `Checker` 审批逻辑 |
 | `compactor` | `src/compactor/` | 上下文压缩：当消息量接近上下文窗口阈值时自动 summary 压缩 |
@@ -101,7 +100,6 @@ graph TD
         channels["channels"]
         cron["cron"]
         task["task"]
-        goal["goal"]
         checkpoint["checkpoint"]
         permissions["permissions"]
         compactor["compactor"]
@@ -120,7 +118,6 @@ graph TD
     kernel --> channels
     kernel --> cron
     kernel --> task
-    kernel --> goal
     kernel --> checkpoint
     kernel --> permissions
     kernel --> compactor
@@ -194,7 +191,6 @@ graph TD
         Channels["channels::ChannelHub<br/>飞书 / Telegram"]
         Cron["cron::CronScheduler + CronWorker<br/>定时任务"]
         Task["task::TaskStore<br/>任务管理"]
-        Goal["goal::GoalStore<br/>目标自动执行"]
         Checkpoint["checkpoint::CheckpointStore<br/>回滚"]
         Permissions["permissions::Checker<br/>权限审批"]
     end
@@ -233,7 +229,6 @@ graph TD
     Channels --> EventBus
     Cron --> Kernel
     Task --> StorageSet
-    Goal --> StorageSet
     Checkpoint --> StorageSet
     Permissions --> Agent
     StorageSet --> SQLite
@@ -363,7 +358,7 @@ sequenceDiagram
 - `Cargo.toml`（workspace 根）
 - `crates/{kernel,cli,gui,tui}/Cargo.toml`
 - `crates/kernel/src/lib.rs`
-- `crates/kernel/src/{agent,comms,event,types,providers,tools,storage,wire,server,client,app,config,channels,cron,goal,task,checkpoint,permissions,compactor}/mod.rs` 或核心文件
+- `crates/kernel/src/{agent,comms,event,types,providers,tools,storage,wire,server,client,app,config,channels,cron,task,checkpoint,permissions,compactor}/mod.rs` 或核心文件
 - `crates/cli/src/main.rs`
 - `crates/gui/src/main.rs`
 - `crates/tui/src/lib.rs`

@@ -21,7 +21,6 @@ pub mod sleep;
 pub mod subagent;
 pub mod task;
 pub mod todo;
-pub mod update_goal;
 pub mod webfetch;
 pub mod websearch;
 pub mod write;
@@ -45,7 +44,6 @@ pub use skill_load::{SkillTool, SKILL_FILENAME, SKILL_TOOL_NAME};
 pub use sleep::{SleepTool, SLEEP_TOOL_NAME};
 pub use subagent::{SubagentTool, SUBAGENT_TOOL_NAME};
 pub use todo::{TodoTool, TODO_TOOL_NAME};
-pub use update_goal::{UpdateGoalTool, UPDATE_GOAL_TOOL_NAME};
 pub use webfetch::{WebFetchTool, WEBFETCH_TOOL_NAME};
 pub use websearch::{WebSearchTool, WEBSEARCH_TOOL_NAME};
 pub use write::{WriteTool, WRITE_TOOL_NAME};
@@ -332,13 +330,6 @@ impl ToolRegistry {
             }
         }
 
-        // Register goal tool if goal store is available
-        if config.flags.goal {
-            if let Some(ref store) = config.shared.goal_store {
-                self.register(UpdateGoalTool::new(Arc::clone(store)));
-            }
-        }
-
         // Register cron tool if enabled and the cron store is available
         if config.flags.cron {
             if let Some(store) = config.shared.cron_store.clone() {
@@ -401,8 +392,6 @@ pub struct ToolFlags {
     pub subagent: bool,
     /// Enable reminder tool for sending notifications.
     pub reminder: bool,
-    /// Enable goal tracking tool.
-    pub goal: bool,
     /// Enable cron tool for managing scheduled jobs.
     pub cron: bool,
     /// Enable todo tool for agent task tracking.
@@ -415,7 +404,6 @@ impl ToolFlags {
         Self {
             subagent: enable_subagent,
             reminder: false,
-            goal: true,
             cron: false,
             todo: false,
         }
@@ -425,13 +413,6 @@ impl ToolFlags {
     #[must_use]
     pub const fn with_cron(mut self, enabled: bool) -> Self {
         self.cron = enabled;
-        self
-    }
-
-    /// Set the goal tool flag.
-    #[must_use]
-    pub const fn with_goal(mut self, enabled: bool) -> Self {
-        self.goal = enabled;
         self
     }
 

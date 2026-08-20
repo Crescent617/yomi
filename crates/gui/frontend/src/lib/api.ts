@@ -626,38 +626,6 @@ export async function setPermissionLevel(
   return invokeCmd("set_permission_level", { session_id: session_id, level });
 }
 
-export async function startGoal(
-  session_id: string,
-  description: string,
-): Promise<void> {
-  return invokeCmd("start_goal", { session_id: session_id, description });
-}
-
-export async function getGoal(
-  session_id: string,
-): Promise<{ description: string; status: string } | null> {
-  return invokeCmd("get_goal", { session_id: session_id });
-}
-
-export async function stopGoal(session_id: string): Promise<void> {
-  return invokeCmd("stop_goal", { session_id: session_id });
-}
-
-export async function pauseGoal(session_id: string): Promise<void> {
-  return invokeCmd("pause_goal", { session_id: session_id });
-}
-
-export async function resumeGoal(session_id: string): Promise<void> {
-  return invokeCmd("resume_goal", { session_id: session_id });
-}
-
-export async function editGoal(
-  session_id: string,
-  description: string,
-): Promise<void> {
-  return invokeCmd("edit_goal", { session_id: session_id, description });
-}
-
 export async function sendSteer(
   session_id: string,
   blocks: TaggedContentBlock[],

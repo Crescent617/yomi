@@ -408,7 +408,6 @@ export interface SessionState {
   streaming_tool_name?: string;
   git_info?: GitInfo | null;
   git_refresh_revision?: number;
-  goal?: { description: string; status: string } | null;
   todos?: { id: number; content: string; status: string }[];
   subagents: SubagentInfo[];
 }
@@ -526,8 +525,6 @@ export interface AgentEvent {
     reason: string;
   };
   message_replaced?: { session_id: string };
-  goal_updated?: { description: string; status: string };
-  goal_stopped?: null;
 }
 
 export interface UserEvent {

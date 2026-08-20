@@ -16,11 +16,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/new", "Create new session"),
     ("/continue", "Continue agent when idle"),
-    (
-        "/goal",
-        "<description> Start goal mode with optional description",
-    ),
-    ("/goal:stop", "Stop goal mode"),
     ("/todos", "Toggle todo list visibility"),
     ("/yolo", "Toggle YOLO mode (auto-approve all tools)"),
     ("/browse", "Toggle browse mode"),

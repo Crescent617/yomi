@@ -278,19 +278,6 @@ pub async fn run_session_loop(
                         tracing::error!("Failed to compact session: {}", e);
                     }
                 }
-                Command::StartGoal(config) => {
-                    if let Err(e) = coord_for_ctrl
-                        .start_goal(&session_id_for_ctrl, config)
-                        .await
-                    {
-                        tracing::error!("Failed to start goal: {}", e);
-                    }
-                }
-                Command::StopGoal => {
-                    if let Err(e) = coord_for_ctrl.stop_goal(&session_id_for_ctrl).await {
-                        tracing::error!("Failed to stop goal: {}", e);
-                    }
-                }
                 Command::Rewind { message_id, target } => {
                     if let Err(e) = coord_for_ctrl
                         .rewind_session(&session_id_for_ctrl, message_id, target)
@@ -310,24 +297,6 @@ pub async fn run_session_loop(
                         tracing::error!("Failed to send ask_user response: {}", e);
                     }
                 }
-                Command::PauseGoal => {
-                    if let Err(e) = coord_for_ctrl.pause_goal(&session_id_for_ctrl).await {
-                        tracing::error!("Failed to pause goal: {}", e);
-                    }
-                }
-                Command::ResumeGoal => {
-                    if let Err(e) = coord_for_ctrl.resume_goal(&session_id_for_ctrl).await {
-                        tracing::error!("Failed to resume goal: {}", e);
-                    }
-                }
-                Command::EditGoal { description } => {
-                    if let Err(e) = coord_for_ctrl
-                        .update_goal(&session_id_for_ctrl, description)
-                        .await
-                    {
-                        tracing::error!("Failed to edit goal: {}", e);
-                    }
-                }
                 Command::Steer { content } => {
                     if let Err(e) = coord_for_ctrl
                         .send_steer(&session_id_for_ctrl, content)
@@ -340,10 +309,6 @@ pub async fn run_session_loop(
                     if let Err(e) = coord_for_ctrl.send_continue(&session_id_for_ctrl).await {
                         tracing::error!("Failed to send continue: {}", e);
                     }
-                }
-                Command::GetGoal => {
-                    // GetGoal is a query; no-op for CLI since it returns a value
-                    tracing::debug!("GetGoal command received in CLI session — no action");
                 }
             }
         }
