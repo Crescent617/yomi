@@ -511,62 +511,6 @@ async fn fetch_message_returns_quoted_content() {
     assert!(adapter.fetch_message("om_missing").await.unwrap().is_none());
 }
 
-#[tokio::test]
-async fn sent_card_text_is_cached_and_served_on_fetch() {
-    let stub = StubFeishu::start().await;
-    let adapter = stub_adapter(&stub.base_url);
-    let card = r#"{"schema":"2.0","body":{"elements":[{"tag":"markdown","content":"答案正文"}]}}"#;
-
-    // The API echoes only a legacy placeholder for our card; the cached
-    // sent text must win.
-    adapter.send_card("oc_chat", card, None).await.unwrap();
-    let m = adapter
-        .fetch_message("om_new")
-        .await
-        .unwrap()
-        .expect("found");
-    assert_eq!(m.text, "答案正文");
-
-    // A card morph (status → reply) refreshes the cached text.
-    let morphed =
-        r#"{"schema":"2.0","body":{"elements":[{"tag":"markdown","content":"morph 后的正文"}]}}"#;
-    adapter.update_card("om_new", morphed).await.unwrap();
-    let m = adapter
-        .fetch_message("om_new")
-        .await
-        .unwrap()
-        .expect("found");
-    assert_eq!(m.text, "morph 后的正文");
-}
-
-/// Restart simulation: process A sends the card (memory + kv db), process
-/// B (fresh adapter, cold memory, same db) must still serve the text.
-#[tokio::test]
-async fn sent_card_text_survives_restart_via_kv() {
-    let stub = StubFeishu::start().await;
-    let dir = tempfile::tempdir().unwrap();
-    let kv_path = dir.path().join("cache.db");
-    let card =
-        r#"{"schema":"2.0","body":{"elements":[{"tag":"markdown","content":"重启前的答案"}]}}"#;
-
-    let mut adapter_a = stub_adapter(&stub.base_url);
-    adapter_a.set_kv_cache(Some(std::sync::Arc::new(
-        crate::kv_cache::KvCache::open(&kv_path).await.unwrap(),
-    )));
-    adapter_a.send_card("oc_chat", card, None).await.unwrap();
-
-    let mut adapter_b = stub_adapter(&stub.base_url);
-    adapter_b.set_kv_cache(Some(std::sync::Arc::new(
-        crate::kv_cache::KvCache::open(&kv_path).await.unwrap(),
-    )));
-    let m = adapter_b
-        .fetch_message("om_new")
-        .await
-        .unwrap()
-        .expect("found");
-    assert_eq!(m.text, "重启前的答案");
-}
-
 // ── send_files: multipart form contract (regression for API error 234001) ──
 
 #[tokio::test]

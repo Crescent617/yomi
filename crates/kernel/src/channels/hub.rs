@@ -137,8 +137,7 @@ impl ChannelHub {
             }
         }
 
-        let kv = kernel.upgrade().and_then(|k| k.kv_cache());
-        let adapter = build_adapter(&config.platform, kv);
+        let adapter = build_adapter(&config.platform);
         let status = Arc::new(AtomicU8::new(STATUS_CONNECTING));
 
         let (incoming_tx, incoming_rx) = mpsc::channel::<ChannelEvent>(256);
@@ -1015,19 +1014,14 @@ impl ChannelHub {
     }
 }
 
-fn build_adapter(
-    platform: &super::PlatformConfig,
-    kv: Option<Arc<crate::kv_cache::KvCache>>,
-) -> Arc<dyn PlatformAdapter> {
+fn build_adapter(platform: &super::PlatformConfig) -> Arc<dyn PlatformAdapter> {
     match platform {
         super::PlatformConfig::Telegram { token } => {
             Arc::new(super::telegram::TelegramAdapter::new(token.clone()))
         }
-        super::PlatformConfig::Feishu { app_id, app_secret } => {
-            let mut adapter = super::feishu::FeishuAdapter::new(app_id.clone(), app_secret.clone());
-            adapter.set_kv_cache(kv);
-            Arc::new(adapter)
-        }
+        super::PlatformConfig::Feishu { app_id, app_secret } => Arc::new(
+            super::feishu::FeishuAdapter::new(app_id.clone(), app_secret.clone()),
+        ),
     }
 }
 

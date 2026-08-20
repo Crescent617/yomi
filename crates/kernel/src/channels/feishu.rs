@@ -74,22 +74,9 @@ pub(crate) struct TokenCache {
 /// was lost; redeliveries land within seconds, so a few thousand is ample.
 const DEDUP_CAP: NonZeroUsize = NonZeroUsize::new(4096).unwrap();
 
-/// Cap for the sent-card text cache (see [`FeishuAdapter::cache_card_text`]).
-const SENT_TEXT_CAP: NonZeroUsize = DEDUP_CAP;
-
 /// Cap for the thread-root cache (thread_id → root message id). Threads
 /// are few and long-lived; a miss just costs one API re-fetch.
 const THREAD_ROOT_CAP: NonZeroUsize = DEDUP_CAP;
-
-/// KV namespace and retention for the sent-card text cache: quoting a
-/// reply happens in the same conversation arc, so a week is ample.
-const SENT_TEXT_NS: &str = "feishu_sent_card_text";
-
-const SENT_TEXT_TTL_MS: i64 = 7 * 24 * 3600 * 1000;
-
-/// The full-table prune is throttled: `update_card` fires per status-card
-/// patch, so per-write pruning would churn cache.db.
-const PRUNE_INTERVAL: std::time::Duration = std::time::Duration::from_hours(1);
 
 // ── Adapter ─────────────────────────────────────────────────────────
 
@@ -101,12 +88,6 @@ pub struct FeishuAdapter {
     token_cache: Mutex<Option<TokenCache>>,
     bot_open_id: tokio::sync::Mutex<Option<String>>,
     pub(crate) seen_messages: Mutex<LruCache<String, ()>>,
-    sent_texts: Mutex<LruCache<String, String>>,
-    /// Persistent backstop for `sent_texts` (survives restarts); `None`
-    /// in tests and when the kernel has no cache db.
-    kv: Option<std::sync::Arc<crate::kv_cache::KvCache>>,
-    /// Last `sent_texts` prune time (throttled, see PRUNE_INTERVAL).
-    last_prune: tokio::sync::Mutex<Option<std::time::Instant>>,
     /// Thread id → root message id, filled by `thread_root_id`. Memory
     /// only: a cold cache after restart costs one refetch per thread.
     thread_roots: tokio::sync::Mutex<LruCache<String, String>>,
@@ -160,16 +141,8 @@ impl FeishuAdapter {
             token_cache: Mutex::new(None),
             bot_open_id: tokio::sync::Mutex::new(None),
             seen_messages: Mutex::new(LruCache::new(DEDUP_CAP)),
-            sent_texts: Mutex::new(LruCache::new(SENT_TEXT_CAP)),
-            kv: None,
-            last_prune: tokio::sync::Mutex::new(None),
             thread_roots: tokio::sync::Mutex::new(LruCache::new(THREAD_ROOT_CAP)),
         }
-    }
-
-    /// Attach the persistent KV backstop for the sent-card text cache.
-    pub fn set_kv_cache(&mut self, kv: Option<std::sync::Arc<crate::kv_cache::KvCache>>) {
-        self.kv = kv;
     }
 
     /// Point the adapter at a different API base URL (tests only).
@@ -519,9 +492,6 @@ impl FeishuAdapter {
             )
             .await?;
         let id = resp_data_str(&resp, "message_id");
-        if msg_type == "interactive" {
-            self.cache_card_text(id.as_deref(), content).await;
-        }
         Ok(id)
     }
 
@@ -544,66 +514,7 @@ impl FeishuAdapter {
             )
             .await?;
         let id = resp_data_str(&resp, "message_id");
-        if msg_type == "interactive" {
-            self.cache_card_text(id.as_deref(), content).await;
-        }
         Ok(id)
-    }
-
-    /// Cache a sent card's markdown body by message id. `fetch_message` asks
-    /// the API for the real card body (`card_msg_content_type`), so this cache
-    /// is only a backstop for when that echo still degrades to the legacy
-    /// "请升级至最新版本客户端" placeholder (very old cards, edge cases).
-    /// Writes through to the persistent KV cache (best-effort) so restarts
-    /// keep the text.
-    async fn cache_card_text(&self, msg_id: Option<&str>, content: &str) {
-        let Some(msg_id) = msg_id else { return };
-        let Ok(card) = serde_json::from_str::<serde_json::Value>(content) else {
-            return;
-        };
-        let text = Self::extract_card_text(&card);
-        if text.is_empty() {
-            return;
-        }
-        self.sent_texts
-            .lock()
-            .await
-            .put(msg_id.to_string(), text.clone());
-        let Some(kv) = &self.kv else { return };
-        if let Err(e) = kv.put(SENT_TEXT_NS, msg_id, &text).await {
-            warn!(error = %e, "sent-text kv put failed");
-        }
-        let mut last = self.last_prune.lock().await;
-        if last.is_none_or(|t| t.elapsed() >= PRUNE_INTERVAL) {
-            let cutoff = chrono::Utc::now().timestamp_millis() - SENT_TEXT_TTL_MS;
-            if let Err(e) = kv.prune_older_than(SENT_TEXT_NS, cutoff).await {
-                warn!(error = %e, "sent-text kv prune failed");
-            }
-            *last = Some(std::time::Instant::now());
-        }
-    }
-
-    /// The text of one of our own cards: memory first, persistent KV as
-    /// the backstop (a hit backfills memory).
-    async fn sent_card_text(&self, msg_id: &str) -> Option<String> {
-        if let Some(text) = self.sent_texts.lock().await.get(msg_id) {
-            return Some(text.clone());
-        }
-        let kv = self.kv.as_ref()?;
-        match kv.get(SENT_TEXT_NS, msg_id).await {
-            Ok(Some(text)) => {
-                self.sent_texts
-                    .lock()
-                    .await
-                    .put(msg_id.to_string(), text.clone());
-                Some(text)
-            }
-            Ok(None) => None,
-            Err(e) => {
-                warn!(error = %e, "sent-text kv get failed");
-                None
-            }
-        }
     }
 
     // ── WebSocket helpers ───────────────────────────────────────────
@@ -1104,8 +1015,6 @@ impl PlatformAdapter for FeishuAdapter {
             json!({ "content": card_json }),
         )
         .await?;
-        // The card morphed (status → reply) — refresh the cached text.
-        self.cache_card_text(Some(message_id), card_json).await;
         Ok(())
     }
 
@@ -1336,15 +1245,8 @@ impl PlatformAdapter for FeishuAdapter {
         }
         // No sender filter here — quoting the bot's own answer is a
         // primary use case. With `card_msg_content_type` the API echoes the
-        // real card body for any sender, so it wins; our sent-text cache only
-        // backfills when the API still degraded to the `[interactive]`
-        // placeholder (very old cards, edge cases).
+        // real card body for any sender, no local cache needed.
         let (text, image_keys) = Self::extract_history_content(item);
-        let text = if item["msg_type"].as_str() == Some("interactive") && text == "[interactive]" {
-            self.sent_card_text(message_id).await.unwrap_or(text)
-        } else {
-            text
-        };
         Ok(Some(super::HistoryMessage {
             message_id: item["message_id"]
                 .as_str()
