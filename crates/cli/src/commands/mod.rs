@@ -2,6 +2,7 @@ pub mod channel;
 pub mod config;
 pub mod cron;
 pub mod daemon;
+pub mod doctor;
 pub mod events;
 pub mod gc;
 pub mod rpc;

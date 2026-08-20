@@ -46,6 +46,8 @@ enum Commands {
     Cron(CronArgs),
     /// Drive platform channels (open a thread with a fresh session)
     Channel(commands::channel::ChannelArgs),
+    /// Health-check the daemon, channels, cron, storage and config
+    Doctor(GlobalArgs),
     /// Show version
     Version,
     /// Manage daemon (internal use)
@@ -98,6 +100,15 @@ enum SessionsCommands {
         /// Include tool calls (name/args/result) in the transcript
         #[arg(long)]
         tools: bool,
+        /// Include thinking blocks (excluded by default; --raw always shows everything)
+        #[arg(long)]
+        verbose: bool,
+        /// Show the message at this JSONL line number (from `session search`)
+        #[arg(long, conflicts_with = "raw")]
+        line: Option<usize>,
+        /// Also show this many lines before/after --line
+        #[arg(long, requires = "line", default_value = "2")]
+        context: usize,
     },
     /// List pending mailbox items (steer + queued messages)
     Mailbox {
@@ -105,6 +116,8 @@ enum SessionsCommands {
         #[arg(short, long)]
         session: Option<String>,
     },
+    /// Full-text search across session histories
+    Search(commands::session::search::SearchArgs),
     /// Retract one pending mailbox item (already-consumed ids fail safely)
     MailboxRemove {
         /// Mailbox item id (mbx_...)
@@ -355,6 +368,7 @@ async fn main() -> Result<()> {
         Some(Commands::Rpc(args)) => commands::rpc::run(args).await,
         Some(Commands::Cron(args)) => run_cron(args).await,
         Some(Commands::Channel(args)) => commands::channel::run(args).await,
+        Some(Commands::Doctor(global)) => commands::doctor::run(&global).await,
         Some(Commands::Version) => {
             println!("v{}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -379,9 +393,18 @@ async fn run_session(args: SessionArgs) -> Result<()> {
             session,
             raw,
             tools,
-        } => commands::session::cat::run(&args.global, session, raw, tools).await,
+            verbose,
+            line,
+            context,
+        } => {
+            commands::session::cat::run(&args.global, session, raw, tools, verbose, line, context)
+                .await
+        }
         SessionsCommands::Mailbox { session } => {
             commands::session::mailbox::list(&args.global, session).await
+        }
+        SessionsCommands::Search(search_args) => {
+            commands::session::search::run_cli(&search_args).await
         }
         SessionsCommands::MailboxRemove { item_id, session } => {
             commands::session::mailbox::remove(&args.global, session, item_id).await

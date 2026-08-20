@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- 新命令 `yomi doctor`：一键健康自检（配置、daemon 握手与协议版本、渠道连通、cron 积压、存储），任何一项失败时退出码为 1，可接进定时任务做重启门禁。
+- 新命令 `yomi session search <关键词>`：跨会话全文检索历史消息（含工具文本），按会话分组显示**带行号**的命中片段，支持 `--session` 限定范围、`--json` 机器可读输出。
+- `yomi session cat` 新增 `--line <n> --context <k>`：按 search 给出的行号直接定位消息全文；`--verbose` 显示 thinking 块（search/cat 默认均不含 thinking）。
+
 ### Removed
 
 - goal 模式（自主目标循环）整体移除：GUI 目标面板、TUI `/goal` `/goal:stop` 命令、`update_goal` 工具及对应 RPC 一并下线。长期无人使用，且"完成后自动续跑"的循环由一次性 cron、todo 提醒和 steer 更安全地覆盖。wire 协议版本升至 27，旧客户端需升级后才能连接。

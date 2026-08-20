@@ -20,6 +20,9 @@ pub async fn run(
     session: Option<String>,
     raw: bool,
     tools: bool,
+    verbose: bool,
+    line: Option<usize>,
+    context: usize,
 ) -> Result<()> {
     let session_id = super::resolve_session_id(global, session).await?;
     let data_dir = crate::utils::data_dir(global)?;
@@ -36,8 +39,42 @@ pub async fn run(
         return dump_raw(&path).await;
     }
 
+    // `--line <n>`：按 JSONL 行号取消息（`session search` 输出的坐标），
+    // `--context <k>` 附带前后 k 行；section 头标行号。
+    if let Some(n) = line {
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        let total = content.lines().count();
+        anyhow::ensure!(n >= 1 && n <= total, "Line {n} out of range (1..={total})");
+        let lo = n.saturating_sub(context).max(1);
+        let hi = (n + context).min(total);
+        // 全量解析再按行过滤：tool 配对靠跨消息索引，切片先转会让
+        // "结果在窗内、调用在窗外"的 tool 消息整条消失。
+        let mut parsed: Vec<(Option<usize>, Message)> = Vec::new();
+        for (idx, raw_line) in content.lines().enumerate() {
+            let line_no = idx + 1;
+            match serde_json::from_str::<Message>(raw_line) {
+                Ok(msg) => parsed.push((Some(line_no), msg)),
+                Err(e) => tracing::warn!(line = line_no, error = %e, "skipping unparsable line"),
+            }
+        }
+        let transcript =
+            format_transcript_with_lines(parsed, &data_dir, tools, verbose, Some((lo, hi)));
+        if transcript.is_empty() {
+            let hint = if tools {
+                ""
+            } else {
+                " (tool messages need --tools)"
+            };
+            println!("No displayable messages at L{lo}..L{hi} in session {session_id}{hint}");
+        } else {
+            print!("{transcript}");
+        }
+        return Ok(());
+    }
+
     let messages = store.get(&session_id).await?;
-    let transcript = format_transcript(messages, &data_dir, tools);
+    let transcript = format_transcript(messages, &data_dir, tools, verbose);
     if transcript.is_empty() {
         println!("No displayable messages found in session {session_id}");
     } else {
@@ -98,46 +135,102 @@ fn redact_base64(line: &str) -> String {
 }
 
 /// Render a friendly transcript of user/assistant messages.
-/// Tool calls are included only when `show_tools` is set.
+/// Tool calls are included only when `show_tools` is set; thinking blocks
+/// only when `verbose` is set.
 /// Pure function so it stays unit-testable.
-fn format_transcript(messages: Vec<Message>, data_dir: &Path, show_tools: bool) -> String {
+fn format_transcript(
+    messages: Vec<Message>,
+    data_dir: &Path,
+    show_tools: bool,
+    verbose: bool,
+) -> String {
+    let wrapped = messages.into_iter().map(|m| (None, m)).collect();
+    format_transcript_with_lines(wrapped, data_dir, show_tools, verbose, None)
+}
+
+/// `format_transcript` 的行号版：`(line_no, message)` 对，section 头标
+/// `· L<n>`（`--line` 路径使用；line_no 为 None 时不标）。
+/// `range` 给定时只渲染行号落在 `[lo, hi]` 内的消息（配对索引用全量，
+/// 显示按窗口）。
+fn format_transcript_with_lines(
+    messages: Vec<(Option<usize>, Message)>,
+    data_dir: &Path,
+    show_tools: bool,
+    verbose: bool,
+    range: Option<(usize, usize)>,
+) -> String {
+    let mut line_of: HashMap<MessageId, usize> = HashMap::new();
+    let raw: Vec<Message> = messages
+        .into_iter()
+        .map(|(line_no, m)| {
+            if let Some(n) = line_no {
+                line_of.insert(m.id.clone(), n);
+            }
+            m
+        })
+        .collect();
     let dangling = if show_tools {
-        dangling_tool_calls(&messages)
+        dangling_tool_calls(&raw)
     } else {
         HashMap::new()
     };
+    // 批量转换（tool 配对靠跨消息索引，必须整批）；转换会丢弃 system/
+    // internal 与坏损消息，所以行号按消息 id 回查，不靠位置对齐。
+    let converted = SessionMessage::from_storage(raw);
     let mut out = String::new();
-    let mut section = |label: &str, ts: chrono::DateTime<chrono::Utc>, body: &str| {
-        if body.trim().is_empty() {
-            return;
+    let mut section =
+        |label: &str, ts: chrono::DateTime<chrono::Utc>, line_no: Option<usize>, body: &str| {
+            if body.trim().is_empty() {
+                return;
+            }
+            let ts = ts.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S");
+            let coord = line_no.map_or_else(String::new, |n| format!(" · L{n}"));
+            let _ = writeln!(out, "=== {label} · {ts}{coord} ===\n{body}\n");
+        };
+    for msg in converted {
+        let msg_line = match &msg {
+            SessionMessage::User(m) => line_of.get(&m.id).copied(),
+            SessionMessage::Steer(m) => line_of.get(&m.id).copied(),
+            SessionMessage::Interrupted(m) => line_of.get(&m.id).copied(),
+            SessionMessage::Assistant(m) => line_of.get(&m.id).copied(),
+            SessionMessage::Tool(m) => line_of.get(&m.id).copied(),
+        };
+        if let (Some((lo, hi)), Some(l)) = (range, msg_line) {
+            if l < lo || l > hi {
+                continue;
+            }
         }
-        let ts = ts.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S");
-        let _ = writeln!(out, "=== {label} · {ts} ===\n{body}\n");
-    };
-    for msg in SessionMessage::from_storage(messages) {
         match msg {
             SessionMessage::User(m) => {
-                section("user", m.created_at, &render_blocks(&m.content, data_dir));
+                section(
+                    "user",
+                    m.created_at,
+                    msg_line,
+                    &render_blocks(&m.content, data_dir, verbose),
+                );
             }
             SessionMessage::Steer(m) => {
                 section(
                     "user (steer)",
                     m.created_at,
-                    &render_blocks(&m.content, data_dir),
+                    msg_line,
+                    &render_blocks(&m.content, data_dir, verbose),
                 );
             }
             SessionMessage::Interrupted(m) => {
                 section(
                     "interrupted",
                     m.created_at,
-                    &render_blocks(&m.content, data_dir),
+                    msg_line,
+                    &render_blocks(&m.content, data_dir, verbose),
                 );
             }
             SessionMessage::Assistant(m) => {
                 section(
                     "assistant",
                     m.created_at,
-                    &render_blocks(&m.content, data_dir),
+                    msg_line,
+                    &render_blocks(&m.content, data_dir, verbose),
                 );
                 // Tool calls without a result (cancel/crash mid-tool) have no
                 // ToolMsg — surface them here or they'd vanish entirely.
@@ -147,7 +240,7 @@ fn format_transcript(messages: Vec<Message>, data_dir: &Path, show_tools: bool) 
                             "args: {}\n(no result — interrupted?)",
                             strs::truncate_with_suffix(args, 300, "...")
                         );
-                        section(&format!("tool · {name}"), m.created_at, &body);
+                        section(&format!("tool · {name}"), m.created_at, msg_line, &body);
                     }
                 }
             }
@@ -156,7 +249,7 @@ fn format_transcript(messages: Vec<Message>, data_dir: &Path, show_tools: bool) 
                     continue;
                 }
                 let mut body = format!("args: {}", strs::truncate_with_suffix(&m.args, 300, "..."));
-                let result = render_blocks(&m.result, data_dir);
+                let result = render_blocks(&m.result, data_dir, verbose);
                 if !result.trim().is_empty() {
                     let _ = write!(
                         body,
@@ -164,7 +257,7 @@ fn format_transcript(messages: Vec<Message>, data_dir: &Path, show_tools: bool) 
                         strs::truncate_with_suffix(&result, 4000, "\n...[truncated]")
                     );
                 }
-                section(&format!("tool · {}", m.name), m.created_at, &body);
+                section(&format!("tool · {}", m.name), m.created_at, msg_line, &body);
             }
         }
     }
@@ -200,7 +293,7 @@ fn dangling_tool_calls(messages: &[Message]) -> HashMap<MessageId, Vec<(String, 
 
 /// Render content blocks for the transcript: text as-is, images as paths.
 /// thinking / redacted thinking / audio are skipped (text-only transcript).
-fn render_blocks(blocks: &[ContentBlock], data_dir: &Path) -> String {
+fn render_blocks(blocks: &[ContentBlock], data_dir: &Path, verbose: bool) -> String {
     let mut body = String::new();
     for block in blocks {
         match block {
@@ -215,6 +308,12 @@ fn render_blocks(blocks: &[ContentBlock], data_dir: &Path) -> String {
                     body.push('\n');
                 }
                 let _ = write!(body, "[image: {}]", image_display(&image_url.url, data_dir));
+            }
+            ContentBlock::Thinking { thinking, .. } if verbose => {
+                if !body.is_empty() {
+                    body.push('\n');
+                }
+                let _ = write!(body, "[thinking]\n{thinking}");
             }
             _ => {}
         }

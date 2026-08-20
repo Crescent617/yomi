@@ -5,6 +5,7 @@ use comfy_table::{ContentArrangement, Table};
 pub mod cancel;
 pub mod cat;
 pub mod mailbox;
+pub mod search;
 pub mod send;
 
 #[cfg(test)]

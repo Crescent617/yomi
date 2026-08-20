@@ -29,7 +29,7 @@ fn user_and_assistant_text_only() {
         Message::user("hello"),
         Message::assistant("hi there"),
     ];
-    let out = format_transcript(messages, &data_dir(), false);
+    let out = format_transcript(messages, &data_dir(), false, false);
     assert!(out.contains("=== user · "));
     assert!(out.contains("hello"));
     assert!(out.contains("=== assistant · "));
@@ -43,7 +43,7 @@ fn thinking_is_skipped() {
         "answer",
         "secret reasoning",
     )];
-    let out = format_transcript(messages, &data_dir(), false);
+    let out = format_transcript(messages, &data_dir(), false, false);
     assert!(out.contains("answer"));
     assert!(!out.contains("secret reasoning"));
 }
@@ -54,7 +54,7 @@ fn image_asset_resolves_to_real_path() {
         "look at this",
         "asset://abc123.png",
     )];
-    let out = format_transcript(messages, &data_dir(), false);
+    let out = format_transcript(messages, &data_dir(), false, false);
     assert!(out.contains("[image: /tmp/yomi-test-data/assets/abc123.png]"));
     assert!(!out.contains("asset://"));
 }
@@ -65,7 +65,7 @@ fn inline_base64_image_is_summarized() {
         "pic",
         "data:image/png;base64,iVBORw0KGgo=",
     )];
-    let out = format_transcript(messages, &data_dir(), false);
+    let out = format_transcript(messages, &data_dir(), false, false);
     assert!(out.contains("[image: (inline base64 image)]"));
 }
 
@@ -75,7 +75,7 @@ fn empty_turns_are_skipped() {
     let mut empty = Message::assistant("");
     empty.content = vec![];
     let messages = vec![empty, Message::user("next")];
-    let out = format_transcript(messages, &data_dir(), false);
+    let out = format_transcript(messages, &data_dir(), false, false);
     assert!(!out.contains("assistant"));
     assert!(out.contains("next"));
 }
@@ -83,7 +83,7 @@ fn empty_turns_are_skipped() {
 #[test]
 fn no_displayable_messages_returns_empty() {
     let messages = vec![Message::system("sys")];
-    assert!(format_transcript(messages, &data_dir(), false).is_empty());
+    assert!(format_transcript(messages, &data_dir(), false, false).is_empty());
 }
 
 #[test]
@@ -93,7 +93,7 @@ fn steer_message_is_labeled() {
         "is_steer".to_string(),
         "true".to_string(),
     )]));
-    let out = format_transcript(vec![msg], &data_dir(), false);
+    let out = format_transcript(vec![msg], &data_dir(), false, false);
     assert!(out.contains("=== user (steer) · "));
 }
 
@@ -104,7 +104,7 @@ fn tool_message_shows_name_args_and_result() {
         serde_json::json!({"path": "/tmp/x.rs"}),
         "file contents",
     );
-    let out = format_transcript(messages, &data_dir(), true);
+    let out = format_transcript(messages, &data_dir(), true, false);
     assert!(out.contains("=== tool · read · "));
     assert!(out.contains(r#"args: {"path":"/tmp/x.rs"}"#));
     assert!(out.contains("file contents"));
@@ -128,7 +128,7 @@ fn tool_result_image_resolves_to_real_path() {
         name: "browser".to_string(),
         arguments: serde_json::json!({}),
     }]);
-    let out = format_transcript(vec![assistant, tool_msg], &data_dir(), true);
+    let out = format_transcript(vec![assistant, tool_msg], &data_dir(), true, false);
     assert!(out.contains("[image: /tmp/yomi-test-data/assets/deadbeef.png]"));
 }
 
@@ -140,7 +140,7 @@ fn orphan_tool_result_is_skipped() {
         "missing-call",
         "orphan output",
     )];
-    let out = format_transcript(messages, &data_dir(), true);
+    let out = format_transcript(messages, &data_dir(), true, false);
     assert!(!out.contains("orphan output"));
 }
 
@@ -148,7 +148,7 @@ fn orphan_tool_result_is_skipped() {
 fn long_tool_args_are_truncated() {
     let big = "x".repeat(1000);
     let messages = tool_pair("write", serde_json::json!({"content": big}), "ok");
-    let out = format_transcript(messages, &data_dir(), true);
+    let out = format_transcript(messages, &data_dir(), true, false);
     assert!(out.contains("args: "));
     assert!(out.contains("..."));
     // args capped well below the raw 1000-char payload
@@ -159,7 +159,7 @@ fn long_tool_args_are_truncated() {
 fn long_tool_result_is_truncated() {
     let big = "y".repeat(5000);
     let messages = tool_pair("shell", serde_json::json!({"command": "ls"}), &big);
-    let out = format_transcript(messages, &data_dir(), true);
+    let out = format_transcript(messages, &data_dir(), true, false);
     assert!(out.contains("...[truncated]"));
     assert!(!out.contains(&big));
 }
@@ -173,7 +173,7 @@ fn dangling_tool_call_is_shown_as_interrupted() {
         name: "shell".to_string(),
         arguments: serde_json::json!({"command": "make"}),
     }]);
-    let out = format_transcript(vec![assistant], &data_dir(), true);
+    let out = format_transcript(vec![assistant], &data_dir(), true, false);
     assert!(out.contains("=== assistant · "));
     assert!(out.contains("let me check"));
     assert!(out.contains("=== tool · shell · "));
@@ -192,7 +192,7 @@ fn tools_hidden_without_flag() {
         arguments: serde_json::json!({"command": "make"}),
     }]);
     messages.push(dangling_assistant);
-    let out = format_transcript(messages, &data_dir(), false);
+    let out = format_transcript(messages, &data_dir(), false, false);
     assert!(!out.contains("=== tool · "));
     assert!(!out.contains("args: "));
     assert!(!out.contains("no result"));
