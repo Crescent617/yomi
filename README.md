@@ -10,6 +10,14 @@
 |-----|-----|
 | ![tui-demo](docs/assets/tui-demo1.png) | ![gui-demo](docs/assets/gui-demo1.png) |
 
+## Design Philosophy
+
+> **The stream is reality.**
+
+1. **Everything is stream** — in as messages, out as events, borne by sessions; nothing lives off-stream.
+2. **State is cache** — discarded at will, restored at a fold.
+3. **Model is suspect** — bounded by design, not by hope.
+
 ## Features
 
 - **TUI** — minimalist terminal interface for seamless interaction
