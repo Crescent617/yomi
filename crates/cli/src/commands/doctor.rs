@@ -121,14 +121,15 @@ pub async fn run(global: &GlobalArgs) -> Result<()> {
                     checks.push(check(Level::Ok, "channels", "none configured"));
                 }
                 for info in &infos {
-                    // STATUS_CONNECTING 的语义是"receiver 活着"（ws 在收），
-                    // 即健康运行态；Idle 才是"receiver 已退出"（不在收）。
-                    let (level, note) = match info.status {
-                        kernel::channels::ChannelStatus::Error => (Level::Fail, "error"),
-                        kernel::channels::ChannelStatus::Connecting => (Level::Ok, "receiving"),
-                        kernel::channels::ChannelStatus::Idle => (Level::Warn, "not receiving"),
+                    // 连接健康只以 daemon Hello 为准（见上）；渠道行纯信息
+                    // 展示（STATUS_CONNECTING=receiver 在收 / Idle=已退出），
+                    // 不参与门禁判定。
+                    let note = match info.status {
+                        kernel::channels::ChannelStatus::Error => "error",
+                        kernel::channels::ChannelStatus::Connecting => "receiving",
+                        kernel::channels::ChannelStatus::Idle => "not receiving",
                     };
-                    checks.push(check(level, &format!("channel:{}", info.name), note));
+                    checks.push(check(Level::Ok, &format!("channel:{}", info.name), note));
                 }
             }
             Err(e) => checks.push(check(Level::Warn, "channels", format!("query failed: {e}"))),
