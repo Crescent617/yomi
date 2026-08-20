@@ -1,5 +1,27 @@
 # AGENTS.md
 
+## Design Philosophy
+
+> **The stream is reality.**
+
+1. **Everything is stream** — in as messages, out as events, borne by
+   sessions; nothing lives off-stream.
+2. **State is cache** — discarded at will, restored at a fold.
+3. **Model is suspect** — bounded by design, not by hope.
+
+### Extension: four ports, no fifth
+
+| Port | Chokepoint | Examples (in-proc / out-of-proc) |
+|---|---|---|
+| Source (messages in) | input bus | cron, channels / webhook bridge, RPC clients |
+| Sink (events out) | event bus | obs cards, persistence / events followers |
+| Gate (veto) | conductor | permission checker, interceptors / hook scripts |
+| Capability (tools) | ToolRegistry | built-in tools / MCP servers, skills |
+
+In-proc and out-of-proc share one contract (the wire protocol is the bus,
+projected over a socket). Default to out-of-proc; promote only when usage
+proves out. Extension state lives in sqlite/config — never private.
+
 ## Build Commands
 
 ```bash
