@@ -563,6 +563,11 @@ pub(crate) fn format_session_info(
         ),
         format!("- **Subagents**: {running_subagents} running"),
         shells_text,
+        format!(
+            "- **Daemon**: yomi v{} · wire v{}",
+            env!("CARGO_PKG_VERSION"),
+            crate::wire::WIRE_PROTOCOL_VERSION
+        ),
     ]
     .join("\n")
 }

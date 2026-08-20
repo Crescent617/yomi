@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `yomi doctor` 终端输出升级为彩色面板（分级着色 + 总结徽章，管道输出保持纯文本）；渠道状态行改为纯信息展示、不再影响退出码；并修复 cron 误报 overdue、渠道误报 connecting 两处口径问题。
+- 渠道 `/info`（`/i`）命令现在同时标注 daemon 版本与 wire 协议版本（有会话与无会话两种输出均包含）。
 
 ### Removed
 

@@ -413,8 +413,11 @@ pub(crate) async fn handle_incoming_message(
                 let model_key =
                     session_model_key(channel_name, store, &kernel, &chat_id, key).await?;
                 return Ok(Some(format!(
-                    "No session yet in this {}. First message will use `{model_key}`.",
+                    "No session yet in this {}. First message will use `{model_key}`.\n\
+                     - **Daemon**: yomi v{} · wire v{}",
                     if chat_level { "chat" } else { "thread" },
+                    env!("CARGO_PKG_VERSION"),
+                    crate::wire::WIRE_PROTOCOL_VERSION,
                 )));
             };
             let session = kernel.get_session(&sid).await?;
