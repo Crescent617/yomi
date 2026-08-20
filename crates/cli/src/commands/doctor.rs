@@ -5,6 +5,7 @@ use crate::args::GlobalArgs;
 use anyhow::Result;
 use kernel::client::KernelApi;
 use kernel::wire::ReqMethod;
+use std::io::IsTerminal;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum Level {
@@ -234,16 +235,81 @@ pub async fn run(global: &GlobalArgs) -> Result<()> {
         .max()
         .cloned()
         .unwrap_or(Level::Ok);
-    for c in &checks {
-        println!("{} {:<16} {}", c.level.icon(), c.label, c.detail);
-    }
-    match worst {
-        Level::Ok => println!("\nAll checks passed."),
-        Level::Warn => println!("\nHealthy with warnings."),
-        Level::Fail => println!("\nUnhealthy — see ❌ above."),
+    // TTY 彩色面板；管道/重定向回落纯文本（cron 自检与日志场景）。
+    if std::io::stdout().is_terminal() {
+        fancy_report(&checks, &worst);
+    } else {
+        for c in &checks {
+            println!("{} {:<16} {}", c.level.icon(), c.label, c.detail);
+        }
+        match worst {
+            Level::Ok => println!("\nAll checks passed."),
+            Level::Warn => println!("\nHealthy with warnings."),
+            Level::Fail => println!("\nUnhealthy — see ❌ above."),
+        }
     }
     if worst == Level::Fail {
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// TTY 彩色面板输出：圆角边框 + 分级着色 + 总结 badge。
+/// `NO_COLOR` 时退化为无 ANSI 的同款面板。
+fn fancy_report(checks: &[Check], worst: &Level) {
+    use comfy_table::{modifiers, presets, Color, ContentArrangement, Table};
+
+    debug_assert!(std::io::stdout().is_terminal());
+    let color_on = std::env::var_os("NO_COLOR").is_none();
+    let color_of = |level: &Level| match level {
+        Level::Ok => Color::Green,
+        Level::Warn => Color::Yellow,
+        Level::Fail => Color::Red,
+    };
+
+    let label_w = checks
+        .iter()
+        .map(|c| c.label.chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut table = Table::new();
+    table
+        .load_preset(presets::UTF8_BORDERS_ONLY)
+        .apply_modifier(modifiers::UTF8_ROUND_CORNERS)
+        .set_content_arrangement(ContentArrangement::Dynamic);
+    let version = env!("CARGO_PKG_VERSION");
+    table.set_header(vec![comfy_table::Cell::new(format!(
+        "🩺 yomi doctor · v{version}"
+    ))]);
+    for c in checks {
+        let line = format!(
+            "{} {:<width$}  {}",
+            c.level.icon(),
+            c.label,
+            c.detail,
+            width = label_w
+        );
+        let mut cell = comfy_table::Cell::new(line);
+        if color_on {
+            cell = cell.fg(color_of(&c.level));
+        }
+        table.add_row(vec![cell]);
+    }
+    println!("{table}");
+
+    let (badge, badge_color) = match worst {
+        Level::Ok => ("ALL SYSTEMS OPERATIONAL", Color::Green),
+        Level::Warn => ("DEGRADED — see warnings", Color::Yellow),
+        Level::Fail => ("UNHEALTHY — see failures", Color::Red),
+    };
+    if color_on {
+        let code = match badge_color {
+            Color::Green => 32,
+            Color::Yellow => 33,
+            _ => 31,
+        };
+        println!("\x1b[1;{code}m{badge}\x1b[0m");
+    } else {
+        println!("{badge}");
+    }
 }
