@@ -58,6 +58,7 @@ python scripts/bump-version.py --level minor
 
 ### 5. CHANGELOG
 
+0. **轮转**：把 `[Unreleased]` 标题改为 `[<新版本>] - <日期>`，并在其上重开空的 `[Unreleased]`——bump 脚本不做这步；漏了的话 release.yml 抽不到本版本 section，GitHub Release 的 body 会是空的（v0.8.2/v0.9.0 各踩过一次）。
 1. **先核对覆盖度**：`git log v<上个版本>..HEAD --oneline`，确保新条目覆盖本次发布包含的**全部**提交；若发现上个版本的条目漏写了已发布的内容，先补写再写新条目。
 2. **写法遵循 `CHANGELOG.md` 顶部的《编写要求》**：面向用户、一条一行一句话、不写内部实现、配置与命令点名。不要写成长段从句。
 3. **写完检查结构**：`grep -n '^## \[' CHANGELOG.md`，确认每个版本只有一个标题、版本号严格倒序、没有内容串到别的版本下。

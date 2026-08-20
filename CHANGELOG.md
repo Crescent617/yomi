@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-20
+
 ### Added
 
 - 新命令 `yomi doctor`：一键健康自检（配置、daemon 握手与协议版本、渠道连通、cron 积压、存储），任何一项失败时退出码为 1，可接进定时任务做重启门禁。
