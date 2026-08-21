@@ -27,7 +27,7 @@ sink 复用现有 `subscribe_*`，channel 插件化等第三个渠道出现再�
 | Sink | 复用现有 `subscribe_*`（零改动） | 分类型过滤器 |
 | Channel | ❌ | 第三个渠道出现时 |
 
-## 协议（wire 新增 5 个方法 + send_message 扩展，版本 → 28）
+## 协议（wire 新增 5 个方法，版本 → 28）
 
 ### `ext_register`
 
@@ -86,26 +86,13 @@ sink 复用现有 `subscribe_*`，channel 插件化等第三个渠道出现再�
 - 之后照常 `send_message`；source 消息统一带 `[From source:<name>]` 前缀，
   对齐 channel 消息的来源标注惯例。
 
-### Source 回执：`send_message` 的 `wait` 选项
+### Source 回执（一期不做）
 
-source 经常需要"发完消息拿结果"（如把 agent 答复回贴到 GitLab MR
-comment）。不新增方法，给 `send_message` 加两个可选参数：
-
-```json
-→ {"send_message": {"session_id": "sess_x", "blocks": [...],
-    "wait_ms": 300000, "client_tag": "mr-8842"}}
-← {"ok": {"text": "……", "stop_reason": "completed",
-           "timed_out": false, "client_tag": "mr-8842"}}
-```
-
-- RPC 挂起直到该消息触发的 run 结束（挂起等，与 ext_pull 同构），返回
-  **run 的最终答复**——与渠道投递（settle 正文）同一份计算，不二门。
-- session 忙时消息排 mailbox，wait 覆盖排队+执行；超时 `timed_out: true`，
-  run 继续不取消（v1 语义）。
-- `client_tag` 原样回显，供 bridge 对齐外部对象（如 MR 号）。
-- mailbox 合并语义：消息与他人合并进同一 run 时，返回该 run 的最终答复
-  （v1 接受并记录）。
-- 高级需求（流式进度、多轮跟踪）走现有 `subscribe_session_events`。
+source"发完消息拿结果"（如回贴 GitLab MR comment）的需求一期不处理：
+`send_message` 的 wait 语义碰上 mailbox 排队/合并/Stop 全是毛边，而
+webhook 场景天然异步（回贴晚到几分钟无影响）。需要结果时用现有
+`subscribe_session_events` 订阅事件流自行跟踪 run 生命周期；
+待真实场景出现再评估是否值得同步原语。
 
 ## 生命周期与回收（三层，零管理面 RPC）
 
