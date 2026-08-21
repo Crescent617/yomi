@@ -18,6 +18,7 @@
 //!   不减，也绝不丢在飞事件；
 //! - 全局信号量限制并发平台 IO 上限，避免洪峰期 API 洪泛。
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -84,6 +85,8 @@ struct DeliveryCtx {
 /// 会话 → 投递 actor 的分派器。
 pub(crate) struct DeliveryPool {
     senders: Arc<DashMap<SessionId, mpsc::Sender<DeliveryJob>>>,
+    /// 每 actor 的在飞任务计数（obs 死亡清扫判活谓词用）。
+    inflight: Arc<DashMap<SessionId, Arc<AtomicU32>>>,
     ctx: Arc<DeliveryCtx>,
 }
 
@@ -128,6 +131,7 @@ impl DeliveryPool {
     ) -> Self {
         Self {
             senders: Arc::new(DashMap::new()),
+            inflight: Arc::new(DashMap::new()),
             ctx: Arc::new(DeliveryCtx {
                 obs,
                 ask,
@@ -162,6 +166,24 @@ impl DeliveryPool {
         )
     }
 
+    /// 该会话的投递是否安静（无 actor，或队列空且无在飞任务）。
+    ///
+    /// 供 obs 死亡清扫的判活谓词使用（发版终审 #2）：`Stopped` 发出时
+    /// conductor 的状态镜像即刻翻为 Idle，但它可能还排在 actor 队列
+    /// 里（IO 信号量后）或正在投递中——此时把卡片错冻成 ⏰ 会产生
+    /// "既丢又成"的矛盾 UX。
+    pub(crate) fn is_quiet(&self, session_id: &SessionId) -> bool {
+        let queue_empty = self
+            .senders
+            .get(session_id)
+            .is_none_or(|tx| tx.capacity() == tx.max_capacity());
+        let no_inflight = self
+            .inflight
+            .get(session_id)
+            .is_none_or(|c| c.load(Ordering::Relaxed) == 0);
+        queue_empty && no_inflight
+    }
+
     /// 派一个事件给该会话的 actor（不存在则创建）。同会话严格 FIFO。
     ///
     /// 永不在调用方阻塞：队满记 ERROR 丢件（此时系统已处于深度异常，
@@ -179,7 +201,15 @@ impl DeliveryPool {
                     let senders = Arc::clone(&self.senders);
                     let sid = session_id.clone();
                     let own_tx = tx.clone();
-                    tokio::spawn(async move { run_actor(sid, rx, own_tx, senders, ctx).await });
+                    let counter = self
+                        .inflight
+                        .entry(session_id.clone())
+                        .or_insert_with(|| Arc::new(AtomicU32::new(0)))
+                        .clone();
+                    let inflight = Arc::clone(&self.inflight);
+                    tokio::spawn(async move {
+                        run_actor(sid, rx, own_tx, senders, inflight, counter, ctx).await;
+                    });
                     tx
                 }
             };
@@ -210,12 +240,30 @@ impl DeliveryPool {
     }
 }
 
+/// 在飞任务计数 guard（Drop 自减，panic 安全）。
+struct InflightGuard(Arc<AtomicU32>);
+
+impl InflightGuard {
+    fn new(counter: &Arc<AtomicU32>) -> Self {
+        counter.fetch_add(1, Ordering::Relaxed);
+        Self(Arc::clone(counter))
+    }
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 /// 会话投递 actor 主循环。
 async fn run_actor(
     session_id: SessionId,
     mut rx: mpsc::Receiver<DeliveryJob>,
     own_tx: mpsc::Sender<DeliveryJob>,
     senders: Arc<DashMap<SessionId, mpsc::Sender<DeliveryJob>>>,
+    inflight_map: Arc<DashMap<SessionId, Arc<AtomicU32>>>,
+    own_inflight: Arc<AtomicU32>,
     ctx: Arc<DeliveryCtx>,
 ) {
     // 本 run 的回复缓冲：存在即"run 在飞"的标记（与原全局循环的
@@ -241,6 +289,7 @@ async fn run_actor(
                     // 误判由 agent_dead 探针内部挡住；瞬时失败时 buffer
                     // 保留在原地，下个节拍继续重试）。
                     if (ctx.agent_dead)(&session_id) {
+                        let _busy = InflightGuard::new(&own_inflight);
                         settle_deliver(&session_id, &mut buffer, SettleKind::Timeout, &ctx)
                             .await;
                     }
@@ -254,9 +303,24 @@ async fn run_actor(
                         .remove_if(&session_id, |_, tx| tx.same_channel(&own_tx))
                         .is_some()
                     {
+                        inflight_map.remove_if(&session_id, |_, c| {
+                            Arc::ptr_eq(c, &own_inflight)
+                        });
                         rx.close();
                         while let Ok(job) = rx.try_recv() {
+                            let _busy = InflightGuard::new(&own_inflight);
                             run_job(&session_id, job, &mut buffer, &ctx).await;
+                        }
+                        // 回收窗口内进来的 run 起始事件可能建起了
+                        // buffer——不能让它随 actor 一起死（静默部分丢
+                        // 回复的同类，发版终审 #3）：兜底送出并留痕。
+                        if buffer.is_some() {
+                            warn!(
+                                session_id = %session_id.0,
+                                "reap drain left a live buffer, settling before exit"
+                            );
+                            settle_deliver(&session_id, &mut buffer, SettleKind::Timeout, &ctx)
+                                .await;
                         }
                         break;
                     }
@@ -265,6 +329,7 @@ async fn run_actor(
             job = rx.recv() => {
                 let Some(job) = job else { break };
                 last_job = std::time::Instant::now();
+                let _busy = InflightGuard::new(&own_inflight);
                 run_job(&session_id, job, &mut buffer, &ctx).await;
             }
         }

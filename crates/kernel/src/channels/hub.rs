@@ -603,9 +603,15 @@ impl ChannelHub {
                             .retain(|_, (_, at)| at.elapsed() < ROUTING_CACHE_TTL);
                         // 回复兜底已下沉到各会话 actor 的巡检（actor 死了
                         // 但 Stopped 丢了会自己 Timeout 投递）；这里只剩
-                        // obs 卡片状态的全局清扫。Kernel gone = 关闭中。
+                        // obs 卡片状态的全局清扫。判活谓词要同时看
+                        // conductor 镜像与 actor 队列/在飞（终审 #2）：
+                        // Stopped 已发出但还排在 actor 队列时绝不能把
+                        // 卡片错冻成 ⏰。Kernel gone = 关闭中。
                         if let Some(k) = kernel.upgrade() {
-                            obs.sweep_dead_sessions(|sid| k.is_session_running(sid)).await;
+                            obs.sweep_dead_sessions(|sid| {
+                                k.is_session_running(sid) || !pool.is_quiet(sid)
+                            })
+                            .await;
                         }
                     }
                     Some((session_id, envelope)) = rx.recv() => {

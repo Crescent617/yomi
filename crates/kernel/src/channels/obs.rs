@@ -812,9 +812,24 @@ impl ObsTracker {
                 render_running(s, &sid),
                 s.status_msg_id.clone(),
                 Arc::clone(&s.adapter),
+                s.last_patch_at,
             ));
         }
-        for (sid, card, msg_id, adapter) in patches {
+        for (sid, card, msg_id, adapter, marked_at) in patches {
+            // 发送前再校验（发版终审 must-fix）：心跳在独立任务里与
+            // 每会话 actor 并发——收集到发送之间会话可能已结算（卡已
+            // morph 成回复）或刚被事件路径 PATCH 过；把过期"运行中"
+            // 渲染盖到已结算的回复卡上不可自愈（obs 状态已删，再无人
+            // 重 PATCH），回复会永久不可见。状态消失、卡片换代
+            // （status_msg_id 变）或期间有更新（last_patch_at 变）
+            // 一律跳过；残余窗口收窄到单次 PATCH 在飞时长（亚秒）。
+            let still_valid = self
+                .states
+                .get(&sid)
+                .is_some_and(|s| s.status_msg_id == msg_id && s.last_patch_at == marked_at);
+            if !still_valid {
+                continue;
+            }
             let ok = send_card_patch(&*adapter, &msg_id, &card).await;
             let Some(mut entry) = self.states.get_mut(&sid) else {
                 continue; // settled while the PATCH was in flight
