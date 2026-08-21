@@ -11,7 +11,8 @@ sink 复用现有 `subscribe_*`，channel 插件化等第三个渠道出现再�
 
 - 注册即记账：每个连接一张 ledger（registration 集合），不做持久化
 - 杀进程即下掉：连接断开 → 账本逆序回收（tool 摘出 ToolRegistry、
-  pending 工作项全部报错）
+  pending 工作项全部报错）——**teardown 只有断开连接一条路（RAII），
+  不设 unregister RPC**；改 schema/改名 = 重连重注册，是契约的一部分
 - 状态只存内存：daemon 重启 = 注册表清空，扩展重连重注册——
   注册表本来就是 fold 出来的（状态是缓存）
 
@@ -29,9 +30,8 @@ sink 复用现有 `subscribe_*`，channel 插件化等第三个渠道出现再�
 
 ## 协议（wire 新增 4 个方法，版本 → 28）
 
-方法面：`ext_register` / `ext_unregister` / `ext_pull` / `ext_route`。
-`ext_result` 不设独立方法——结果搭下一次 `ext_pull` 的便车（piggyback），
-provider 永远挂着一条 pull，没有"交结果与下一拉之间"的空窗。
+方法面：`ext_register` / `ext_pull` / `ext_result` / `ext_route`。
+不设 `ext_unregister`（断开即回收，RAII 覆盖一切下线场景）。
 
 ### `ext_register`
 
@@ -48,29 +48,29 @@ provider 永远挂着一条 pull，没有"交结果与下一拉之间"的空窗�
 - 注册进 ToolRegistry 的是一个**代理 Tool**：desc/schema 用登记的，
   exec 时把调用派给登记连接的队列。
 
-### `ext_unregister`（可选，优雅下线单个能力）
+### `ext_pull`
 
 ```json
-→ {"ext_unregister": {"registration": "ext_01J..."}}
-← {"ok": null}
-```
-
-### `ext_pull`（结果 piggyback）
-
-```json
-→ {"ext_pull": {"registration": "ext_01J...", "timeout_ms": 55000,
-    "result": {"call_id": "c_8f2", "output": "1900.00", "is_error": false}}}
+→ {"ext_pull": {"registration": "ext_01J...", "timeout_ms": 55000}}
 ← {"ok": {"call_id": "c_91a", "name": "stock.quote", "args": {"symbol": "600519"}}}
    {"ok": null}   // 超时（默认 55s，上限 60s）
 ```
 
-- 首次 pull 不带 `result`；之后每拉一次顺带交付上一单结果。
-- result 的 call_id 必须属于本连接本 registration（防串线）；
-  不认识的 call_id 整包报错（client bug，fail fast）。
 - per-registration 一个 `VecDeque` + `Notify`；有单即取、无单挂起（**挂起等，不空转**）。
 - 一个工作项只 pop 一次（恰好一次是结构保证）；同一 registration 允许并发 pull（多 worker）。
 - 工作项状态机：`queued → delivered → resolved / expired（60s 无响应）
-  / cancelled（run 被 Stop）`；迟到的 result 丢弃并记事件。
+  / cancelled（run 被 Stop）`。
+
+### `ext_result`
+
+```json
+→ {"ext_result": {"call_id": "c_91a", "output": "1900.00", "is_error": false}}
+← {"ok": null}
+```
+
+- call_id 必须属于本连接本 registration（防串线），否则报错（client bug）。
+- 迟到的 result（expired/cancelled 后到达）丢弃并记事件——**独立失败域**：
+  result 的任何问题都不影响 pull 循环。
 
 ### `ext_route`
 
@@ -165,6 +165,10 @@ ext.serve_forever()  # pull(result) → dispatch → 下一拉带回结果；断
 - **双向 RPC（server→client 主动调用）**：v1 用 pull 倒转 request/response，
   保持 wire 永远 client 主动。触发重估的条件：需要 daemon 主动取消在飞的
   外部调用（Stop 传播），或 provider 数量多到长连接成负担。
+- **result 搭 pull 便车（piggyback）**：弃选（2026-08-21）。过期 result 是
+  常态（Stop/超时），piggyback 下会误杀取活循环——失败域耦合；
+  且 daemon 队列本就吸收"交结果与下一拉"的缝隙，原子性无收益。
+- **ext_unregister RPC**：弃选。断开即回收（RAII）覆盖一切下线场景。
 - **注册持久化**：明确不做。重连重注册是契约的一部分。
 - **gate 一期**：拦截点要动 conductor 热路径，单独一批做（二期）。
 
