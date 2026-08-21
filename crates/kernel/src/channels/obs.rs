@@ -916,7 +916,10 @@ impl ObsTracker {
         match state.adapter.update_card(&state.status_msg_id, &card).await {
             Err(e) => {
                 warn!(error = %e, "obs settle card patch failed");
-                SettleOutcome::settled(None)
+                // 返回回复供调用方纯文本兜底（对齐文档承诺与 send_card
+                // 失败分支——此处曾 settled(None) 吞回复：live 卡永停
+                // "运行中"且回复整篇丢失，终审 #5 实锤的既有洞）。
+                SettleOutcome::unsettled(reply)
             }
             Ok(()) => {
                 // A silent in-place settle carries no notification — react

@@ -553,6 +553,9 @@ impl ChannelHub {
             // 心跳 PATCH 在飞标记（评审 nit #6）：上一次还没跑完就不再
             // 叠加 spawn，挂起的 PATCH 不会堆积任务。
             let refresh_in_flight = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            // 死亡清扫在飞标记（终审 #1：清扫给每张死卡做 PATCH/表情等
+            // 平台 IO，必须和心跳一样移出本循环——内联就是事故根机制）。
+            let sweep_in_flight = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let mut watchdog = tokio::time::interval(WATCHDOG_SWEEP_INTERVAL);
             watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut live_refresh = tokio::time::interval(LIVE_CARD_REFRESH_INTERVAL);
@@ -601,18 +604,32 @@ impl ChannelHub {
                         // 防无界缓慢增长——评审 should-fix #2）。
                         routing_cache
                             .retain(|_, (_, at)| at.elapsed() < ROUTING_CACHE_TTL);
-                        // 回复兜底已下沉到各会话 actor 的巡检（actor 死了
-                        // 但 Stopped 丢了会自己 Timeout 投递）；这里只剩
-                        // obs 卡片状态的全局清扫。判活谓词要同时看
-                        // conductor 镜像与 actor 队列/在飞（终审 #2）：
-                        // Stopped 已发出但还排在 actor 队列时绝不能把
-                        // 卡片错冻成 ⏰。Kernel gone = 关闭中。
-                        if let Some(k) = kernel.upgrade() {
-                            obs.sweep_dead_sessions(|sid| {
-                                k.is_session_running(sid) || !pool.is_quiet(sid)
-                            })
-                            .await;
+                        // 死亡清扫移出循环（终审 #1：每张死卡一次 PATCH+
+                        // 表情，内联执行 = 事故根机制复刻）。判活谓词同
+                        // 时看 conductor 镜像、actor 队列/在飞（终审 #2）
+                        // 与 actor 持有的回复 buffer（终审 #2 双重结算）：
+                        // 有投递状态的一律不是孤儿卡，归 actor 结算。
+                        if sweep_in_flight
+                            .swap(true, std::sync::atomic::Ordering::AcqRel)
+                        {
+                            continue;
                         }
+                        let guard = ResetOnDrop(Arc::clone(&sweep_in_flight));
+                        let obs = Arc::clone(&obs);
+                        let pool = pool.clone();
+                        let kernel = kernel.clone();
+                        tokio::spawn(async move {
+                            let _guard = guard;
+                            // Kernel gone = 关闭中，不扫。
+                            if let Some(k) = kernel.upgrade() {
+                                obs.sweep_dead_sessions(|sid| {
+                                    k.is_session_running(sid)
+                                        || !pool.is_quiet(sid)
+                                        || pool.has_buffer(sid)
+                                })
+                                .await;
+                            }
+                        });
                     }
                     Some((session_id, envelope)) = rx.recv() => {
                         // Forwarder liveness breadcrumb (trace level): the

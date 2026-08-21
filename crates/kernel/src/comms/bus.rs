@@ -159,6 +159,7 @@ where
                 filter: Arc::new(filter),
                 dropped: AtomicU64::new(0),
                 last_drop_alert_ms: AtomicU64::new(0),
+                last_alert_count: AtomicU64::new(0),
             },
         );
         if self.closed.load(Ordering::Relaxed) {
@@ -353,6 +354,8 @@ struct Listener<T, K> {
     dropped: AtomicU64,
     /// 上次丢件 ERROR 告警的时间戳（ms since epoch），用于限频。
     last_drop_alert_ms: AtomicU64,
+    /// 上次告警时的累计丢件数（算每次窗口的增量，值班不用自己 diff）。
+    last_alert_count: AtomicU64,
 }
 
 fn now_millis() -> u64 {
@@ -419,11 +422,14 @@ where
                         .is_ok()
                 {
                     // 丢件 = 数据丢失（回复投递事件也在其中）。ERROR 级、
-                    // 按 listener 限频聚合并带累计数：第一次丢和之后每分钟
-                    // 最多一条，洪峰不会刷日志，监控 grep ERROR 即可发现。
+                    // 按 listener 限频聚合并带累计数+本窗口增量（累计数
+                    // 永不清零，第三天的一条 blip 不该报出 16.9 万的
+                    // 总数误导值班——评审 #4）。
+                    let delta = n - l.last_alert_count.swap(n, Ordering::Relaxed);
                     tracing::error!(
                         listener = l.id,
                         dropped_total = n,
+                        dropped_since_last_alert = delta,
                         "EventBus listener queue full, dropping events (data loss — consumer is too slow)"
                     );
                 } else {

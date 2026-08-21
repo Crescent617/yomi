@@ -18,7 +18,7 @@
 //!   不减，也绝不丢在飞事件；
 //! - 全局信号量限制并发平台 IO 上限，避免洪峰期 API 洪泛。
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -83,10 +83,14 @@ struct DeliveryCtx {
 }
 
 /// 会话 → 投递 actor 的分派器。
+#[derive(Clone)]
 pub(crate) struct DeliveryPool {
     senders: Arc<DashMap<SessionId, mpsc::Sender<DeliveryJob>>>,
     /// 每 actor 的在飞任务计数（obs 死亡清扫判活谓词用）。
     inflight: Arc<DashMap<SessionId, Arc<AtomicU32>>>,
+    /// 每 actor 是否持有未投递的回复 buffer（同上：清扫对持有者让步，
+    /// 杜绝"先冻后成"的双重结算——终审 #2）。
+    buffers: Arc<DashMap<SessionId, Arc<AtomicBool>>>,
     ctx: Arc<DeliveryCtx>,
 }
 
@@ -132,6 +136,7 @@ impl DeliveryPool {
         Self {
             senders: Arc::new(DashMap::new()),
             inflight: Arc::new(DashMap::new()),
+            buffers: Arc::new(DashMap::new()),
             ctx: Arc::new(DeliveryCtx {
                 obs,
                 ask,
@@ -184,6 +189,14 @@ impl DeliveryPool {
         queue_empty && no_inflight
     }
 
+    /// 该会话的 actor 是否持有未投递的回复 buffer。清扫谓词对它让步：
+    /// 卡片+回复的结算权威是 actor，清扫只收真正的孤儿卡。
+    pub(crate) fn has_buffer(&self, session_id: &SessionId) -> bool {
+        self.buffers
+            .get(session_id)
+            .is_some_and(|f| f.load(Ordering::Relaxed))
+    }
+
     /// 派一个事件给该会话的 actor（不存在则创建）。同会话严格 FIFO。
     ///
     /// 永不在调用方阻塞：队满记 ERROR 丢件（此时系统已处于深度异常，
@@ -207,8 +220,25 @@ impl DeliveryPool {
                         .or_insert_with(|| Arc::new(AtomicU32::new(0)))
                         .clone();
                     let inflight = Arc::clone(&self.inflight);
+                    let buffer_flag = self
+                        .buffers
+                        .entry(session_id.clone())
+                        .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+                        .clone();
+                    let buffers = Arc::clone(&self.buffers);
                     tokio::spawn(async move {
-                        run_actor(sid, rx, own_tx, senders, inflight, counter, ctx).await;
+                        run_actor(
+                            sid,
+                            rx,
+                            own_tx,
+                            senders,
+                            inflight,
+                            counter,
+                            buffers,
+                            buffer_flag,
+                            ctx,
+                        )
+                        .await;
                     });
                     tx
                 }
@@ -257,6 +287,7 @@ impl Drop for InflightGuard {
 }
 
 /// 会话投递 actor 主循环。
+#[allow(clippy::too_many_arguments)] // actor 生命周期件清单，打包反而假抽象
 async fn run_actor(
     session_id: SessionId,
     mut rx: mpsc::Receiver<DeliveryJob>,
@@ -264,6 +295,8 @@ async fn run_actor(
     senders: Arc<DashMap<SessionId, mpsc::Sender<DeliveryJob>>>,
     inflight_map: Arc<DashMap<SessionId, Arc<AtomicU32>>>,
     own_inflight: Arc<AtomicU32>,
+    buffers_map: Arc<DashMap<SessionId, Arc<AtomicBool>>>,
+    own_buffers: Arc<AtomicBool>,
     ctx: Arc<DeliveryCtx>,
 ) {
     // 本 run 的回复缓冲：存在即"run 在飞"的标记（与原全局循环的
@@ -287,11 +320,14 @@ async fn run_actor(
                 if buffer.is_some() {
                     // agent 已死但 Stopped 丢失：兜底投递（kernel 消失的
                     // 误判由 agent_dead 探针内部挡住；瞬时失败时 buffer
-                    // 保留在原地，下个节拍继续重试）。
+                    // 保留在原地，下个节拍继续重试）。此守卫只查自身队
+                    // 列——上游分派循环无 IO（终审 #1 修复后），背压
+                    // 为毫秒级，Stopped 不可能"在上游堵着"（终审 #3）。
                     if (ctx.agent_dead)(&session_id) {
                         let _busy = InflightGuard::new(&own_inflight);
                         settle_deliver(&session_id, &mut buffer, SettleKind::Timeout, &ctx)
                             .await;
+                        own_buffers.store(buffer.is_some(), Ordering::Relaxed);
                     }
                 } else if last_job.elapsed() >= ctx.idle_reap {
                     // 空闲回收，四步防竞态：① 原子摘除登记（仅当登记的
@@ -305,6 +341,9 @@ async fn run_actor(
                     {
                         inflight_map.remove_if(&session_id, |_, c| {
                             Arc::ptr_eq(c, &own_inflight)
+                        });
+                        buffers_map.remove_if(&session_id, |_, f| {
+                            Arc::ptr_eq(f, &own_buffers)
                         });
                         rx.close();
                         while let Ok(job) = rx.try_recv() {
@@ -331,6 +370,7 @@ async fn run_actor(
                 last_job = std::time::Instant::now();
                 let _busy = InflightGuard::new(&own_inflight);
                 run_job(&session_id, job, &mut buffer, &ctx).await;
+                own_buffers.store(buffer.is_some(), Ordering::Relaxed);
             }
         }
     }
