@@ -316,7 +316,7 @@ async fn handle_event(
             let buf = buffer.get_or_insert_with(RunReplyBuffer::default);
             // run 的第一条 Running：把会话模型放上状态卡（每 run 一次
             // store 读；kernel 没了就跳过）。
-            let observability = channel_flags(&routing, ctx).is_some_and(|f| f.1);
+            let observability = channel_flags(&routing, ctx).is_some_and(|f| f.observability);
             if observability && !is_doc_comment && !ctx.obs.has_state(session_id) {
                 if let Some(k) = ctx.kernel.upgrade() {
                     let model = k.get_session_model(session_id).await;
@@ -378,11 +378,12 @@ async fn handle_event(
     }
 
     // 以下平台操作需要渠道实例；实例没了直接丢（与原循环的 continue 同义）。
-    let Some((adapter, observability, _tool_trace, _mid_run_split)) = channel_flags(&routing, ctx)
-    else {
+    // 以下平台操作需要渠道实例；实例没了直接丢（与原循环的 continue 同义）。
+    let Some(flags) = channel_flags(&routing, ctx) else {
         return;
     };
-    let supports_cards = adapter.supports_status_card();
+    let supports_cards = flags.adapter.supports_status_card();
+    let observability = flags.observability;
 
     // ── ask_user 决策卡 ──
     match &event {
@@ -391,7 +392,7 @@ async fn handle_event(
         }) if supports_cards && !is_doc_comment => {
             ctx.ask
                 .send_question_cards(
-                    &adapter,
+                    &flags.adapter,
                     &routing.external_chat_id,
                     routing.reply_msg_id.as_deref(),
                     session_id,
@@ -401,7 +402,7 @@ async fn handle_event(
                 .await;
         }
         Event::Agent(AgentEvent::AskUserAck { req_id }) => {
-            ctx.ask.close_cards(&adapter, req_id).await;
+            ctx.ask.close_cards(&flags.adapter, req_id).await;
         }
         _ => {}
     }
@@ -410,7 +411,7 @@ async fn handle_event(
     if observability && !is_doc_comment {
         ctx.obs
             .handle_event(
-                &adapter,
+                &flags.adapter,
                 session_id,
                 &routing.external_chat_id,
                 routing.reply_msg_id.as_deref(),
@@ -424,7 +425,7 @@ async fn handle_event(
         && (!supports_cards || !observability)
         && !is_doc_comment
     {
-        let _ = adapter.send_typing(&routing.external_chat_id).await;
+        let _ = flags.adapter.send_typing(&routing.external_chat_id).await;
     }
 }
 
@@ -468,8 +469,7 @@ async fn settle_deliver(
             return;
         }
     };
-    let Some((adapter, tool_trace, observability, mid_run_split)) = channel_flags(&routing, ctx)
-    else {
+    let Some(flags) = channel_flags(&routing, ctx) else {
         // 渠道实例已删（运维摘了 channel）：同样无处投递——必须留痕
         // （评审 must-fix a）。
         if buffer.take().is_some() {
@@ -491,12 +491,12 @@ async fn settle_deliver(
     });
     let reply_msg_id = deliver_reply(
         &ctx.obs,
-        &adapter,
+        &flags.adapter,
         &routing,
         buffer.take().map(RunReplyBuffer::into_reply),
-        tool_trace,
-        observability,
-        mid_run_split,
+        flags.tool_trace,
+        flags.observability,
+        flags.mid_run_split,
         session_id,
         kind,
         &ctx.kernel,
@@ -505,7 +505,7 @@ async fn settle_deliver(
     // 回复已送达（或已尽力）——订阅者拿到带链接的完成通知。
     notify_run_subscribers(
         &ctx.store,
-        &adapter,
+        &flags.adapter,
         &routing,
         reply_msg_id.as_deref(),
         status,
@@ -516,19 +516,24 @@ async fn settle_deliver(
     .await;
 }
 
-/// 取渠道实例的 (adapter, `observability`, `tool_trace`, `mid_run_split`)。
-fn channel_flags(
-    routing: &SessionRouting,
-    ctx: &DeliveryCtx,
-) -> Option<(Arc<dyn super::PlatformAdapter>, bool, bool, bool)> {
-    ctx.instances.get(&routing.channel_name).map(|i| {
-        (
-            Arc::clone(&i.adapter),
-            i.config.observability,
-            i.config.tool_trace,
-            i.config.mid_run_split,
-        )
-    })
+/// 渠道实例的投递相关配置（命名字段——曾发生 (adapter, bool, bool, bool)
+/// 元组在两个站点顺序不一致导致旗标绑反的发版级 bug，改结构体消灭这一类）。
+struct ChannelFlags {
+    adapter: Arc<dyn super::PlatformAdapter>,
+    observability: bool,
+    tool_trace: bool,
+    mid_run_split: bool,
+}
+
+fn channel_flags(routing: &SessionRouting, ctx: &DeliveryCtx) -> Option<ChannelFlags> {
+    ctx.instances
+        .get(&routing.channel_name)
+        .map(|i| ChannelFlags {
+            adapter: Arc::clone(&i.adapter),
+            observability: i.config.observability,
+            tool_trace: i.config.tool_trace,
+            mid_run_split: i.config.mid_run_split,
+        })
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -755,5 +760,41 @@ mod tests {
             );
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
+    }
+
+    /// 旗标绑反回归（发版终审 BLOCK 项）：`observability=false` +
+    /// `tool_trace=true` 的配置下，`channel_flags` 必须按名字映射——
+    /// 历史上此处按位置传递布尔导致两旗标互换（同 true 时无症状，
+    /// 配置不同才爆炸）。
+    #[tokio::test]
+    async fn channel_flags_maps_config_by_name() {
+        let db = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        run_migrations(&db).await.unwrap();
+        let store: Arc<dyn ChannelStore> = Arc::new(SqliteChannelStore::new(db));
+
+        let adapter = Arc::new(MockAdapter {
+            sent: tokio::sync::Mutex::new(Vec::new()),
+        });
+        let mut config = ChannelConfig {
+            name: "feishu".to_string(),
+            enabled: true,
+            ..ChannelConfig::default()
+        };
+        config.observability = false;
+        config.tool_trace = true;
+        let instances: Arc<DashMap<String, ChannelInstance>> = Arc::new(DashMap::new());
+        instances.insert(
+            "feishu".to_string(),
+            ChannelInstance::test_instance(config, adapter),
+        );
+
+        let pool = DeliveryPool::for_test(store, instances);
+        let flags = channel_flags(&test_routing(), &pool.ctx).expect("instance exists");
+        assert!(!flags.observability, "observability must map from config");
+        assert!(flags.tool_trace, "tool_trace must map from config");
     }
 }
