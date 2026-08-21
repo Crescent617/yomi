@@ -27,7 +27,11 @@ sink 复用现有 `subscribe_*`，channel 插件化等第三个渠道出现再�
 | Sink | 复用现有 `subscribe_*`（零改动） | 分类型过滤器 |
 | Channel | ❌ | 第三个渠道出现时 |
 
-## 协议（wire 新增 5 个方法，版本 → 28）
+## 协议（wire 新增 4 个方法，版本 → 28）
+
+方法面：`ext_register` / `ext_unregister` / `ext_pull` / `ext_route`。
+`ext_result` 不设独立方法——结果搭下一次 `ext_pull` 的便车（piggyback），
+provider 永远挂着一条 pull，没有"交结果与下一拉之间"的空窗。
 
 ### `ext_register`
 
@@ -51,30 +55,27 @@ sink 复用现有 `subscribe_*`，channel 插件化等第三个渠道出现再�
 ← {"ok": null}
 ```
 
-### `ext_pull`
+### `ext_pull`（结果 piggyback）
 
 ```json
-→ {"ext_pull": {"registration": "ext_01J...", "timeout_ms": 55000}}
-← {"ok": {"call_id": "c_8f2", "name": "stock.quote", "args": {"symbol": "600519"}}}
+→ {"ext_pull": {"registration": "ext_01J...", "timeout_ms": 55000,
+    "result": {"call_id": "c_8f2", "output": "1900.00", "is_error": false}}}
+← {"ok": {"call_id": "c_91a", "name": "stock.quote", "args": {"symbol": "600519"}}}
    {"ok": null}   // 超时（默认 55s，上限 60s）
 ```
 
+- 首次 pull 不带 `result`；之后每拉一次顺带交付上一单结果。
+- result 的 call_id 必须属于本连接本 registration（防串线）；
+  不认识的 call_id 整包报错（client bug，fail fast）。
 - per-registration 一个 `VecDeque` + `Notify`；有单即取、无单挂起（**挂起等，不空转**）。
 - 一个工作项只 pop 一次（恰好一次是结构保证）；同一 registration 允许并发 pull（多 worker）。
 - 工作项状态机：`queued → delivered → resolved / expired（60s 无响应）
   / cancelled（run 被 Stop）`；迟到的 result 丢弃并记事件。
 
-### `ext_result`
+### `ext_route`
 
 ```json
-→ {"ext_result": {"call_id": "c_8f2", "output": "1900.00", "is_error": false}}
-← {"ok": null}
-```
-
-### `route_message`
-
-```json
-→ {"route_message": {"source": "gitlab-ci", "key": "proj123/pipelines",
+→ {"ext_route": {"source": "gitlab-ci", "key": "proj123/pipelines",
     "target_hint": {"channel": "feishu", "chat_id": "oc_devops"}}}
 ← {"ok": {"session_id": "sess_...", "created": false}}
 ```
@@ -125,7 +126,7 @@ daemon 死则全组 SIGTERM）。supervised 与 external 注册契约一致—�
 
 ## 改动文件（预计）
 
-- `crates/kernel/src/wire/mod.rs`：5 个 ReqMethod + 版本 28
+- `crates/kernel/src/wire/mod.rs`：4 个 ReqMethod + 版本 28
 - `crates/kernel/src/extension/`（新）：registry、代理 Tool、pull 队列、
   连接 sweep 钩子
 - `crates/kernel/src/server/{dispatcher,connection}.rs`：方法分发 + conn drop sweep
@@ -148,7 +149,7 @@ ext.tool("stock.quote", "查询股票实时价格",
 def quote(args):
     return {"price": fetch(args["symbol"])}
 
-ext.serve_forever()  # pull → dispatch → result 循环；断开即退出
+ext.serve_forever()  # pull(result) → dispatch → 下一拉带回结果；断开即退出
 ```
 
 ## 狗食计划
