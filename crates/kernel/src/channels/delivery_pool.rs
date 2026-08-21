@@ -25,7 +25,7 @@ use tokio::sync::{mpsc, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
 
-use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolEvent};
+use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, ToolEvent};
 use crate::kernel::Kernel;
 use crate::types::SessionId;
 
@@ -55,8 +55,9 @@ const SELF_SETTLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs
 const WORKER_IDLE_REAP: std::time::Duration = std::time::Duration::from_mins(15);
 
 /// 派给会话 actor 的一条事件。`routing` 是分派时的快照（TTL 缓存，Arc
-/// 共享避免每事件克隆），仅用于门禁与 obs 展示；**投递路径
-/// （Deliver/兜底）总是新鲜重读**，回复锚点绝不用陈旧的。
+/// 共享避免每事件克隆），用于门禁、obs 展示以及 ask/typing 的目标定位
+/// （≤2s 陈旧可接受：锚点漂移慢）；**投递路径（Deliver/兜底）总是新鲜
+/// 重读**，回复锚点绝不用陈旧的（评审复核修正注释）。
 pub(crate) struct DeliveryJob {
     pub(crate) routing: Arc<SessionRouting>,
     pub(crate) event: Event,
@@ -95,19 +96,24 @@ impl DeliveryPool {
         kernel: std::sync::Weak<Kernel>,
         token: CancellationToken,
     ) -> Self {
+        let agent_dead = {
+            let kernel = kernel.clone();
+            move |sid: &SessionId| kernel.upgrade().is_some_and(|k| !k.is_session_running(sid))
+        };
         Self::with_timing(
             obs,
             ask,
             store,
             instances,
             kernel,
+            Box::new(agent_dead),
             token,
             SELF_SETTLE_INTERVAL,
             WORKER_IDLE_REAP,
         )
     }
 
-    /// 完整构造（节拍可配——测试用短节拍覆盖巡检/回收路径）。
+    /// 完整构造（判死探针与节拍可注入——测试用短节拍覆盖巡检/回收路径）。
     #[allow(clippy::too_many_arguments)] // 依赖注入构造器，参数即上下文
     fn with_timing(
         obs: Arc<ObsTracker>,
@@ -115,14 +121,11 @@ impl DeliveryPool {
         store: Arc<dyn ChannelStore>,
         instances: Arc<DashMap<String, ChannelInstance>>,
         kernel: std::sync::Weak<Kernel>,
+        agent_dead: Box<dyn Fn(&SessionId) -> bool + Send + Sync>,
         token: CancellationToken,
         settle_interval: std::time::Duration,
         idle_reap: std::time::Duration,
     ) -> Self {
-        let agent_dead = {
-            let kernel = kernel.clone();
-            move |sid: &SessionId| kernel.upgrade().is_some_and(|k| !k.is_session_running(sid))
-        };
         Self {
             senders: Arc::new(DashMap::new()),
             ctx: Arc::new(DeliveryCtx {
@@ -131,7 +134,7 @@ impl DeliveryPool {
                 store,
                 instances,
                 kernel,
-                agent_dead: Box::new(agent_dead),
+                agent_dead,
                 io_permits: Semaphore::new(MAX_CONCURRENT_IO),
                 token,
                 settle_interval,
@@ -140,29 +143,23 @@ impl DeliveryPool {
         }
     }
 
-    /// 测试构造：判死探针与节拍均可注入（覆盖巡检兜底路径）。
+    /// 测试构造：判死探针恒真 + 短节拍，覆盖巡检兜底路径。
     #[cfg(test)]
     fn for_test(
         store: Arc<dyn ChannelStore>,
         instances: Arc<DashMap<String, ChannelInstance>>,
-        agent_dead: Box<dyn Fn(&SessionId) -> bool + Send + Sync>,
-        settle_interval: std::time::Duration,
     ) -> Self {
-        Self {
-            senders: Arc::new(DashMap::new()),
-            ctx: Arc::new(DeliveryCtx {
-                obs: Arc::new(ObsTracker::new()),
-                ask: Arc::new(AskCardRegistry::new()),
-                store,
-                instances,
-                kernel: std::sync::Weak::new(),
-                agent_dead,
-                io_permits: Semaphore::new(MAX_CONCURRENT_IO),
-                token: CancellationToken::new(),
-                settle_interval,
-                idle_reap: std::time::Duration::from_hours(1),
-            }),
-        }
+        Self::with_timing(
+            Arc::new(ObsTracker::new()),
+            Arc::new(AskCardRegistry::new()),
+            store,
+            instances,
+            std::sync::Weak::new(),
+            Box::new(|_| true),
+            CancellationToken::new(),
+            std::time::Duration::from_millis(50),
+            std::time::Duration::from_hours(1),
+        )
     }
 
     /// 派一个事件给该会话的 actor（不存在则创建）。同会话严格 FIFO。
@@ -244,7 +241,8 @@ async fn run_actor(
                     // 误判由 agent_dead 探针内部挡住；瞬时失败时 buffer
                     // 保留在原地，下个节拍继续重试）。
                     if (ctx.agent_dead)(&session_id) {
-                        settle_deliver(&session_id, &mut buffer, Settle::Timeout, &ctx).await;
+                        settle_deliver(&session_id, &mut buffer, SettleKind::Timeout, &ctx)
+                            .await;
                     }
                 } else if last_job.elapsed() >= ctx.idle_reap {
                     // 空闲回收，四步防竞态：① 原子摘除登记（仅当登记的
@@ -375,7 +373,7 @@ async fn handle_event(
         state: AgentStatus::Stopped { reason },
     }) = &event
     {
-        settle_deliver(session_id, buffer, Settle::Stopped(reason), ctx).await;
+        settle_deliver(session_id, buffer, SettleKind::Stopped(reason), ctx).await;
         return;
     }
 
@@ -430,25 +428,20 @@ async fn handle_event(
     }
 }
 
-/// 终态投递方式（内部辅助：Stopped 用事件里的 reason，兜底用 Timeout）。
-enum Settle<'a> {
-    Stopped(&'a StopReason),
-    Timeout,
-}
-
 /// 投递回复 + 通知订阅者。Stopped 与巡检兜底共用。**总是新鲜重读
 /// 路由与渠道实例**——回复锚点可能在 run 中移动，陈旧锚点会把回复
 /// 挂到旧消息上。
 ///
 /// buffer 以 `&mut` 传入、**易错前置条件全部通过后才 take**（评审
 /// 复核）：瞬时 store 错误原样保留、下拍重试（旧全局 watchdog 本来
-/// 就给第二次机会）；路由/实例永久消失才取走丢弃。残余窗口：take
-/// 之后若 `deliver_reply`/`notify` 自身 panic，该回复仍会丢（有
-/// ERROR 日志）——彻底消灭它需要持久化 outbox，属另一个课题。
+/// 就给第二次机会）；路由/实例永久消失才取走丢弃（均有 warn）。
+/// 残余窗口：take 之后若 `deliver_reply`/`notify` 自身 panic，该回复
+/// 仍会丢（有 ERROR 日志）——彻底消灭它需要持久化 outbox，属另一个
+/// 课题。
 async fn settle_deliver(
     session_id: &SessionId,
     buffer: &mut Option<RunReplyBuffer>,
-    settle: Settle<'_>,
+    settle_kind: SettleKind<'_>,
     ctx: &DeliveryCtx,
 ) {
     let routing = match ctx.store.find_routing_by_session(session_id).await {
@@ -463,28 +456,39 @@ async fn settle_deliver(
             }
             return;
         }
-        // 瞬时 store 错误：buffer 原样保留，下个节拍重试。
-        Err(_) => return,
+        // 瞬时 store 错误：buffer 原样保留，下个节拍重试。告警（巡检
+        // 节拍天然限频 30s）——store 若持续损坏，这是唯一的可见性
+        // （评审 must-fix b）。
+        Err(e) => {
+            warn!(
+                session_id = %session_id.0,
+                error = %e,
+                "routing lookup failed, reply buffer kept for retry"
+            );
+            return;
+        }
     };
     let Some((adapter, tool_trace, observability, mid_run_split)) = channel_flags(&routing, ctx)
     else {
-        // 渠道实例已删：同样无处投递。
-        buffer.take();
+        // 渠道实例已删（运维摘了 channel）：同样无处投递——必须留痕
+        // （评审 must-fix a）。
+        if buffer.take().is_some() {
+            warn!(
+                session_id = %session_id.0,
+                channel = %routing.channel_name,
+                "channel instance gone, dropping undeliverable reply buffer"
+            );
+        }
         return;
     };
-    let (kind, status) = match settle {
-        Settle::Stopped(reason) => (
-            SettleKind::Stopped(reason),
-            RunEndStatus::from_stop_reason(reason),
-        ),
-        Settle::Timeout => (
-            // 兜底路径的已知取舍（评审 nit #5）：投递被保住，但若原 run
-            // 实为 Completed，订阅者状态会被记为 ❌/“session lost”。
-            // 瞬时重试场景下状态保真度让位于投递可靠性。
-            SettleKind::Timeout,
-            RunEndStatus::Failed,
-        ),
-    };
+    let (kind, status) = (settle_kind, {
+        match &settle_kind {
+            SettleKind::Stopped(r) => RunEndStatus::from_stop_reason(r),
+            // 兜底路径的已知取舍（评审 nit #5）：Timeout 时订阅者状态记为
+            // ❌/“session lost”——投递可靠性优先于状态保真度。
+            SettleKind::Timeout => RunEndStatus::Failed,
+        }
+    });
     let reply_msg_id = deliver_reply(
         &ctx.obs,
         &adapter,
@@ -535,6 +539,7 @@ mod tests {
     use crate::channels::hub::ChannelInstance;
     use crate::channels::store::SqliteChannelStore;
     use crate::channels::{ChannelConfig, ChannelError, ChannelEvent, PlatformAdapter};
+    use crate::event::StopReason;
     use crate::storage::migrations::run_migrations;
     use crate::types::ContentBlock;
     use sqlx::sqlite::SqlitePoolOptions;
@@ -708,13 +713,8 @@ mod tests {
             ChannelInstance::test_instance(config, adapter.clone()),
         );
 
-        // 判死探针恒 true（模拟 agent 已死），巡检节拍 50ms。
-        let pool = DeliveryPool::for_test(
-            store,
-            instances,
-            Box::new(|_| true),
-            std::time::Duration::from_millis(50),
-        );
+        // 判死探针恒真（模拟 agent 已死），巡检节拍 50ms。
+        let pool = DeliveryPool::for_test(store, instances);
 
         let routing = test_routing();
         // 只发 Running + End——Stopped“丢了”。

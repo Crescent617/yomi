@@ -191,6 +191,7 @@ where
     }
 
     /// 某个 listener 的累计丢件数（队列满被 drop 的事件总数）。诊断用。
+    #[cfg(test)]
     pub fn listener_dropped(&self, id: u64) -> Option<u64> {
         self.listeners
             .get(&id)
@@ -309,6 +310,7 @@ impl<T, K> PubSubSubscriber<T, K> {
     }
 
     /// 该订阅者在 bus 注册表中的 id（配合 [`PubSub::listener_dropped`] 做诊断）。
+    #[cfg(test)]
     pub fn id(&self) -> u64 {
         self.id
     }
@@ -425,7 +427,9 @@ where
                         "EventBus listener queue full, dropping events (data loss — consumer is too slow)"
                     );
                 } else {
-                    tracing::debug!(
+                    // trace 级：事故期若有人开 debug，debug 级会重现
+                    // 16.9 万行日志洪水（评审简洁性发现）。
+                    tracing::trace!(
                         listener = l.id,
                         dropped_total = n,
                         "EventBus event dropped (alert suppressed by rate limit)"

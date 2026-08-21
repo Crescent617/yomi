@@ -9,11 +9,11 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
+use super::delivery_pool::{DeliveryJob, DeliveryPool};
 use super::hub_context::{
     advance_history_cursor, prepare_trigger, record_passive_receipt, TriggerKind,
 };
 use super::hub_deliver::send_command_reply;
-use super::hub_delivery::{DeliveryJob, DeliveryPool};
 use super::hub_gate::{gate_message, send_gate_reaction, Gate};
 use super::hub_handlers::handle_incoming_message;
 use super::hub_routing::{reply_anchor, resolve_reply_in_thread};
