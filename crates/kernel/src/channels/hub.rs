@@ -43,6 +43,16 @@ const FORWARDER_QUEUE_CAPACITY: usize = 4096;
 /// stale entries are dropped on the watchdog tick.
 const ROUTING_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// 心跳 PATCH 在飞标记的复位 guard：panic/取消等任何退出路径都不会
+/// 把标记卡在 true 让心跳永久停摆（评审复核 #6）。
+struct ResetOnDrop(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for ResetOnDrop {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 /// Heartbeat interval for refreshing live status cards. Long tool calls
 /// emit no events, so event-driven PATCHes stop and the card looks frozen
 /// (elapsed stuck at the last patch) — this keeps it visibly alive.
@@ -576,11 +586,11 @@ impl ChannelHub {
                         {
                             continue;
                         }
+                        let guard = ResetOnDrop(Arc::clone(&refresh_in_flight));
                         let obs = Arc::clone(&obs);
-                        let flag = Arc::clone(&refresh_in_flight);
                         tokio::spawn(async move {
+                            let _guard = guard;
                             obs.refresh_stale(LIVE_CARD_REFRESH_INTERVAL).await;
-                            flag.store(false, std::sync::atomic::Ordering::Release);
                         });
                     }
                     _ = watchdog.tick(), if rx.is_empty() => {

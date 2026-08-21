@@ -23,7 +23,7 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use tokio::sync::{mpsc, Semaphore};
 use tokio_util::sync::CancellationToken;
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolEvent};
 use crate::kernel::Kernel;
@@ -241,11 +241,10 @@ async fn run_actor(
                 }
                 if buffer.is_some() {
                     // agent 已死但 Stopped 丢失：兜底投递（kernel 消失的
-                    // 误判由 agent_dead 探针内部挡住）。
+                    // 误判由 agent_dead 探针内部挡住；瞬时失败时 buffer
+                    // 保留在原地，下个节拍继续重试）。
                     if (ctx.agent_dead)(&session_id) {
-                        let taken = buffer.take().expect("buffer checked");
-                        // 瞬时失败会还回 buffer，下个节拍继续重试。
-                        buffer = settle_deliver(&session_id, Some(taken), Settle::Timeout, &ctx).await;
+                        settle_deliver(&session_id, &mut buffer, Settle::Timeout, &ctx).await;
                     }
                 } else if last_job.elapsed() >= ctx.idle_reap {
                     // 空闲回收，四步防竞态：① 原子摘除登记（仅当登记的
@@ -370,14 +369,13 @@ async fn handle_event(
         _ => {}
     }
 
-    // ── run 结束：取走 buffer 投递（投递路径新鲜重读路由；瞬时失败
-    // 会把 buffer 还回来，等巡检节拍重试）──
+    // ── run 结束：取走 buffer 投递（投递路径新鲜重读路由；易错前置
+    // 未过时 buffer 原样保留，等巡检节拍重试）──
     if let Event::Agent(AgentEvent::Lifecycle {
         state: AgentStatus::Stopped { reason },
     }) = &event
     {
-        let taken = buffer.take();
-        *buffer = settle_deliver(session_id, taken, Settle::Stopped(reason), ctx).await;
+        settle_deliver(session_id, buffer, Settle::Stopped(reason), ctx).await;
         return;
     }
 
@@ -442,24 +440,38 @@ enum Settle<'a> {
 /// 路由与渠道实例**——回复锚点可能在 run 中移动，陈旧锚点会把回复
 /// 挂到旧消息上。
 ///
-/// 返回 `Some(buf)` 表示**瞬时失败**（store 读错误）：调用方应把
-/// buffer 放回去，等下一个巡检节拍重试——旧全局 watchdog 本来就给
-/// 这种情况第二次机会，丢回复必须是永久失败（路由/实例已不存在）
-/// 的专利。
+/// buffer 以 `&mut` 传入、**易错前置条件全部通过后才 take**（评审
+/// 复核）：瞬时 store 错误原样保留、下拍重试（旧全局 watchdog 本来
+/// 就给第二次机会）；路由/实例永久消失才取走丢弃。残余窗口：take
+/// 之后若 `deliver_reply`/`notify` 自身 panic，该回复仍会丢（有
+/// ERROR 日志）——彻底消灭它需要持久化 outbox，属另一个课题。
 async fn settle_deliver(
     session_id: &SessionId,
-    buf: Option<RunReplyBuffer>,
+    buffer: &mut Option<RunReplyBuffer>,
     settle: Settle<'_>,
     ctx: &DeliveryCtx,
-) -> Option<RunReplyBuffer> {
+) {
     let routing = match ctx.store.find_routing_by_session(session_id).await {
         Ok(Some(r)) => r,
         // 路由被 gc：回复无处投递（与原 watchdog 的丢 buffer 同义）。
-        Ok(None) => return None,
-        // 瞬时 store 错误：buffer 交还，下个节拍重试。
-        Err(_) => return buf,
+        Ok(None) => {
+            if buffer.take().is_some() {
+                warn!(
+                    session_id = %session_id.0,
+                    "routing gone, dropping undeliverable reply buffer"
+                );
+            }
+            return;
+        }
+        // 瞬时 store 错误：buffer 原样保留，下个节拍重试。
+        Err(_) => return,
     };
-    let (adapter, tool_trace, observability, mid_run_split) = channel_flags(&routing, ctx)?;
+    let Some((adapter, tool_trace, observability, mid_run_split)) = channel_flags(&routing, ctx)
+    else {
+        // 渠道实例已删：同样无处投递。
+        buffer.take();
+        return;
+    };
     let (kind, status) = match settle {
         Settle::Stopped(reason) => (
             SettleKind::Stopped(reason),
@@ -477,7 +489,7 @@ async fn settle_deliver(
         &ctx.obs,
         &adapter,
         &routing,
-        buf.map(RunReplyBuffer::into_reply),
+        buffer.take().map(RunReplyBuffer::into_reply),
         tool_trace,
         observability,
         mid_run_split,
@@ -498,7 +510,6 @@ async fn settle_deliver(
         &ctx.obs,
     )
     .await;
-    None
 }
 
 /// 取渠道实例的 (adapter, `observability`, `tool_trace`, `mid_run_split`)。
