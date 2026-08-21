@@ -106,10 +106,13 @@ impl ExtensionRegistry {
                 def.name
             ));
         }
-        if self.by_name.contains_key(&def.name) {
-            return Err(format!("extension tool '{}' already registered", def.name));
-        }
+        // 原子查插：check-then-insert 的 TOCTOU 会让两个连接同时注册
+        // 同名成功。entry 占坑即所有权重音。
         let id = format!("ext_{}", ulid::Ulid::new().to_string().to_lowercase());
+        let dashmap::mapref::entry::Entry::Vacant(slot) = self.by_name.entry(def.name.clone())
+        else {
+            return Err(format!("extension tool '{}' already registered", def.name));
+        };
         let reg = Arc::new(Registration {
             conn_id: conn_id.to_string(),
             def,
@@ -117,7 +120,7 @@ impl ExtensionRegistry {
             notify: Notify::new(),
             pull_pending: AtomicBool::new(false),
         });
-        self.by_name.insert(reg.def.name.clone(), id.clone());
+        slot.insert(id.clone());
         self.regs.insert(id.clone(), reg);
         info!(registration = %id, tool = %self.regs.get(&id).unwrap().def.name, "extension tool registered");
         Ok(id)

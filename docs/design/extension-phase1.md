@@ -46,7 +46,9 @@ sink 复用现有 `subscribe_*`，channel 插件化等第三个渠道出现再�
 - `kind: "tool"` 必填；`level` 缺省 `caution`（走审批）。
 - 命名约束（provider 最紧交集）：字母开头，仅 `[a-zA-Z0-9_-]`——
   OpenAI 函数名不允许点号（stock.quote 会被 400 拒绝，2026-08-21 实测）。
-- name 全局唯一（含内建工具）；撞名报错。tool_blocklist 对 ext 工具同样生效。
+- 命名冲突三种结局：ext 撞 ext → 第二个注册报错（DashMap entry 原子
+  查插防 TOCTOU，先注册者拥有，断开后方可重注册）；ext 撞内建 →
+  ext 让位（spawn 合并时 warn 跳过）；命中 tool_blocklist → spawn 时不进表。
 - 注册进 ToolRegistry 的是一个**代理 Tool**：desc/schema 用登记的，
   exec 时把调用派给登记连接的队列。
 
