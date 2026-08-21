@@ -325,8 +325,12 @@ async fn run_actor(
                     // 为毫秒级，Stopped 不可能"在上游堵着"（终审 #3）。
                     if (ctx.agent_dead)(&session_id) {
                         let _busy = InflightGuard::new(&own_inflight);
-                        settle_deliver(&session_id, &mut buffer, SettleKind::Timeout, &ctx)
-                            .await;
+                        guarded(
+                            &session_id,
+                            "settle",
+                            settle_deliver(&session_id, &mut buffer, SettleKind::Timeout, &ctx),
+                        )
+                        .await;
                         own_buffers.store(buffer.is_some(), Ordering::Relaxed);
                     }
                 } else if last_job.elapsed() >= ctx.idle_reap {
@@ -358,8 +362,12 @@ async fn run_actor(
                                 session_id = %session_id.0,
                                 "reap drain left a live buffer, settling before exit"
                             );
-                            settle_deliver(&session_id, &mut buffer, SettleKind::Timeout, &ctx)
-                                .await;
+                            guarded(
+                                &session_id,
+                                "settle",
+                                settle_deliver(&session_id, &mut buffer, SettleKind::Timeout, &ctx),
+                            )
+                            .await;
                         }
                         break;
                     }
@@ -385,15 +393,27 @@ async fn run_job(
     buffer: &mut Option<RunReplyBuffer>,
     ctx: &Arc<DeliveryCtx>,
 ) {
+    guarded(
+        session_id,
+        "handle_event",
+        handle_event(session_id, job, buffer, ctx),
+    )
+    .await;
+}
+
+/// 投递操作的统一 panic 安全网（复审残余项）：事件处理、巡检结算、
+/// 回收排空全部经此——panic 只留 ERROR，不杀 actor、不卡死标记。
+async fn guarded<F>(session_id: &SessionId, op: &'static str, fut: F)
+where
+    F: std::future::Future<Output = ()>,
+{
     use futures::FutureExt as _;
-    let result = std::panic::AssertUnwindSafe(handle_event(session_id, job, buffer, ctx))
-        .catch_unwind()
-        .await;
-    if let Err(panic) = result {
+    if let Err(panic) = std::panic::AssertUnwindSafe(fut).catch_unwind().await {
         error!(
             session_id = %session_id.0,
             panic = ?panic,
-            "delivery actor: event handling panicked, actor continues"
+            op,
+            "delivery actor: operation panicked, actor continues"
         );
     }
 }
