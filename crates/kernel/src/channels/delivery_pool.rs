@@ -378,7 +378,6 @@ async fn handle_event(
     }
 
     // 以下平台操作需要渠道实例；实例没了直接丢（与原循环的 continue 同义）。
-    // 以下平台操作需要渠道实例；实例没了直接丢（与原循环的 continue 同义）。
     let Some(flags) = channel_flags(&routing, ctx) else {
         return;
     };
