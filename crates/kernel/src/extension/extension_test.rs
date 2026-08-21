@@ -142,3 +142,50 @@ async fn route_memory_roundtrip() {
     registry.route_set("gitlab-ci", "p1", sid.clone());
     assert_eq!(registry.route_get("gitlab-ci", "p1"), Some(sid));
 }
+
+/// 代理 Tool 的 exec：调派 → 回执映射为 ToolOutput（成功/错误/断开三路）。
+#[tokio::test]
+async fn ext_tool_exec_maps_outcomes() {
+    use crate::tools::ToolExecCtx;
+
+    let registry = Arc::new(ExtensionRegistry::new());
+    let reg_id = registry.register_tool("conn_a", def("quote")).unwrap();
+    let tool = Arc::new(registry.tool_proxies().into_iter().next().unwrap());
+
+    // 起一个在飞的 exec（future 惰性，必须 spawn 驱动；tc 取字面量保 'static）。
+    let spawn_call = |tc: &'static str| {
+        let tool = Arc::clone(&tool);
+        let ctx = ToolExecCtx::new(tc, "/tmp", "sess_x");
+        tokio::spawn(async move { tool.exec(serde_json::json!({}), ctx).await })
+    };
+
+    // 成功回执 → text
+    let call = spawn_call("tc_1");
+    let work = registry.pull("conn_a", &reg_id).await.unwrap().unwrap();
+    registry
+        .submit_result("conn_a", &work.call_id, "42".to_string(), false)
+        .unwrap();
+    let out = call.await.unwrap().unwrap();
+    let text = format!("{:?}", out.contents);
+    assert!(text.contains("42"), "{text}");
+    assert!(!out.is_error);
+
+    // is_error 回执（串线 conn → 错误回执送回调用方）→ error output
+    let call = spawn_call("tc_2");
+    let work = registry.pull("conn_a", &reg_id).await.unwrap().unwrap();
+    registry
+        .submit_result("conn_b", &work.call_id, "boom".to_string(), true)
+        .unwrap_err();
+    let out = call.await.unwrap().unwrap();
+    let text = format!("{:?}", out.contents);
+    assert!(text.contains("wrong connection"), "{text}");
+    assert!(out.is_error);
+
+    // provider 断开 → error output
+    let call = spawn_call("tc_3");
+    registry.sweep("conn_a");
+    let out = call.await.unwrap().unwrap();
+    let text = format!("{:?}", out.contents);
+    assert!(text.contains("disconnected"), "{text}");
+    assert!(out.is_error);
+}
