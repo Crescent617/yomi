@@ -170,6 +170,13 @@ struct ObsCardState {
     /// Consecutive heartbeat-patch failures; reaching
     /// [`PATCH_FAILURE_LIMIT`] trips `send_failed` for the rest of the run.
     patch_failures: u32,
+    /// Serializes every PATCH targeting this card (throttled event updates,
+    /// heartbeat refreshes, and the terminal settle/freeze). Senders
+    /// re-validate inside the lock and render fresh inside the lock, so a
+    /// heartbeat PATCH can never land *after* the settle morph and paint a
+    /// stale "running" render over the reply card — the settle always
+    /// wins, and a late heartbeat sees the state gone and skips (M2).
+    patch_lock: Arc<tokio::sync::Mutex<()>>,
     /// Standalone-compact card (`/compact` outside a run): materialized on
     /// `Compacting { active: true }` when no run state exists, settled by
     /// `Compacted` instead of the run's `Stopped`.
@@ -197,6 +204,7 @@ impl ObsCardState {
             last_patch_at: now,
             send_failed: false,
             patch_failures: 0,
+            patch_lock: Arc::new(tokio::sync::Mutex::new(())),
             compact_only: false,
         }
     }
@@ -717,6 +725,13 @@ impl ObsTracker {
             .map(|e| e.key().clone())
             .collect();
         for sid in dead {
+            // 收集到结算之间会话可能已复活（新 run 复用了孤儿卡）——
+            // 逐卡复核判活，别把活卡冻成 ⏰（S1：收集与逐卡结算的
+            // TOCTOU 收口；settle 在飞与新 run materialize 的残余窗口
+            // 为 actor 化前既有语义，由 is_quiet 谓词收窄）。
+            if is_alive(&sid) {
+                continue;
+            }
             let _ = self.settle_card(&sid, &Settle::Timeout, None).await;
         }
     }
@@ -768,6 +783,18 @@ impl ObsTracker {
     /// Mutate a running card's state and PATCH if outside the throttle window.
     /// Before the card is materialized this is memory-only.
     async fn update_running(&self, session_id: &SessionId, mutate: impl FnOnce(&mut ObsCardState)) {
+        // 所有落在本卡上的 PATCH 都经 patch_lock 串行（M2）：与心跳、
+        // 与 settle 的终态 PATCH 互斥——锁内渲染锁内发，本路径永远是
+        // 最新内容，也绝不会盖过已结算的终态卡（settle 摘除状态后本
+        // 路径在锁内看到 `get_mut` 为空即跳过重渲染）。
+        let Some(lock) = self
+            .states
+            .get(session_id)
+            .map(|e| Arc::clone(&e.patch_lock))
+        else {
+            return;
+        };
+        let _guard = lock.lock().await;
         let patch = if let Some(mut entry) = self.states.get_mut(session_id) {
             let s = entry.value_mut();
             mutate(s);
@@ -796,43 +823,51 @@ impl ObsTracker {
     /// patch. Cheap state scan per call; only stale cards get patched.
     pub(crate) async fn refresh_stale(&self, max_age: Duration) {
         // Collect first: never hold a DashMap shard lock across an await.
-        let mut patches = Vec::new();
-        for mut entry in self.states.iter_mut() {
-            let sid = entry.key().clone();
-            let s = entry.value_mut();
+        let mut candidates = Vec::new();
+        for entry in &self.states {
+            let s = entry.value();
             if s.status_msg_id.is_empty() || s.send_failed {
                 continue;
             }
             if s.last_patch_at.elapsed() < max_age {
                 continue;
             }
-            s.last_patch_at = Instant::now();
-            patches.push((
-                sid.clone(),
-                render_running(s, &sid),
+            candidates.push((
+                entry.key().clone(),
                 s.status_msg_id.clone(),
-                Arc::clone(&s.adapter),
                 s.last_patch_at,
+                Arc::clone(&s.patch_lock),
             ));
         }
-        for (sid, card, msg_id, adapter, marked_at) in patches {
-            // 发送前再校验（发版终审 must-fix）：心跳在独立任务里与
-            // 每会话 actor 并发——收集到发送之间会话可能已结算（卡已
-            // morph 成回复）或刚被事件路径 PATCH 过；把过期"运行中"
-            // 渲染盖到已结算的回复卡上不可自愈（obs 状态已删，再无人
-            // 重 PATCH），回复会永久不可见。状态消失、卡片换代
-            // （status_msg_id 变）或期间有更新（last_patch_at 变）
-            // 一律跳过；残余窗口收窄到单次 PATCH 在飞时长（亚秒）。
-            let still_valid = self
-                .states
-                .get(&sid)
-                .is_some_and(|s| s.status_msg_id == msg_id && s.last_patch_at == marked_at);
-            if !still_valid {
+        for (sid, msg_id, marked_at, lock) in candidates {
+            // 心跳在独立任务里与每会话 actor 并发——候选到发送之间会话
+            // 可能已结算（卡已 morph 成回复）或刚被事件路径 PATCH 过；
+            // 把过期"运行中"渲染盖到已结算的回复卡上不可自愈（obs 状态
+            // 已删，再无人重 PATCH），回复会永久不可见。因此本卡的 PATCH
+            // 全部经 patch_lock 串行（M2）：锁内重校验（状态消失、卡片
+            // 换代 status_msg_id 变、期间有更新 last_patch_at 变一律跳
+            // 过）+ 锁内新鲜渲染 + 锁内发送——settle 若先到，重校验即
+            // 拦截；settle 若后到，它等锁后覆盖本渲染，终态必赢。
+            let _guard = lock.lock().await;
+            let prepared = if let Some(mut entry) = self.states.get_mut(&sid) {
+                let s = entry.value_mut();
+                if s.status_msg_id != msg_id || s.last_patch_at != marked_at || s.send_failed {
+                    None
+                } else {
+                    s.last_patch_at = Instant::now();
+                    Some((render_running(s, &sid), Arc::clone(&s.adapter)))
+                }
+            } else {
+                None
+            };
+            let Some((card, adapter)) = prepared else {
                 continue;
-            }
+            };
             let ok = send_card_patch(&*adapter, &msg_id, &card).await;
             let Some(mut entry) = self.states.get_mut(&sid) else {
-                continue; // settled while the PATCH was in flight
+                // 防御性分支：当前锁序下不可达（摘除 state 必先拿本
+                // 锁），保留以抵御未来锁序变更（三审 nit）。
+                continue;
             };
             let s = entry.value_mut();
             if ok {
@@ -879,6 +914,18 @@ impl ObsTracker {
         // sessions whose real `Stopped` never arrives).
         let mid_run_posts = self.has_mid_run_posts(session_id);
         self.receipts.remove(session_id);
+        // 与心跳/节流 PATCH 同锁（M2）：锁内摘除状态——在飞的心跳
+        // PATCH 随后拿锁时重校验见状态已删即放弃，本函数发出的终态
+        // 渲染永远是最后落在卡上的内容（旧顺序：校验→发送→结算，在飞
+        // PATCH 可晚于 morph 落地，过期"运行中"盖回复卡且无自愈）。
+        let Some(lock) = self
+            .states
+            .get(session_id)
+            .map(|e| Arc::clone(&e.patch_lock))
+        else {
+            return SettleOutcome::unsettled(reply);
+        };
+        let _guard = lock.lock().await;
         let Some((_, state)) = self.states.remove(session_id) else {
             return SettleOutcome::unsettled(reply);
         };
@@ -913,7 +960,7 @@ impl ObsTracker {
             }
             return SettleOutcome::settled(None);
         }
-        match state.adapter.update_card(&state.status_msg_id, &card).await {
+        let outcome = match state.adapter.update_card(&state.status_msg_id, &card).await {
             Err(e) => {
                 warn!(error = %e, "obs settle card patch failed");
                 // 返回回复供调用方纯文本兜底（对齐文档承诺与 send_card
@@ -921,16 +968,18 @@ impl ObsTracker {
                 // "运行中"且回复整篇丢失，终审 #5 实锤的既有洞）。
                 SettleOutcome::unsettled(reply)
             }
-            Ok(()) => {
-                // A silent in-place settle carries no notification — react
-                // on the latest user message as the completion signal
-                // instead (skipped when the reply lands as a new message).
-                if !mid_run_posts {
-                    self.send_settle_reaction(session_id, &state, settle).await;
-                }
-                SettleOutcome::settled(Some(state.status_msg_id.clone()))
-            }
+            Ok(()) => SettleOutcome::settled(Some(state.status_msg_id.clone())),
+        };
+        // 终态 PATCH 已落地即释锁（复审 nit）：reaction 作用于用户消
+        // 息、与卡 PATCH 无序依赖，不再占锁多等两次平台 RTT。
+        drop(_guard);
+        // A silent in-place settle carries no notification — react
+        // on the latest user message as the completion signal
+        // instead (skipped when the reply lands as a new message).
+        if outcome.message_id.is_some() && !mid_run_posts {
+            self.send_settle_reaction(session_id, &state, settle).await;
         }
+        outcome
     }
 
     /// Freeze the status card in place as a terminal receipt and clear
@@ -945,6 +994,15 @@ impl ObsTracker {
     /// it too; duplication in this rare edge is preferred over loss.
     async fn freeze_card(&self, session_id: &SessionId, settle: &Settle, keep_trace: bool) {
         self.receipts.remove(session_id);
+        // 同 settle_card 的 M2 锁序：锁内摘除，在飞 PATCH 不得盖终态。
+        let Some(lock) = self
+            .states
+            .get(session_id)
+            .map(|e| Arc::clone(&e.patch_lock))
+        else {
+            return;
+        };
+        let _guard = lock.lock().await;
         let Some((_, state)) = self.states.remove(session_id) else {
             return;
         };
@@ -978,6 +1036,15 @@ impl ObsTracker {
     /// followed by `/stop` then morphs instead of splitting, visually
     /// identical since the new card anchors below the trigger anyway.)
     async fn settle_compact(&self, session_id: &SessionId, summary: &str, is_error: bool) {
+        // 同 settle_card 的 M2 锁序：锁内摘除，在飞 PATCH 不得盖终态。
+        let Some(lock) = self
+            .states
+            .get(session_id)
+            .map(|e| Arc::clone(&e.patch_lock))
+        else {
+            return;
+        };
+        let _guard = lock.lock().await;
         let Some((_, state)) = self.states.remove(session_id) else {
             return;
         };

@@ -13,9 +13,10 @@
 //!   巡检节拍兜底投递残余回复（替代旧的全局 watchdog 回复扫描，
 //!   延迟 60s → 30s）；判死前确认自身队列为空，杜绝与在队
 //!   `Stopped` 的双重结算；
-//! - buffer 为空且长期闲置的 worker 走四步防竞态退出（摘除登记 →
-//!   close 通道 → 排空余量 → 退出），僵尸会话的 worker 不会只增
-//!   不减，也绝不丢在飞事件；
+//! - buffer 为空且长期闲置的 worker 走三步防竞态退出（摘除登记 →
+//!   close 通道 → 余量**重投**给新 actor），僵尸会话的 worker 不会
+//!   只增不减，也绝不丢在飞事件（M1：重投而非就地执行，旧 actor
+//!   不产生状态，杜绝同一 run 被两个 actor 劈开结算）；
 //! - 全局信号量限制并发平台 IO 上限，避免洪峰期 API 洪泛。
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -82,15 +83,23 @@ struct DeliveryCtx {
     idle_reap: std::time::Duration,
 }
 
+/// 每会话 actor 登记：发送端与对外旗标一体。原 senders/inflight/
+/// buffers 三表需锁步维护，回收窗口内新 actor 会复用旧旗标 Arc、随后
+/// 被旧 actor 的摘除误伤（旗标entry消失、旗标失真）——单表单 entry
+/// 原子建删，从结构上消灭这类错位（评审复核）。
+struct ActorHandle {
+    tx: mpsc::Sender<DeliveryJob>,
+    /// 在飞任务计数（obs 死亡清扫判活谓词用）。
+    inflight: Arc<AtomicU32>,
+    /// 是否持有未投递的回复 buffer（清扫对持有者让步，杜绝"先冻后成"
+    /// 的双重结算——终审 #2）。
+    has_buffer: Arc<AtomicBool>,
+}
+
 /// 会话 → 投递 actor 的分派器。
 #[derive(Clone)]
 pub(crate) struct DeliveryPool {
-    senders: Arc<DashMap<SessionId, mpsc::Sender<DeliveryJob>>>,
-    /// 每 actor 的在飞任务计数（obs 死亡清扫判活谓词用）。
-    inflight: Arc<DashMap<SessionId, Arc<AtomicU32>>>,
-    /// 每 actor 是否持有未投递的回复 buffer（同上：清扫对持有者让步，
-    /// 杜绝"先冻后成"的双重结算——终审 #2）。
-    buffers: Arc<DashMap<SessionId, Arc<AtomicBool>>>,
+    actors: Arc<DashMap<SessionId, ActorHandle>>,
     ctx: Arc<DeliveryCtx>,
 }
 
@@ -134,9 +143,7 @@ impl DeliveryPool {
         idle_reap: std::time::Duration,
     ) -> Self {
         Self {
-            senders: Arc::new(DashMap::new()),
-            inflight: Arc::new(DashMap::new()),
-            buffers: Arc::new(DashMap::new()),
+            actors: Arc::new(DashMap::new()),
             ctx: Arc::new(DeliveryCtx {
                 obs,
                 ask,
@@ -178,23 +185,17 @@ impl DeliveryPool {
     /// 里（IO 信号量后）或正在投递中——此时把卡片错冻成 ⏰ 会产生
     /// "既丢又成"的矛盾 UX。
     pub(crate) fn is_quiet(&self, session_id: &SessionId) -> bool {
-        let queue_empty = self
-            .senders
-            .get(session_id)
-            .is_none_or(|tx| tx.capacity() == tx.max_capacity());
-        let no_inflight = self
-            .inflight
-            .get(session_id)
-            .is_none_or(|c| c.load(Ordering::Relaxed) == 0);
-        queue_empty && no_inflight
+        self.actors.get(session_id).is_none_or(|h| {
+            h.tx.capacity() == h.tx.max_capacity() && h.inflight.load(Ordering::Relaxed) == 0
+        })
     }
 
     /// 该会话的 actor 是否持有未投递的回复 buffer。清扫谓词对它让步：
     /// 卡片+回复的结算权威是 actor，清扫只收真正的孤儿卡。
     pub(crate) fn has_buffer(&self, session_id: &SessionId) -> bool {
-        self.buffers
+        self.actors
             .get(session_id)
-            .is_some_and(|f| f.load(Ordering::Relaxed))
+            .is_some_and(|h| h.has_buffer.load(Ordering::Relaxed))
     }
 
     /// 派一个事件给该会话的 actor（不存在则创建）。同会话严格 FIFO。
@@ -203,71 +204,64 @@ impl DeliveryPool {
     /// 上游 bus 的丢件告警必然先触发）；actor 恰好死亡/退出则摘除
     /// 登记、重建并重投一次。
     pub(crate) fn dispatch(&self, session_id: &SessionId, job: DeliveryJob) {
-        let mut job = Some(job);
-        for _ in 0..2 {
-            let sender = match self.senders.entry(session_id.clone()) {
-                dashmap::mapref::entry::Entry::Occupied(e) => e.get().clone(),
-                dashmap::mapref::entry::Entry::Vacant(e) => {
-                    let (tx, rx) = mpsc::channel::<DeliveryJob>(SESSION_EVENT_CAPACITY);
-                    e.insert(tx.clone());
-                    let ctx = Arc::clone(&self.ctx);
-                    let senders = Arc::clone(&self.senders);
-                    let sid = session_id.clone();
-                    let own_tx = tx.clone();
-                    let counter = self
-                        .inflight
-                        .entry(session_id.clone())
-                        .or_insert_with(|| Arc::new(AtomicU32::new(0)))
-                        .clone();
-                    let inflight = Arc::clone(&self.inflight);
-                    let buffer_flag = self
-                        .buffers
-                        .entry(session_id.clone())
-                        .or_insert_with(|| Arc::new(AtomicBool::new(false)))
-                        .clone();
-                    let buffers = Arc::clone(&self.buffers);
-                    tokio::spawn(async move {
-                        run_actor(
-                            sid,
-                            rx,
-                            own_tx,
-                            senders,
-                            inflight,
-                            counter,
-                            buffers,
-                            buffer_flag,
-                            ctx,
-                        )
-                        .await;
-                    });
-                    tx
-                }
-            };
-            match sender.try_send(job.take().expect("job consumed on retry")) {
-                Ok(()) => return,
-                Err(mpsc::error::TrySendError::Full(returned)) => {
-                    error!(
-                        session_id = %session_id.0,
-                        "session delivery queue full, dropping event (deep overload)"
-                    );
-                    let _ = returned;
-                    return;
-                }
-                Err(mpsc::error::TrySendError::Closed(returned)) => {
-                    // actor 已退出（空闲回收/panic）：摘除死登记后重建重投。
-                    // 必须确认登记的还是**这条**死通道——并发 dispatch 可能
-                    // 已经重建过，误删新登记会造成同会话双 actor 乱序。
-                    job = Some(returned);
-                    self.senders
-                        .remove_if(session_id, |_, tx| tx.same_channel(&sender));
-                }
+        dispatch(&self.actors, &self.ctx, session_id, job);
+    }
+}
+
+/// dispatch 的自由函数形态：actor 回收臂把余量重投给新 actor 时与外部
+/// 派单走同一入口（同一建 actor/重建重投逻辑），不再各写一份。
+fn dispatch(
+    actors: &Arc<DashMap<SessionId, ActorHandle>>,
+    ctx: &Arc<DeliveryCtx>,
+    session_id: &SessionId,
+    job: DeliveryJob,
+) {
+    let mut job = Some(job);
+    for _ in 0..2 {
+        let sender = match actors.entry(session_id.clone()) {
+            dashmap::mapref::entry::Entry::Occupied(e) => e.get().tx.clone(),
+            dashmap::mapref::entry::Entry::Vacant(e) => {
+                let (tx, rx) = mpsc::channel::<DeliveryJob>(SESSION_EVENT_CAPACITY);
+                let inflight = Arc::new(AtomicU32::new(0));
+                let has_buffer = Arc::new(AtomicBool::new(false));
+                e.insert(ActorHandle {
+                    tx: tx.clone(),
+                    inflight: Arc::clone(&inflight),
+                    has_buffer: Arc::clone(&has_buffer),
+                });
+                let ctx = Arc::clone(ctx);
+                let actors = Arc::clone(actors);
+                let sid = session_id.clone();
+                let own_tx = tx.clone();
+                tokio::spawn(async move {
+                    run_actor(sid, rx, own_tx, actors, inflight, has_buffer, ctx).await;
+                });
+                tx
+            }
+        };
+        match sender.try_send(job.take().expect("job consumed on retry")) {
+            Ok(()) => return,
+            Err(mpsc::error::TrySendError::Full(returned)) => {
+                error!(
+                    session_id = %session_id.0,
+                    "session delivery queue full, dropping event (deep overload)"
+                );
+                let _ = returned;
+                return;
+            }
+            Err(mpsc::error::TrySendError::Closed(returned)) => {
+                // actor 已退出（空闲回收/panic）：摘除死登记后重建重投。
+                // 必须确认登记的还是**这条**死通道——并发 dispatch 可能
+                // 已经重建过，误删新登记会造成同会话双 actor 乱序。
+                job = Some(returned);
+                actors.remove_if(session_id, |_, h| h.tx.same_channel(&sender));
             }
         }
-        error!(
-            session_id = %session_id.0,
-            "failed to dispatch delivery job after actor respawn"
-        );
     }
+    error!(
+        session_id = %session_id.0,
+        "failed to dispatch delivery job after actor respawn"
+    );
 }
 
 /// 在飞任务计数 guard（Drop 自减，panic 安全）。
@@ -286,19 +280,54 @@ impl Drop for InflightGuard {
     }
 }
 
+/// actor 登记的退出清理 guard（评审 N1）：任何退出路径（含 panic、
+/// 取消）都把登记摘除——登记在而 actor 亡会让 dispatch 拿到死通道多
+/// 绕一轮重建，也让 `is_quiet`/`has_buffer` 读到不再更新的幽灵旗标。
+/// 仅当登记的还是自己（`same_channel`）才摘：回收臂已完成登记交接时
+/// 不得误删新 actor。
+struct ActorRegistrationGuard {
+    session_id: SessionId,
+    actors: Arc<DashMap<SessionId, ActorHandle>>,
+    own_tx: mpsc::Sender<DeliveryJob>,
+}
+
+impl Drop for ActorRegistrationGuard {
+    fn drop(&mut self) {
+        self.actors
+            .remove_if(&self.session_id, |_, h| h.tx.same_channel(&self.own_tx));
+    }
+}
+
+/// 回收臂③：通道余量逐条重投（M1——**不**就地执行）。登记已摘除，
+/// 第一条重投即经统一 dispatch 入口重建新 actor，FIFO 全序保持；
+/// 旧 actor 不产生任何状态，也就不存在"旧 actor 替新 run 建 buffer
+/// 再冻 ⏰"的劈 run 窗口。
+fn redispatch_remaining(
+    actors: &Arc<DashMap<SessionId, ActorHandle>>,
+    ctx: &Arc<DeliveryCtx>,
+    session_id: &SessionId,
+    rx: &mut mpsc::Receiver<DeliveryJob>,
+) {
+    while let Ok(job) = rx.try_recv() {
+        dispatch(actors, ctx, session_id, job);
+    }
+}
+
 /// 会话投递 actor 主循环。
-#[allow(clippy::too_many_arguments)] // actor 生命周期件清单，打包反而假抽象
 async fn run_actor(
     session_id: SessionId,
     mut rx: mpsc::Receiver<DeliveryJob>,
     own_tx: mpsc::Sender<DeliveryJob>,
-    senders: Arc<DashMap<SessionId, mpsc::Sender<DeliveryJob>>>,
-    inflight_map: Arc<DashMap<SessionId, Arc<AtomicU32>>>,
+    actors: Arc<DashMap<SessionId, ActorHandle>>,
     own_inflight: Arc<AtomicU32>,
-    buffers_map: Arc<DashMap<SessionId, Arc<AtomicBool>>>,
-    own_buffers: Arc<AtomicBool>,
+    own_has_buffer: Arc<AtomicBool>,
     ctx: Arc<DeliveryCtx>,
 ) {
+    let _registration = ActorRegistrationGuard {
+        session_id: session_id.clone(),
+        actors: Arc::clone(&actors),
+        own_tx: own_tx.clone(),
+    };
     // 本 run 的回复缓冲：存在即"run 在飞"的标记（与原全局循环的
     // reply_buffers 语义一致），在 Stopped/兜底时取走投递。
     let mut buffer: Option<RunReplyBuffer> = None;
@@ -323,7 +352,21 @@ async fn run_actor(
                     // 保留在原地，下个节拍继续重试）。此守卫只查自身队
                     // 列——上游分派循环无 IO（终审 #1 修复后），背压
                     // 为毫秒级，Stopped 不可能"在上游堵着"（终审 #3）。
-                    if (ctx.agent_dead)(&session_id) {
+                    // 探针在 guarded 之外，自行 catch_unwind：panic 降级
+                    // 为"视为存活"（保守不杀 run），actor 不受牵连（三审
+                    // should-fix #2）。
+                    let dead = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        (ctx.agent_dead)(&session_id)
+                    }))
+                    .unwrap_or_else(|panic| {
+                        error!(
+                            session_id = %session_id.0,
+                            panic = %panic_msg(&panic),
+                            "agent_dead probe panicked, treating session as alive"
+                        );
+                        false
+                    });
+                    if dead {
                         let _busy = InflightGuard::new(&own_inflight);
                         guarded(
                             &session_id,
@@ -331,44 +374,26 @@ async fn run_actor(
                             settle_deliver(&session_id, &mut buffer, SettleKind::Timeout, &ctx),
                         )
                         .await;
-                        own_buffers.store(buffer.is_some(), Ordering::Relaxed);
+                        own_has_buffer.store(buffer.is_some(), Ordering::Relaxed);
                     }
                 } else if last_job.elapsed() >= ctx.idle_reap {
-                    // 空闲回收，四步防竞态：① 原子摘除登记（仅当登记的
-                    // 还是自己——并发 dispatch 可能已重建）；② close 通
-                    // 道（此后持有旧发送端的 dispatch 得 Closed 错误，
-                    // 自动走重建重投路径）；③ 排空余量；④ 退出。摘除
-                    // 失败说明登记易手中，继续服务。
-                    if senders
-                        .remove_if(&session_id, |_, tx| tx.same_channel(&own_tx))
+                    // 空闲回收，三步：① 原子摘除登记（仅当还是自己——
+                    // 此后 dispatch 得 Closed 错误会自动走重建重投）；
+                    // ② close 通道；③ 余量**重投**而非就地执行（终审
+                    // M1：就地执行会为别人的新 run 建 buffer，随后被本
+                    // actor 的退出结算劈成两半——旧 actor 把活卡冻成
+                    // ⏰Timeout、新 actor 无卡可结）。重投走正常派单：
+                    // 登记已空，第一条即重建新 actor，FIFO 全序保持；
+                    // 本 actor 不产生任何新状态，buffer 恒空、无需兜底
+                    // 结算。残余：摘除登记与 close 之间亚微秒窗口内到达
+                    // 的事件会排在重投事件之前（要求恰好此刻到达的新消
+                    // 息，可接受）。
+                    if actors
+                        .remove_if(&session_id, |_, h| h.tx.same_channel(&own_tx))
                         .is_some()
                     {
-                        inflight_map.remove_if(&session_id, |_, c| {
-                            Arc::ptr_eq(c, &own_inflight)
-                        });
-                        buffers_map.remove_if(&session_id, |_, f| {
-                            Arc::ptr_eq(f, &own_buffers)
-                        });
                         rx.close();
-                        while let Ok(job) = rx.try_recv() {
-                            let _busy = InflightGuard::new(&own_inflight);
-                            run_job(&session_id, job, &mut buffer, &ctx).await;
-                        }
-                        // 回收窗口内进来的 run 起始事件可能建起了
-                        // buffer——不能让它随 actor 一起死（静默部分丢
-                        // 回复的同类，发版终审 #3）：兜底送出并留痕。
-                        if buffer.is_some() {
-                            warn!(
-                                session_id = %session_id.0,
-                                "reap drain left a live buffer, settling before exit"
-                            );
-                            guarded(
-                                &session_id,
-                                "settle",
-                                settle_deliver(&session_id, &mut buffer, SettleKind::Timeout, &ctx),
-                            )
-                            .await;
-                        }
+                        redispatch_remaining(&actors, &ctx, &session_id, &mut rx);
                         break;
                     }
                 }
@@ -378,7 +403,7 @@ async fn run_actor(
                 last_job = std::time::Instant::now();
                 let _busy = InflightGuard::new(&own_inflight);
                 run_job(&session_id, job, &mut buffer, &ctx).await;
-                own_buffers.store(buffer.is_some(), Ordering::Relaxed);
+                own_has_buffer.store(buffer.is_some(), Ordering::Relaxed);
             }
         }
     }
@@ -401,8 +426,22 @@ async fn run_job(
     .await;
 }
 
-/// 投递操作的统一 panic 安全网（复审残余项）：事件处理、巡检结算、
-/// 回收排空全部经此——panic 只留 ERROR，不杀 actor、不卡死标记。
+/// panic 载荷的可读文本（`Box<dyn Any>` 的 Debug 只打 `Any { .. }`，
+/// 丢失 panic 消息——四审 nit）。
+fn panic_msg(panic: &dyn std::any::Any) -> String {
+    if let Some(s) = panic.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = panic.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "non-string panic payload".to_string()
+    }
+}
+
+/// 投递操作的统一 panic 安全网（复审残余项）：事件处理与巡检结算
+/// 经此——panic 只留 ERROR，不杀 actor、不卡死标记。（回收余量重投
+/// 是纯内存派单不走此网；判死探针在 `guarded` 之外，自带
+/// catch_unwind 降级为"视为存活"。）
 async fn guarded<F>(session_id: &SessionId, op: &'static str, fut: F)
 where
     F: std::future::Future<Output = ()>,
@@ -411,7 +450,7 @@ where
     if let Err(panic) = std::panic::AssertUnwindSafe(fut).catch_unwind().await {
         error!(
             session_id = %session_id.0,
-            panic = ?panic,
+            panic = %panic_msg(&*panic),
             op,
             "delivery actor: operation panicked, actor continues"
         );
@@ -429,10 +468,8 @@ async fn handle_event(
     let DeliveryJob { routing, event } = job;
     let is_doc_comment = routing.doc_comment.is_some();
 
-    // 并发 IO 封顶；信号量永不关闭，取不到 permit 时退化为不限流。
-    let _permit = ctx.io_permits.acquire().await.ok();
-
-    // ── reply buffer 记账（纯内存，与原循环一致）──
+    // ── reply buffer 记账（纯内存，不占渠道 IO 闸；Running 分支的模型
+    // 查询是本地 store 读）──
     match &event {
         Event::Agent(AgentEvent::Lifecycle {
             state: AgentStatus::Running,
@@ -509,6 +546,12 @@ async fn handle_event(
     let supports_cards = flags.adapter.supports_status_card();
     let observability = flags.observability;
 
+    // 并发 IO 封顶；信号量永不关闭，取不到 permit 时退化为不限流。
+    // 闸只罩这段渠道侧 IO：buffer 记账是纯内存，Stopped 结算由
+    // settle_deliver 内部自取——本函数若持闸再调它，每个 actor 各持
+    // 1 张等第 2 张，16 个 actor 即信号量死锁（评审 S2）。
+    let _permit = ctx.io_permits.acquire().await.ok();
+
     // ── ask_user 决策卡 ──
     match &event {
         Event::Agent(AgentEvent::AskUserQuestion {
@@ -569,6 +612,12 @@ async fn settle_deliver(
     settle_kind: SettleKind<'_>,
     ctx: &DeliveryCtx,
 ) {
+    // 并发 IO 闸在此单点获取（评审 S2）：本函数被 Stopped 路径
+    // （handle_event 内）与巡检/回收兜底（tick 臂，无闸上下文）共
+    // 用——闸只能在这里取；交给调用方各自取既漏掉兜底路径，又会与
+    // 事件路径嵌套取第二张 permit，构成信号量死锁。
+    let _permit = ctx.io_permits.acquire().await.ok();
+
     let routing = match ctx.store.find_routing_by_session(session_id).await {
         Ok(Some(r)) => r,
         // 路由被 gc：回复无处投递（与原 watchdog 的丢 buffer 同义）。
@@ -920,5 +969,314 @@ mod tests {
         let flags = channel_flags(&test_routing(), &pool.ctx).expect("instance exists");
         assert!(!flags.observability, "observability must map from config");
         assert!(flags.tool_trace, "tool_trace must map from config");
+    }
+
+    /// 新测试的搭建辅助：内存 store + 单 feishu 实例（纯文本投递），
+    /// 判死探针/节拍/取消令牌可注入。返回 (pool, adapter, sid)。
+    async fn setup_pool(
+        agent_dead: Box<dyn Fn(&SessionId) -> bool + Send + Sync>,
+        settle_interval: std::time::Duration,
+        idle_reap: std::time::Duration,
+        token: CancellationToken,
+    ) -> (DeliveryPool, Arc<MockAdapter>, SessionId) {
+        let db = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        run_migrations(&db).await.unwrap();
+        let store: Arc<dyn ChannelStore> = Arc::new(SqliteChannelStore::new(db));
+        let sid = SessionId::from("sess_pool_test");
+        store
+            .save_mapping("feishu", "chat-1", &sid, "chat-1", None)
+            .await
+            .unwrap();
+
+        let adapter = Arc::new(MockAdapter {
+            sent: tokio::sync::Mutex::new(Vec::new()),
+        });
+        let mut config = ChannelConfig {
+            name: "feishu".to_string(),
+            enabled: true,
+            ..ChannelConfig::default()
+        };
+        config.observability = false;
+        let instances: Arc<DashMap<String, ChannelInstance>> = Arc::new(DashMap::new());
+        instances.insert(
+            "feishu".to_string(),
+            ChannelInstance::test_instance(config, adapter.clone()),
+        );
+
+        let pool = DeliveryPool::with_timing(
+            Arc::new(ObsTracker::new()),
+            Arc::new(AskCardRegistry::new()),
+            store,
+            instances,
+            std::sync::Weak::new(),
+            agent_dead,
+            token,
+            settle_interval,
+            idle_reap,
+        );
+        (pool, adapter, sid)
+    }
+
+    fn run_events(text: &str) -> Vec<Event> {
+        vec![
+            Event::Agent(AgentEvent::Lifecycle {
+                state: AgentStatus::Running,
+            }),
+            Event::Model(ModelEvent::End {
+                message_id: "m-1".into(),
+                content: vec![ContentBlock::Text {
+                    text: text.to_string(),
+                }],
+            }),
+            Event::Agent(AgentEvent::Lifecycle {
+                state: AgentStatus::Stopped {
+                    reason: StopReason::Completed {
+                        finish_reason: None,
+                    },
+                },
+            }),
+        ]
+    }
+
+    async fn wait_delivered(adapter: &MockAdapter, text: &str, what: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            if adapter.sent.lock().await.iter().any(|t| t.contains(text)) {
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "{what}");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    /// M1/单表重构回归：actor 空闲回收后，下一个 run 必须由新 actor
+    /// 正常投递（回收的摘除/交接不得误伤新登记——旗标与发送端同
+    /// entry 原子建删）。
+    #[tokio::test]
+    async fn actor_reap_then_new_run_delivers() {
+        let (pool, adapter, sid) = setup_pool(
+            Box::new(|_| false),
+            std::time::Duration::from_millis(20),
+            std::time::Duration::from_millis(60),
+            CancellationToken::new(),
+        )
+        .await;
+        let routing = test_routing();
+
+        for event in run_events("第一轮回复") {
+            pool.dispatch(
+                &sid,
+                DeliveryJob {
+                    routing: Arc::clone(&routing),
+                    event,
+                },
+            );
+        }
+        wait_delivered(&adapter, "第一轮回复", "first run not delivered").await;
+
+        // 越过 idle_reap：actor 被回收（登记摘除、通道关闭、退出）。
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(pool.is_quiet(&sid), "reaped actor reads quiet");
+        assert!(!pool.has_buffer(&sid), "reaped actor holds no buffer");
+
+        // 第二轮：全新 actor 接管并投递。
+        for event in run_events("第二轮回复") {
+            pool.dispatch(
+                &sid,
+                DeliveryJob {
+                    routing: Arc::clone(&routing),
+                    event,
+                },
+            );
+        }
+        wait_delivered(&adapter, "第二轮回复", "post-reap run not delivered").await;
+    }
+
+    /// M1 机制直接回归（复审 should-fix）：回收时队列余量必须经
+    /// `redispatch_remaining` 重投给**新** actor——投递恰好一次（无
+    /// 丢弃、无旧 actor 就地执行后的 ⏰ 重复兜底）。
+    #[tokio::test]
+    async fn reap_redispatch_hands_queued_jobs_to_fresh_actor() {
+        let (pool, adapter, sid) = setup_pool(
+            Box::new(|_| false),
+            std::time::Duration::from_hours(1),
+            std::time::Duration::from_hours(1),
+            CancellationToken::new(),
+        )
+        .await;
+        let routing = test_routing();
+
+        // 模拟回收臂现场：登记已摘除（Vacant）、通道已 close、余量待重投。
+        let (tx, mut rx) = mpsc::channel::<DeliveryJob>(SESSION_EVENT_CAPACITY);
+        for event in run_events("重投回复") {
+            tx.try_send(DeliveryJob {
+                routing: Arc::clone(&routing),
+                event,
+            })
+            .unwrap();
+        }
+        rx.close();
+
+        redispatch_remaining(&pool.actors, &pool.ctx, &sid, &mut rx);
+
+        wait_delivered(&adapter, "重投回复", "re-dispatched run not delivered").await;
+        assert_eq!(
+            adapter
+                .sent
+                .lock()
+                .await
+                .iter()
+                .filter(|t| t.contains("重投回复"))
+                .count(),
+            1,
+            "exactly one delivery — no drop, no duplicate Timeout settle"
+        );
+    }
+
+    /// 三审 should-fix #2 回归：判死探针 panic 必须降级为"视为存活"
+    /// ——actor 不死、buffer 不被误结算，后续事件正常投递。
+    #[tokio::test]
+    async fn panicking_probe_is_downgraded_to_alive() {
+        let probe_calls = Arc::new(AtomicU32::new(0));
+        let probe = {
+            let calls = Arc::clone(&probe_calls);
+            move |_: &SessionId| -> bool {
+                calls.fetch_add(1, Ordering::Relaxed);
+                panic!("injected probe panic")
+            }
+        };
+        let (pool, adapter, sid) = setup_pool(
+            Box::new(probe),
+            std::time::Duration::from_millis(30),
+            std::time::Duration::from_hours(1),
+            CancellationToken::new(),
+        )
+        .await;
+        let routing = test_routing();
+
+        // ① Running 建 buffer；② 等巡检节拍触发探针（panic → 降级
+        // 存活）；③ 补齐 End+Stopped：actor 必须活着并正常投递。
+        pool.dispatch(
+            &sid,
+            DeliveryJob {
+                routing: Arc::clone(&routing),
+                event: Event::Agent(AgentEvent::Lifecycle {
+                    state: AgentStatus::Running,
+                }),
+            },
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while probe_calls.load(Ordering::Relaxed) == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "watchdog tick never invoked the probe"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        for event in run_events("探针panic后仍投递").into_iter().skip(1) {
+            pool.dispatch(
+                &sid,
+                DeliveryJob {
+                    routing: Arc::clone(&routing),
+                    event,
+                },
+            );
+        }
+        wait_delivered(&adapter, "探针panic后仍投递", "run lost after probe panic").await;
+        assert!(
+            pool.actors.contains_key(&sid),
+            "actor must survive probe panics"
+        );
+    }
+
+    /// N1 回归：actor 退出（取消路径）时登记必须被退出 guard 摘除——
+    /// `is_quiet`/`has_buffer` 不得读到幽灵旗标，后续 dispatch 直接
+    /// 拿到新 actor（panic 路径同此 Drop，Rust 保证 unwind 触发）。
+    #[tokio::test]
+    async fn actor_exit_cleans_registration() {
+        let token = CancellationToken::new();
+        let (pool, _adapter, sid) = setup_pool(
+            Box::new(|_| false),
+            std::time::Duration::from_hours(1),
+            std::time::Duration::from_hours(1),
+            token.clone(),
+        )
+        .await;
+
+        pool.dispatch(
+            &sid,
+            DeliveryJob {
+                routing: test_routing(),
+                event: Event::Agent(AgentEvent::Lifecycle {
+                    state: AgentStatus::Running,
+                }),
+            },
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !pool.actors.contains_key(&sid) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "actor never registered"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        token.cancel();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            // 登记被摘除后：无 entry → has_buffer=false（幽灵旗标会
+            // 给出 has_buffer=true）。
+            if !pool.actors.contains_key(&sid) && !pool.has_buffer(&sid) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "exited actor left a ghost registration"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    /// S2 回归：并发会话数超过 IO 信号量（16）时全量投递仍完成——
+    /// settle 的 permit 单点获取若退化为嵌套获取，此用例会死锁超时。
+    #[tokio::test]
+    async fn concurrent_sessions_all_deliver_under_io_cap() {
+        const SESSIONS: usize = 20;
+        let (pool, adapter, _sid) = setup_pool(
+            Box::new(|_| false),
+            std::time::Duration::from_millis(50),
+            std::time::Duration::from_hours(1),
+            CancellationToken::new(),
+        )
+        .await;
+        let routing = test_routing();
+
+        for i in 0..SESSIONS {
+            // 每个会话独立的 mapping 键（同键 upsert 会互相覆盖，
+            // settle 新鲜重读路由时前 19 个会话会查无路由）。
+            let sid = SessionId::from(format!("sess_concurrent_{i}"));
+            pool.ctx
+                .store
+                .save_mapping("feishu", &format!("chat-{i}"), &sid, "chat-1", None)
+                .await
+                .unwrap();
+            for event in run_events(&format!("并发回复{i}")) {
+                pool.dispatch(
+                    &sid,
+                    DeliveryJob {
+                        routing: Arc::clone(&routing),
+                        event,
+                    },
+                );
+            }
+        }
+        for i in 0..SESSIONS {
+            wait_delivered(&adapter, &format!("并发回复{i}"), "concurrent run lost").await;
+        }
     }
 }

@@ -19,6 +19,10 @@ struct MockAdapter {
     send_card_attempts: AtomicUsize,
     fail_patches: std::sync::atomic::AtomicBool,
     patch_attempts: AtomicUsize,
+    /// M2 测试缝：置位后 `update_card` 挂起（PATCH 在飞），直到
+    /// [`MockAdapter::open_patch_gate`]。
+    gate_patches: std::sync::atomic::AtomicBool,
+    patch_gate: tokio::sync::Notify,
 }
 
 impl MockAdapter {
@@ -34,7 +38,15 @@ impl MockAdapter {
             send_card_attempts: AtomicUsize::new(0),
             fail_patches: std::sync::atomic::AtomicBool::new(false),
             patch_attempts: AtomicUsize::new(0),
+            gate_patches: std::sync::atomic::AtomicBool::new(false),
+            patch_gate: tokio::sync::Notify::new(),
         })
+    }
+
+    /// Release a PATCH blocked by `gate_patches` (single shot).
+    fn open_patch_gate(&self) {
+        self.gate_patches.store(false, Ordering::Relaxed);
+        self.patch_gate.notify_one();
     }
 }
 
@@ -85,6 +97,9 @@ impl PlatformAdapter for MockAdapter {
 
     async fn update_card(&self, message_id: &str, card_json: &str) -> Result<(), ChannelError> {
         self.patch_attempts.fetch_add(1, Ordering::Relaxed);
+        if self.gate_patches.load(Ordering::Relaxed) {
+            self.patch_gate.notified().await;
+        }
         if self.fail_patches.load(Ordering::Relaxed) {
             return Err(ChannelError::Platform("mock patch failure".into()));
         }
@@ -3013,5 +3028,153 @@ async fn usage_event_before_end_fold_never_double_counts() {
     assert!(
         !last.contains('~'),
         "no estimate marker once real usage landed: {last}"
+    );
+}
+
+// ── M2：心跳与 settle 的 PATCH 串行化 ────────────────────────────────
+
+/// 终审 M2 回归：心跳 PATCH 在飞（闸门内持有 `patch_lock`）时并发的
+/// settle 必须等它落地，且终态渲染严格最后 PATCH——旧实现只在发送前
+/// 校验，心跳可在 settle morph 之后落地，把过期"运行中"渲染盖到回复
+/// 卡上（无自愈）。
+#[tokio::test]
+async fn settle_waits_out_in_flight_heartbeat_and_lands_last() {
+    let tracker = Arc::new(ObsTracker::with_patch_interval(Duration::ZERO));
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    assert_eq!(mock.cards.lock().await.len(), 1);
+
+    // 心跳 PATCH 进闸门（持有 patch_lock、卡在平台 RTT 上）。
+    mock.gate_patches.store(true, Ordering::Relaxed);
+    let hb = {
+        let t = Arc::clone(&tracker);
+        tokio::spawn(async move { t.refresh_stale(Duration::ZERO).await })
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while mock.patch_attempts.load(Ordering::Relaxed) == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "heartbeat never entered the PATCH gate"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    // settle 并发到来：必须堵在 patch_lock 上，不得抢先 PATCH。
+    let st = {
+        let t = Arc::clone(&tracker);
+        let a = adapter_ref(&mock);
+        tokio::spawn(async move {
+            t.handle_event(
+                &a,
+                &sid,
+                "chat-1",
+                None,
+                &stopped(StopReason::Completed {
+                    finish_reason: None,
+                }),
+            )
+            .await;
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        mock.patches.lock().await.len(),
+        0,
+        "settle must wait for the in-flight heartbeat PATCH"
+    );
+
+    mock.open_patch_gate();
+    hb.await.unwrap();
+    st.await.unwrap();
+
+    // 严格顺序：心跳的运行中渲染在前，settle 的终态渲染在后。
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 2, "patches: {patches:?}");
+    assert!(
+        !patches[0].1.contains('✅'),
+        "first patch is the heartbeat's running render: {}",
+        patches[0].1
+    );
+    assert!(
+        patches[1].1.contains('✅'),
+        "last patch is the settle's terminal render: {}",
+        patches[1].1
+    );
+}
+
+/// S1 回归：sweep 收集判死清单后到逐卡结算之间，会话可能已复活（新
+/// run 复用了孤儿卡）——逐卡复核判活，活卡不得被冻成 ⏰。
+#[tokio::test]
+async fn sweep_rechecks_liveness_before_settling_each_card() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    assert!(tracker.has_state(&sid));
+
+    // 第 1 次调用（收集阶段）判死；第 2 次起（逐卡复核）已复活。
+    let calls = AtomicUsize::new(0);
+    tracker
+        .sweep_dead_sessions(|_| calls.fetch_add(1, Ordering::Relaxed) > 0)
+        .await;
+
+    assert!(
+        tracker.has_state(&sid),
+        "resurrected session's card must survive the sweep"
+    );
+    assert!(
+        mock.patches.lock().await.is_empty(),
+        "no terminal PATCH for a session that came back to life"
+    );
+}
+
+/// M2 反向用例（三审 should-fix #1）：settle 先落地（状态摘除）后，
+/// 迟到心跳必须在锁内重校验时被跳过——候选收集时 state 还在，拿锁
+/// 时已不在，`prepared=None` 分支不得发出任何 PATCH。
+#[tokio::test]
+async fn late_heartbeat_after_settle_is_skipped_by_in_lock_revalidation() {
+    let tracker = Arc::new(ObsTracker::with_patch_interval(Duration::ZERO));
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    assert_eq!(mock.cards.lock().await.len(), 1);
+
+    // 占位锁：心跳收集到候选后被堵在锁外（模拟"候选已收集、settle
+    // 抢先落地"的时序）。
+    let lock = tracker
+        .states
+        .get(&sid)
+        .map(|e| Arc::clone(&e.patch_lock))
+        .expect("state exists");
+    let hold = lock.lock().await;
+    let hb = {
+        let t = Arc::clone(&tracker);
+        tokio::spawn(async move { t.refresh_stale(Duration::ZERO).await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await; // 候选已收集并堵在锁上
+                                                         // （无法直接观测"已堵锁"，盲等只可能假绿、不可能假红——四审 nit 接受）
+
+    // settle 落地（状态摘除），随后放行：心跳锁内重校验见 None → 跳过。
+    tracker.states.remove(&sid);
+    drop(hold);
+    hb.await.unwrap();
+
+    assert_eq!(
+        mock.patch_attempts.load(Ordering::Relaxed),
+        0,
+        "late heartbeat must be skipped by in-lock re-validation"
     );
 }
