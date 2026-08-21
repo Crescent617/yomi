@@ -311,6 +311,12 @@ pub(crate) async fn get_or_create_session(
     mapping_key: &str,
     reply_msg_id: Option<&str>,
 ) -> Result<(SessionId, bool)> {
+    // check-then-act（find→create→save）的全局键锁：dispatch 循环是串行
+    // 的，但卡片回调（cfg_model 等，spawned 任务）与 ChannelNewThread RPC
+    // 都循环外并发可达——同 key 并发 miss 会各建各的 session，败者成
+    // 孤儿（消息静默路由到脱离映射的 session）。锁与 ext_route 同键空间。
+    let _guard =
+        crate::utils::g_lock::g_lock(format!("channel_route:{channel_name}:{mapping_key}")).await;
     if let Some(sid) = store.find_mapping(channel_name, mapping_key).await? {
         info!(channel = %channel_name, mapping_key, session_id = %sid.0, "reusing session");
         store

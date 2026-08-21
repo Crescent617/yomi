@@ -32,14 +32,15 @@ pub async fn check_tool_permissions(
     tool_calls: &[ToolCall],
     permission_checker: Option<&Checker>,
     cancel_token: &tokio_util::sync::CancellationToken,
+    extension_registry: Option<&crate::extension::ExtensionRegistry>,
 ) -> PermissionCheckResult {
-    use super::resolver::ToolLevelResolver;
+    use super::resolver::resolve_level;
 
     let mut approved = Vec::new();
     let mut denied = Vec::new();
 
     for call in tool_calls {
-        let level = ToolLevelResolver::resolve(&call.name, &call.arguments);
+        let level = resolve_level(extension_registry, &call.name, &call.arguments);
 
         // Check if permission is needed
         if let Some(checker) = permission_checker {

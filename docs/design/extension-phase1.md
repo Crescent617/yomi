@@ -193,4 +193,8 @@ ext.serve_forever()  # pull → dispatch → ext_result 循环；断开即退出
 
 ## 状态
 
-待实施（2026-08-21 设计定稿）。
+已实现并上线（v0.9.2，2026-08-21）。上线后并发审查的两处硬化：
+① 路由 check-then-act 的键锁收进 `get_or_create_session` 单点
+（卡片回调/RPC 与 dispatch 循环的并发同 key 竞态修复，ext_route
+复用该单点）；② ext 声明 level 接通权限解析（`resolve_level`
+纯函数：ext 注册表优先、内建名表兜底——此前是死字段静默降档）。

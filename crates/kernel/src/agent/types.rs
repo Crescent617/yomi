@@ -380,6 +380,9 @@ pub struct AgentShared {
     pub message_interceptor: Option<Arc<dyn super::UserMsgInterceptor>>,
     /// Channel manager for external platform integrations (Telegram, Feishu, etc.)
     pub channel_hub: Option<Arc<crate::channels::hub::ChannelHub>>,
+    /// wire 外部扩展注册表（权限解析读取 ext 工具的声明级别；
+    /// agent 侧只读，注册/回收走 server）。
+    pub extension_registry: Option<Arc<crate::extension::ExtensionRegistry>>,
     /// Global event bus for all agents and sessions
     pub event_bus: Option<Arc<crate::comms::EventBus>>,
     /// Runtime tracker for asynchronous background work grouped by session.
@@ -460,6 +463,7 @@ impl AgentShared {
             data_dir,
             message_interceptor: None,
             channel_hub: None,
+            extension_registry: None,
             event_bus: None,
             background_tasks: Arc::new(BgTaskTracker::default()),
             cron_store: None,
@@ -481,6 +485,7 @@ impl AgentShared {
             file_state_store,
             checkpoint_store,
             channel_hub: self.channel_hub.clone(),
+            extension_registry: self.extension_registry.clone(),
             event_bus: self.event_bus.clone(),
             background_tasks: Arc::clone(&self.background_tasks),
             ..self.clone()
@@ -523,6 +528,16 @@ impl AgentShared {
         manager: Option<Arc<crate::channels::hub::ChannelHub>>,
     ) -> Self {
         self.channel_hub = manager;
+        self
+    }
+
+    /// Set the extension registry (permission resolution reads ext levels).
+    #[must_use]
+    pub fn with_extension_registry(
+        mut self,
+        registry: Arc<crate::extension::ExtensionRegistry>,
+    ) -> Self {
+        self.extension_registry = Some(registry);
         self
     }
 

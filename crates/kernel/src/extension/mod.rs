@@ -281,6 +281,13 @@ impl ExtensionRegistry {
             .collect()
     }
 
+    /// 已注册 ext 工具的声明权限级别（权限判定的唯一真相源：
+    /// resolver 先查这里，查不到才走内建名表）。
+    pub fn registered_level(&self, name: &str) -> Option<crate::permission::Level> {
+        let id = self.by_name.get(name)?;
+        self.regs.get(id.value()).map(|r| r.def.level)
+    }
+
     /// source 路由（内存回退路径）。
     pub fn route_get(&self, source: &str, key: &str) -> Option<SessionId> {
         self.routes

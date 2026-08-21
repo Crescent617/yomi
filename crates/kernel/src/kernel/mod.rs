@@ -298,9 +298,9 @@ impl Kernel {
         Arc::clone(&self.extension_registry)
     }
 
-    /// `ext_route`：source 的 pseudo-channel 路由。复用 channel mapping
-    /// store（`ext:<source>` + key → session，创建/复用/gc 级联免费）；
-    /// 无渠道存储的 daemon 回退到注册表的内存路由。
+    /// `ext_route`：source 的 pseudo-channel 路由。有渠道存储时复用
+    /// `get_or_create_session` 单点（映射逻辑与键锁的唯一收口）；
+    /// 无渠道存储的 daemon 回退注册表内存路由（同键空间的独立持锁）。
     pub async fn ext_route(&self, source: &str, key: &str) -> Result<(SessionId, bool)> {
         if source.is_empty() || key.is_empty() {
             return Err(KernelError::Config(
@@ -310,22 +310,15 @@ impl Kernel {
         let channel = format!("ext:{source}");
         if let Some(hub) = &self.channel_manager {
             let store = hub.store();
-            if let Some(sid) = store.find_mapping(&channel, key).await? {
-                return Ok((sid, false));
-            }
-            let sid = self
-                .create_session(CreateSessionInput {
-                    project_id: None,
-                    working_dir: None,
-                    auto_approve_level: None,
-                    tool_blocklist: vec![],
-                    model_key: None,
-                })
-                .await?;
-            store.save_mapping(&channel, key, &sid, key, None).await?;
-            return Ok((sid, true));
+            let (sid, reused) = crate::channels::hub_routing::get_or_create_session(
+                &channel, &store, self, key, key, None,
+            )
+            .await?;
+            return Ok((sid, !reused));
         }
-        // 内存回退：无 channel store（无渠道配置的 daemon）。
+        // 内存回退：无 channel store（无渠道配置的 daemon）。与
+        // get_or_create_session 内建锁同键空间（两处不嵌套，无死锁）。
+        let _guard = crate::utils::g_lock::g_lock(format!("channel_route:{channel}:{key}")).await;
         if let Some(sid) = self.extension_registry.route_get(source, key) {
             return Ok((sid, false));
         }
@@ -482,7 +475,9 @@ impl Kernel {
         let channel_manager =
             channel_store.map(|store| Arc::new(crate::channels::hub::ChannelHub::new(store)));
 
+        let extension_registry = Arc::new(crate::extension::ExtensionRegistry::new());
         let agent_shared = agent_shared.with_channel_manager(channel_manager.clone());
+        let agent_shared = agent_shared.with_extension_registry(Arc::clone(&extension_registry));
         let event_bus = crate::comms::EventBus::new();
         let agent_shared = agent_shared.with_event_bus(event_bus.clone());
         let agent_shared = Arc::new(agent_shared);
@@ -494,7 +489,6 @@ impl Kernel {
         agent_shared
             .background_tasks
             .set_notification_bus(notification_bus.clone());
-        let extension_registry = Arc::new(crate::extension::ExtensionRegistry::new());
         let conductor = Arc::new(Conductor::new(
             agent_shared.clone(),
             agent_config.clone(),

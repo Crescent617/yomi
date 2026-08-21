@@ -7190,3 +7190,36 @@ fn bg_command_parse() {
         ChannelCommand::BackgroundTasks { all: false }
     ));
 }
+
+/// 卡片回调/RPC 路径与 dispatch 循环并发同 key：get_or_create_session 的
+/// 键锁保证只有一个创建者（reviewer 实锤：cfg_model/ChannelNewThread
+/// 在循环外并发可达）。
+#[tokio::test]
+async fn get_or_create_session_concurrent_same_key_single_creator() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let call = || {
+        let store = Arc::clone(&store);
+        let kernel = Arc::clone(&kernel);
+        async move {
+            crate::channels::hub_routing::get_or_create_session(
+                "feishu", &store, &kernel, "oc_x", "omt_1", None,
+            )
+            .await
+            .unwrap()
+        }
+    };
+    let (r1, r2, r3) = tokio::join!(call(), call(), call());
+    assert_eq!(r1.0, r2.0);
+    assert_eq!(r2.0, r3.0);
+    let fresh = [r1.1, r2.1, r3.1].iter().filter(|reused| !**reused).count();
+    assert_eq!(fresh, 1, "exactly one caller must be the creator");
+}

@@ -49,6 +49,10 @@ Kill the process → tool gone, in-flight calls error
 - **Teardown is RAII only**: no `unregister` — close the connection / exit
   the process. Daemon restart = your read fails; restart your process to
   re-register.
+- **Don't pipeline on one connection**: a pending `ext_pull` holds your
+  connection's request loop — an `ext_result` sent behind it on the same
+  connection can wait up to 55 s and hit the 60 s call cap. Use the SDK's
+  sequential loop, or a second connection.
 - **Permissions**: `tool_blocklist` regexes in daemon config apply to your
   tools too. `level` defaults to `caution` (approval card per call).
 - **Auth**: the unix socket file *is* the credential. Default path

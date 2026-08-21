@@ -189,3 +189,34 @@ async fn ext_tool_exec_maps_outcomes() {
     assert!(text.contains("disconnected"), "{text}");
     assert!(out.is_error);
 }
+
+/// ext_route 并发同 key：必须只有一个 created=true 且 session 相同
+///（无锁时两个并发 miss 各建各的，败者拿到不进映射的孤儿 sid）。
+#[tokio::test]
+async fn ext_route_concurrent_same_key_single_winner() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let (r1, r2, r3) = tokio::join!(
+        kernel.ext_route("gitlab-ci", "proj1"),
+        kernel.ext_route("gitlab-ci", "proj1"),
+        kernel.ext_route("gitlab-ci", "proj1"),
+    );
+    let (s1, c1) = r1.unwrap();
+    let (s2, c2) = r2.unwrap();
+    let (s3, c3) = r3.unwrap();
+    assert_eq!(s1, s2);
+    assert_eq!(s2, s3);
+    let created = [c1, c2, c3].iter().filter(|c| **c).count();
+    assert_eq!(created, 1, "exactly one caller must see created=true");
+
+    // 后续单发调用：复用，不再创建。
+    let (s4, c4) = kernel.ext_route("gitlab-ci", "proj1").await.unwrap();
+    assert_eq!(s4, s1);
+    assert!(!c4);
+}
