@@ -71,6 +71,8 @@ pub struct Kernel {
     /// Disposable persistent KV cache (`cache.db`), shared with channel adapters.
     pub(crate) kv_cache: Option<Arc<crate::kv_cache::KvCache>>,
     pub(crate) channel_manager: Option<Arc<crate::channels::hub::ChannelHub>>,
+    /// wire 外部扩展注册表（custom tool / source 路由；纯内存，RAII 回收）。
+    extension_registry: Arc<crate::extension::ExtensionRegistry>,
     /// Global notification bus for state changes and other broadcasts.
     notification_bus: Arc<crate::notification::NotificationBus>,
     /// Global shutdown token for graceful stop.
@@ -291,6 +293,55 @@ impl Kernel {
         self.kv_cache.clone()
     }
 
+    /// wire 外部扩展注册表（server 分发与 conductor spawn 共用）。
+    pub fn extension_registry(&self) -> Arc<crate::extension::ExtensionRegistry> {
+        Arc::clone(&self.extension_registry)
+    }
+
+    /// `ext_route`：source 的 pseudo-channel 路由。复用 channel mapping
+    /// store（`ext:<source>` + key → session，创建/复用/gc 级联免费）；
+    /// 无渠道存储的 daemon 回退到注册表的内存路由。
+    pub async fn ext_route(&self, source: &str, key: &str) -> Result<(SessionId, bool)> {
+        if source.is_empty() || key.is_empty() {
+            return Err(KernelError::Config(
+                "ext_route requires non-empty source and key".to_string(),
+            ));
+        }
+        let channel = format!("ext:{source}");
+        if let Some(hub) = &self.channel_manager {
+            let store = hub.store();
+            if let Some(sid) = store.find_mapping(&channel, key).await? {
+                return Ok((sid, false));
+            }
+            let sid = self
+                .create_session(CreateSessionInput {
+                    project_id: None,
+                    working_dir: None,
+                    auto_approve_level: None,
+                    tool_blocklist: vec![],
+                    model_key: None,
+                })
+                .await?;
+            store.save_mapping(&channel, key, &sid, key, None).await?;
+            return Ok((sid, true));
+        }
+        // 内存回退：无 channel store（无渠道配置的 daemon）。
+        if let Some(sid) = self.extension_registry.route_get(source, key) {
+            return Ok((sid, false));
+        }
+        let sid = self
+            .create_session(CreateSessionInput {
+                project_id: None,
+                working_dir: None,
+                auto_approve_level: None,
+                tool_blocklist: vec![],
+                model_key: None,
+            })
+            .await?;
+        self.extension_registry.route_set(source, key, sid.clone());
+        Ok((sid, true))
+    }
+
     /// Get data directory from `agent_shared`
     pub async fn data_dir(&self) -> std::path::PathBuf {
         self.agent_shared.data_dir.clone()
@@ -443,6 +494,7 @@ impl Kernel {
         agent_shared
             .background_tasks
             .set_notification_bus(notification_bus.clone());
+        let extension_registry = Arc::new(crate::extension::ExtensionRegistry::new());
         let conductor = Arc::new(Conductor::new(
             agent_shared.clone(),
             agent_config.clone(),
@@ -452,6 +504,7 @@ impl Kernel {
             base_prompt,
             data_dir_for_conductor,
             notification_bus.clone(),
+            Arc::clone(&extension_registry),
         ));
         let cron_store = if enable_cron {
             Some(storage.cron_store())
@@ -477,6 +530,7 @@ impl Kernel {
             restart_tx: Arc::new(std::sync::Mutex::new(None)),
             kv_cache: storage.kv_cache(),
             channel_manager,
+            extension_registry,
             notification_bus,
             shutdown: tokio_util::sync::CancellationToken::new(),
         }))

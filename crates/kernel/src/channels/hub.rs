@@ -65,6 +65,11 @@ impl ChannelHub {
         }
     }
 
+    /// Channel mapping store（ext_route 的 pseudo-channel 映射复用）。
+    pub fn store(&self) -> Arc<dyn ChannelStore> {
+        Arc::clone(&self.store)
+    }
+
     /// Start all enabled channels from the given configurations.
     /// If a channel with the same name already exists, it is skipped.
     pub async fn start_all(

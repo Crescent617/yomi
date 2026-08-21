@@ -20,7 +20,7 @@ async fn setup_with_config_path(
     config.finalize();
     let kernel = crate::build_kernel(&config, false).await.unwrap();
     let server = crate::server::KernelServer::with_lifecycle(kernel, config_path, restart_tx);
-    server.start(Vec::new()).await;
+    server.start(&config).await;
     let addr = crate::transport::SocketAddr::Unix(tmp.path().join("daemon.sock"));
     let listener = crate::transport::bind(&addr).await.unwrap();
     let shutdown = tokio_util::sync::CancellationToken::new();

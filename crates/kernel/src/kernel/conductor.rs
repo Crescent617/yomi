@@ -26,6 +26,8 @@ pub struct Conductor {
     /// Per-session spawn lock to prevent duplicate agent creation races.
     spawn_locks: DashMap<SessionId, Arc<tokio::sync::Mutex<()>>>,
     notification_bus: Arc<NotificationBus>,
+    /// wire 外部扩展注册表（spawn 时把 ext 工具代理并入新 agent）。
+    extension_registry: Arc<crate::extension::ExtensionRegistry>,
 }
 
 pub struct ActiveSessionSnapshot {
@@ -51,6 +53,7 @@ impl Conductor {
         base_prompt: String,
         data_dir: std::path::PathBuf,
         notification_bus: Arc<NotificationBus>,
+        extension_registry: Arc<crate::extension::ExtensionRegistry>,
     ) -> Self {
         Self {
             agent_shared,
@@ -64,6 +67,7 @@ impl Conductor {
             data_dir,
             spawn_locks: DashMap::new(),
             notification_bus,
+            extension_registry,
         }
     }
 
@@ -595,7 +599,14 @@ impl Conductor {
             .with_tool_blocklist(tool_blocklist)
             .with_max_tool_output_length(self.agent_config.max_tool_output_length)
             .with_cancel_token(cancel_token.clone())
-            .with_input_bus(self.input_bus.clone());
+            .with_input_bus(self.input_bus.clone())
+            .with_ext_tools(
+                self.extension_registry
+                    .tool_proxies()
+                    .into_iter()
+                    .map(|t| Arc::new(t) as Arc<dyn crate::tools::Tool>)
+                    .collect(),
+            );
 
         let agent = Agent::new(&shared, args).await;
 

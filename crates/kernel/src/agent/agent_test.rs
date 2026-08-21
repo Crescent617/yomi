@@ -248,6 +248,7 @@ async fn repeated_token_usage_events_are_recorded_once() {
         max_tool_output_length: 1024,
         mailbox: Arc::new(crate::comms::Mailbox::new()),
         input_bus: None,
+        ext_tools: Vec::new(),
     };
     let mut agent = Agent::new(&shared, args).await;
     agent.current_model_config = Some(Arc::new(model_config));
@@ -315,6 +316,7 @@ async fn handle_clear_keeps_system_prompt() {
         max_tool_output_length: 1024,
         mailbox: Arc::new(crate::comms::Mailbox::new()),
         input_bus: None,
+        ext_tools: Vec::new(),
     };
     let mut agent = Agent::new(&shared, args).await;
 
@@ -381,6 +383,7 @@ async fn apply_compacted_messages_keeps_system_prompt() {
         max_tool_output_length: 1024,
         mailbox: Arc::new(crate::comms::Mailbox::new()),
         input_bus: None,
+        ext_tools: Vec::new(),
     };
     let mut agent = Agent::new(&shared, args).await;
 
@@ -454,6 +457,7 @@ async fn force_full_compact_emits_event_bracket_on_early_failure() {
         max_tool_output_length: 1024,
         mailbox: Arc::new(crate::comms::Mailbox::new()),
         input_bus: None,
+        ext_tools: Vec::new(),
     };
     let mut subscriber = event_bus.subscribe(session_id.clone());
     let mut agent = Agent::new(&shared, args).await;
@@ -552,6 +556,7 @@ async fn compaction_result_emits_compacted_outcome() {
         max_tool_output_length: 1024,
         mailbox: Arc::new(crate::comms::Mailbox::new()),
         input_bus: None,
+        ext_tools: Vec::new(),
     };
     let mut subscriber = event_bus.subscribe(session_id.clone());
     let mut agent = Agent::new(&shared, args).await;
@@ -632,6 +637,7 @@ async fn cancelled_agent_exits_loop() {
         max_tool_output_length: 1024,
         mailbox: Arc::new(crate::comms::Mailbox::new()),
         input_bus: None,
+        ext_tools: Vec::new(),
     };
     let agent = Agent::new(&shared, args).await;
     agent.cancel_token.cancel();
@@ -751,6 +757,7 @@ async fn retrying_event_carries_retry_after_wait() {
         max_tool_output_length: 1024,
         mailbox: Arc::new(crate::comms::Mailbox::new()),
         input_bus: None,
+        ext_tools: Vec::new(),
     };
     let mut subscriber = event_bus.subscribe(session_id.clone());
     let mut agent = Agent::new(&shared, args).await;
@@ -880,6 +887,7 @@ async fn interrupted_marker_closes_pending_tool_batch() {
         max_tool_output_length: 1024,
         mailbox: Arc::new(crate::comms::Mailbox::new()),
         input_bus: None,
+        ext_tools: Vec::new(),
     };
     let mut agent = Agent::new(&shared, args).await;
 
@@ -998,6 +1006,7 @@ mod rewind_tests {
             max_tool_output_length: 1024,
             mailbox: Arc::new(crate::comms::Mailbox::new()),
             input_bus: None,
+            ext_tools: Vec::new(),
         };
         let agent = Agent::new(&shared, args).await;
         RewindHarness {

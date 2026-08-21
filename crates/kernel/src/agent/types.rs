@@ -68,6 +68,9 @@ pub struct AgentSpawnArgs {
     /// Mailbox for receiving input messages. Created by Conductor or subagent caller.
     pub mailbox: Arc<crate::comms::Mailbox>,
     pub input_bus: Option<Arc<crate::comms::InputBus>>,
+    /// wire 外部扩展工具的代理（spawn 时快照；agent 生命周期内不刷新，
+    /// 新注册的工具在下一次 agent respawn 时生效）。
+    pub ext_tools: Vec<Arc<dyn crate::tools::Tool>>,
 }
 
 impl std::fmt::Debug for AgentSpawnArgs {
@@ -114,7 +117,15 @@ impl AgentSpawnArgs {
             max_tool_output_length: 40_000,
             input_bus: None,
             mailbox: mailbox.into(),
+            ext_tools: Vec::new(),
         }
+    }
+
+    /// Set wire extension tool proxies
+    #[must_use]
+    pub fn with_ext_tools(mut self, tools: Vec<Arc<dyn crate::tools::Tool>>) -> Self {
+        self.ext_tools = tools;
+        self
     }
 
     /// Set skills to include

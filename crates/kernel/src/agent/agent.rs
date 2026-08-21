@@ -131,7 +131,7 @@ impl Agent {
 
         let shared = shared.clone();
 
-        let tool_registry = ToolRegistry::new().with_standard_tools(
+        let mut tool_registry = ToolRegistry::new().with_standard_tools(
             ToolRegistryConfig {
                 shared: &shared,
                 event_bus: &event_bus,
@@ -143,6 +143,21 @@ impl Agent {
             }
             .with_file_state_store(args.file_state_store.clone()),
         );
+
+        // wire 外部扩展工具（spawn 时快照）：收口与内建一致——
+        // blocklist 同样生效，与内建/已注册撞名让位记 warn。
+        for tool in args.ext_tools {
+            let name = tool.name().to_string();
+            if !crate::tools::passes_blocklist(&name, &args.tool_blocklist) {
+                tracing::info!("Extension tool '{name}' blocked by blocklist pattern");
+                continue;
+            }
+            if tool_registry.get(&name).is_some() {
+                tracing::warn!("Extension tool '{name}' shadows a registered tool; skipped");
+                continue;
+            }
+            tool_registry.register_arc(tool);
+        }
 
         let permission_checker = shared
             .permission_state

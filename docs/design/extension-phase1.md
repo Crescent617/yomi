@@ -36,7 +36,7 @@ sink 复用现有 `subscribe_*`，channel 插件化等第三个渠道出现再�
 ### `ext_register`
 
 ```json
-→ {"ext_register": {"kind": "tool", "name": "stock.quote",
+→ {"ext_register": {"kind": "tool", "name": "stock_quote",
     "desc": "查询股票实时价格",
     "schema": {"type":"object","properties":{"symbol":{"type":"string"}},"required":["symbol"]},
     "level": "safe"}}
@@ -44,6 +44,8 @@ sink 复用现有 `subscribe_*`，channel 插件化等第三个渠道出现再�
 ```
 
 - `kind: "tool"` 必填；`level` 缺省 `caution`（走审批）。
+- 命名约束（provider 最紧交集）：字母开头，仅 `[a-zA-Z0-9_-]`——
+  OpenAI 函数名不允许点号（stock.quote 会被 400 拒绝，2026-08-21 实测）。
 - name 全局唯一（含内建工具）；撞名报错。tool_blocklist 对 ext 工具同样生效。
 - 注册进 ToolRegistry 的是一个**代理 Tool**：desc/schema 用登记的，
   exec 时把调用派给登记连接的队列。
@@ -52,7 +54,7 @@ sink 复用现有 `subscribe_*`，channel 插件化等第三个渠道出现再�
 
 ```json
 → {"ext_pull": {"registration": "ext_01J..."}}
-← {"ok": {"call_id": "c_91a", "name": "stock.quote", "args": {"symbol": "600519"}}}
+← {"ok": {"call_id": "c_91a", "name": "stock_quote", "args": {"symbol": "600519"}}}
    {"ok": null}   // 超时（默认 55s，上限 60s）
 ```
 
@@ -149,11 +151,11 @@ command = ["uv", "run", "~/.yomi/ext/stock_tools.py"]
 from yomi_ext import Ext
 
 ext = Ext()  # unix socket 连接 + Hello
-ext.tool("stock.quote", "查询股票实时价格",
+ext.tool("stock_quote", "查询股票实时价格",
          schema={"type":"object","properties":{"symbol":{"type":"string"}},"required":["symbol"]},
          level="safe")
 
-@ext.on("stock.quote")
+@ext.on("stock_quote")
 def quote(args):
     return {"price": fetch(args["symbol"])}
 
@@ -162,7 +164,7 @@ ext.serve_forever()  # pull → dispatch → ext_result 循环；断开即退出
 
 ## 狗食计划
 
-1. `~/.yomi/ext/stock_tools.py` 注册 `stock.quote`（stock-pool 数据）
+1. `~/.yomi/ext/stock_tools.py` 注册 `stock_quote`（stock-pool 数据）
 2. 飞书里让 agent 调用，验证：schema 进模型工具表 → 审批（caution）→
    pull 派单 → Python 执行 → ToolEvent 完整 → 结果回模型
 3. 杀掉 Python 进程，验证工具立即从工具表消失、后续调用报 disconnected

@@ -18,9 +18,77 @@ impl KernelServer {
         subscriptions: Arc<RwLock<HashMap<String, tokio::task::JoinHandle<()>>>>,
         send_tx: mpsc::Sender<WireMsg>,
         cancel: tokio_util::sync::CancellationToken,
+        conn_id: &str,
         method: ReqMethod,
     ) -> RespBody {
         match method {
+            // ── Extension（wire 外部扩展）──────────────────────────
+            ReqMethod::ExtRegister {
+                kind,
+                name,
+                desc,
+                schema,
+                level,
+            } => {
+                if kind != "tool" {
+                    return rpc_error(
+                        "ext_bad_kind",
+                        format!("unsupported extension kind '{kind}' (phase 1: only 'tool')"),
+                    );
+                }
+                let registry = self.kernel.extension_registry();
+                rpc_body(
+                    "ext_register_failed",
+                    registry
+                        .register_tool(
+                            conn_id,
+                            crate::extension::ExtToolDef {
+                                name,
+                                desc,
+                                schema,
+                                level: level.unwrap_or_default(),
+                            },
+                        )
+                        .map(|registration| serde_json::json!({ "registration": registration }))
+                        .map_err(crate::types::KernelError::Config),
+                )
+            }
+            ReqMethod::ExtPull { registration } => {
+                let registry = self.kernel.extension_registry();
+                match registry.pull(conn_id, &registration).await {
+                    Ok(item) => RespBody::Ok {
+                        result: match item {
+                            Some(w) => serde_json::json!({
+                                "call_id": w.call_id, "name": w.name, "args": w.args,
+                            }),
+                            None => serde_json::Value::Null,
+                        },
+                    },
+                    Err(e) => rpc_error("ext_pull_failed", e),
+                }
+            }
+            ReqMethod::ExtResult {
+                call_id,
+                output,
+                is_error,
+            } => {
+                let registry = self.kernel.extension_registry();
+                rpc_body(
+                    "ext_result_failed",
+                    registry
+                        .submit_result(conn_id, &call_id, output, is_error)
+                        .map(|()| serde_json::Value::Null)
+                        .map_err(crate::types::KernelError::Config),
+                )
+            }
+            ReqMethod::ExtRoute { source, key } => {
+                rpc_body("ext_route_failed", self.kernel.ext_route(&source, &key).await.map(
+                    |(sid, created)| {
+                        serde_json::json!({ "session_id": sid.0.to_string(), "created": created })
+                    },
+                ))
+            }
+
             // ── Config ───────────────────────────────────────────────────
             ReqMethod::GetConfig => {
                 let path = self

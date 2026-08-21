@@ -178,8 +178,13 @@ impl ToolRegistry {
     /// Register a tool (mutable because registry is built during agent initialization)
     /// Invalidates the cached definitions since tools have changed
     pub fn register(&mut self, tool: impl Tool + 'static) {
+        self.register_arc(Arc::new(tool));
+    }
+
+    /// Register an already-`Arc`ed tool（外部代理工具走这里）。
+    pub fn register_arc(&mut self, tool: Arc<dyn Tool>) {
         let name = tool.name().to_string();
-        self.tools.insert(name, Arc::new(tool));
+        self.tools.insert(name, tool);
         // Invalidate cache since tools have changed
         self.cached_definitions = None;
     }
@@ -353,8 +358,7 @@ impl ToolRegistry {
 
         // Apply tool blocklist (regex patterns) — remove matching tools from the registry.
         // Patterns compile individually: a bad entry is skipped with a warn,
-        // never drops the whole blocklist (which includes the sub-agent
-        // ask_user guard).
+        // never drops the whole blocklist.
         if !config.tool_blocklist.is_empty() {
             let patterns: Vec<regex::Regex> = config
                 .tool_blocklist
@@ -382,6 +386,17 @@ impl ToolRegistry {
 
         self
     }
+}
+
+/// `tool_blocklist` 命中检查（与 `with_standard_tools` 同一语义：逐条
+/// 编译、坏 pattern 跳过不拦）。ext 工具的收口与内建一致。
+pub fn passes_blocklist(name: &str, blocklist: &[String]) -> bool {
+    blocklist.iter().all(
+        |p| match regex::RegexBuilder::new(p).case_insensitive(true).build() {
+            Ok(re) => !re.is_match(name),
+            Err(_) => true,
+        },
+    )
 }
 
 /// Feature flags for tool registration.

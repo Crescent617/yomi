@@ -80,7 +80,7 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
                 config_file,
                 Some(restart_tx),
             );
-            server.start(config.channels.clone()).await;
+            server.start(&config).await;
             let shutdown = tokio_util::sync::CancellationToken::new();
             let restart_shutdown = shutdown.clone();
             let restart_requested_task = Arc::clone(&restart_requested);

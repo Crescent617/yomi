@@ -168,7 +168,7 @@ async fn spawn_daemon_inner() -> Result<kernel::config::Config> {
         config_file,
         Some(restart_sender()),
     );
-    server.start(config.channels.clone()).await;
+    server.start(&config).await;
     let shutdown = CancellationToken::new();
 
     // Write PID file

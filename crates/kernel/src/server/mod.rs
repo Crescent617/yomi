@@ -133,8 +133,18 @@ impl KernelServer {
         }
     }
 
-    pub async fn start(&self, configs: Vec<crate::channels::ChannelConfig>) {
+    pub async fn start(&self, config: &crate::config::Config) {
         self.kernel.start();
+
+        // supervised 扩展进程：跟随 daemon 拉起，随 daemon 死亡。
+        if !config.extensions.is_empty() {
+            let log_dir = self.kernel.data_dir().await.join("logs");
+            crate::extension::supervisor::start_supervisor(
+                config.extensions.clone(),
+                log_dir,
+                self.shutdown.child_token(),
+            );
+        }
 
         if let Some(store) = self.kernel.cron_store.as_ref() {
             let (task_tx, task_rx) = mpsc::channel(64);
@@ -158,7 +168,10 @@ impl KernelServer {
 
         if let Some(ref mgr) = self.kernel.channel_manager {
             let weak = Arc::downgrade(&self.kernel);
-            if let Err(e) = mgr.start_all(self.shutdown.clone(), configs, weak).await {
+            if let Err(e) = mgr
+                .start_all(self.shutdown.clone(), config.channels.clone(), weak)
+                .await
+            {
                 tracing::warn!(error = %e, "some channels failed to start");
             }
         }
@@ -276,6 +289,9 @@ impl KernelServer {
     ) -> Result<()> {
         const OUTBOUND_CHANNEL_SIZE: usize = 4096;
 
+        // 连接的扩展身份：ext_* 方法的归属键，断开时 RAII 回收的边界。
+        let conn_id = format!("conn_{}", ulid::Ulid::new().to_string().to_lowercase());
+
         let (mut read_half, mut write_half) = stream.into_split();
         let (send_tx, mut send_rx) = mpsc::channel::<WireMsg>(OUTBOUND_CHANNEL_SIZE);
 
@@ -392,6 +408,7 @@ impl KernelServer {
                             std::sync::Arc::clone(&subscriptions),
                             send_tx.clone(),
                             cancel.clone(),
+                            &conn_id,
                             method,
                         )
                         .await;
@@ -414,6 +431,10 @@ impl KernelServer {
             handle.abort();
         }
         drop(subs);
+
+        // RAII：连接终止 = 该连接的全部扩展能力回收（代理 tool 摘除、
+        // pending 工作项以 disconnected 报错）。
+        self.kernel.extension_registry().sweep(&conn_id);
 
         cancel.cancel();
         let _ = writer.await;
