@@ -15,6 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-08-21
+
+### Added
+
+- wire 外部扩展（一期）：外部进程可经 IPC 注册自定义工具（描述与参数 schema 进入模型工具表，权限审批与 blocklist 收口和内置一致），断连即自动下线；`[[extensions]]` 配置段可让扩展进程跟随 daemon 自动拉起、随 daemon 退出。
+- 扩展 source 路由接口：外部事件源（如 CI webhook 桥）可按"来源名 + 话题键"映射到固定会话。
+
+### Changed
+
+- wire 协议版本升至 28（旧版本客户端需同步升级后才能连接 daemon）。
+
 ## [0.9.1] - 2026-08-21
 
 ### Changed
