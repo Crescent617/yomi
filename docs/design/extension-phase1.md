@@ -51,13 +51,16 @@ sink 复用现有 `subscribe_*`，channel 插件化等第三个渠道出现再�
 ### `ext_pull`
 
 ```json
-→ {"ext_pull": {"registration": "ext_01J...", "timeout_ms": 55000}}
+→ {"ext_pull": {"registration": "ext_01J..."}}
 ← {"ok": {"call_id": "c_91a", "name": "stock.quote", "args": {"symbol": "600519"}}}
    {"ok": null}   // 超时（默认 55s，上限 60s）
 ```
 
 - per-registration 一个 `VecDeque` + `Notify`；有单即取、无单挂起（**挂起等，不空转**）。
-- 一个工作项只 pop 一次（恰好一次是结构保证）；同一 registration 允许并发 pull（多 worker）。
+- 一个工作项只 pop 一次（恰好一次是结构保证）。
+- **单 worker 约束**：同一 registration 同时只允许一条挂起 pull，第二条
+  直接报错；要并发就多开进程（多连接多 registration），扩容路径天然且隔离。
+- 超时固定 55s（空转心跳，不设参数）。
 - 工作项状态机：`queued → delivered → resolved / expired（60s 无响应）
   / cancelled（run 被 Stop）`。
 
@@ -84,8 +87,11 @@ sink 复用现有 `subscribe_*`，channel 插件化等第三个渠道出现再�
 - 之后照常 `send_message`；source 消息统一带 `[From source:<name>]` 前缀，
   对齐 channel 消息的来源标注惯例。
 - **回复出向**（如回飞书群）两条路，均无需协议新增：
-  ① bridge config 直接写目标群的 session_id（人工查一次 mapping 即可）；
+  ① bridge config 直接写目标群的 session_id（人工查一次 mapping 即可，
+  然后**根本不调 ext_route**，直接 `send_message`）；
   ② source 会话 prompt 约定"结果发到 oc_xxx"，agent 用 lark skill 自行转发。
+- ext_route 只为**话题 keyed** 路由存在；固定 session 不是它的模式，
+  是不用它的场景。
 
 ### Source 回执（一期不做）
 
@@ -103,20 +109,6 @@ webhook 场景天然异步（回贴晚到几分钟无影响）。需要结果时
 2. **daemon 重启**：内存表清空；supervised 自动重拉，external 各自
    重连重注册。
 
-## Config（supervised 模式，可选）
-
-```toml
-[[extensions]]
-name = "stock-tools"
-command = ["uv", "run", "~/.yomi/ext/stock_tools.py"]
-autostart = true          # 默认 false
-restart = "on-failure"    # 默认 no
-```
-
-supervised 由 daemon spawn，进程组管理（复用 background shell 组杀语义，
-daemon 死则全组 SIGTERM）。supervised 与 external 注册契约一致——
-启动方式只是运维差异（内外同构），config 可以为空。
-
 ## 收口与防幽灵
 
 - 代理 tool 经 ToolRegistry：permission 分级、tool_blocklist、审批卡、
@@ -132,7 +124,6 @@ daemon 死则全组 SIGTERM）。supervised 与 external 注册契约一致—�
   连接 sweep 钩子
 - `crates/kernel/src/server/{dispatcher,connection}.rs`：方法分发 + conn drop sweep
 - `crates/kernel/src/kernel/conductor.rs`：route_message 的 pseudo-channel 映射
-- `crates/kernel/src/config/mod.rs`：`[[extensions]]` 段
 - `crates/cli`：`yomi ext list`（查看登记，debug 用，可缓）
 - `ext/sdk/yomi_ext.py`（repo 外或 examples/）：~50 行 Python SDK
 
@@ -172,6 +163,12 @@ ext.serve_forever()  # pull → dispatch → ext_result 循环；断开即退出
 - **ext_unregister RPC**：弃选。断开即回收（RAII）覆盖一切下线场景。
 - **注册持久化**：明确不做。重连重注册是契约的一部分。
 - **gate 一期**：拦截点要动 conductor 热路径，单独一批做（二期）。
+- **supervised config（`[[extensions]]`，daemon 拉起扩展进程）**：一期不做
+  （2026-08-21）。nohup/launchd 足够；加回条件：扩展常驻化需求明确，
+  届时复用 background shell 的进程组管理。
+- **多 worker（同 registration 并发 pull）**：一期单 worker，第二条挂起
+  pull 报错；扩容 = 多进程多连接。
+- **`ext_pull` 的 timeout_ms 参数**：固定 55s，不设 knob。
 - **`ext_route` 的 target_hint（挂靠已有渠道 chat）**：弃选（2026-08-21）。
   双重归属语义（session 同属群聊与 source key）+ 映射冲突处理是隐藏税；
   固定 session_id 与 agent 经 lark 转发已覆盖出向需求。加回条件：
