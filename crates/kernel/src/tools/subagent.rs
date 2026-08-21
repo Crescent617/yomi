@@ -60,6 +60,11 @@ impl SubagentTool {
 
         let session_id_str = session_id.as_str();
 
+        // 声明本次完成的回信所有权（sync/async 都经此）：conductor 的
+        // Stopped 分支消费 claim 后跳过转运；未声明的（post-completion
+        // follow-up、重启恢复的无主完成）才由 conductor 转运给 parent。
+        self.shared.subagent_claims.insert(session_id.clone());
+
         // Subscribe to the event bus and wait for the subagent to finish.
         let event_bus = self
             .shared
@@ -74,6 +79,8 @@ impl SubagentTool {
             session_id.clone(),
             crate::agent::AgentInput::Steer(vec![ContentBlock::Text { text: prompt }]),
         ) {
+            // 任务未发出，回收刚声明的 claim（避免残留吞掉下一次转运）。
+            self.shared.subagent_claims.remove(&session_id);
             tracing::warn!("Failed to publish subagent input: {}", e);
             return (
                 format!("Failed to queue subagent task: {e}"),
@@ -82,12 +89,35 @@ impl SubagentTool {
         }
 
         let mut status = SubAgentStatus::Completed;
+        // 从事件流直接捕获最终答案（"流即现实"）：Stopped 后再读
+        // store 与 conductor 的异步落盘是同 bus 独立 listener 竞态
+        // （sync 首轮返回偶发为空的既有 bug，2026-08-21 e2e 实锤）；
+        // MessageAdded 携带消息本体，订阅又在 publish 之前，零竞态。
+        // 取最后一条**非空**文本（中间轮空文本不覆盖）——与 conductor
+        // 的 orphan 转运（取最后一条 assistant、空则 warn 丢弃）在
+        // "文本为空的终答案"病态边缘行为有意分歧：这里要返回内容，
+        // 那里要避免转运空壳。
+        let mut last_answer = String::new();
 
         while let Some((sid, envelope)) = subscriber.recv().await {
             if sid.0 != session_id.0 {
                 continue;
             }
             let event = envelope.event;
+
+            if let Event::Internal(crate::event::InternalEvent::MessageAdded { message }) = &event {
+                if message.role == crate::types::Role::Assistant {
+                    let text = message
+                        .content
+                        .iter()
+                        .filter_map(|b| b.as_text())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if !text.is_empty() {
+                        last_answer = text;
+                    }
+                }
+            }
 
             // Forward ask_user and permission events to the parent session so
             // UI layers (TUI/GUI) can display them in the same event stream.
@@ -205,8 +235,11 @@ impl SubagentTool {
             }
         }
 
-        // Fetch final output from the subagent's message store
-        let output_text = if let Some(ref store) = self.shared.message_store {
+        // 优先用事件流捕获的答案；store 读取只做兜底（订阅前的事件
+        // 或 MessageAdded 缺失的异常路径）。
+        let output_text = if !last_answer.is_empty() {
+            last_answer
+        } else if let Some(ref store) = self.shared.message_store {
             match store.get(session_id_str).await {
                 Ok(msgs) => msgs
                     .iter()
@@ -480,6 +513,14 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                     let (output, status) = tokio::select! {
                         biased;
                         () = cancel.cancelled() => {
+                            // 等待被取消：run_subagent 随之丢弃，回收
+                            // 它声明的 claim——否则 subagent 若幸存并
+                            // 随后自行完成，conductor 会消费残留
+                            // claim 跳过转运，最终答案蒸发（发版评审
+                            // should-fix；sync 路径无此问题——父代理
+                            // 取消经 child token 级联取消 subagent，
+                            // claim 会被 Stopped(Cancelled) 正常消费）。
+                            self_clone.shared.subagent_claims.remove(&session_id);
                             (String::new(), SubAgentStatus::Cancelled)
                         }
                         result = self_clone.run_subagent(params) => result,

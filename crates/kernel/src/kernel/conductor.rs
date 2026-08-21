@@ -7,7 +7,7 @@ use tracing::Instrument;
 use crate::agent::AgentShared;
 use crate::agent::{Agent, AgentConfig, AgentInput, AgentSpawnArgs, AgentState};
 use crate::comms::{EventBus, InputBus, InputBusSubscriber, Mailbox};
-use crate::event::{AgentEvent, AgentStatus, Event, InternalEvent};
+use crate::event::{AgentEvent, AgentStatus, Event, InternalEvent, StopReason};
 use crate::notification::{AgentActivity, Notification, NotificationBus};
 use crate::types::SessionId;
 
@@ -181,6 +181,11 @@ impl Conductor {
                                     }
                                 }
                             }
+                        }
+                        Event::Agent(AgentEvent::Lifecycle {
+                            state: AgentStatus::Stopped { reason },
+                        }) => {
+                            self.maybe_forward_orphan(&sid, reason);
                         }
                         _ => {}
                     }
@@ -367,6 +372,113 @@ impl Conductor {
                 sid.clone(),
                 Event::Agent(AgentEvent::MailboxChanged { steer, queued }),
             ));
+    }
+
+    /// subagent 无主完成的回信转运入口（详见 `forward_orphan_reply`）：
+    /// claim 命中的归既有 sync/async 路径。claim 消费保持 inline（与
+    /// 事件处理同点原子）；转运体挪出循环——jsonl 整读+两次 store
+    /// 读不挡所有 session 的 `MessageAdded` 落盘（复审 should-fix）。
+    /// 落盘时序已由循环顺序保证，spawn 不破坏正确性。
+    fn maybe_forward_orphan(self: &Arc<Self>, sid: &SessionId, reason: StopReason) {
+        if !self.should_forward_orphan(sid) {
+            return;
+        }
+        let this = Arc::clone(self);
+        let sid = sid.clone();
+        tokio::spawn(async move {
+            this.forward_orphan_reply(&sid, &reason).await;
+        });
+    }
+
+    /// 该 `Stopped` 是否是"无主"的 subagent 完成（claim 原子消费判
+    /// 定）：`run_subagent` 声明过的归既有回信路径（sync `ToolOutput`
+    /// / `async` 完成 steer），跳过；未声明的（post-completion
+    /// follow-up、daemon 重启恢复）由 conductor 转运。claim 完整语
+    /// 义见 `AgentShared::subagent_claims`。
+    fn should_forward_orphan(&self, sid: &SessionId) -> bool {
+        sid.starts_with(crate::types::SUB_PREFIX)
+            && self.agent_shared.subagent_claims.remove(sid).is_none()
+    }
+
+    /// subagent 无主完成的回信转运：把最终答案以 `[From Agent: ...]`
+    /// 格式 steer 给 parent（2026-08-21 `post_message` follow-up 回信
+    /// 蒸发事故的根治——彼时回信路径都在首次完成后退出，跟进答案
+    /// 蒸发在 subagent 自己的 transcript 里）。
+    ///
+    /// **无落盘竞态**：conductor 事件循环顺序消费，`MessageAdded`
+    /// 的 `store.append` 是 inline await，agent 先发 `MessageAdded`
+    /// （最终答案）再发 `Stopped`——处理到 `Stopped` 时最终答案必然已
+    /// 落盘。这就是本函数可以直接读 store 而不需要任何轮询/基线的
+    /// 原因（时序由循环顺序保证，不靠猜）。残余缺口（既有持久化路
+    /// 径同型假设，非本函数引入）：bus 主通道打满时 `EventSink` 的
+    /// `try_send().ok()` 会静默丢 `MessageAdded`/`Stopped`，此时可能读
+    /// 到上一轮旧答案。
+    async fn forward_orphan_reply(&self, sid: &SessionId, reason: &StopReason) {
+        // Cancelled 多半是 parent 自己 /stop 的——不转运。
+        if matches!(reason, StopReason::Cancelled { .. }) {
+            return;
+        }
+        let (Some(messages), Some(sessions)) = (
+            &self.agent_shared.message_store,
+            &self.agent_shared.session_store,
+        ) else {
+            return;
+        };
+        let reply = messages
+            .get(&sid.0)
+            .await
+            .ok()
+            .and_then(|msgs| {
+                msgs.iter()
+                    .rev()
+                    .find(|m| m.role == crate::types::Role::Assistant)
+                    .map(|m| {
+                        m.content
+                            .iter()
+                            .filter_map(|b| b.as_text())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+            })
+            .unwrap_or_default();
+        // 无可转运文本（Failed 且无残留、纯 thinking 终答案等病态边
+        // 缘）——留 warn。
+        if reply.is_empty() {
+            tracing::warn!(
+                session_id = %sid.0,
+                "orphan subagent completion has no text reply to forward"
+            );
+            return;
+        }
+        let parent = sessions
+            .get(sid)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|info| info.parent_id);
+        let Some(parent) = parent else {
+            tracing::warn!(
+                session_id = %sid.0,
+                "orphan subagent reply has nowhere to go (no parent)"
+            );
+            return;
+        };
+        let body = match reason {
+            StopReason::Completed { .. } => reply,
+            StopReason::Failed { error } => format!("⚠ run failed: {error}\n{reply}"),
+            StopReason::MaxIterations { reached } => {
+                format!("⚠ run hit max iterations ({reached})\n{reply}")
+            }
+            StopReason::Cancelled { .. } => unreachable!("cancelled filtered above"),
+        };
+        let steer =
+            crate::tools::format_agent_message(&sid.0, format_args!("Follow-up reply\n{body}"));
+        if let Err(error) = self.input_bus.publish(
+            parent,
+            AgentInput::Steer(vec![crate::types::ContentBlock::Text { text: steer }]),
+        ) {
+            tracing::warn!("failed to forward orphan subagent reply: {error}");
+        }
     }
 
     /// Check whether the session or any ancestor is routed from an external

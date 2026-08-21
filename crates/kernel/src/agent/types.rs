@@ -387,6 +387,15 @@ pub struct AgentShared {
     pub event_bus: Option<Arc<crate::comms::EventBus>>,
     /// Runtime tracker for asynchronous background work grouped by session.
     pub background_tasks: Arc<BgTaskTracker>,
+    /// subagent 完成回信的所有权声明（2026-08-21 follow-up 回信蒸发事
+    /// 故的根治）：`run_subagent`（sync/async 必经）启动时插入，表示
+    /// "该 session 下一次 `Stopped` 的回信归既有路径（sync `ToolOutput`
+    /// / async 完成 steer）"；conductor 的 `Stopped` 分支原子消费——
+    /// 命中则跳过，未命中（post-completion follow-up、daemon 重启恢
+    /// 复的无主完成）则把最终答案转运给 parent。插入/消费正常平衡；
+    /// 永不停止的 subagent 会残留一条，最坏后果是下一次完成被误跳
+    /// 过一次转运（下下次自愈），不做清理。
+    pub subagent_claims: Arc<dashmap::DashSet<crate::types::SessionId>>,
     /// Cron store for scheduled job operations (None when cron is disabled).
     pub cron_store: Option<Arc<dyn crate::cron::CronStore>>,
     /// Shared slot for the running cron scheduler. Owned by `Kernel`, filled by
@@ -466,6 +475,7 @@ impl AgentShared {
             extension_registry: None,
             event_bus: None,
             background_tasks: Arc::new(BgTaskTracker::default()),
+            subagent_claims: Arc::new(dashmap::DashSet::new()),
             cron_store: None,
             cron_scheduler: Arc::new(std::sync::Mutex::new(None)),
             config_auto_approve: crate::permission::Level::default(),

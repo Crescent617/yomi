@@ -319,3 +319,186 @@ async fn unknown_template_errors_with_available_list() {
     assert!(text.contains("unknown template 'no-such-role'"));
     assert!(text.contains("verifier (builtin)"));
 }
+
+/// 事件流捕获最终答案（2026-08-21 e2e 实锤的既有 bug：Stopped 后读
+/// store 与 conductor 异步落盘竞态，sync 首轮返回偶发为空）。答案
+/// 必须来自 MessageAdded 事件本体——本用例不配置 message_store，
+/// store 兜底路径不存在；同时钉住 claim 插入路径。
+#[tokio::test]
+async fn sync_result_comes_from_event_stream_not_store() {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    run_migrations(&pool).await.unwrap();
+    let session_store: Arc<dyn SessionStore> = Arc::new(SqliteSessionStore::new(pool));
+    let parent_id = SessionId::from("parent_session");
+    session_store
+        .create(NewSession::new(parent_id.clone()))
+        .await
+        .unwrap();
+
+    let event_bus = EventBus::new();
+    let shared = Arc::new(
+        AgentShared::new(
+            Default::default(),
+            String::new(),
+            None,
+            None,
+            None,
+            Some(Arc::clone(&session_store)),
+            None, // message_store 缺省：答案只能来自事件流
+            None,
+            None,
+            Vec::new(),
+            None,
+            None,
+        )
+        .with_event_bus(Arc::clone(&event_bus)),
+    );
+    let claims = Arc::clone(&shared.subagent_claims);
+    let input_bus = InputBus::new();
+    let tool = SubagentTool::new(shared, input_bus.clone(), parent_id.clone());
+    let mut input_subscriber = input_bus.subscribe_all();
+
+    let exec = tokio::spawn(async move {
+        tool.exec(
+            serde_json::json!({
+                "description": "stream capture",
+                "prompt": "answer from the stream",
+                "wait_for_completion": true,
+            }),
+            ToolExecCtx::new("call_1", ".", parent_id.as_str()),
+        )
+        .await
+    });
+    let (subagent_id, _) = input_subscriber.recv().await.unwrap();
+    assert!(
+        claims.contains(&subagent_id),
+        "run_subagent must claim the first completion"
+    );
+
+    let publish_answer = |text: &str| {
+        let msg = Arc::new(crate::types::Message {
+            role: crate::types::Role::Assistant,
+            content: vec![crate::types::ContentBlock::Text {
+                text: text.to_string(),
+            }],
+            ..Default::default()
+        });
+        event_bus
+            .publish(
+                subagent_id.clone(),
+                crate::event::Envelope::new(
+                    subagent_id.clone(),
+                    crate::event::Event::Internal(crate::event::InternalEvent::MessageAdded {
+                        message: msg,
+                    }),
+                ),
+            )
+            .unwrap();
+    };
+    publish_answer("中间答案（被覆盖）");
+    publish_answer("流里的最终答案");
+    event_bus
+        .publish(
+            subagent_id.clone(),
+            crate::event::Envelope::new(
+                subagent_id.clone(),
+                crate::event::Event::Agent(crate::event::AgentEvent::Lifecycle {
+                    state: crate::event::AgentStatus::Stopped {
+                        reason: crate::event::StopReason::Completed {
+                            finish_reason: None,
+                        },
+                    },
+                }),
+            ),
+        )
+        .unwrap();
+
+    let out = exec.await.unwrap().unwrap();
+    let text = output_text(&out);
+    assert!(
+        text.contains("流里的最终答案"),
+        "final answer must come from the event stream: {text}"
+    );
+    assert!(
+        !text.contains("中间答案"),
+        "last assistant text wins: {text}"
+    );
+}
+
+/// 发版评审 should-fix：async 等待被取消时回收 claim——否则 subagent
+/// 幸存完成后 conductor 消费残留 claim 跳过转运，答案蒸发。
+#[tokio::test]
+async fn async_cancel_reclaims_subagent_claim() {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    run_migrations(&pool).await.unwrap();
+    let session_store: Arc<dyn SessionStore> = Arc::new(SqliteSessionStore::new(pool));
+    let parent_id = SessionId::from("parent_session");
+    session_store
+        .create(NewSession::new(parent_id.clone()))
+        .await
+        .unwrap();
+
+    let event_bus = EventBus::new();
+    let shared = Arc::new(
+        AgentShared::new(
+            Default::default(),
+            String::new(),
+            None,
+            None,
+            None,
+            Some(Arc::clone(&session_store)),
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+            None,
+        )
+        .with_event_bus(Arc::clone(&event_bus)),
+    );
+    let claims = Arc::clone(&shared.subagent_claims);
+    let input_bus = InputBus::new();
+    let tool = SubagentTool::new(shared, input_bus.clone(), parent_id.clone());
+    let mut input_subscriber = input_bus.subscribe_all();
+    let cancel = tokio_util::sync::CancellationToken::new();
+
+    let out = tool
+        .exec(
+            serde_json::json!({
+                "description": "cancel reclaim",
+                "prompt": "run in background",
+                "wait_for_completion": false,
+            }),
+            crate::tools::ToolExecCtx {
+                cancel_token: Some(cancel.clone()),
+                ..ToolExecCtx::new("call_1", ".", parent_id.as_str())
+            },
+        )
+        .await
+        .unwrap();
+    assert!(output_text(&out).contains("spawned in background"));
+
+    // 任务 steer 发布时 claim 已插入（run_subagent 先声明后发布）。
+    let (subagent_id, _) = input_subscriber.recv().await.unwrap();
+    assert!(claims.contains(&subagent_id), "claim must be inserted");
+
+    cancel.cancel();
+
+    // 取消臂回收 claim（轮询至 3s 超时）。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while claims.contains(&subagent_id) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "claim was not reclaimed after async cancel"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
