@@ -532,7 +532,7 @@ impl ChannelHub {
                     )
                 },
             );
-            // 平台 IO 与投递状态全部收进每会话 actor（hub_delivery）；
+            // 平台 IO 与投递状态全部收进每会话 actor（delivery_pool）；
             // 本循环只剩分派与全局 tick，不做任何网络调用——2026-08-21
             // 洪峰事故的根修。
             let pool = DeliveryPool::new(
@@ -568,7 +568,7 @@ impl ChannelHub {
                     // this loop may not have processed them yet — judging
                     // liveness (obs dead-card sweep) before draining the
                     // queue could sweep live sessions' cards. The reply
-                    // settle path has the same guard per-actor (hub_delivery).
+                    // settle path has the same guard per-actor (delivery_pool).
                     // Sustained flow defers ticks (MissedTickBehavior::Skip);
                     // they catch up when traffic quiets.
                     _ = live_refresh.tick(), if rx.is_empty() => {
