@@ -1167,6 +1167,7 @@ pub mod hub;
 pub(crate) mod hub_command;
 pub(crate) mod hub_context;
 pub(crate) mod hub_deliver;
+pub(crate) mod hub_delivery;
 pub(crate) mod hub_gate;
 pub(crate) mod hub_handlers;
 pub(crate) mod hub_routing;

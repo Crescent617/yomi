@@ -1,9 +1,8 @@
-use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, ToolEvent};
+use crate::event::{Event, ModelEvent};
 use crate::kernel::Kernel;
 
 use crate::types::{ContentBlock, Result, SessionId};
 use dashmap::DashMap;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -13,15 +12,14 @@ use tracing::{error, info, warn};
 use super::hub_context::{
     advance_history_cursor, prepare_trigger, record_passive_receipt, TriggerKind,
 };
-use super::hub_deliver::{
-    deliver_reply, notify_run_subscribers, send_command_reply, RunEndStatus, SettleKind,
-};
+use super::hub_deliver::send_command_reply;
+use super::hub_delivery::{DeliveryJob, DeliveryPool};
 use super::hub_gate::{gate_message, send_gate_reaction, Gate};
 use super::hub_handlers::handle_incoming_message;
 use super::hub_routing::{reply_anchor, resolve_reply_in_thread};
 
 use super::{
-    ask::AskCardRegistry, obs::ObsTracker, reply, ChannelConfig, ChannelEvent, ChannelInfo,
+    ask::AskCardRegistry, obs::ObsTracker, ChannelConfig, ChannelEvent, ChannelInfo,
     ChannelMessage, ChannelStatus, ChannelStore, PlatformAdapter, SessionRouting,
 };
 
@@ -34,16 +32,39 @@ const STATUS_ERROR: u8 = 3;
 /// Watchdog sweep interval for dead-session status cards.
 const WATCHDOG_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_mins(1);
 
+/// The forwarder's bus queue: sized for bursts (the default listener
+/// capacity is 256). Platform I/O runs on per-session workers, but a
+/// flood can still outpace this bookkeeping loop — headroom converts
+/// silent drops into queued latency.
+const FORWARDER_QUEUE_CAPACITY: usize = 4096;
+
+/// Routing-gate cache retention (positive entries; negatives use a much
+/// shorter TTL inline in `routing_for`). Also the eviction granularity —
+/// stale entries are dropped on the watchdog tick.
+const ROUTING_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Heartbeat interval for refreshing live status cards. Long tool calls
 /// emit no events, so event-driven PATCHes stop and the card looks frozen
 /// (elapsed stuck at the last patch) — this keeps it visibly alive.
 const LIVE_CARD_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// A running channel instance.
-struct ChannelInstance {
-    config: ChannelConfig,
+pub(crate) struct ChannelInstance {
+    pub(crate) config: ChannelConfig,
     status: Arc<AtomicU8>,
-    adapter: Arc<dyn PlatformAdapter>,
+    pub(crate) adapter: Arc<dyn PlatformAdapter>,
+}
+
+impl ChannelInstance {
+    /// 测试用构造（`status` 字段刻意保持私有，测试走这里）。
+    #[cfg(test)]
+    pub(crate) fn test_instance(config: ChannelConfig, adapter: Arc<dyn PlatformAdapter>) -> Self {
+        Self {
+            config,
+            status: Arc::new(AtomicU8::new(STATUS_IDLE)),
+            adapter,
+        }
+    }
 }
 
 /// Manages the lifecycle of all platform channels and routes incoming
@@ -488,134 +509,92 @@ impl ChannelHub {
 
         tokio::spawn(async move {
             // `ToolCallDelta` floods (e.g. thousands of argument deltas for a
-            // large file write) would overflow this listener's 256-slot
-            // buffer while the loop is blocked in an inline card PATCH,
-            // silently dropping text `Chunk`/`End` events (bus delivery is
-            // try_send). The forwarder never consumes deltas, so filter them
-            // out at the source.
-            let mut rx = event_bus.subscribe_all_filtered(|envelope| {
-                !matches!(
-                    envelope.event,
-                    Event::Model(ModelEvent::ToolCallDelta { .. })
-                )
-            });
+            // large file write) would overflow this listener's queue while
+            // the loop is busy, silently dropping text `Chunk`/`End` events
+            // (bus delivery is try_send). The forwarder never consumes
+            // deltas, so filter them out at the source.
+            let mut rx = event_bus.subscribe_all_filtered_with_capacity(
+                FORWARDER_QUEUE_CAPACITY,
+                |envelope| {
+                    !matches!(
+                        envelope.event,
+                        Event::Model(ModelEvent::ToolCallDelta { .. })
+                    )
+                },
+            );
+            // 平台 IO 与投递状态全部收进每会话 actor（hub_delivery）；
+            // 本循环只剩分派与全局 tick，不做任何网络调用——2026-08-21
+            // 洪峰事故的根修。
+            let pool = DeliveryPool::new(
+                Arc::clone(&obs),
+                Arc::clone(&ask),
+                Arc::clone(&store),
+                Arc::clone(&instances),
+                kernel.clone(),
+                token.clone(),
+            );
+            // 路由门禁：无路由的会话（TUI/CLI/cron）不派发给 actor。
+            // 短 TTL 缓存（含负结果）避免每事件一次 sqlite 读；投递侧
+            // （actor 内）总是新鲜重读，此处用快照不构成锚点风险。
+            let routing_cache: DashMap<
+                SessionId,
+                (Option<Arc<SessionRouting>>, std::time::Instant),
+            > = DashMap::new();
+            // 心跳 PATCH 在飞标记（评审 nit #6）：上一次还没跑完就不再
+            // 叠加 spawn，挂起的 PATCH 不会堆积任务。
+            let refresh_in_flight = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let mut watchdog = tokio::time::interval(WATCHDOG_SWEEP_INTERVAL);
             watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut live_refresh = tokio::time::interval(LIVE_CARD_REFRESH_INTERVAL);
             live_refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-            // Per-session run reply buffers: assistant texts and tool calls
-            // accumulate during a run; only the last text becomes a message
-            // bubble when the run ends (design: reply buffering). A buffer
-            // is (re)started by the first `Running` of a run and drained at
-            // `Stopped`/watchdog, so its presence doubles as the
-            // run-in-flight marker.
-            let mut reply_buffers: HashMap<SessionId, reply::RunReplyBuffer> = HashMap::new();
 
             loop {
                 tokio::select! {
                     biased;
                     () = token.cancelled() => break,
                     // Ticks yield to queued events (guard disables the arm
-                    // under `biased`): a terminal event (`Stopped`/
-                    // `Compacted`) flips the conductor's state mirror to
-                    // Idle the instant it is emitted, but this loop may not
-                    // have processed it yet — judging liveness before
-                    // draining the queue sweeps live cards into false
-                    // ⏰ Session lost receipts. Guards are evaluated once at
-                    // `select!` entry, so a tick waking the loop can still
-                    // win over events that landed while parked — hence the
-                    // re-check inside each handler. Sustained event flow
-                    // defers ticks (MissedTickBehavior::Skip, no burst);
+                    // under `biased`): terminal events flip the conductor's
+                    // state mirror to Idle the instant they are emitted, but
+                    // this loop may not have processed them yet — judging
+                    // liveness (obs dead-card sweep) before draining the
+                    // queue could sweep live sessions' cards. The reply
+                    // settle path has the same guard per-actor (hub_delivery).
+                    // Sustained flow defers ticks (MissedTickBehavior::Skip);
                     // they catch up when traffic quiets.
                     _ = live_refresh.tick(), if rx.is_empty() => {
                         if !rx.is_empty() {
                             continue;
                         }
-                        // Live-card heartbeat: re-render + PATCH cards that
-                        // haven't updated within the interval (long tool).
-                        obs.refresh_stale(LIVE_CARD_REFRESH_INTERVAL).await;
+                        // Live-card heartbeat off-loop: obs state is
+                        // DashMap-sharded; a racing heartbeat PATCH only
+                        // costs a seconds-stale render that self-heals on
+                        // the next update. Keeps the loop free of PATCH
+                        // bursts after a flood (91 stale cards ≈ a minute
+                        // of inline PATCHes — exactly what killed it).
+                        if refresh_in_flight
+                            .swap(true, std::sync::atomic::Ordering::AcqRel)
+                        {
+                            continue;
+                        }
+                        let obs = Arc::clone(&obs);
+                        let flag = Arc::clone(&refresh_in_flight);
+                        tokio::spawn(async move {
+                            obs.refresh_stale(LIVE_CARD_REFRESH_INTERVAL).await;
+                            flag.store(false, std::sync::atomic::Ordering::Release);
+                        });
                     }
                     _ = watchdog.tick(), if rx.is_empty() => {
                         if !rx.is_empty() {
                             continue;
                         }
-                        // Kernel gone = shutting down; nothing to settle.
+                        // 顺手驱逐路由缓存的过期项（cron/subagent churn，
+                        // 防无界缓慢增长——评审 should-fix #2）。
+                        routing_cache
+                            .retain(|_, (_, at)| at.elapsed() < ROUTING_CACHE_TTL);
+                        // 回复兜底已下沉到各会话 actor 的巡检（actor 死了
+                        // 但 Stopped 丢了会自己 Timeout 投递）；这里只剩
+                        // obs 卡片状态的全局清扫。Kernel gone = 关闭中。
                         if let Some(k) = kernel.upgrade() {
-                            // Sessions whose agent died (crash / lost
-                            // `Stopped`): flush whatever reply state remains
-                            // so content is never silently lost, mirroring the
-                            // obs timeout settlement. Tick arms yield to
-                            // queued events (guard + in-handler re-check),
-                            // so an already-delivered `Stopped` is always
-                            // drained before this check; the residual window
-                            // is the bus-forwarder hop (sub-ms scheduling
-                            // latency) before an event reaches this listener.
-                            let dead: Vec<SessionId> = reply_buffers
-                                .keys()
-                                .filter(|sid| !k.is_session_running(sid))
-                                .cloned()
-                                .collect();
-                            for sid in dead {
-                                // Look up BEFORE draining the buffer: a
-                                // failed lookup must not drop the reply.
-                                let routing = match store.find_routing_by_session(&sid).await {
-                                    Ok(Some(r)) => r,
-                                    // Routing gc'd: the reply is undeliverable
-                                    // — drop the buffer instead of re-querying
-                                    // the store every sweep forever.
-                                    Ok(None) => {
-                                        reply_buffers.remove(&sid);
-                                        continue;
-                                    }
-                                    // Transient store error: keep the buffer
-                                    // and retry next sweep.
-                                    Err(_) => continue,
-                                };
-                                let Some((adapter, tool_trace, observability, mid_run_split)) = instances
-                                    .get(&routing.channel_name)
-                                    .map(|i| {
-                                        (
-                                            Arc::clone(&i.adapter),
-                                            i.config.tool_trace,
-                                            i.config.observability,
-                                            i.config.mid_run_split,
-                                        )
-                                    })
-                                else {
-                                    // Channel instance gone: undeliverable.
-                                    reply_buffers.remove(&sid);
-                                    continue;
-                                };
-                                let Some(buf) = reply_buffers.remove(&sid) else { continue };
-                                let reply_msg_id = deliver_reply(
-                                    &obs,
-                                    &adapter,
-                                    &routing,
-                                    Some(buf.into_reply()),
-                                    tool_trace,
-                                    observability,
-                                    mid_run_split,
-                                    &sid,
-                                    SettleKind::Timeout,
-                                    &kernel,
-                                )
-                                .await;
-                                // The reply was still delivered — subscribers
-                                // get their card (agent died mid-run, so the
-                                // status says so).
-                                notify_run_subscribers(
-                                    &store,
-                                    &adapter,
-                                    &routing,
-                                    reply_msg_id.as_deref(),
-                                    RunEndStatus::Failed,
-                                    &sid,
-                                    &kernel,
-                                    &obs,
-                                )
-                                .await;
-                            }
                             obs.sweep_dead_sessions(|sid| k.is_session_running(sid)).await;
                         }
                     }
@@ -629,191 +608,20 @@ impl ChannelHub {
                             event = ?std::mem::discriminant(&envelope.event),
                             "channel forwarder event"
                         );
-                        let routing = match store.find_routing_by_session(&session_id).await {
-                            Ok(Some(r)) => r,
-                            Ok(None) => continue,
-                            Err(e) => {
-                                error!(error = %e, "failed to look up routing for session");
-                                continue;
-                            }
-                        };
-
-                        let (adapter, observability, tool_trace, mid_run_split) = {
-                            let Some(instance) = instances.get(&routing.channel_name) else { continue };
-                            (
-                                Arc::clone(&instance.adapter),
-                                instance.config.observability,
-                                instance.config.tool_trace,
-                                instance.config.mid_run_split,
-                            )
-                        };
-                        let supports_cards = adapter.supports_status_card();
-                        // Doc-comment sessions have no chat surface: no
-                        // status cards, no typing — only the final reply
-                        // (deliver_reply's doc-comment branch).
-                        let is_doc_comment = routing.doc_comment.is_some();
-
-                        // Reply buffering: collect assistant texts and tool
-                        // calls for the run instead of sending each
-                        // intermediate text as its own bubble.
-                        match &envelope.event {
-                            Event::Agent(AgentEvent::Lifecycle {
-                                state: AgentStatus::Running,
-                            }) => {
-                                // `Running` fires per turn; `or_default`
-                                // keeps an existing buffer — buffers are
-                                // drained at `Stopped`/watchdog. (Crash then
-                                // quick restart within a watchdog interval
-                                // may blend the old run's trace in;
-                                // cosmetic, self-heals on the next run.)
-                                reply_buffers.entry(session_id.clone()).or_default();
-                                // First Running of the run: put the session's
-                                // model on the status card (one store read
-                                // per run; a gone kernel just skips it).
-                                if observability && !is_doc_comment && !obs.has_state(&session_id) {
-                                    if let Some(k) = kernel.upgrade() {
-                                        let model = k.get_session_model(&session_id).await;
-                                        obs.set_model(&session_id, model.clone());
-                                        // The reply buffer renders the same
-                                        // title on the settled reply card.
-                                        if let Some(buf) = reply_buffers.get_mut(&session_id) {
-                                            buf.set_model(model);
-                                        }
-                                    }
-                                }
-                            }
-                            Event::Model(ModelEvent::End { content, .. }) => {
-                                // One step per completed model response —
-                                // tool-call-only turns (no text) count too.
-                                let text = super::blocks_to_text(content);
-                                reply_buffers
-                                    .entry(session_id.clone())
-                                    .or_default()
-                                    .record_model_end(&text);
-                            }
-                            Event::Model(ModelEvent::TokenUsage {
-                                message_id,
-                                prompt_tokens,
-                                completion_tokens,
-                                total_tokens,
-                                context_window,
-                                ..
-                            }) => {
-                                // Real usage rides the settled reply card's
-                                // trace title, same segment as the live card.
-                                if let Some(buf) = reply_buffers.get_mut(&session_id) {
-                                    buf.set_ctx_footer(*total_tokens, *context_window);
-                                    buf.add_usage(message_id, *prompt_tokens, *completion_tokens);
-                                }
-                            }
-                            Event::Tool(ToolEvent::Start {
-                                tool_id,
-                                tool_name,
-                                arguments,
-                                ..
-                            }) => {
-                                reply_buffers
-                                    .entry(session_id.clone())
-                                    .or_default()
-                                    .record_tool_start(tool_id, tool_name, arguments.as_deref());
-                            }
-                            Event::Tool(ToolEvent::End {
-                                tool_id,
-                                elapsed_ms,
-                                is_error,
-                                ..
-                            }) => {
-                                if let Some(buf) = reply_buffers.get_mut(&session_id) {
-                                    buf.record_tool_end(tool_id, *elapsed_ms, *is_error);
-                                }
-                            }
-                            _ => {}
-                        }
-
-                        // Run end: deliver the buffered reply — morph the
-                        // status card (single message), or freeze it as a
-                        // terminal receipt and flush the reply at the bottom
-                        // when the user posted mid-run (`mid_run_split`).
-                        if let Event::Agent(AgentEvent::Lifecycle {
-                            state: AgentStatus::Stopped { reason },
-                        }) = &envelope.event
-                        {
-                            let reply = reply_buffers
-                                .remove(&session_id)
-                                .map(reply::RunReplyBuffer::into_reply);
-                            let reply_msg_id = deliver_reply(
-                                &obs,
-                                &adapter,
-                                &routing,
-                                reply,
-                                tool_trace,
-                                observability,
-                                mid_run_split,
-                                &session_id,
-                                SettleKind::Stopped(reason),
-                                &kernel,
-                            )
-                            .await;
-                            notify_run_subscribers(
-                                &store,
-                                &adapter,
-                                &routing,
-                                reply_msg_id.as_deref(),
-                                RunEndStatus::from_stop_reason(reason),
-                                &session_id,
-                                &kernel,
-                                &obs,
-                            )
-                            .await;
+                        // 门禁：无路由的会话不派发。事件的一切处理
+                        // （记账/obs/ask/typing/投递）都在 actor 内闭环。
+                        let Some(routing) =
+                            routing_for(&store, &routing_cache, &session_id).await
+                        else {
                             continue;
-                        }
-
-                        // agent 决策卡（ask_user）：问题渲染成按钮卡；
-                        // Ack（应答/超时/取消）关闭残留卡片。独立于
-                        // observability——它是交互面不是观察面。
-                        match &envelope.event {
-                            Event::Agent(AgentEvent::AskUserQuestion {
-                                req_id,
-                                questions,
-                                ..
-                            }) if supports_cards && !is_doc_comment => {
-                                ask.send_question_cards(
-                                    &adapter,
-                                    &routing.external_chat_id,
-                                    routing.reply_msg_id.as_deref(),
-                                    &session_id,
-                                    req_id,
-                                    questions,
-                                )
-                                .await;
-                            }
-                            Event::Agent(AgentEvent::AskUserAck { req_id }) => {
-                                ask.close_cards(&adapter, req_id).await;
-                            }
-                            _ => {}
-                        }
-
-                        // Observability: cheap state updates + throttled
-                        // in-place PATCHes (design: feishu-channel-observability).
-                        if observability && !is_doc_comment {
-                            obs.handle_event(
-                                &adapter,
-                                &session_id,
-                                &routing.external_chat_id,
-                                routing.reply_msg_id.as_deref(),
-                                &envelope.event,
-                            ).await;
-                        }
-
-                        // Typing indicator as the fallback progress signal on
-                        // platforms without status cards (or when
-                        // observability is disabled).
-                        if matches!(envelope.event, Event::Model(ModelEvent::Request { .. }))
-                            && (!supports_cards || !observability)
-                            && !is_doc_comment
-                        {
-                            let _ = adapter.send_typing(&routing.external_chat_id).await;
-                        }
+                        };
+                        pool.dispatch(
+                            &session_id,
+                            DeliveryJob {
+                                routing,
+                                event: envelope.event,
+                            },
+                        );
                     }
                 }
             }
@@ -1016,6 +824,47 @@ impl ChannelHub {
         self.instances
             .get(&routing.channel_name)
             .is_some_and(|instance| instance.adapter.supports_status_card())
+    }
+}
+
+/// Routing gate lookup with a short TTL cache: keeps the demux loop off
+/// sqlite under floods. Hits and *misses* are both cached (unrouted
+/// sessions — TUI/CLI/subagent — would otherwise cost a store read per
+/// event). Only a *gate* plus a display snapshot — delivery paths always
+/// re-read fresh inside the session actor, so a stale snapshot can never
+/// mis-anchor a reply.
+async fn routing_for(
+    store: &Arc<dyn ChannelStore>,
+    cache: &DashMap<SessionId, (Option<Arc<SessionRouting>>, std::time::Instant)>,
+    session_id: &SessionId,
+) -> Option<Arc<SessionRouting>> {
+    // 分级 TTL（评审 should-fix #3）：正结果 2s，负结果 250ms——负缓存
+    // 若遮住一个刚建好路由的会话，会在门禁处吞掉它整个 run（连 actor
+    // 都不会创建，巡检也救不回来）；250ms 把理论窗口压到近零，同时仍
+    // 把 subagent/TUI 会话的查询压到每秒几次。
+    const POS_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+    const NEG_TTL: std::time::Duration = std::time::Duration::from_millis(250);
+    if let Some(entry) = cache.get(session_id) {
+        let (routing, at) = entry.value();
+        let ttl = if routing.is_some() { POS_TTL } else { NEG_TTL };
+        if at.elapsed() < ttl {
+            return routing.clone();
+        }
+    }
+    match store.find_routing_by_session(session_id).await {
+        Ok(found) => {
+            let found = found.map(Arc::new);
+            cache.insert(
+                session_id.clone(),
+                (found.clone(), std::time::Instant::now()),
+            );
+            found
+        }
+        Err(e) => {
+            // 瞬时错误不缓存（下个事件重试），但本轮按无路由跳过。
+            error!(error = %e, "failed to look up routing for session");
+            None
+        }
     }
 }
 

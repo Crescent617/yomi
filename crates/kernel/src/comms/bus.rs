@@ -6,6 +6,14 @@ use tokio::sync::{mpsc, Notify};
 
 use crate::types::SessionId;
 
+/// 每个 listener 的默认队列容量。
+const LISTENER_CAPACITY: usize = 256;
+
+/// 丢件告警的最小间隔（每 listener）：丢件=数据丢失，必须可见；
+/// 但洪峰时逐条 WARN 本身就是日志洪水（2026-08-21 事故：38 分钟
+/// 16.9 万条重复 WARN，真正的丢件规模反而被淹没）。
+const DROP_ALERT_INTERVAL_MS: u64 = 60_000;
+
 /// 泛型发布-订阅通道。
 ///
 /// 生产者通过 [`PubSubHandle`] 发送，消费者通过 [`PubSubSubscriber`] 接收。
@@ -97,12 +105,41 @@ where
         self.add_listener(None, filter)
     }
 
+    /// 订阅所有消息（自定义过滤），并显式指定该 listener 的队列容量。
+    ///
+    /// 默认容量是 [`LISTENER_CAPACITY`]（256）：对高吞吐、且消费者可能
+    /// 短暂阻塞在下游 IO 的关键订阅者（如渠道投递器），应显式调大，
+    /// 把"突发丢件"换成"短暂排队"。
+    pub fn subscribe_all_filtered_with_capacity<F>(
+        &self,
+        capacity: usize,
+        filter: F,
+    ) -> PubSubSubscriber<T, K>
+    where
+        F: Fn(&T) -> bool + Send + Sync + 'static,
+    {
+        self.add_listener_with_capacity(None, filter, capacity)
+    }
+
     /// 同步注册一个 listener：`None` 为全局订阅。
     fn add_listener<F>(&self, session: Option<K>, filter: F) -> PubSubSubscriber<T, K>
     where
         F: Fn(&T) -> bool + Send + Sync + 'static,
     {
-        let (tx, rx) = mpsc::channel::<(K, T)>(256);
+        self.add_listener_with_capacity(session, filter, LISTENER_CAPACITY)
+    }
+
+    /// 同步注册一个 listener（显式容量）。
+    fn add_listener_with_capacity<F>(
+        &self,
+        session: Option<K>,
+        filter: F,
+        capacity: usize,
+    ) -> PubSubSubscriber<T, K>
+    where
+        F: Fn(&T) -> bool + Send + Sync + 'static,
+    {
+        let (tx, rx) = mpsc::channel::<(K, T)>(capacity);
         let id = next_listener_id();
         if self.closed.load(Ordering::Relaxed) {
             // Bus already shut down: skip registration — `tx` drops here,
@@ -120,6 +157,8 @@ where
                 session,
                 tx,
                 filter: Arc::new(filter),
+                dropped: AtomicU64::new(0),
+                last_drop_alert_ms: AtomicU64::new(0),
             },
         );
         if self.closed.load(Ordering::Relaxed) {
@@ -149,6 +188,13 @@ where
     /// 返回 `Err(TrySendError::Full)` 当通道满时，调用者应处理或重试。
     pub fn publish(&self, key: K, payload: T) -> Result<(), mpsc::error::TrySendError<(K, T)>> {
         self.event_tx.try_send((key, payload))
+    }
+
+    /// 某个 listener 的累计丢件数（队列满被 drop 的事件总数）。诊断用。
+    pub fn listener_dropped(&self, id: u64) -> Option<u64> {
+        self.listeners
+            .get(&id)
+            .map(|l| l.dropped.load(Ordering::Relaxed))
     }
 }
 
@@ -262,6 +308,11 @@ impl<T, K> PubSubSubscriber<T, K> {
         self.rx.recv().await
     }
 
+    /// 该订阅者在 bus 注册表中的 id（配合 [`PubSub::listener_dropped`] 做诊断）。
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
     /// 队列是否已排空。供 select! 守卫让 tick 分支让位于待处理事件。
     pub fn is_empty(&self) -> bool {
         self.rx.is_empty()
@@ -296,6 +347,16 @@ struct Listener<T, K> {
     session: Option<K>,
     tx: mpsc::Sender<(K, T)>,
     filter: Arc<dyn Fn(&T) -> bool + Send + Sync>,
+    /// 该 listener 队列满导致的累计丢件数（诊断/告警用）。
+    dropped: AtomicU64,
+    /// 上次丢件 ERROR 告警的时间戳（ms since epoch），用于限频。
+    last_drop_alert_ms: AtomicU64,
+}
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 fn next_listener_id() -> u64 {
@@ -347,10 +408,29 @@ where
                 closed.push(l.id);
             }
             Err(mpsc::error::TrySendError::Full(_)) => {
-                tracing::warn!(
-                    "EventBus channel full for listener {}, dropping event",
-                    l.id
-                );
+                let n = l.dropped.fetch_add(1, Ordering::Relaxed) + 1;
+                let now_ms = now_millis();
+                let last = l.last_drop_alert_ms.load(Ordering::Relaxed);
+                if (n == 1 || now_ms.saturating_sub(last) >= DROP_ALERT_INTERVAL_MS)
+                    && l.last_drop_alert_ms
+                        .compare_exchange(last, now_ms, Ordering::Relaxed, Ordering::Relaxed)
+                        .is_ok()
+                {
+                    // 丢件 = 数据丢失（回复投递事件也在其中）。ERROR 级、
+                    // 按 listener 限频聚合并带累计数：第一次丢和之后每分钟
+                    // 最多一条，洪峰不会刷日志，监控 grep ERROR 即可发现。
+                    tracing::error!(
+                        listener = l.id,
+                        dropped_total = n,
+                        "EventBus listener queue full, dropping events (data loss — consumer is too slow)"
+                    );
+                } else {
+                    tracing::debug!(
+                        listener = l.id,
+                        dropped_total = n,
+                        "EventBus event dropped (alert suppressed by rate limit)"
+                    );
+                }
             }
             Ok(()) => {}
         }

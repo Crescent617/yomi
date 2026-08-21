@@ -137,3 +137,26 @@ async fn test_emit_on_drop_survives_task_abort() {
         Some(("alpha", 4))
     );
 }
+
+#[tokio::test]
+async fn test_drop_counter_and_custom_capacity() {
+    // capacity=1、无人消费：第 1 条进队，其余被丢并累计进 dropped
+    // （2026-08-21 事故的回归测试：丢件必须可数、可查）。
+    let bus: Arc<PubSub<i32, &'static str>> = PubSub::new();
+    let mut sub = bus.subscribe_all_filtered_with_capacity(1, |_| true);
+    let id = sub.id();
+
+    for i in 0..4 {
+        bus.publish("k", i).unwrap();
+    }
+    // forwarder 是异步派发，给它跑完的时间（与既有测试同一量级）。
+    sleep(Duration::from_millis(100)).await;
+
+    let dropped = bus.listener_dropped(id).expect("listener registered");
+    assert_eq!(dropped, 3, "3 of 4 events must be dropped, got {dropped}");
+
+    // 队列里那一条仍然完好可读。
+    assert_eq!(sub.recv().await, Some(("k", 0)));
+    // 未知 id 返回 None。
+    assert_eq!(bus.listener_dropped(u64::MAX - 1), None);
+}
