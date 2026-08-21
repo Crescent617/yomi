@@ -95,12 +95,13 @@ webhook 场景天然异步（回贴晚到几分钟无影响）。需要结果时
 `subscribe_session_events` 订阅事件流自行跟踪 run 生命周期；
 待真实场景出现再评估是否值得同步原语。
 
-## 生命周期与回收（三层，零管理面 RPC）
+## 生命周期与回收（两条路，零管理面 RPC）
 
-1. 显式：`ext_unregister`
-2. 连接断开：该连接的账本逆序回收——代理 tool 摘除、pending 工作项
-   以 "tool provider disconnected" 报错给调用方。**杀进程即下掉，主路径。**
-3. daemon 重启：内存表清空；supervised 自动重拉，external 各自重连重注册。
+1. **连接断开（唯一主动路径，RAII）**：该连接的账本逆序回收——代理
+   tool 摘除、pending 工作项以 "tool provider disconnected" 报错给调用方。
+   杀进程即下掉。
+2. **daemon 重启**：内存表清空；supervised 自动重拉，external 各自
+   重连重注册。
 
 ## Config（supervised 模式，可选）
 
@@ -149,7 +150,7 @@ ext.tool("stock.quote", "查询股票实时价格",
 def quote(args):
     return {"price": fetch(args["symbol"])}
 
-ext.serve_forever()  # pull(result) → dispatch → 下一拉带回结果；断开即退出
+ext.serve_forever()  # pull → dispatch → ext_result 循环；断开即退出
 ```
 
 ## 狗食计划
