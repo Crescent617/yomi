@@ -75,17 +75,17 @@ sink 复用现有 `subscribe_*`，channel 插件化等第三个渠道出现再�
 ### `ext_route`
 
 ```json
-→ {"ext_route": {"source": "gitlab-ci", "key": "proj123/pipelines",
-    "target_hint": {"channel": "feishu", "chat_id": "oc_devops"}}}
+→ {"ext_route": {"source": "gitlab-ci", "key": "proj123/pipelines"}}
 ← {"ok": {"session_id": "sess_...", "created": false}}
 ```
 
 - 复用 channel mapping store：source 名当 pseudo-channel（第一维）、
   key 当 mapping key（第二维）。会话创建/复用/gc 级联全免费。
-- 三种模式：固定 session（config 写死）、话题 keyed（source+key 自动建/复用）、
-  挂靠渠道会话（`target_hint` → 回复走该会话的渠道出向，如回飞书群）。
 - 之后照常 `send_message`；source 消息统一带 `[From source:<name>]` 前缀，
   对齐 channel 消息的来源标注惯例。
+- **回复出向**（如回飞书群）两条路，均无需协议新增：
+  ① bridge config 直接写目标群的 session_id（人工查一次 mapping 即可）；
+  ② source 会话 prompt 约定"结果发到 oc_xxx"，agent 用 lark skill 自行转发。
 
 ### Source 回执（一期不做）
 
@@ -172,6 +172,10 @@ ext.serve_forever()  # pull → dispatch → ext_result 循环；断开即退出
 - **ext_unregister RPC**：弃选。断开即回收（RAII）覆盖一切下线场景。
 - **注册持久化**：明确不做。重连重注册是契约的一部分。
 - **gate 一期**：拦截点要动 conductor 热路径，单独一批做（二期）。
+- **`ext_route` 的 target_hint（挂靠已有渠道 chat）**：弃选（2026-08-21）。
+  双重归属语义（session 同属群聊与 source key）+ 映射冲突处理是隐藏税；
+  固定 session_id 与 agent 经 lark 转发已覆盖出向需求。加回条件：
+  bridge 需按事件内容运行时动态选择目标群。
 
 ## 状态
 
