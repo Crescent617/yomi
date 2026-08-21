@@ -46,7 +46,9 @@ impl KernelServer {
                                 name,
                                 desc,
                                 schema,
-                                level: level.unwrap_or_default(),
+                                // 缺省 caution（走审批）：ext 是任意外部代码，
+                                // 不给"默认免审"的口子。
+                                level: level.unwrap_or(crate::permission::Level::Caution),
                             },
                         )
                         .map(|registration| serde_json::json!({ "registration": registration }))
