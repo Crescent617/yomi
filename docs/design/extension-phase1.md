@@ -101,6 +101,21 @@ webhook 场景天然异步（回贴晚到几分钟无影响）。需要结果时
 `subscribe_session_events` 订阅事件流自行跟踪 run 生命周期；
 待真实场景出现再评估是否值得同步原语。
 
+## Config（supervised：跟随 daemon 拉起）
+
+```toml
+[[extensions]]
+name = "stock-tools"
+command = ["uv", "run", "~/.yomi/ext/stock_tools.py"]
+```
+
+- 语义压到最简：**列出即拉起**——daemon 启动时按进程组 spawn
+  （复用 background shell 组杀）；**daemon 死则全组 SIGTERM**；
+  运行中崩溃则固定 5s 退避重拉（无 restart 策略 knob）。
+- 于是扩展的生命周期与 daemon 完全耦合：发版重启 daemon =
+  扩展随死随生，无需人工扶进程。supervised 与 external（自己跑的）
+  注册契约一致——启动方式只是运维差异（内外同构）。
+
 ## 生命周期与回收（两条路，零管理面 RPC）
 
 1. **连接断开（唯一主动路径，RAII）**：该连接的账本逆序回收——代理
@@ -121,9 +136,10 @@ webhook 场景天然异步（回贴晚到几分钟无影响）。需要结果时
 
 - `crates/kernel/src/wire/mod.rs`：4 个 ReqMethod + 版本 28
 - `crates/kernel/src/extension/`（新）：registry、代理 Tool、pull 队列、
-  连接 sweep 钩子
+  连接 sweep 钩子、supervisor（boot spawn + 组杀 + 固定退避重拉）
 - `crates/kernel/src/server/{dispatcher,connection}.rs`：方法分发 + conn drop sweep
 - `crates/kernel/src/kernel/conductor.rs`：route_message 的 pseudo-channel 映射
+- `crates/kernel/src/config/mod.rs`：`[[extensions]]` 段
 - `crates/cli`：`yomi ext list`（查看登记，debug 用，可缓）
 - `ext/sdk/yomi_ext.py`（repo 外或 examples/）：~50 行 Python SDK
 
@@ -163,9 +179,6 @@ ext.serve_forever()  # pull → dispatch → ext_result 循环；断开即退出
 - **ext_unregister RPC**：弃选。断开即回收（RAII）覆盖一切下线场景。
 - **注册持久化**：明确不做。重连重注册是契约的一部分。
 - **gate 一期**：拦截点要动 conductor 热路径，单独一批做（二期）。
-- **supervised config（`[[extensions]]`，daemon 拉起扩展进程）**：一期不做
-  （2026-08-21）。nohup/launchd 足够；加回条件：扩展常驻化需求明确，
-  届时复用 background shell 的进程组管理。
 - **多 worker（同 registration 并发 pull）**：一期单 worker，第二条挂起
   pull 报错；扩容 = 多进程多连接。
 - **`ext_pull` 的 timeout_ms 参数**：固定 55s，不设 knob。
