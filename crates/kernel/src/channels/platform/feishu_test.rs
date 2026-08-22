@@ -1427,7 +1427,7 @@ async fn reply_doc_comment_with_whole_sentinel_creates_new_comment_directly() {
         .reply_doc_comment(
             "doxcnABC123",
             "docx",
-            super::super::WHOLE_COMMENT_ID,
+            crate::channels::WHOLE_COMMENT_ID,
             "回复内容",
         )
         .await

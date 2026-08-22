@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
-use super::{
+use crate::channels::{
     CardAction, ChannelError, ChannelEvent, ChannelMessage, DocPermissionRequest, PlatformAdapter,
 };
 
@@ -40,8 +40,8 @@ pub(crate) const FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_
 
 // ── Types ────────────────────────────────────────────────────────────
 
-use super::feishu::{api_err, FeishuAdapter};
-use super::feishu_text::strip_bot_mention;
+use crate::channels::feishu::{api_err, FeishuAdapter};
+use crate::channels::feishu_text::strip_bot_mention;
 
 impl FeishuAdapter {
     /// Handle one binary frame. The `write` lock is held only around the
@@ -401,7 +401,7 @@ impl FeishuAdapter {
                 }
             }
         }
-        let notice = super::DocCommentNotice {
+        let notice = crate::channels::DocCommentNotice {
             file_token: file_token.to_string(),
             file_type: file_type.to_string(),
             comment_id: comment_id.to_string(),

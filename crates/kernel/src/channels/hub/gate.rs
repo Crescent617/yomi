@@ -3,11 +3,11 @@
 use std::sync::Arc;
 use tracing::{info, warn};
 
-use super::hub_command::{parse_channel_command, ChannelCommand};
+use crate::channels::hub_command::{parse_channel_command, ChannelCommand};
 
-use super::hub_routing::resolve_require_mention;
+use crate::channels::hub_routing::resolve_require_mention;
 
-use super::{ChannelConfig, ChannelMessage, ChannelStore, PlatformAdapter};
+use crate::channels::{ChannelConfig, ChannelMessage, ChannelStore, PlatformAdapter};
 
 /// Outcome of gating one incoming message (see `gate_message`).
 /// `comment.rs` hands assembled doc-comment triggers to the dispatch

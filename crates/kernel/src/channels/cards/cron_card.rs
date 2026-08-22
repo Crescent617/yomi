@@ -1,9 +1,10 @@
-//! `/cron` — cron 面板卡：**全部**定时任务（不筛归属——hrli
-//! 2026-08-22 决策：全部列出最简单），每行 ⏸暂停 / ▶️恢复 / 🗑删除
-//! （无状态两段确认），底部 🔄 Refresh。`cron_*` 回调执行后原地刷
-//! 新（settings 同款："执行 → 重读状态 → `update_card`"）。命令与
-//! 全部按钮回调限 admin（与 `/settings` 同档）；路由层 user 门限
-//! 对所有按钮生效。
+//! `/cron` — cron 面板卡：定时任务管理（**全部 job、不含已完成**
+//! ——hrli 2026-08-22 决策：completed 纯属历史残留，列表只该看
+//! "还活着的"；failed 保留显示以呈现 `last_error`），每行 ⏸暂停 /
+//! ▶️恢复 / 🗑删除（无状态两段确认），底部 🔄 Refresh。`cron_*` 回
+//! 调执行后原地刷新（settings 同款："执行 → 重读状态 →
+//! `update_card`"）。命令与全部按钮回调限 admin（与 `/settings`
+//! 同档）；路由层 user 门限对所有按钮生效。
 //!
 //! 不提供触发按钮（行太挤——hrli 决策；触发走 cron tool）。
 
@@ -16,8 +17,8 @@ use crate::cron::{CronJob, CronJobStatus, CronStore, UpdateCronJobInput};
 use crate::kernel::Kernel;
 use crate::types::{ContentBlock, Result as KernelResult};
 
-use super::hub_deliver::info_card_envelope;
-use super::{CardAction, ChannelConfig, ChannelMessage, PlatformAdapter};
+use crate::channels::hub_deliver::info_card_envelope;
+use crate::channels::{CardAction, ChannelConfig, ChannelMessage, PlatformAdapter};
 
 async fn read_jobs(cron_store: &Arc<dyn CronStore>) -> KernelResult<Vec<CronJob>> {
     let mut jobs = cron_store
@@ -26,7 +27,12 @@ async fn read_jobs(cron_store: &Arc<dyn CronStore>) -> KernelResult<Vec<CronJob>
         // 支持需加分页。
         .list(None, 1000)
         .await
-        .map_err(|e| crate::types::KernelError::storage(format!("list cron jobs: {e}")))?;
+        .map_err(|e| crate::types::KernelError::storage(format!("list cron jobs: {e}")))?
+        .into_iter()
+        // completed 不显示（纯属历史残留——hrli 2026-08-22）；failed
+        // 保留（last_error 需要可见）。
+        .filter(|j| !matches!(j.status, CronJobStatus::Completed))
+        .collect::<Vec<_>>();
     // 活跃在前，其余按下次运行时间升序（None 排尾）。
     jobs.sort_by_key(|j| {
         (
@@ -66,7 +72,7 @@ fn job_info_line(job: &CronJob) -> String {
     };
     let mut line = format!(
         "**{}**\n{} `{}` · next {}{}",
-        super::reply::md_safe(&super::reply::flatten_ws(&job.name)),
+        crate::channels::reply::md_safe(&crate::channels::reply::flatten_ws(&job.name)),
         status_icon(job.status),
         job.schedule,
         fmt_next(job),
@@ -77,7 +83,7 @@ fn job_info_line(job: &CronJob) -> String {
         let _ = write!(
             line,
             "\n<font color='red'>last error: {}</font>",
-            super::reply::md_safe(&super::reply::flatten_ws(&tail(err, 60)))
+            crate::channels::reply::md_safe(&crate::channels::reply::flatten_ws(&tail(err, 60)))
         );
     }
     line
@@ -137,7 +143,7 @@ fn cron_card(chat_id: &str, jobs: &[CronJob], confirming: Option<(&str, &str)>) 
                 {
                     "tag": "column", "width": "weighted", "weight": 1, "vertical_align": "center",
                     "elements": [{ "tag": "markdown", "text_size": "notation",
-                        "content": format!("确认删除「{}」？此操作不可撤销。", super::reply::md_safe(&super::reply::flatten_ws(name))) }],
+                        "content": format!("确认删除「{}」？此操作不可撤销。", crate::channels::reply::md_safe(&crate::channels::reply::flatten_ws(name))) }],
                 },
                 {
                     "tag": "column", "width": "auto", "vertical_align": "center",
@@ -169,7 +175,7 @@ fn cron_card(chat_id: &str, jobs: &[CronJob], confirming: Option<(&str, &str)>) 
 }
 
 /// `/cron` 命令主体（admin 门槛在命令臂，此处只管执行）。
-pub(super) async fn handle_cron_command(
+pub(crate) async fn handle_cron_command(
     kernel: &Arc<Kernel>,
     adapter: &Arc<dyn PlatformAdapter>,
     msg: &ChannelMessage,
@@ -209,7 +215,7 @@ fn notify_scheduler(kernel: &Arc<Kernel>) {
 
 /// `cron_*` 按钮回调：执行变更后原地刷新这张卡片（settings 同款约定
 /// ——不自动跟踪变更，别处改了任务点 🔄 Refresh）。
-pub(super) async fn handle_card_action(
+pub(crate) async fn handle_card_action(
     channel_name: &str,
     config: &ChannelConfig,
     kernel: &Arc<Kernel>,
@@ -311,8 +317,8 @@ async fn handle_card_action_inner(
         warn!(value = %value, "cron card action missing scope");
         return Ok(());
     }
-    if let Some(deny) = super::approval::check_admin(config, &action.operator_open_id) {
-        super::approval::send_action_denial(adapter, action, deny).await;
+    if let Some(deny) = crate::channels::approval::check_admin(config, &action.operator_open_id) {
+        crate::channels::approval::send_action_denial(adapter, action, deny).await;
         return Ok(());
     }
     let Some(cron_store) = kernel.cron_store() else {

@@ -13,9 +13,9 @@ use tracing::warn;
 use crate::kernel::Kernel;
 use crate::types::Result as KernelResult;
 
-use super::hub_deliver::info_card_envelope;
-use super::hub_routing::read_mention_override;
-use super::{CardAction, ChannelConfig, ChannelMessage, ChannelStore, PlatformAdapter};
+use crate::channels::hub_deliver::info_card_envelope;
+use crate::channels::hub_routing::read_mention_override;
+use crate::channels::{CardAction, ChannelConfig, ChannelMessage, ChannelStore, PlatformAdapter};
 
 /// 面板管理的三个配置项的当前状态（chat scope；`None` = 跟随 channel
 /// default）。
@@ -204,7 +204,7 @@ fn settings_card(chat_id: &str, state: &SettingsState) -> String {
 }
 
 /// `/settings` 命令主体（admin 门槛在命令臂，此处只管执行）。
-pub(super) async fn handle_settings_command(
+pub(crate) async fn handle_settings_command(
     channel_name: &str,
     config: &ChannelConfig,
     kernel: &Arc<Kernel>,
@@ -227,7 +227,7 @@ pub(super) async fn handle_settings_command(
 
 /// `cfg_*` 按钮/下拉回调：执行变更后原地刷新这张卡片（与 mailbox 卡
 /// 同一约定——不自动跟踪变更，别处改了配置点 🔄 Refresh）。
-pub(super) async fn handle_card_action(
+pub(crate) async fn handle_card_action(
     channel_name: &str,
     config: &ChannelConfig,
     kernel: &Arc<Kernel>,
@@ -256,8 +256,8 @@ async fn handle_card_action_inner(
         warn!(value = %value, "settings card action missing scope");
         return Ok(());
     }
-    if let Some(deny) = super::approval::check_admin(config, &action.operator_open_id) {
-        super::approval::send_action_denial(adapter, action, deny).await;
+    if let Some(deny) = crate::channels::approval::check_admin(config, &action.operator_open_id) {
+        crate::channels::approval::send_action_denial(adapter, action, deny).await;
         return Ok(());
     }
     match value["action"].as_str() {
@@ -296,8 +296,14 @@ async fn handle_card_action_inner(
             };
             match map_cfg_model(&models, opt) {
                 Some(key) => {
-                    super::hub_handlers::set_chat_model(channel_name, store, kernel, chat_id, key)
-                        .await?
+                    crate::channels::hub_handlers::set_chat_model(
+                        channel_name,
+                        store,
+                        kernel,
+                        chat_id,
+                        key,
+                    )
+                    .await?
                 }
                 None => {
                     warn!(opt, "cfg_model: unknown option, model untouched");
@@ -308,7 +314,14 @@ async fn handle_card_action_inner(
         Some("cfg_reset_all") => {
             store.clear_mention_override(channel_name, chat_id).await?;
             store.clear_rit_override(channel_name, chat_id).await?;
-            super::hub_handlers::set_chat_model(channel_name, store, kernel, chat_id, None).await?;
+            crate::channels::hub_handlers::set_chat_model(
+                channel_name,
+                store,
+                kernel,
+                chat_id,
+                None,
+            )
+            .await?;
         }
         Some("cfg_refresh") => {}
         other => {

@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use super::{ChannelError, ChannelEvent, ChannelMessage, PlatformAdapter};
+use crate::channels::{ChannelError, ChannelEvent, ChannelMessage, PlatformAdapter};
 
 pub struct TelegramAdapter {
     bot: Bot,
@@ -267,7 +267,7 @@ async fn send_one_file(
     caption: Option<&str>,
     reply_msg_id: Option<&str>,
 ) -> Result<(), ChannelError> {
-    let upload = super::utils::read_upload(
+    let upload = crate::channels::utils::read_upload(
         path,
         PHOTO_MAX_BYTES,
         DOCUMENT_MAX_BYTES,
@@ -412,7 +412,7 @@ impl PlatformAdapter for TelegramAdapter {
                             |msg| {
                                 let raw_text =
                                     msg.text().or_else(|| msg.caption()).unwrap_or_default();
-                                super::hub_command::has_channel_command_prefix(raw_text)
+                                crate::channels::hub_command::has_channel_command_prefix(raw_text)
                             },
                             |msg| msg.from.as_ref().map_or(0, |u| u.id.0),
                         );
@@ -459,12 +459,12 @@ impl PlatformAdapter for TelegramAdapter {
             .parse()
             .map_err(|e| ChannelError::Platform(format!("invalid chat_id: {e}")))?;
 
-        let text = super::blocks_to_text(&blocks);
+        let text = crate::channels::blocks_to_text(&blocks);
         if text.is_empty() {
             return Ok(None);
         }
         // Platform-neutral `<@USER_ID>` contract → tg://user?id= link.
-        let text = super::utils::rewrite_mentions(&text, &telegram_mention);
+        let text = crate::channels::utils::rewrite_mentions(&text, &telegram_mention);
         let text = cap_message_length(&text);
 
         let recipient = Recipient::Id(ChatId(chat_id));

@@ -45,7 +45,7 @@ impl PlatformAdapter for MockAdapter {
         blocks: Vec<ContentBlock>,
         _reply_msg_id: Option<&str>,
     ) -> Result<Option<String>, ChannelError> {
-        let text = super::super::blocks_to_text(&blocks);
+        let text = crate::channels::blocks_to_text(&blocks);
         self.sent_messages
             .lock()
             .unwrap()

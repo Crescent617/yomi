@@ -9,16 +9,24 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use super::delivery_pool::{DeliveryJob, DeliveryPool};
-use super::hub_context::{
+pub(crate) mod command;
+pub(crate) mod context;
+pub(crate) mod deliver;
+pub(crate) mod delivery_pool;
+pub(crate) mod gate;
+pub(crate) mod handlers;
+pub(crate) mod routing;
+
+use crate::channels::delivery_pool::{DeliveryJob, DeliveryPool};
+use crate::channels::hub_context::{
     advance_history_cursor, prepare_trigger, record_passive_receipt, TriggerKind,
 };
-use super::hub_deliver::send_command_reply;
-use super::hub_gate::{gate_message, send_gate_reaction, Gate};
-use super::hub_handlers::handle_incoming_message;
-use super::hub_routing::{reply_anchor, resolve_reply_in_thread};
+use crate::channels::hub_deliver::send_command_reply;
+use crate::channels::hub_gate::{gate_message, send_gate_reaction, Gate};
+use crate::channels::hub_handlers::handle_incoming_message;
+use crate::channels::hub_routing::{reply_anchor, resolve_reply_in_thread};
 
-use super::{
+use crate::channels::{
     ask::AskCardRegistry, obs::ObsTracker, ChannelConfig, ChannelEvent, ChannelInfo,
     ChannelMessage, ChannelStatus, ChannelStore, PlatformAdapter, SessionRouting,
 };
@@ -251,7 +259,7 @@ impl ChannelHub {
                                     Arc::clone(&adapter_gate),
                                 );
                                 tokio::spawn(async move {
-                                    super::approval::handle_doc_permission_applied(
+                                    crate::channels::approval::handle_doc_permission_applied(
                                         &name, &config, &store, &adapter, req,
                                     ).await;
                                 });
@@ -274,11 +282,11 @@ impl ChannelHub {
                                     // Admin-gated surfaces (mb_*, doc
                                     // approvals) stack check_admin in
                                     // their own handlers.
-                                    if let Some(deny) = super::check_user_access(
+                                    if let Some(deny) = crate::channels::check_user_access(
                                         &config,
                                         &action.operator_open_id,
                                     ) {
-                                        super::approval::send_action_denial(
+                                        crate::channels::approval::send_action_denial(
                                             &adapter, &action, deny,
                                         )
                                         .await;
@@ -298,7 +306,7 @@ impl ChannelHub {
                                         let Some(kernel) = kernel_weak.upgrade() else {
                                             return;
                                         };
-                                        super::mailbox::handle_card_action(
+                                        crate::channels::mailbox::handle_card_action(
                                             &name, &config, &kernel, &adapter, action,
                                         )
                                         .await;
@@ -306,12 +314,12 @@ impl ChannelHub {
                                         let Some(kernel) = kernel_weak.upgrade() else {
                                             return;
                                         };
-                                        super::obs::handle_stop_action(&kernel, &action);
+                                        crate::channels::obs::handle_stop_action(&kernel, &action);
                                     } else if ns.starts_with("bg_") {
                                         let Some(kernel) = kernel_weak.upgrade() else {
                                             return;
                                         };
-                                        super::hub_handlers::handle_bg_action(
+                                        crate::channels::hub_handlers::handle_bg_action(
                                             &name, &kernel, &adapter, &action,
                                         )
                                         .await;
@@ -319,7 +327,7 @@ impl ChannelHub {
                                         let Some(kernel) = kernel_weak.upgrade() else {
                                             return;
                                         };
-                                        super::hub_handlers::handle_sessions_action(
+                                        crate::channels::hub_handlers::handle_sessions_action(
                                             &name, &config, &store, &kernel, &adapter, &action,
                                         )
                                         .await;
@@ -327,7 +335,7 @@ impl ChannelHub {
                                         let Some(kernel) = kernel_weak.upgrade() else {
                                             return;
                                         };
-                                        super::settings::handle_card_action(
+                                        crate::channels::settings::handle_card_action(
                                             &name, &config, &kernel, &store, &adapter, action,
                                         )
                                         .await;
@@ -335,12 +343,12 @@ impl ChannelHub {
                                         let Some(kernel) = kernel_weak.upgrade() else {
                                             return;
                                         };
-                                        super::cron_card::handle_card_action(
+                                        crate::channels::cron_card::handle_card_action(
                                             &name, &config, &kernel, &adapter, action,
                                         )
                                         .await;
                                     } else {
-                                        super::approval::handle_card_action(
+                                        crate::channels::approval::handle_card_action(
                                             &name, &config, &store, &adapter, action,
                                         )
                                         .await;
@@ -361,7 +369,7 @@ impl ChannelHub {
                                     dispatch_tx.clone(),
                                 );
                                 tokio::spawn(async move {
-                                    super::comment::handle_doc_comment_added(
+                                    crate::channels::comment::handle_doc_comment_added(
                                         &name, &config, &store, &adapter, &dispatch, notice,
                                     ).await;
                                 });
@@ -740,7 +748,10 @@ impl ChannelHub {
             }
         };
         // Threads are a Feishu capability for now.
-        if !matches!(config.platform, super::PlatformConfig::Feishu { .. }) {
+        if !matches!(
+            config.platform,
+            crate::channels::PlatformConfig::Feishu { .. }
+        ) {
             return Err(crate::types::KernelError::Config(format!(
                 "channel `{name}` does not support threads"
             )));
@@ -909,13 +920,13 @@ async fn routing_for(
     }
 }
 
-fn build_adapter(platform: &super::PlatformConfig) -> Arc<dyn PlatformAdapter> {
+fn build_adapter(platform: &crate::channels::PlatformConfig) -> Arc<dyn PlatformAdapter> {
     match platform {
-        super::PlatformConfig::Telegram { token } => {
-            Arc::new(super::telegram::TelegramAdapter::new(token.clone()))
-        }
-        super::PlatformConfig::Feishu { app_id, app_secret } => Arc::new(
-            super::feishu::FeishuAdapter::new(app_id.clone(), app_secret.clone()),
+        crate::channels::PlatformConfig::Telegram { token } => Arc::new(
+            crate::channels::telegram::TelegramAdapter::new(token.clone()),
+        ),
+        crate::channels::PlatformConfig::Feishu { app_id, app_secret } => Arc::new(
+            crate::channels::feishu::FeishuAdapter::new(app_id.clone(), app_secret.clone()),
         ),
     }
 }

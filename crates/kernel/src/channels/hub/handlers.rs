@@ -8,19 +8,19 @@ use crate::types::{ContentBlock, Result, SessionId};
 use std::sync::Arc;
 use tracing::warn;
 
-use super::hub_command::{
+use crate::channels::hub_command::{
     format_current_model, format_model_list, format_session_info, format_unknown_model,
     parse_channel_command, suggest_command, ChannelCommand, OverrideMode, HELP_TEXT,
 };
-use super::hub_context::{append_message_images, prepare_trigger, TriggerKind};
-use super::hub_deliver::send_info_reply;
-use super::hub_routing::{
+use crate::channels::hub_context::{append_message_images, prepare_trigger, TriggerKind};
+use crate::channels::hub_deliver::send_info_reply;
+use crate::channels::hub_routing::{
     effective_mapping_key, get_or_create_session, history_container, is_chat_level_message,
     reply_anchor, resolve_reply_in_thread, resolve_require_mention, session_jump_link,
     session_model_key, subscription_scope_key, thread_refusal, MentionSource,
 };
 
-use super::{
+use crate::channels::{
     obs::ObsTracker, ChannelConfig, ChannelMessage, ChannelStore, PlatformAdapter, PlatformConfig,
 };
 
@@ -95,7 +95,7 @@ pub(crate) async fn handle_incoming_message(
             Ok(Some("No active session to stop.".to_string()))
         }
         ChannelCommand::Restart => {
-            if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
+            if let Some(deny) = crate::channels::approval::check_admin(config, &msg.external_user_id) {
                 return Ok(Some(deny));
             }
             if !kernel.can_restart() {
@@ -308,7 +308,7 @@ pub(crate) async fn handle_incoming_message(
                 .to_string(),
         )),
         ChannelCommand::Mailbox(sub) => {
-            if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
+            if let Some(deny) = crate::channels::approval::check_admin(config, &msg.external_user_id) {
                 return Ok(Some(deny));
             }
             // Same scope resolution as `/info`: chat-level messages show
@@ -321,7 +321,7 @@ pub(crate) async fn handle_incoming_message(
                     if chat_level { "chat" } else { "thread" },
                 )));
             };
-            super::mailbox::handle_mailbox_command(&kernel, adapter, &msg, reply_msg_id, &sid, sub)
+            crate::channels::mailbox::handle_mailbox_command(&kernel, adapter, &msg, reply_msg_id, &sid, sub)
                 .await
         }
         ChannelCommand::InvalidMailboxCommand => Ok(Some(
@@ -329,10 +329,10 @@ pub(crate) async fn handle_incoming_message(
                 .to_string(),
         )),
         ChannelCommand::Settings => {
-            if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
+            if let Some(deny) = crate::channels::approval::check_admin(config, &msg.external_user_id) {
                 return Ok(Some(deny));
             }
-            super::settings::handle_settings_command(
+            crate::channels::settings::handle_settings_command(
                 channel_name,
                 config,
                 &kernel,
@@ -344,13 +344,13 @@ pub(crate) async fn handle_incoming_message(
             .await
         }
         ChannelCommand::Cron => {
-            if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
+            if let Some(deny) = crate::channels::approval::check_admin(config, &msg.external_user_id) {
                 return Ok(Some(deny));
             }
-            super::cron_card::handle_cron_command(&kernel, adapter, &msg, reply_msg_id).await
+            crate::channels::cron_card::handle_cron_command(&kernel, adapter, &msg, reply_msg_id).await
         }
         ChannelCommand::BackgroundTasks { all } => {
-            if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
+            if let Some(deny) = crate::channels::approval::check_admin(config, &msg.external_user_id) {
                 return Ok(Some(deny));
             }
             let chat_level = is_chat_level_message(&msg, rit);
@@ -449,15 +449,15 @@ pub(crate) async fn handle_incoming_message(
             Ok(None)
         }
         ChannelCommand::Permits => {
-            if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
+            if let Some(deny) = crate::channels::approval::check_admin(config, &msg.external_user_id) {
                 return Ok(Some(deny));
             }
-            let body = super::approval::pending_list_body(channel_name, store).await?;
+            let body = crate::channels::approval::pending_list_body(channel_name, store).await?;
             send_info_reply(adapter, &msg, reply_msg_id, "🔐 Pending approvals", body).await?;
             Ok(None)
         }
         ChannelCommand::Approve { id, perm } => {
-            super::approval::approve(
+            crate::channels::approval::approve(
                 channel_name,
                 config,
                 store,
@@ -469,7 +469,7 @@ pub(crate) async fn handle_incoming_message(
             .await
         }
         ChannelCommand::Deny { id } => {
-            super::approval::deny(
+            crate::channels::approval::deny(
                 channel_name,
                 config,
                 store,
@@ -479,7 +479,7 @@ pub(crate) async fn handle_incoming_message(
             )
             .await
         }
-        ChannelCommand::InvalidApprovalCommand => Ok(Some(super::approval::usage())),
+        ChannelCommand::InvalidApprovalCommand => Ok(Some(crate::channels::approval::usage())),
         ChannelCommand::Subscribe {
             recursive,
             target_chat_id,
@@ -651,7 +651,7 @@ pub(crate) async fn handle_bind(
                 .to_string(),
         });
     };
-    if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
+    if let Some(deny) = crate::channels::approval::check_admin(config, &msg.external_user_id) {
         return Ok(deny);
     }
     let sid = SessionId::from(target.clone());
@@ -763,7 +763,7 @@ pub(crate) async fn handle_mention_command(
         send_info_reply(adapter, msg, reply_msg_id, "📣 Mention", body).await?;
         return Ok(None);
     };
-    if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
+    if let Some(deny) = crate::channels::approval::check_admin(config, &msg.external_user_id) {
         return Ok(Some(deny));
     }
     match mode {
@@ -831,7 +831,7 @@ pub(crate) async fn handle_threads_command(
         send_info_reply(adapter, msg, reply_msg_id, "🧵 Reply-in-thread", body).await?;
         return Ok(None);
     };
-    if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
+    if let Some(deny) = crate::channels::approval::check_admin(config, &msg.external_user_id) {
         return Ok(Some(deny));
     }
     match mode {
@@ -882,7 +882,7 @@ pub(crate) async fn handle_sessions_command(
     reply_msg_id: Option<String>,
     offset: usize,
 ) -> Result<Option<String>> {
-    if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
+    if let Some(deny) = crate::channels::approval::check_admin(config, &msg.external_user_id) {
         return Ok(Some(deny));
     }
     let (entries, has_more) =
@@ -1022,7 +1022,7 @@ pub(crate) fn sessions_card(offset: usize, entries: &[SessionEntry], has_more: b
         }
         elements.push(serde_json::json!({ "tag": "column_set", "columns": cols }));
     }
-    super::hub_deliver::info_card_envelope(
+    crate::channels::hub_deliver::info_card_envelope(
         &format!(
             "📋 Recent sessions ({}–{})",
             offset + 1,
@@ -1209,10 +1209,10 @@ pub(crate) async fn handle_sessions_action(
     store: &Arc<dyn ChannelStore>,
     kernel: &Arc<Kernel>,
     adapter: &Arc<dyn PlatformAdapter>,
-    action: &super::CardAction,
+    action: &crate::channels::CardAction,
 ) {
-    if let Some(deny) = super::approval::check_admin(config, &action.operator_open_id) {
-        super::approval::send_action_denial(adapter, action, deny).await;
+    if let Some(deny) = crate::channels::approval::check_admin(config, &action.operator_open_id) {
+        crate::channels::approval::send_action_denial(adapter, action, deny).await;
         return;
     }
     let Some(message_id) = &action.message_id else {
@@ -1222,7 +1222,7 @@ pub(crate) async fn handle_sessions_action(
     let page = collect_session_entries(channel_name, store, kernel, adapter, offset).await;
     let card = match page {
         Ok((entries, has_more)) if !entries.is_empty() => sessions_card(offset, &entries, has_more),
-        Ok(_) => super::hub_deliver::info_card_envelope(
+        Ok(_) => crate::channels::hub_deliver::info_card_envelope(
             "📋 Recent sessions",
             vec![serde_json::json!({
                 "tag": "markdown", "text_size": "notation",
@@ -1356,7 +1356,7 @@ pub(crate) fn background_tasks_card(
     } else {
         "🖥 Background tasks"
     };
-    super::hub_deliver::info_card_envelope(title, elements)
+    crate::channels::hub_deliver::info_card_envelope(title, elements)
 }
 
 /// `bg_*` 按钮回调（/bg 卡行尾 ⏹ 与底部 🔄）：shell=SIGTERM 进程组，
@@ -1366,7 +1366,7 @@ pub(crate) async fn handle_bg_action(
     channel_name: &str,
     kernel: &Arc<Kernel>,
     adapter: &Arc<dyn PlatformAdapter>,
-    action: &super::CardAction,
+    action: &crate::channels::CardAction,
 ) {
     let value = &action.value;
     match value["action"].as_str() {
@@ -1431,7 +1431,7 @@ pub(crate) async fn handle_bg_action(
         (shells, subs)
     };
     let card = if shells.is_empty() && subagents.is_empty() {
-        super::hub_deliver::info_card_envelope(
+        crate::channels::hub_deliver::info_card_envelope(
             if all {
                 "🖥 Background tasks (all sessions)"
             } else {

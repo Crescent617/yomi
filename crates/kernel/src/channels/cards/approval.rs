@@ -2,7 +2,7 @@
 //! command/button approvals.
 //! See `docs/archive/feishu-doc-permission-approval.md`.
 
-use super::{
+use crate::channels::{
     CardAction, ChannelConfig, ChannelStore, DocPermissionRequest, PermRequestRow, PlatformAdapter,
 };
 use crate::types::{ContentBlock, Result as KernelResult};
@@ -31,7 +31,7 @@ const MAX_PENDING_ROWS: usize = 50;
 /// notification card: to `approval_chat_id` when configured, else by DM
 /// to every admin. Per-recipient failures don't take down the rest — the
 /// stored row keeps the request approvable via `/permits`.
-pub(super) async fn handle_doc_permission_applied(
+pub(crate) async fn handle_doc_permission_applied(
     channel_name: &str,
     config: &ChannelConfig,
     store: &Arc<dyn ChannelStore>,
@@ -96,7 +96,7 @@ pub(super) async fn handle_doc_permission_applied(
 // ── Commands ───────────────────────────────────────────────────────
 
 /// The `/permits` list body (no admin check — the caller gates).
-pub(super) async fn pending_list_body(
+pub(crate) async fn pending_list_body(
     channel_name: &str,
     store: &Arc<dyn ChannelStore>,
 ) -> KernelResult<String> {
@@ -105,7 +105,7 @@ pub(super) async fn pending_list_body(
 }
 
 /// `/approve <id> [perm]` — grant the requested (or overridden) level.
-pub(super) async fn approve(
+pub(crate) async fn approve(
     channel_name: &str,
     config: &ChannelConfig,
     store: &Arc<dyn ChannelStore>,
@@ -138,7 +138,7 @@ pub(super) async fn approve(
 }
 
 /// `/deny <id>` — mark denied locally; Feishu has no reject API.
-pub(super) async fn deny(
+pub(crate) async fn deny(
     channel_name: &str,
     config: &ChannelConfig,
     store: &Arc<dyn ChannelStore>,
@@ -162,7 +162,7 @@ pub(super) async fn deny(
 }
 
 /// Usage error reply for malformed approval commands.
-pub(super) fn usage() -> String {
+pub(crate) fn usage() -> String {
     APPROVAL_USAGE.to_string()
 }
 
@@ -172,7 +172,7 @@ pub(super) fn usage() -> String {
 /// carries `{"action": "approve"|"deny", "id": N}`. Successful resolutions
 /// speak through the updated terminal-state cards; only failures and
 /// rejections get an extra chat message in the callback's chat.
-pub(super) async fn handle_card_action(
+pub(crate) async fn handle_card_action(
     channel_name: &str,
     config: &ChannelConfig,
     store: &Arc<dyn ChannelStore>,
@@ -369,7 +369,7 @@ async fn update_notify_cards(adapter: &Arc<dyn PlatformAdapter>, row: &PermReque
     any
 }
 
-pub(super) fn check_admin(config: &ChannelConfig, user_id: &str) -> Option<String> {
+pub(crate) fn check_admin(config: &ChannelConfig, user_id: &str) -> Option<String> {
     if config.admin_users.iter().any(|u| u == user_id) {
         None
     } else {
@@ -380,7 +380,7 @@ pub(super) fn check_admin(config: &ChannelConfig, user_id: &str) -> Option<Strin
 /// Send a card-action denial back to the chat the click came from.
 /// Best-effort: a missing chat or a failed send only warns — the
 /// operator's client already registered the tap regardless.
-pub(super) async fn send_action_denial(
+pub(crate) async fn send_action_denial(
     adapter: &Arc<dyn PlatformAdapter>,
     action: &CardAction,
     text: String,
@@ -441,7 +441,7 @@ fn applicant_summary(row: &PermRequestRow) -> String {
 fn doc_md(file_type: &str, file_token: &str) -> String {
     format!(
         "[{file_type}/{file_token}]({})",
-        super::doc_link(file_type, file_token)
+        crate::channels::doc_link(file_type, file_token)
     )
 }
 
@@ -506,7 +506,7 @@ fn build_request_card(id: i64, req: &DocPermissionRequest, doc_title: Option<&st
         format!(
             "**Document** [{}]({})",
             doc_text,
-            super::doc_link(&req.file_type, &req.file_token)
+            crate::channels::doc_link(&req.file_type, &req.file_token)
         ),
         format!("**Requested permission** {}", req.permission),
     ];
@@ -583,7 +583,7 @@ fn build_resolved_card(row: &PermRequestRow, doc_title: Option<&str>) -> String 
         "**Applicant** {}\n**Document** [{}]({})\n\n**{action_text}** · by {by_text}",
         applicant_summary(row),
         doc_text,
-        super::doc_link(&row.file_type, &row.file_token),
+        crate::channels::doc_link(&row.file_type, &row.file_token),
     );
     card_json(
         template,

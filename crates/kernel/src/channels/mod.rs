@@ -1,8 +1,9 @@
 //! External channel adapters (Feishu/Telegram/doc comments) and the hub
 //! that routes their messages into kernel sessions. Feishu card design
 //! rules (button size, copy language, client rendering quirks) live in
-//! the module docs of `feishu.rs` — read them before touching any card
-//! rendering code (`obs`/`reply`/`mailbox`/`approval`/`hub_deliver`).
+//! the module docs of `platform/feishu.rs` — read them before touching
+//! any card rendering code (`render/obs`, `render/reply`, `cards/mailbox`,
+//! `cards/approval`, `hub/deliver`).
 
 use crate::permission::Level;
 use crate::types::{ContentBlock, Result as KernelResult, SessionId};
@@ -15,16 +16,19 @@ pub(crate) use utils::MAX_RETRY_DELAY;
 
 pub(crate) mod attachments;
 
-pub(crate) mod approval;
-
-pub(crate) mod ask;
-
-pub(crate) mod mailbox;
-
-pub(crate) mod cron_card;
-pub(crate) mod settings;
-
 pub(crate) mod comment;
+
+// 目录分组（2026-08-22）：源文件按职责落子目录，模块路径经再导出
+// 与旧平铺完全一致（`crate::channels::X` 零变化）。
+pub(crate) mod cards;
+pub(crate) mod platform;
+pub(crate) mod render;
+
+pub mod hub;
+
+pub(crate) use cards::{approval, ask, cron_card, mailbox, settings};
+pub(crate) use platform::{feishu, feishu_events, feishu_text, telegram};
+pub(crate) use render::{obs, reply};
 
 /// Why a channel message was rejected by access control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1160,24 +1164,10 @@ pub fn blocks_to_text(blocks: &[ContentBlock]) -> String {
 
 pub mod store;
 
-pub(crate) mod obs;
-
-pub(crate) mod reply;
-
-pub(crate) mod delivery_pool;
-pub mod hub;
-pub(crate) mod hub_command;
-pub(crate) mod hub_context;
-pub(crate) mod hub_deliver;
-pub(crate) mod hub_gate;
-pub(crate) mod hub_handlers;
-pub(crate) mod hub_routing;
-
-pub mod telegram;
-
-pub mod feishu;
-pub(crate) mod feishu_events;
-pub(crate) mod feishu_text;
+pub(crate) use hub::{
+    command as hub_command, context as hub_context, deliver as hub_deliver, delivery_pool,
+    gate as hub_gate, handlers as hub_handlers, routing as hub_routing,
+};
 
 #[cfg(test)]
 mod tests;

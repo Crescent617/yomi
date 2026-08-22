@@ -55,8 +55,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::warn;
 
-use super::reply::{self, FinalReply};
-use super::PlatformAdapter;
+use crate::channels::reply::{self, FinalReply};
+use crate::channels::PlatformAdapter;
 
 /// Minimum interval between two in-place card updates (low-frequency updates).
 const PATCH_MIN_INTERVAL: Duration = Duration::from_secs(3);
@@ -619,7 +619,7 @@ impl ObsTracker {
                 // loss on the bus — the full text is authoritative); the
                 // whisper always clears for the next turn instead of
                 // duplicating or going stale.
-                let text = super::blocks_to_text(content);
+                let text = crate::channels::blocks_to_text(content);
                 self.update_running(session_id, |s| {
                     s.trace.record_model_end(&text);
                     s.whisper.clear();
@@ -1228,7 +1228,10 @@ fn stop_button_row(sid: &SessionId) -> serde_json::Value {
 /// every button; this handler only executes. No card patch here: the
 /// run's settlement morphs the card into the terminal receipt, which is
 /// the click feedback.
-pub(crate) fn handle_stop_action(kernel: &crate::kernel::Kernel, action: &super::CardAction) {
+pub(crate) fn handle_stop_action(
+    kernel: &crate::kernel::Kernel,
+    action: &crate::channels::CardAction,
+) {
     if action.value["action"].as_str() != Some("act_stop") {
         warn!(value = %action.value, "unrecognized obs card action");
         return;

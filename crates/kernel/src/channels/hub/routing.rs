@@ -8,7 +8,7 @@ use crate::types::{Result, SessionId};
 use std::sync::Arc;
 use tracing::{info, warn};
 
-use super::{
+use crate::channels::{
     ChannelConfig, ChannelMessage, ChannelStore, HistoryContainer, PlatformAdapter, PlatformConfig,
 };
 
@@ -194,7 +194,11 @@ pub(crate) fn session_mapping_key(
     // one session per document — regardless of chat-oriented rules
     // (there is no chat).
     if let Some(dc) = &msg.doc_comment {
-        return super::doc_comment_mapping_key(&dc.file_type, &dc.file_token, &dc.comment_id);
+        return crate::channels::doc_comment_mapping_key(
+            &dc.file_type,
+            &dc.file_token,
+            &dc.comment_id,
+        );
     }
     if reply_in_thread && msg.is_group {
         if msg.thread_id.is_some() {

@@ -8,7 +8,7 @@ use serde_json::json;
 /// do not translate or reword it.
 pub(crate) const UPGRADE_CLIENT_NOTICE: &str = "请升级至最新版本客户端，以查看内容";
 
-use super::feishu::FeishuAdapter;
+use crate::channels::feishu::FeishuAdapter;
 
 impl FeishuAdapter {
     /// Extract display text and image keys from a history item in one
@@ -224,7 +224,8 @@ impl FeishuAdapter {
 
     pub(crate) fn build_card(text: &str) -> String {
         // Platform-neutral `<@USER_ID>` contract → feishu <at> syntax.
-        let text = super::utils::rewrite_mentions(text, &|id| format!("<at id={id}></at>"));
+        let text =
+            crate::channels::utils::rewrite_mentions(text, &|id| format!("<at id={id}></at>"));
         json!({
             "schema": "2.0",
             "body": {
@@ -261,7 +262,7 @@ pub(crate) fn strip_bot_mention(
 /// an example shown literally stays literal. The id attribute tolerates
 /// optional quotes.
 pub(crate) fn rewrite_card_at_tags(text: &str) -> String {
-    super::utils::map_outside_code_spans(text, &mut |segment, out| {
+    crate::channels::utils::map_outside_code_spans(text, &mut |segment, out| {
         rewrite_at_tag_segment(segment, out);
     })
 }

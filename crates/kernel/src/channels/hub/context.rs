@@ -8,15 +8,15 @@ use crate::types::{ContentBlock, Result, SessionId};
 use std::sync::Arc;
 use tracing::warn;
 
-use super::hub_command::{
+use crate::channels::hub_command::{
     consumes_history, is_command_text, parse_channel_command, ChannelCommand,
 };
-use super::hub_routing::{
+use crate::channels::hub_routing::{
     effective_mapping_key, get_or_create_session, history_container, reply_anchor,
     resolve_reply_in_thread, session_mapping_key, thread_refusal,
 };
 
-use super::{
+use crate::channels::{
     obs::ObsTracker, ChannelConfig, ChannelMessage, ChannelStore, HistoryContainer, HistoryMessage,
     PlatformAdapter,
 };

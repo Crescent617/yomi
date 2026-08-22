@@ -4,8 +4,8 @@ use std::fmt::Write as _;
 
 use crate::storage::format_age;
 
-use super::obs::fmt_tokens;
-use super::reply::ctx_footer;
+use crate::channels::obs::fmt_tokens;
+use crate::channels::reply::ctx_footer;
 
 pub(crate) const CMD_MODELS: &str = "/models";
 
@@ -188,7 +188,7 @@ pub(crate) enum ChannelCommand {
     /// A malformed `/threads` command.
     InvalidThreadsCommand,
     /// Show or manage the session's pending mailbox (admin).
-    Mailbox(super::mailbox::MailboxSub),
+    Mailbox(crate::channels::mailbox::MailboxSub),
     /// A malformed `/mailbox` command.
     InvalidMailboxCommand,
     /// Background tasks panel (`/bg [--all]`, admin): shells + running
@@ -362,21 +362,25 @@ pub(crate) fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
         CMD_SETTINGS => ChannelCommand::Settings,
         CMD_CRON => ChannelCommand::Cron,
         CMD_MAILBOX => match (parts.next(), parts.next(), parts.next()) {
-            (None, None, None) => ChannelCommand::Mailbox(super::mailbox::MailboxSub::Show),
+            (None, None, None) => {
+                ChannelCommand::Mailbox(crate::channels::mailbox::MailboxSub::Show)
+            }
             (Some("clear"), scope, None) => match scope {
-                None | Some("all") => ChannelCommand::Mailbox(super::mailbox::MailboxSub::Clear(
-                    crate::comms::MailboxScope::All,
-                )),
-                Some("steer") => ChannelCommand::Mailbox(super::mailbox::MailboxSub::Clear(
-                    crate::comms::MailboxScope::Steer,
-                )),
-                Some("queue") => ChannelCommand::Mailbox(super::mailbox::MailboxSub::Clear(
-                    crate::comms::MailboxScope::Queue,
-                )),
+                None | Some("all") => ChannelCommand::Mailbox(
+                    crate::channels::mailbox::MailboxSub::Clear(crate::comms::MailboxScope::All),
+                ),
+                Some("steer") => ChannelCommand::Mailbox(
+                    crate::channels::mailbox::MailboxSub::Clear(crate::comms::MailboxScope::Steer),
+                ),
+                Some("queue") => ChannelCommand::Mailbox(
+                    crate::channels::mailbox::MailboxSub::Clear(crate::comms::MailboxScope::Queue),
+                ),
                 _ => ChannelCommand::InvalidMailboxCommand,
             },
             (Some("retract"), Some(n), None) => match n.parse::<usize>() {
-                Ok(n) if n > 0 => ChannelCommand::Mailbox(super::mailbox::MailboxSub::Retract(n)),
+                Ok(n) if n > 0 => {
+                    ChannelCommand::Mailbox(crate::channels::mailbox::MailboxSub::Retract(n))
+                }
                 _ => ChannelCommand::InvalidMailboxCommand,
             },
             _ => ChannelCommand::InvalidMailboxCommand,
@@ -431,7 +435,7 @@ pub(crate) fn is_command_shaped(token: &str) -> bool {
     })
 }
 
-pub(super) fn has_channel_command_prefix(raw_text: &str) -> bool {
+pub(crate) fn has_channel_command_prefix(raw_text: &str) -> bool {
     let command = raw_text.split_whitespace().next().unwrap_or_default();
     resolve_command(command).is_some()
 }
@@ -442,8 +446,8 @@ pub(super) fn has_channel_command_prefix(raw_text: &str) -> bool {
 /// cannot see. Leading `@mention` tokens are stripped for
 /// detection only (a group command fetches back as `@_user_1 /info`) —
 /// anything not command-shaped stays, rendered verbatim.
-/// `pub(super)` for the doc-comment thread history (same filter).
-pub(super) fn is_command_text(text: &str) -> bool {
+/// `pub(crate)` for the doc-comment thread history (same filter).
+pub(crate) fn is_command_text(text: &str) -> bool {
     let mut rest = text.trim_start();
     while let Some(t) = rest.strip_prefix('@') {
         rest = t

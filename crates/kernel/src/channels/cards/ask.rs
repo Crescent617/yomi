@@ -16,8 +16,8 @@ use crate::kernel::Kernel;
 use crate::tools::AskQuestion;
 use crate::types::{ContentBlock, SessionId};
 
-use super::hub_deliver::info_card_envelope;
-use super::{CardAction, PlatformAdapter};
+use crate::channels::hub_deliver::info_card_envelope;
+use crate::channels::{CardAction, PlatformAdapter};
 
 /// req_id → 已发问题卡（多问题时一题一张；关闭/回答时需要知道
 /// patch 哪几张、各自属于哪一问）。

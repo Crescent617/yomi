@@ -39,8 +39,10 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use super::feishu_events::{build_ping, FRAME_TIMEOUT, PING_INTERVAL};
-use super::{ChannelError, ChannelEvent, DocPermissionRequest, PlatformAdapter, MAX_RETRY_DELAY};
+use crate::channels::feishu_events::{build_ping, FRAME_TIMEOUT, PING_INTERVAL};
+use crate::channels::{
+    ChannelError, ChannelEvent, DocPermissionRequest, PlatformAdapter, MAX_RETRY_DELAY,
+};
 
 const FEISHU_BASE_URL: &str = "https://open.feishu.cn";
 
@@ -392,9 +394,14 @@ impl FeishuAdapter {
         caption: Option<&str>,
         reply_msg_id: Option<&str>,
     ) -> Result<(), ChannelError> {
-        let upload =
-            super::utils::read_upload(path, IMAGE_MAX_BYTES, FILE_MAX_BYTES, "image", "file")
-                .await?;
+        let upload = crate::channels::utils::read_upload(
+            path,
+            IMAGE_MAX_BYTES,
+            FILE_MAX_BYTES,
+            "image",
+            "file",
+        )
+        .await?;
         let kind = if upload.is_image { "image" } else { "file" };
         let part =
             reqwest::multipart::Part::bytes(upload.bytes).file_name(upload.file_name.clone());
@@ -585,7 +592,7 @@ impl FeishuAdapter {
         file_token: &str,
         file_type: &str,
         comment_id: &str,
-    ) -> Result<Option<super::DocCommentDetail>, ChannelError> {
+    ) -> Result<Option<crate::channels::DocCommentDetail>, ChannelError> {
         let replies_url = format!(
             "{}/open-apis/drive/v1/files/{file_token}/comments/{comment_id}/replies",
             self.base_url
@@ -638,7 +645,7 @@ impl FeishuAdapter {
             .iter()
             .map(|r| {
                 let user_id = r["user_id"].as_str().unwrap_or_default().to_string();
-                super::DocCommentReplyLite {
+                crate::channels::DocCommentReplyLite {
                     is_from_bot: bot_open_id.as_deref() == Some(user_id.as_str())
                         && !user_id.is_empty(),
                     user_id,
@@ -654,7 +661,7 @@ impl FeishuAdapter {
                 }
             })
             .collect();
-        Ok(Some(super::DocCommentDetail {
+        Ok(Some(crate::channels::DocCommentDetail {
             // None = batch_query has not caught up with the event yet
             // (the caller retries — the session mapping keys off this).
             is_whole: batch_item
@@ -803,7 +810,7 @@ impl PlatformAdapter for FeishuAdapter {
         // 30KB (bytes, UTF-8 safe — a char count would undercut CJK text).
         const MAX_MD: usize = 30_000;
         let token = self.get_token().await?;
-        let text = super::blocks_to_text(&blocks);
+        let text = crate::channels::blocks_to_text(&blocks);
         if text.is_empty() {
             return Ok(None);
         }
@@ -926,7 +933,7 @@ impl PlatformAdapter for FeishuAdapter {
         file_token: &str,
         file_type: &str,
         comment_id: &str,
-    ) -> Result<Option<super::DocCommentDetail>, ChannelError> {
+    ) -> Result<Option<crate::channels::DocCommentDetail>, ChannelError> {
         let token = self.get_token().await?;
         tokio::time::timeout(
             std::time::Duration::from_secs(5),
@@ -939,7 +946,7 @@ impl PlatformAdapter for FeishuAdapter {
     /// refer: <https://open.feishu.cn/document/server-docs/docs/CommentAPI/reply>
     /// Whole comments take no thread replies (platform error 1069302) —
     /// the answer goes out as a new whole comment. The
-    /// [`super::WHOLE_COMMENT_ID`] sentinel (the shared whole-comment
+    /// [`crate::channels::WHOLE_COMMENT_ID`] sentinel (the shared whole-comment
     /// session's delivery target) skips the doomed reply attempt and
     /// creates the new comment directly.
     async fn reply_doc_comment(
@@ -953,7 +960,7 @@ impl PlatformAdapter for FeishuAdapter {
         let body = json!({
             "content": { "elements": [{ "type": "text_run", "text_run": { "text": text } }] }
         });
-        if comment_id == super::WHOLE_COMMENT_ID {
+        if comment_id == crate::channels::WHOLE_COMMENT_ID {
             return self
                 .create_whole_comment(&token, file_token, file_type, &body)
                 .await;
@@ -1098,13 +1105,13 @@ impl PlatformAdapter for FeishuAdapter {
     /// refer: <https://open.feishu.cn/document/server-docs/im-v1/message/list>
     async fn fetch_history(
         &self,
-        container: &super::HistoryContainer,
+        container: &crate::channels::HistoryContainer,
         since_ts: Option<i64>,
         limit: usize,
-    ) -> Result<Vec<super::HistoryMessage>, ChannelError> {
+    ) -> Result<Vec<crate::channels::HistoryMessage>, ChannelError> {
         let (id_type, id) = match container {
-            super::HistoryContainer::Chat(id) => ("chat", id),
-            super::HistoryContainer::Thread(id) => ("thread", id),
+            crate::channels::HistoryContainer::Chat(id) => ("chat", id),
+            crate::channels::HistoryContainer::Thread(id) => ("thread", id),
         };
         let token = self.get_token().await?;
 
@@ -1165,7 +1172,7 @@ impl PlatformAdapter for FeishuAdapter {
             if text.trim().is_empty() {
                 continue;
             }
-            out.push(super::HistoryMessage {
+            out.push(crate::channels::HistoryMessage {
                 message_id: item["message_id"].as_str().unwrap_or("").to_string(),
                 create_time,
                 sender_id: sender["id"].as_str().unwrap_or("").to_string(),
@@ -1221,7 +1228,7 @@ impl PlatformAdapter for FeishuAdapter {
     async fn fetch_message(
         &self,
         message_id: &str,
-    ) -> Result<Option<super::HistoryMessage>, ChannelError> {
+    ) -> Result<Option<crate::channels::HistoryMessage>, ChannelError> {
         let token = self.get_token().await?;
         // `card_msg_content_type=user_card_content` (undocumented but stable,
         // verified) makes interactive cards echo their real schema 2.0 body
@@ -1247,7 +1254,7 @@ impl PlatformAdapter for FeishuAdapter {
         // primary use case. With `card_msg_content_type` the API echoes the
         // real card body for any sender, no local cache needed.
         let (text, image_keys) = Self::extract_history_content(item);
-        Ok(Some(super::HistoryMessage {
+        Ok(Some(crate::channels::HistoryMessage {
             message_id: item["message_id"]
                 .as_str()
                 .unwrap_or(message_id)

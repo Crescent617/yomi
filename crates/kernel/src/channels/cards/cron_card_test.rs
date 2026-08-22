@@ -47,13 +47,13 @@ async fn read_jobs_lists_all_active_first() {
     let other = make_job("别人", Some("sess_b"), CronJobStatus::Active);
     let store = store_with(&[target.clone(), active.clone(), other]).await;
 
-    // 全量列出（不筛归属）：active 组在前、completed 排尾（组内
-    // 时间戳秒级并列，不做次序断言）。
+    // 全量列出（不筛归属）：completed 不显示（hrli 2026-08-22），
+    // active 在前（组内时间戳秒级并列，不做次序断言）。
     let jobs = read_jobs(&store).await.unwrap();
-    assert_eq!(jobs.len(), 3);
-    assert!(matches!(jobs[0].status, CronJobStatus::Active));
-    assert!(matches!(jobs[1].status, CronJobStatus::Active));
-    assert_eq!(jobs[2].name, "目标", "completed last: {:?}", jobs[2].name);
+    assert_eq!(jobs.len(), 2);
+    assert!(jobs
+        .iter()
+        .all(|j| matches!(j.status, CronJobStatus::Active)));
 }
 
 #[test]

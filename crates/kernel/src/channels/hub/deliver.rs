@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
-use super::{
+use crate::channels::{
     obs::{ObsTracker, SettleOutcome},
     reply, ChannelMessage, ChannelStore, PlatformAdapter, SessionRouting,
 };
@@ -334,7 +334,10 @@ pub(crate) async fn send_command_reply(
     text: String,
 ) -> Result<()> {
     if let Some(dc) = &msg.doc_comment {
-        for chunk in super::comment::chunk_text(&text, super::comment::COMMENT_REPLY_CHUNK_CHARS) {
+        for chunk in crate::channels::comment::chunk_text(
+            &text,
+            crate::channels::comment::COMMENT_REPLY_CHUNK_CHARS,
+        ) {
             adapter
                 .reply_doc_comment(&dc.file_token, &dc.file_type, &dc.comment_id, &chunk)
                 .await?;
@@ -414,7 +417,7 @@ pub(crate) enum SettleKind<'a> {
 /// appended to the reply instead of vanishing silently.
 pub(crate) async fn deliver_doc_comment_reply(
     adapter: &Arc<dyn PlatformAdapter>,
-    dc: &super::DocCommentRef,
+    dc: &crate::channels::DocCommentRef,
     reply: Option<reply::FinalReply>,
 ) -> Option<String> {
     let mut reply = reply?;
@@ -431,7 +434,10 @@ pub(crate) async fn deliver_doc_comment_reply(
     }
     let text = reply.text()?.to_string();
     let mut last_id = None;
-    for chunk in super::comment::chunk_text(&text, super::comment::COMMENT_REPLY_CHUNK_CHARS) {
+    for chunk in crate::channels::comment::chunk_text(
+        &text,
+        crate::channels::comment::COMMENT_REPLY_CHUNK_CHARS,
+    ) {
         match adapter
             .reply_doc_comment(&dc.file_token, &dc.file_type, &dc.comment_id, &chunk)
             .await
@@ -537,7 +543,7 @@ pub(crate) async fn deliver_reply(
                 Some(k) => Some(k.session_cwd(session_id).await),
                 None => None,
             };
-            super::attachments::resolve_attachments(cwd.as_deref(), reply).await
+            crate::channels::attachments::resolve_attachments(cwd.as_deref(), reply).await
         }
         _ => Vec::new(),
     };
@@ -548,7 +554,7 @@ pub(crate) async fn deliver_reply(
         let has_mention = reply
             .as_ref()
             .and_then(|r| r.text())
-            .is_some_and(super::utils::contains_mention);
+            .is_some_and(crate::channels::utils::contains_mention);
         if (mid_run_split && obs.has_mid_run_posts(session_id)) || has_mention {
             // The reply lands as a new message below the user's mid-run
             // posts, carrying the run trace; the status card then freezes
@@ -590,7 +596,7 @@ pub(crate) async fn deliver_reply(
 
     // Attachments last: files land at the bottom of the chat, below the
     // reply text/card.
-    super::attachments::send_attachments(adapter, routing, files).await;
+    crate::channels::attachments::send_attachments(adapter, routing, files).await;
     reply_msg_id
 }
 

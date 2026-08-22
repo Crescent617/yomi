@@ -37,12 +37,14 @@ use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, ToolEvent};
 use crate::kernel::Kernel;
 use crate::types::SessionId;
 
-use super::ask::AskCardRegistry;
-use super::hub::ChannelInstance;
-use super::hub_deliver::{deliver_reply, notify_run_subscribers, RunEndStatus, SettleKind};
-use super::obs::ObsTracker;
-use super::reply::RunReplyBuffer;
-use super::{ChannelStore, SessionRouting};
+use crate::channels::ask::AskCardRegistry;
+use crate::channels::hub::ChannelInstance;
+use crate::channels::hub_deliver::{
+    deliver_reply, notify_run_subscribers, RunEndStatus, SettleKind,
+};
+use crate::channels::obs::ObsTracker;
+use crate::channels::reply::RunReplyBuffer;
+use crate::channels::{ChannelStore, SessionRouting};
 
 /// 每会话事件通道容量。与上游 bus 的全局队列（hub 侧 4096）相配：
 /// 单会话 256 足够吸收正常突发，又限制洪峰期的内存占用（91 会话全满
@@ -524,7 +526,7 @@ async fn handle_event(
             }
         }
         Event::Model(ModelEvent::End { content, .. }) => {
-            let text = super::blocks_to_text(content);
+            let text = crate::channels::blocks_to_text(content);
             buffer
                 .get_or_insert_with(RunReplyBuffer::default)
                 .record_model_end(&text);
@@ -728,7 +730,7 @@ async fn settle_deliver(
 /// 渠道实例的投递相关配置（命名字段——曾发生 (adapter, bool, bool, bool)
 /// 元组在两个站点顺序不一致导致旗标绑反的发版级 bug，改结构体消灭这一类）。
 struct ChannelFlags {
-    adapter: Arc<dyn super::PlatformAdapter>,
+    adapter: Arc<dyn crate::channels::PlatformAdapter>,
     observability: bool,
     tool_trace: bool,
     mid_run_split: bool,

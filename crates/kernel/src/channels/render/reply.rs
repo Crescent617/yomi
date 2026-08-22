@@ -13,7 +13,7 @@ use serde_json::json;
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
-use super::obs::{fmt_elapsed, fmt_tokens};
+use crate::channels::obs::{fmt_elapsed, fmt_tokens};
 use crate::utils::strs::truncate_by_chars;
 
 /// Reply text budget in bytes. Feishu card payloads cap around 30KB; leave
@@ -402,7 +402,8 @@ pub(crate) fn render_card(reply: &FinalReply, notice: Option<&str>) -> Option<St
 
     if let Some(text) = reply.text() {
         // Platform-neutral `<@USER_ID>` contract → feishu <at> syntax.
-        let text = super::utils::rewrite_mentions(text, &|id| format!("<at id={id}></at>"));
+        let text =
+            crate::channels::utils::rewrite_mentions(text, &|id| format!("<at id={id}></at>"));
         let text = crate::utils::strs::truncate_with_suffix(
             &text,
             FINAL_TEXT_MAX_BYTES,

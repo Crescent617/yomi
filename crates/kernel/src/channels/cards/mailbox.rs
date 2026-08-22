@@ -10,8 +10,8 @@ use crate::comms::{MailboxItem, MailboxScope, MailboxSnapshot};
 use crate::kernel::Kernel;
 use crate::types::{Result as KernelResult, SessionId};
 
-use super::hub_deliver::info_card_envelope;
-use super::{CardAction, ChannelConfig, PlatformAdapter};
+use crate::channels::hub_deliver::info_card_envelope;
+use crate::channels::{CardAction, ChannelConfig, PlatformAdapter};
 
 /// 卡片/文本可见行数；溢出折叠成提示。
 const VISIBLE_ROWS: usize = 8;
@@ -39,7 +39,7 @@ fn parse_scope(v: &serde_json::Value) -> MailboxScope {
 /// Pending 卡（info 卡同款蓝头 compact）：每行小字内容（preview ≤80
 /// 字符）+ 行尾 ❌ 撤回按钮（text 型无边框）；底部 刷新/清空 为
 /// default 边框 small 按钮。
-pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> String {
+pub(crate) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> String {
     let items = merged(snapshot);
     let mut elements: Vec<serde_json::Value> = Vec::new();
     // Empty state is reachable: the `/mailbox` command short-circuits to
@@ -149,7 +149,7 @@ pub(super) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
 }
 
 /// 文本回退（Telegram / 文档评论）。
-pub(super) fn pending_text(snapshot: &MailboxSnapshot) -> String {
+pub(crate) fn pending_text(snapshot: &MailboxSnapshot) -> String {
     let items = merged(snapshot);
     let mut lines = Vec::new();
     for item in items.iter().take(VISIBLE_ROWS) {
@@ -177,7 +177,7 @@ pub(super) fn pending_text(snapshot: &MailboxSnapshot) -> String {
 /// 可能不是最新，但 mailbox_changed 事件链保证各端最终收敛）。卡片
 /// 不跟踪 mailbox 变化自动刷新：多卡片并存时注册表难维护，需要最新
 /// 状态点 🔄 或重发 `/mailbox`。
-pub(super) async fn handle_card_action(
+pub(crate) async fn handle_card_action(
     channel_name: &str,
     config: &ChannelConfig,
     kernel: &Arc<Kernel>,
@@ -202,8 +202,8 @@ async fn handle_card_action_inner(
         warn!(value = %value, "mailbox card action missing sid");
         return Ok(());
     }
-    if let Some(deny) = super::approval::check_admin(config, &action.operator_open_id) {
-        super::approval::send_action_denial(adapter, action, deny).await;
+    if let Some(deny) = crate::channels::approval::check_admin(config, &action.operator_open_id) {
+        crate::channels::approval::send_action_denial(adapter, action, deny).await;
         return Ok(());
     }
     match value["action"].as_str() {
@@ -236,10 +236,10 @@ async fn handle_card_action_inner(
 }
 
 /// `/mailbox` 命令主体（admin 门槛在命令臂，此处只管执行）。
-pub(super) async fn handle_mailbox_command(
+pub(crate) async fn handle_mailbox_command(
     kernel: &Arc<Kernel>,
     adapter: &Arc<dyn PlatformAdapter>,
-    msg: &super::ChannelMessage,
+    msg: &crate::channels::ChannelMessage,
     reply_msg_id: Option<String>,
     sid: &SessionId,
     sub: MailboxSub,
