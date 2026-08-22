@@ -3180,3 +3180,64 @@ async fn late_heartbeat_after_settle_is_skipped_by_in_lock_revalidation() {
         "late heartbeat must be skipped by in-lock re-validation"
     );
 }
+
+/// 双终态并发（整审 should-fix）：sweep 与 worker settle 并发时，
+/// `take_state_locked` 保证恰好一个赢——只有一次终态 PATCH，败者
+/// 原样拿回回复（调用方可退化纯文本兜底）。
+#[tokio::test]
+async fn double_settle_exactly_one_wins() {
+    let tracker = Arc::new(ObsTracker::with_patch_interval(Duration::ZERO));
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    assert_eq!(mock.cards.lock().await.len(), 1);
+
+    // 第一路 settle 的 PATCH 进闸门（持锁在飞）；第二路并发到来——
+    // 它在 take_state_locked 的 states.get 处即被拒（state 已被第一
+    // 路摘除），根本碰不到锁。
+    mock.gate_patches.store(true, Ordering::Relaxed);
+    let reply_a = reply_with("答案A");
+    let s1 = {
+        let t = Arc::clone(&tracker);
+        let sid = sid.clone();
+        tokio::spawn(async move { t.settle_card(&sid, &Settle::Completed, Some(reply_a)).await })
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while mock.patch_attempts.load(Ordering::Relaxed) == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "first settle never entered the PATCH gate"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let reply_b = reply_with("答案B");
+    let s2 = {
+        let t = Arc::clone(&tracker);
+        let sid = sid.clone();
+        tokio::spawn(async move { t.settle_card(&sid, &Settle::Completed, Some(reply_b)).await })
+    };
+    mock.open_patch_gate();
+
+    let (o1, o2) = (s1.await.unwrap(), s2.await.unwrap());
+    // 恰好一路 settled；另一路 unsettled 且把回复原样退回。胜者恒为
+    // 先发的 s1（s2 在 states.get 即被拒），故退回的必是"答案B"。
+    let settled = [&o1, &o2].iter().filter(|o| o.unsettled.is_none()).count();
+    assert_eq!(settled, 1, "exactly one settle must win");
+    let loser_text = [&o1, &o2]
+        .iter()
+        .filter_map(|o| o.unsettled.as_ref())
+        .filter_map(|r| r.text().map(str::to_string))
+        .next()
+        .expect("loser must hand its reply back");
+    assert_eq!(loser_text, "答案B");
+    // 只有一次终态 PATCH（胜者的 morph）。
+    assert_eq!(
+        mock.patches.lock().await.len(),
+        1,
+        "exactly one terminal PATCH"
+    );
+}
