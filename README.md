@@ -22,6 +22,7 @@
 
 - **TUI** — minimalist terminal interface for seamless interaction
 - **GUI** — desktop app built with Tauri for a richer experience
+- **Channels** — Feishu/Telegram integration in daemon mode: every chat gets its own persistent agent session (see [Channels](#channels-im-integration))
 - **Tools** — built-in file operations (read/write/edit), glob/grep, shell command execution, and more
 - **Configurable** — context window, agent tools, and LLM provider settings
 - **Safe by default** — all operations require user confirmation except in YOLO mode
@@ -179,6 +180,30 @@ Skip all confirmations (use with caution):
 yomi --yolo
 yomi -y
 ```
+
+## Channels (IM integration)
+
+Run Yomi as a long-lived daemon to serve IM chats. Every chat (or thread) gets its own persistent agent session by default — a 1:1 mapping, so context stays scoped per conversation — and replies are delivered back to the same conversation.
+
+| Platform | Support |
+| --- | --- |
+| Feishu | Full: live status cards for run progress, interactive cards (`/settings`, `/cron`, mailbox), reply-in-thread, @-mention gating, run-completion subscriptions, doc-comment triggers |
+| Telegram | Basic: text-only chat (markdown, quote replies; no cards) |
+
+Frequently used in-chat commands (run `/help` in a chat for the full list):
+
+- `/model` — show or switch the session's model
+- `/stop` — cancel the current run
+- `/settings` — interactive panel: mention / reply-in-thread / model overrides (admin)
+- `/cron` — interactive panel: pause / resume / delete scheduled jobs (admin)
+- `/subscribe` — get notified when runs complete
+- `/clear` — clear the session's context
+
+```bash
+yomi daemon start    # serve the configured channels
+```
+
+See [`docs/CONFIG.md`](docs/CONFIG.md) for `[[channels]]` setup (platform credentials, mention / reply-in-thread defaults, per-channel models).
 
 ## Safety
 
