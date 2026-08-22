@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.8] - 2026-08-22
+
+### Added
+
+- 新增 `/cron` 命令（admin）：定时任务交互面板卡，列出全部 cron 任务（名称、节奏、下次运行、运行次数、状态），支持在卡片上直接暂停/恢复/删除任务（删除有两段确认），并提供手动刷新按钮。此前定时任务只能通过对话让 agent 管理，无法在飞书里直接查看和操作。
+
 ## [0.9.7] - 2026-08-22
 
 ### Changed
