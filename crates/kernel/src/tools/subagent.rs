@@ -240,6 +240,13 @@ impl SubagentTool {
         let output_text = if !last_answer.is_empty() {
             last_answer
         } else if let Some(ref store) = self.shared.message_store {
+            // 兜底读前显式排空持久化池：已 dispatch 的落盘写必完
+            // 成（收敛"答案在飞"窗口；conductor 尚未分发到的事件不
+            // 在此保证内——主路径是事件流捕获，store 仅异常兜底）。
+            if let Some(ref pool) = self.shared.persist_pool {
+                crate::kernel::persist_pool::wait_drained(pool, &session_id, "subagent fallback")
+                    .await;
+            }
             match store.get(session_id_str).await {
                 Ok(msgs) => msgs
                     .iter()

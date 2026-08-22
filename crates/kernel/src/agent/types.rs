@@ -396,6 +396,12 @@ pub struct AgentShared {
     /// 永不停止的 subagent 会残留一条，最坏后果是下一次完成被误跳
     /// 过一次转运（下下次自愈），不做清理。
     pub subagent_claims: Arc<dashmap::DashSet<crate::types::SessionId>>,
+    /// 会话持久化 worker 池（2026-08-22 洪峰丢回复根治）：conductor
+    /// 的 `MessageAdded`/`MessageReplaced` 落盘出口——慢 IO 写（生产
+    /// 为 jsonl）挪出事件循环，per-session FIFO worker 执行；
+    /// `Stopped` 臂 `wait_idle` 显式兑现"最终答案必落盘"。`None` =
+    /// 不落盘（纯内存测试等）。写口与 `message_store` 同一实例。
+    pub(crate) persist_pool: Option<Arc<crate::kernel::persist_pool::PersistPool>>,
     /// Cron store for scheduled job operations (None when cron is disabled).
     pub cron_store: Option<Arc<dyn crate::cron::CronStore>>,
     /// Shared slot for the running cron scheduler. Owned by `Kernel`, filled by
@@ -476,6 +482,7 @@ impl AgentShared {
             event_bus: None,
             background_tasks: Arc::new(BgTaskTracker::default()),
             subagent_claims: Arc::new(dashmap::DashSet::new()),
+            persist_pool: None,
             cron_store: None,
             cron_scheduler: Arc::new(std::sync::Mutex::new(None)),
             config_auto_approve: crate::permission::Level::default(),
@@ -555,6 +562,16 @@ impl AgentShared {
     #[must_use]
     pub fn with_event_bus(mut self, event_bus: Arc<crate::comms::EventBus>) -> Self {
         self.event_bus = Some(event_bus);
+        self
+    }
+
+    /// Set the per-session persist pool (conductor 落盘出口).
+    #[must_use]
+    pub(crate) fn with_persist_pool(
+        mut self,
+        pool: Arc<crate::kernel::persist_pool::PersistPool>,
+    ) -> Self {
+        self.persist_pool = Some(pool);
         self
     }
 

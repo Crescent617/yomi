@@ -267,9 +267,10 @@ impl KernelServer {
             }
         }
         tracing::info!("Server shutting down, accept loop stopped");
-        // Idempotent: cancels all connections/background tasks and stops the
-        // kernel regardless of which token ended the loop.
-        self.shutdown();
+        // 幂等 cancel（`shutdown` 的另一半）+ 等持久化排空再退出——
+        // daemon 重启路径上已入队的落盘写必须走完（复审 must-fix）。
+        self.shutdown.cancel();
+        self.kernel.graceful_stop().await;
         Ok(())
     }
 

@@ -100,6 +100,10 @@ pub trait KernelApi: Send + Sync {
     /// Gracefully stop the kernel and all background tasks.
     fn stop(&self);
 
+    /// 优雅关停：等持久化排空后再停（daemon 重启/进程退出路径必
+    /// 须走它）；远程 kernel 语义同 `stop`（生命周期在服务端）。
+    async fn graceful_stop(&self);
+
     /// Whether the kernel is currently reachable.
     ///
     /// Local kernels are always connected. The remote client reports
@@ -348,6 +352,10 @@ pub trait KernelApi: Send + Sync {
 impl KernelApi for Kernel {
     fn stop(&self) {
         Self::stop(self);
+    }
+
+    async fn graceful_stop(&self) {
+        Self::graceful_stop(self).await;
     }
 
     async fn is_connected(&self) -> bool {
@@ -1292,6 +1300,11 @@ impl KernelApi for RemoteKernel {
                 c.cancel.cancel();
             }
         });
+    }
+
+    async fn graceful_stop(&self) {
+        // 远程 kernel 的生命周期在服务端：语义同 `stop`。
+        self.stop();
     }
 
     async fn is_connected(&self) -> bool {

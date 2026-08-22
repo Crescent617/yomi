@@ -8,6 +8,7 @@ use crate::agent::AgentShared;
 use crate::agent::{Agent, AgentConfig, AgentInput, AgentSpawnArgs, AgentState};
 use crate::comms::{EventBus, InputBus, InputBusSubscriber, Mailbox};
 use crate::event::{AgentEvent, AgentStatus, Event, InternalEvent, StopReason};
+use crate::kernel::persist_pool;
 use crate::notification::{AgentActivity, Notification, NotificationBus};
 use crate::types::SessionId;
 
@@ -126,24 +127,29 @@ impl Conductor {
                             });
                         }
                         Event::Internal(InternalEvent::MessageAdded { message }) => {
-                            if let Some(ref store) = self.agent_shared.message_store {
+                            // 落盘走持久化池（2026-08-22 洪峰丢回复根
+                            // 治）：dispatch 同步入队即返，慢 IO 写不
+                            // 再堵事件循环（旧 inline append 在 91 会
+                            // 话洪峰下把 256 深 bus 队列打爆丢件）。顺
+                            // 序不变式 = 单循环顺序 dispatch + 池 per-
+                            // key FIFO + `Stopped` 臂 wait_idle。
+                            if let Some(ref pool) = self.agent_shared.persist_pool {
                                 if message.role != crate::types::Role::System {
-                                    if let Err(e) = store.append(&sid.0, &[(*message).clone()]).await {
-                                        tracing::warn!("Failed to persist message for session={sid}: {e}");
-                                    }
+                                    pool.dispatch(
+                                        &sid,
+                                        persist_pool::PersistJob::Append((*message).clone()),
+                                    );
                                 }
                             }
                         }
                         Event::Internal(InternalEvent::MessageReplaced { messages }) => {
-                            if let Some(ref store) = self.agent_shared.message_store {
+                            if let Some(ref pool) = self.agent_shared.persist_pool {
                                 let to_persist: Vec<crate::types::Message> = messages
                                     .iter()
                                     .map(|m| (**m).clone())
                                     .filter(|m| m.role != crate::types::Role::System)
                                     .collect();
-                                if let Err(e) = store.replace(&sid.0, &to_persist).await {
-                                    tracing::warn!("Failed to replace messages for session={sid}: {e}");
-                                }
+                                pool.dispatch(&sid, persist_pool::PersistJob::Replace(to_persist));
                             }
                             let _ = self.event_bus.publish(
                                 sid.clone(),
@@ -154,7 +160,7 @@ impl Conductor {
                             );
                         }
                         Event::Tool(crate::event::ToolEvent::Metadata { message_id, tool_id, metadata }) => {
-                            if let Some(ref store) = self.agent_shared.message_store {
+                            if let Some(ref pool) = self.agent_shared.persist_pool {
                                 let placeholder = Arc::new(crate::types::Message {
                                     id: message_id.clone(),
                                     role: crate::types::Role::Internal,
@@ -176,15 +182,27 @@ impl Conductor {
                                 );
                                 if let Err(e) = self.event_bus.publish(sid.clone(), envelope) {
                                     tracing::warn!("Failed to publish metadata MessageAdded for session={sid}: {e}, falling back to direct persist");
-                                    if let Err(e2) = store.append(&sid.0, &[(*placeholder).clone()]).await {
-                                        tracing::warn!("Failed to persist tool metadata for session={sid}: {e2}");
-                                    }
+                                    pool.dispatch(
+                                        &sid,
+                                        persist_pool::PersistJob::Append((*placeholder).clone()),
+                                    );
                                 }
                             }
                         }
                         Event::Agent(AgentEvent::Lifecycle {
                             state: AgentStatus::Stopped { reason },
                         }) => {
+                            // 转运/收尾前显式排空该 session 的落盘队
+                            // 列——"最终答案必落盘"从旧的循环时序隐含
+                            // 保证变成断言式保证（上界与降级见
+                            // `wait_drained`）。阻塞上界 30s/次的权
+                            // 衡（fresh-eyes 复审）：store 病态 + 连
+                            // 续 Stopped 会队头阻塞——宁慢不丢（病态
+                            // 下 warn 可见；比慢盘丢件更可控）。
+                            if let Some(ref pool) = self.agent_shared.persist_pool {
+                                persist_pool::wait_drained(pool, &sid, "orphan forwarding")
+                                    .await;
+                            }
                             self.maybe_forward_orphan(&sid, reason);
                         }
                         _ => {}
@@ -377,8 +395,8 @@ impl Conductor {
     /// subagent 无主完成的回信转运入口（详见 `forward_orphan_reply`）：
     /// claim 命中的归既有 sync/async 路径。claim 消费保持 inline（与
     /// 事件处理同点原子）；转运体挪出循环——jsonl 整读+两次 store
-    /// 读不挡所有 session 的 `MessageAdded` 落盘（复审 should-fix）。
-    /// 落盘时序已由循环顺序保证，spawn 不破坏正确性。
+    /// 读不挡其他 session 的事件分发（复审 should-fix）。落盘完整性
+    /// 已由调用点的 `wait_idle` 显式排空保证，spawn 不破坏正确性。
     fn maybe_forward_orphan(self: &Arc<Self>, sid: &SessionId, reason: StopReason) {
         if !self.should_forward_orphan(sid) {
             return;
@@ -405,14 +423,14 @@ impl Conductor {
     /// 蒸发事故的根治——彼时回信路径都在首次完成后退出，跟进答案
     /// 蒸发在 subagent 自己的 transcript 里）。
     ///
-    /// **无落盘竞态**：conductor 事件循环顺序消费，`MessageAdded`
-    /// 的 `store.append` 是 inline await，agent 先发 `MessageAdded`
-    /// （最终答案）再发 `Stopped`——处理到 `Stopped` 时最终答案必然已
-    /// 落盘。这就是本函数可以直接读 store 而不需要任何轮询/基线的
-    /// 原因（时序由循环顺序保证，不靠猜）。残余缺口（既有持久化路
-    /// 径同型假设，非本函数引入）：bus 主通道打满时 `EventSink` 的
-    /// `try_send().ok()` 会静默丢 `MessageAdded`/`Stopped`，此时可能读
-    /// 到上一轮旧答案。
+    /// **无落盘竞态**：落盘走持久化池（per-session FIFO），`Stopped`
+    /// 臂在调用本函数前先 `wait_idle` 显式排空该 session 的落盘队
+    /// 列——agent 先发 `MessageAdded`（最终答案）再发 `Stopped`，
+    /// 处理到 `Stopped` 时最终答案必然已落盘。这就是本函数可以直接
+    /// 读 store 而不需要任何轮询/基线的原因（断言式保证，不靠时序
+    /// 猜）。残余缺口（既有持久化路径同型假设，非本函数引入）：bus
+    /// 主通道打满时 `EventSink` 的 `try_send().ok()` 会静默丢
+    /// `MessageAdded`/`Stopped`，此时可能读到上一轮旧答案。
     async fn forward_orphan_reply(&self, sid: &SessionId, reason: &StopReason) {
         // Cancelled 多半是 parent 自己 /stop 的——不转运。
         if matches!(reason, StopReason::Cancelled { .. }) {

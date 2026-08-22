@@ -422,6 +422,16 @@ impl Agent {
     /// bus-published marker would be lost on exactly the path it exists
     /// for. The buffer is updated in place to avoid a double persist.
     /// Metadata flags it for UIs to render as a divider/system line.
+    ///
+    /// 直写前先排空持久化池（2026-08-22 复审 should-fix）：jsonl
+    /// append 非原子，直写与池 worker 的 drain/在飞写并发写同一文
+    /// 件会交错出坏行（`read_lines` 静默跳过 → 双丢）；排空后直写
+    /// 还把 marker 顺序顺带改正（落在既有消息之后）。**残余窗口**
+    /// （fresh-eyes 复审）：`wait_drained` 只覆盖**已 dispatch**
+    /// 的写——仍堵在 conductor bus 队列里、尚未分发的
+    /// `MessageAdded` 会在 marker 直写之后才入池落盘，marker 顺序
+    /// 与并发写在该窗口内仍可能存在（与旧码 inline 时代同型）。
+    /// 上界与降级见 `wait_drained`。
     async fn mark_interrupted(&mut self, reason: &str) {
         let mut msg = Message::user(format!("[interrupted: {reason}]"));
         msg.metadata = Some(std::collections::HashMap::from([(
@@ -429,6 +439,14 @@ impl Agent {
             "true".to_string(),
         )]));
         if let Some(store) = &self.shared.message_store {
+            if let Some(ref pool) = self.shared.persist_pool {
+                crate::kernel::persist_pool::wait_drained(
+                    pool,
+                    &self.session_id,
+                    "interruption marker",
+                )
+                .await;
+            }
             if let Err(e) = store.append(&self.session_id.0, &[msg.clone()]).await {
                 tracing::warn!("failed to persist interruption marker: {e}");
             }

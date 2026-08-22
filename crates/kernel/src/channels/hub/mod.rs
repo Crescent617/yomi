@@ -17,6 +17,10 @@ pub(crate) mod gate;
 pub(crate) mod handlers;
 pub(crate) mod routing;
 
+#[cfg(test)]
+#[path = "stress_test.rs"]
+mod stress_tests;
+
 use crate::channels::delivery_pool::{DeliveryJob, DeliveryPool};
 use crate::channels::hub_context::{
     advance_history_cursor, prepare_trigger, record_passive_receipt, TriggerKind,

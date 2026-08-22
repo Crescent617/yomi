@@ -1,6 +1,7 @@
 //! Application layer - kernel and conductor management
 
 pub mod conductor;
+pub(crate) mod persist_pool;
 mod tasks;
 pub use conductor::Conductor;
 
@@ -449,6 +450,17 @@ impl Kernel {
         // start so that agents (cron tool) can notify it of job changes.
         let cron_scheduler = Arc::new(std::sync::Mutex::new(None));
 
+        // 提前创建关停 token：持久化池挂它的 child（stop 时与
+        // conductor 同时收到取消；池 drain_on_cancel 排空落盘）。
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        // 会话持久化 worker 池（conductor 落盘出口；洪峰下慢 IO 写
+        // ——生产为 jsonl——不再堵事件循环）。写口与 `message_store`
+        // 同一实例。
+        let persist_pool = Arc::new(persist_pool::build(
+            message_store.clone(),
+            shutdown.child_token(),
+        ));
+
         let agent_shared = AgentShared::with_data_dir(
             Arc::clone(&models_map),
             agent_config.default_model.clone(),
@@ -465,7 +477,8 @@ impl Kernel {
             data_dir,
         )
         .with_cron(cron_store.clone(), Arc::clone(&cron_scheduler))
-        .with_config_auto_approve(config_auto_approve);
+        .with_config_auto_approve(config_auto_approve)
+        .with_persist_pool(persist_pool);
 
         let agent_shared = match todo_interceptor {
             Some(interceptor) => agent_shared.with_message_interceptor(interceptor),
@@ -526,7 +539,7 @@ impl Kernel {
             channel_manager,
             extension_registry,
             notification_bus,
-            shutdown: tokio_util::sync::CancellationToken::new(),
+            shutdown,
         }))
     }
 
@@ -580,6 +593,30 @@ impl Kernel {
     /// Gracefully stop the kernel and all background tasks.
     pub fn stop(&self) {
         self.shutdown.cancel();
+        self.input_bus.shutdown();
+        if let Some(ref bus) = self.agent_shared.event_bus {
+            bus.shutdown();
+        }
+    }
+
+    /// 优雅关停：`stop` 的取消语义 + 先等持久化池排空（10s 上界，
+    /// 超时 warn 退出——单 key 排空的 30s 上界在
+    /// `persist_pool::wait_drained`，两者互参）——daemon 重启/CLI
+    /// 退出必须走它：否则 `drain_on_cancel` 的排空承诺被进程退出
+    /// 截断，已入队的落盘写随 runtime drop 半途夭折（2026-08-22
+    /// 复审 must-fix）。
+    /// 顺序：cancel（conductor 停分发、池开始 drain）→ 等排空 →
+    /// 再关 bus（排空期间 conductor 残臂仍可能 publish）。
+    pub async fn graceful_stop(&self) {
+        self.shutdown.cancel();
+        if let Some(ref pool) = self.agent_shared.persist_pool {
+            if tokio::time::timeout(std::time::Duration::from_secs(10), pool.wait_all_idle())
+                .await
+                .is_err()
+            {
+                tracing::warn!("persist pool drain timed out on shutdown; tail writes may be lost");
+            }
+        }
         self.input_bus.shutdown();
         if let Some(ref bus) = self.agent_shared.event_bus {
             bus.shutdown();

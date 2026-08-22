@@ -60,7 +60,44 @@ struct OrphanHarness {
     message_store: Arc<dyn MessageStore>,
 }
 
+/// 慢写包装：`append` 注入延迟（模拟病态慢盘），其余直传。
+struct SlowStore {
+    inner: Arc<dyn MessageStore>,
+    delay: std::time::Duration,
+}
+
+#[async_trait::async_trait]
+impl MessageStore for SlowStore {
+    async fn append(&self, session_id: &str, messages: &[Message]) -> crate::types::Result<()> {
+        tokio::time::sleep(self.delay).await;
+        self.inner.append(session_id, messages).await
+    }
+
+    async fn get(&self, session_id: &str) -> crate::types::Result<Vec<Message>> {
+        self.inner.get(session_id).await
+    }
+
+    async fn get_inlined(&self, session_id: &str) -> crate::types::Result<Vec<Message>> {
+        self.inner.get_inlined(session_id).await
+    }
+
+    async fn replace(&self, session_id: &str, messages: &[Message]) -> crate::types::Result<()> {
+        self.inner.replace(session_id, messages).await
+    }
+}
+
 async fn orphan_harness(sub_id: &SessionId, with_parent: bool) -> OrphanHarness {
+    orphan_harness_with(sub_id, with_parent, None).await
+}
+
+/// `slow_write`：持久化池的写口包一层慢写（`append` 注入延迟；
+/// `get` 直读不减速）——钉死"`MessageAdded` 紧随 `Stopped` 时，
+/// 转运必须等最终答案落盘"的集成回归。
+async fn orphan_harness_with(
+    sub_id: &SessionId,
+    with_parent: bool,
+    slow_write: Option<std::time::Duration>,
+) -> OrphanHarness {
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
@@ -107,6 +144,19 @@ async fn orphan_harness(sub_id: &SessionId, with_parent: bool) -> OrphanHarness 
         None,
     );
     shared.event_bus = Some(Arc::clone(&event_bus));
+    // 与生产拓扑一致的持久化池（run 循环的 MessageAdded/Stopped
+    // 臂都走它；旧 inline append 已退役）。
+    let write_store: Arc<dyn MessageStore> = match slow_write {
+        Some(delay) => Arc::new(SlowStore {
+            inner: Arc::clone(&message_store),
+            delay,
+        }),
+        None => Arc::clone(&message_store),
+    };
+    shared.persist_pool = Some(Arc::new(crate::kernel::persist_pool::build(
+        write_store,
+        CancellationToken::new(),
+    )));
     let conductor = Arc::new(Conductor::new(
         Arc::new(shared),
         AgentConfig::default(),
@@ -300,9 +350,9 @@ async fn orphan_without_text_reply_is_dropped() {
 }
 
 /// run 循环全接线（复审 should-fix）：事件总线进 MessageAdded
-/// （conductor inline 落盘）→ Stopped（Stopped 分支消费 claim、
-/// spawn 转运）→ parent 收到 steer。钉住的是分发臂接线本身，不是
-/// 直调 helper。
+/// （持久化池 dispatch + `Stopped` 臂 wait_idle 排空）→ Stopped
+/// （消费 claim、spawn 转运）→ parent 收到 steer。钉住的是分发臂
+/// 接线本身，不是直调 helper。
 #[tokio::test]
 async fn run_loop_forwards_orphan_stop_to_parent() {
     let sub = SessionId::from("sub_wired");
@@ -360,6 +410,73 @@ async fn run_loop_forwards_orphan_stop_to_parent() {
         content,
         vec![ContentBlock::Text {
             text: "[From Agent: sub_wired] Follow-up reply\n接线版答案".to_string(),
+        }]
+    );
+
+    token.cancel();
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(3), run).await;
+}
+
+/// `Stopped` 臂 `wait_idle` 的集成回归（复审 should-fix）：慢写盘
+/// + `MessageAdded` 紧随 `Stopped`——转运必须等到最终答案落盘。
+/// （没有 `wait_idle` 时 80ms 慢写下转运读空答案、parent 收不到
+/// steer，本测试即红。）
+#[tokio::test]
+async fn stopped_waits_for_slow_persist_before_forwarding() {
+    let sub = SessionId::from("sub_slow_persist");
+    let h = orphan_harness_with(&sub, true, Some(std::time::Duration::from_millis(80))).await;
+    let mut parent_rx = h.input_bus.subscribe(SessionId::from("sess_parent"));
+    let token = CancellationToken::new();
+    let run = {
+        let c = Arc::clone(&h.conductor);
+        let token = token.clone();
+        tokio::spawn(async move { c.run(token).await })
+    };
+
+    // 等 run() 完成事件总线订阅（同 run_loop 接线测试）。
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let msg = Arc::new(Message {
+        role: Role::Assistant,
+        content: vec![ContentBlock::Text {
+            text: "慢盘最终答案".to_string(),
+        }],
+        ..Default::default()
+    });
+    h.event_bus
+        .publish(
+            sub.clone(),
+            crate::event::Envelope::new(
+                sub.clone(),
+                Event::Internal(InternalEvent::MessageAdded { message: msg }),
+            ),
+        )
+        .unwrap();
+    h.event_bus
+        .publish(
+            sub.clone(),
+            crate::event::Envelope::new(
+                sub.clone(),
+                Event::Agent(AgentEvent::Lifecycle {
+                    state: AgentStatus::Stopped {
+                        reason: completed(),
+                    },
+                }),
+            ),
+        )
+        .unwrap();
+
+    let (_sid, input) = tokio::time::timeout(std::time::Duration::from_secs(3), parent_rx.recv())
+        .await
+        .expect("orphan stop was not forwarded under slow persist")
+        .expect("input bus closed");
+    let AgentInput::Steer(content) = input else {
+        panic!("expected Steer input");
+    };
+    assert_eq!(
+        content,
+        vec![ContentBlock::Text {
+            text: "[From Agent: sub_slow_persist] Follow-up reply\n慢盘最终答案".to_string(),
         }]
     );
 

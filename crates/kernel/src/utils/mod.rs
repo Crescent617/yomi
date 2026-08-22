@@ -10,6 +10,7 @@ pub mod html;
 pub mod http;
 pub mod id;
 pub mod image;
+pub(crate) mod keyed_pool;
 pub mod line_numbers;
 pub mod logging;
 pub mod markdown;

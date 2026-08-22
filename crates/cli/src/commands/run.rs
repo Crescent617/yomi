@@ -550,7 +550,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
             tracing::warn!("Failed to save session: {e}");
         }
     }
-    kernel.stop();
+    kernel.graceful_stop().await;
 
     match args.format {
         OutputFormat::Text => {

@@ -96,7 +96,18 @@ impl AppState {
             *guard = ConnectionState { kernel: next, mode };
             old
         };
-        old.stop();
+        // fire-and-forget 优雅关停：旧 kernel 的持久化排空在后台走
+        // 完（GUI 进程存活，drain 不会被进程退出截断；runtime 外调
+        // 用 swap 的异常路径退化为同步 `stop`——fresh-eyes 复审）。
+        // 已知窗口：swap 后进程随即退出时 drain 仍被截断（秒级，
+        // 与旧 `stop()` 同型）。
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                old.graceful_stop().await;
+            });
+        } else {
+            old.stop();
+        }
     }
 
     pub fn connection_mode(&self) -> ConnectionMode {
