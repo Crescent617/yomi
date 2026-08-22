@@ -1159,15 +1159,17 @@ fn render_running(s: &ObsCardState, sid: &SessionId) -> String {
         })
     };
     // Everything live rides inside one collapsible panel that starts
-    // expanded so the human watches it stream — the whisper tail first,
-    // then the trace — while reading bots skip the whole thing (yomi
-    // strips collapsible panels from card text on every read path). The
-    // stats line rides the panel's title instead of a top element.
-    let mut panel_lines: Vec<String> = Vec::new();
+    // expanded so the human watches it stream — **strictly chronological**:
+    // the trace first, the live whisper tail last（与终态卡同一时序：
+    // 最新内容在底部；早前 whisper 置顶会让最新文本跳到历史之上，
+    // 且 End 落地时文本还要从顶部跳回时序位置——hrli 2026-08-22 定
+    // 稿不特殊处理）。Reading bots skip the whole thing (yomi strips
+    // collapsible panels from card text on every read path). The stats
+    // line rides the panel's title instead of a top element.
+    let mut panel_lines: Vec<String> = trace;
     if let Some(w) = whisper_line() {
         panel_lines.push(w);
     }
-    panel_lines.extend(trace);
     let mut elements = if panel_lines.is_empty() {
         // Retry edge: a new Request cleared the whisper before the first
         // tool or model End — bare stats until content flows again.

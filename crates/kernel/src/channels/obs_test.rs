@@ -1989,8 +1989,8 @@ async fn whisper_line_is_capped_at_100_chars() {
     let patches = mock.patches.lock().await;
     let body: serde_json::Value = serde_json::from_str(&patches.last().unwrap().1).unwrap();
     // Live content rides inside the collapsible panel (humans see it
-    // expanded; reading bots strip it) — the whisper tail is its first
-    // line, the trace lines follow.
+    // expanded; reading bots strip it) — 时序与终态卡一致：trace 行在
+    // 前、whisper 尾行在最后。
     let panel = &body["body"]["elements"][0];
     assert_eq!(panel["tag"], "collapsible_panel");
     let content = panel["elements"][0]["content"].as_str().unwrap();
@@ -1998,6 +1998,8 @@ async fn whisper_line_is_capped_at_100_chars() {
         .lines()
         .find(|l| l.contains('💬'))
         .expect("whisper line");
+    // whisper 必须是面板的最后一行（时序底部）。
+    assert_eq!(content.lines().last().unwrap(), whisper_line);
     // "<font color='grey'>💬 …" wrapper + ≤100-char snippet.
     let snippet = whisper_line
         .trim_start_matches("<font color='grey'>💬 ")
