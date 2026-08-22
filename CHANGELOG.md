@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.11] - 2026-08-22
+
+### Fixed
+
+- 修复 GUI 切换连接在异常路径下旧连接可能未完全断开的问题（正常切换不受影响）；关停流程内部统一为单一优雅入口，无行为变化。
+
 ## [0.9.10] - 2026-08-22
 
 ### Fixed
