@@ -5,7 +5,7 @@
 //! 执行所有会话的飞书 API 调用，消费速度被网络延迟锁死；91 会话并发
 //! 时 bus 队列被打满，投递事件（含 `Stopped`/回复正文）被静默丢弃。
 //!
-//! 设计（actor 模型）：
+//! 设计（actor 模型 + Redis TTL 式过期，2026-08-22 定稿）：
 //! - 每个经路由的会话拥有**一个** worker，事件经一条 FIFO 通道按序
 //!   到达；reply buffer、obs/ask/typing、回复投递全部在 worker 内
 //!   闭环——同会话保序与旧单循环语义完全一致，跨会话天然并行；
@@ -13,12 +13,16 @@
 //!   巡检节拍兜底投递残余回复（替代旧的全局 watchdog 回复扫描，
 //!   延迟 60s → 30s）；判死前确认自身队列为空，杜绝与在队
 //!   `Stopped` 的双重结算；
-//! - **actor 常驻，不回收**（2026-08-22 设计定稿）：曾有的空闲回
-//!   收（摘除登记 → close → 余量重投）被整体删除——worker 退出即
-//!   交接，交接即窗口（stranded/乱序/丢余量三类竞态皆源于此），
-//!   没有退出就没有交接。成本：每会话一份登记+驻留任务+通道约数
-//!   KB，百级会话约 MB 级，daemon 重启即归零；百万级会话规模的
-//!   部署才需要 LRU 淘汰，那是另一个课题；
+//! - **过期回收（惰性+主动，Redis TTL 同款双机制）**：TTL 由事件
+//!   到达驱动（dispatch 在 entry 锁内刷新 `last_activity`）；worker
+//!   闲置超 TTL 时在**同一把锁内**复核确认零到达后摘牌退出——余
+//!   量结构性不存在（复核通过 ⟺ TTL 全程零到达），故无换代分支，
+//!   摘了就走、下次 dispatch 惰性重建。dispatch 的 `try_send` 同在
+//!   此锁内（同步 µs 段，零 await），重试循环/身份比对/re-dispatch
+//!   全部成为过去式（**临界区不变式：锁内零 await、零 IO、零二次
+//!   map 访问**）。panic/关停的猝死由 dispatch 的 Closed 分支原地
+//!   换代兜底（近乎不可达，余量随 rx 丢弃、有日志），janitor 周期
+//!   收尸（旗标留痕+摘 entry，纯保洁）；
 //! - 全局信号量限制并发平台 IO 上限，避免洪峰期 API 洪泛。
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -54,6 +58,14 @@ const MAX_CONCURRENT_IO: usize = 16;
 /// （`Stopped` 被 bus 丢弃），以 Timeout 形态兜底送出。
 const SELF_SETTLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// worker 空闲 TTL：无 buffer 且闲置超过此时长即自我过期（锁内了断，
+/// 见模块文档）。
+const WORKER_IDLE_TTL: std::time::Duration = std::time::Duration::from_mins(15);
+
+/// janitor 收尸节拍（异常死亡 worker 的旗标复位与 entry 清理——纯保
+/// 洁，正确性不依赖它）。
+const JANITOR_INTERVAL: std::time::Duration = std::time::Duration::from_mins(1);
+
 /// 派给会话 actor 的一条事件。`routing` 是分派时的快照（TTL 缓存，Arc
 /// 共享避免每事件克隆），用于门禁、obs 展示以及 ask/typing 的目标定位
 /// （≤2s 陈旧可接受：锚点漂移慢）；**投递路径（Deliver/兜底）总是新鲜
@@ -78,14 +90,20 @@ struct DeliveryCtx {
     token: CancellationToken,
     /// 巡检节拍（测试可缩短）。
     settle_interval: std::time::Duration,
+    /// worker 空闲 TTL（测试可缩短）。
+    idle_ttl: std::time::Duration,
 }
 
-/// 每会话 actor 登记：发送端与对外旗标一体。原 senders/inflight/
-/// buffers 三表需锁步维护，回收窗口内新 actor 会复用旧旗标 Arc、随后
-/// 被旧 actor 的摘除误伤（旗标entry消失、旗标失真）——单表单 entry
-/// 原子建删，从结构上消灭这类错位（评审复核）。
+/// 每会话 actor 登记：发送端、worker 句柄与对外旗标一体。
 struct ActorHandle {
     tx: mpsc::Sender<DeliveryJob>,
+    /// worker 任务句柄（janitor 的 `is_finished` 收尸谓词用；换代即
+    /// 换新的，旧句柄 drop 仅 detach）。
+    worker: tokio::task::JoinHandle<()>,
+    /// 最后一次事件到达时刻（**仅在 entry 锁内读写，无需原子**）：
+    /// dispatch 投件成功时刷新；worker 过期判定在同一把锁内复核——
+    /// 复核通过 ⟺ TTL 全程零到达 ⟺ 队列必然为空，余量结构性不存在。
+    last_activity: std::time::Instant,
     /// 在飞任务计数（obs 死亡清扫判活谓词用）。
     inflight: Arc<AtomicU32>,
     /// 是否持有未投递的回复 buffer（清扫对持有者让步，杜绝"先冻后成"
@@ -122,10 +140,11 @@ impl DeliveryPool {
             Box::new(agent_dead),
             token,
             SELF_SETTLE_INTERVAL,
+            WORKER_IDLE_TTL,
         )
     }
 
-    /// 完整构造（判死探针与节拍可注入——测试用短节拍覆盖巡检路径）。
+    /// 完整构造（判死探针与节拍可注入——测试用短节拍覆盖巡检/过期路径）。
     #[allow(clippy::too_many_arguments)] // 依赖注入构造器，参数即上下文
     fn with_timing(
         obs: Arc<ObsTracker>,
@@ -136,8 +155,9 @@ impl DeliveryPool {
         agent_dead: Box<dyn Fn(&SessionId) -> bool + Send + Sync>,
         token: CancellationToken,
         settle_interval: std::time::Duration,
+        idle_ttl: std::time::Duration,
     ) -> Self {
-        Self {
+        let pool = Self {
             actors: Arc::new(DashMap::new()),
             ctx: Arc::new(DeliveryCtx {
                 obs,
@@ -149,8 +169,11 @@ impl DeliveryPool {
                 io_permits: Semaphore::new(MAX_CONCURRENT_IO),
                 token,
                 settle_interval,
+                idle_ttl,
             }),
-        }
+        };
+        pool.spawn_janitor();
+        pool
     }
 
     /// 测试构造：判死探针恒真 + 短节拍，覆盖巡检兜底路径。
@@ -168,6 +191,7 @@ impl DeliveryPool {
             Box::new(|_| true),
             CancellationToken::new(),
             std::time::Duration::from_millis(50),
+            std::time::Duration::from_hours(1),
         )
     }
 
@@ -191,60 +215,112 @@ impl DeliveryPool {
             .is_some_and(|h| h.has_buffer.load(Ordering::Relaxed))
     }
 
-    /// 派一个事件给该会话的 actor（不存在则创建）。同会话严格 FIFO。
+    /// 派一个事件给该会话的 worker（不存在则创建）。同会话严格 FIFO。
     ///
-    /// 永不在调用方阻塞：队满记 ERROR 丢件（此时系统已处于深度异常，
-    /// 上游 bus 的丢件告警必然先触发）；actor 恰好死亡（panic/取消，
-    /// 登记尚未来得及摘除）则摘除死登记、重建并重投一次。
+    /// **全程在 entry 锁内**（同步 µs 段，零 await）：`try_send` 成功即
+    /// 止；队满记 ERROR 丢件（深度异常，上游 bus 告警必然先触发）；
+    /// Closed 仅意味着 worker 猝死（panic/关停——正常过期由 worker
+    /// 自己持锁摘牌退出，锁内永远不该见到 Closed）——观察即证据，
+    /// 锁即身份，原地换代重投，无需重试与身份比对。
     pub(crate) fn dispatch(&self, session_id: &SessionId, job: DeliveryJob) {
-        let mut job = Some(job);
-        for _ in 0..2 {
-            let sender = match self.actors.entry(session_id.clone()) {
-                dashmap::mapref::entry::Entry::Occupied(e) => e.get().tx.clone(),
-                dashmap::mapref::entry::Entry::Vacant(e) => {
-                    let (tx, rx) = mpsc::channel::<DeliveryJob>(SESSION_EVENT_CAPACITY);
-                    let inflight = Arc::new(AtomicU32::new(0));
-                    let has_buffer = Arc::new(AtomicBool::new(false));
-                    e.insert(ActorHandle {
-                        tx: tx.clone(),
-                        inflight: Arc::clone(&inflight),
-                        has_buffer: Arc::clone(&has_buffer),
-                    });
-                    let ctx = Arc::clone(&self.ctx);
-                    let actors = Arc::clone(&self.actors);
-                    let sid = session_id.clone();
-                    let own_tx = tx.clone();
-                    tokio::spawn(async move {
-                        run_actor(sid, rx, own_tx, actors, inflight, has_buffer, ctx).await;
-                    });
-                    tx
+        use dashmap::mapref::entry::Entry;
+        match self.actors.entry(session_id.clone()) {
+            Entry::Occupied(mut e) => match e.get().tx.try_send(job) {
+                Ok(()) => {
+                    // 到达即活动：刷新 TTL（锁内普通字段写）。
+                    e.get_mut().last_activity = std::time::Instant::now();
                 }
-            };
-            match sender.try_send(job.take().expect("job consumed on retry")) {
-                Ok(()) => return,
                 Err(mpsc::error::TrySendError::Full(returned)) => {
                     error!(
                         session_id = %session_id.0,
                         "session delivery queue full, dropping event (deep overload)"
                     );
                     let _ = returned;
-                    return;
                 }
                 Err(mpsc::error::TrySendError::Closed(returned)) => {
-                    // actor 已退出（panic/取消）：摘除死登记后重建重投。
-                    // 必须确认登记的还是**这条**死通道——并发 dispatch 可能
-                    // 已经重建过，误删新登记会造成同会话双 actor 乱序。
-                    job = Some(returned);
-                    self.actors
-                        .remove_if(session_id, |_, h| h.tx.same_channel(&sender));
+                    warn!(
+                        session_id = %session_id.0,
+                        "delivery worker died abnormally, respawning (queued events lost)"
+                    );
+                    *e.get_mut() = spawn_handle(&self.actors, &self.ctx, session_id.clone());
+                    // 新通道必收（空队列、容量满额）。
+                    let _ = e.get().tx.try_send(returned);
                 }
+            },
+            Entry::Vacant(e) => {
+                let handle = spawn_handle(&self.actors, &self.ctx, session_id.clone());
+                let tx = handle.tx.clone();
+                e.insert(handle);
+                // 同上：新通道必收。
+                let _ = tx.try_send(job);
             }
         }
-        error!(
-            session_id = %session_id.0,
-            "failed to dispatch delivery job after actor respawn"
-        );
     }
+
+    /// janitor 单趟收尸（测试可直接调用）：摘除 worker 已死亡的
+    /// entry（panic/关停的尸体；正常过期的 worker 已在锁内自我了
+    /// 断，不会产生尸体）。脏旗标随 entry 一并消失——此处留痕是为
+    /// 了 forensic（幻影 buffer 曾让 obs 清扫永远让步的风险随摘除
+    /// 关闭）。本函数纯属保洁，正确性不依赖它。
+    pub(crate) fn janitor_sweep(&self) {
+        self.actors.retain(|sid, h| {
+            if !h.worker.is_finished() {
+                return true;
+            }
+            if h.has_buffer.load(Ordering::Relaxed) || h.inflight.load(Ordering::Relaxed) != 0 {
+                warn!(
+                    session_id = %sid.0,
+                    "janitor: collecting a dead delivery worker with stale flags"
+                );
+            }
+            false
+        });
+    }
+
+    /// janitor 周期任务（Redis 主动过期同款：慢节奏、纯内存保洁）。
+    fn spawn_janitor(&self) {
+        let token = self.ctx.token.clone();
+        let pool = self.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(JANITOR_INTERVAL);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    () = token.cancelled() => break,
+                    _ = tick.tick() => pool.janitor_sweep(),
+                }
+            }
+        });
+    }
+}
+
+/// 建一条会话通道并拉起 worker，返回完整登记。调用方必须持有
+/// entry 锁（spawn 是同步 fire-and-forget，不违例）。
+fn spawn_handle(
+    actors: &Arc<DashMap<SessionId, ActorHandle>>,
+    ctx: &Arc<DeliveryCtx>,
+    session_id: SessionId,
+) -> ActorHandle {
+    let (tx, rx) = mpsc::channel::<DeliveryJob>(SESSION_EVENT_CAPACITY);
+    let worker = {
+        let ctx = Arc::clone(ctx);
+        let actors = Arc::clone(actors);
+        let inflight = Arc::new(AtomicU32::new(0));
+        let has_buffer = Arc::new(AtomicBool::new(false));
+        let h_inflight = Arc::clone(&inflight);
+        let h_buffer = Arc::clone(&has_buffer);
+        let worker = tokio::spawn(async move {
+            run_worker(session_id, rx, actors, inflight, has_buffer, ctx).await;
+        });
+        ActorHandle {
+            tx,
+            worker,
+            last_activity: std::time::Instant::now(),
+            inflight: h_inflight,
+            has_buffer: h_buffer,
+        }
+    };
+    worker
 }
 
 /// 在飞任务计数 guard（Drop 自减，panic 安全）。
@@ -263,39 +339,15 @@ impl Drop for InflightGuard {
     }
 }
 
-/// actor 登记的退出清理 guard（评审 N1）：任何退出路径（含 panic、
-/// 取消）都把登记摘除——登记在而 actor 亡会让 dispatch 拿到死通道多
-/// 绕一轮重建，也让 `is_quiet`/`has_buffer` 读到不再更新的幽灵旗标。
-/// 仅当登记的还是自己（`same_channel`）才摘：并发 dispatch 已重建
-/// 新 actor 时不得误删。
-struct ActorRegistrationGuard {
-    session_id: SessionId,
-    actors: Arc<DashMap<SessionId, ActorHandle>>,
-    own_tx: mpsc::Sender<DeliveryJob>,
-}
-
-impl Drop for ActorRegistrationGuard {
-    fn drop(&mut self) {
-        self.actors
-            .remove_if(&self.session_id, |_, h| h.tx.same_channel(&self.own_tx));
-    }
-}
-
-/// 会话投递 actor 主循环。
-async fn run_actor(
+/// 会话投递 worker 主循环。
+async fn run_worker(
     session_id: SessionId,
     mut rx: mpsc::Receiver<DeliveryJob>,
-    own_tx: mpsc::Sender<DeliveryJob>,
     actors: Arc<DashMap<SessionId, ActorHandle>>,
     own_inflight: Arc<AtomicU32>,
     own_has_buffer: Arc<AtomicBool>,
     ctx: Arc<DeliveryCtx>,
 ) {
-    let _registration = ActorRegistrationGuard {
-        session_id: session_id.clone(),
-        actors: Arc::clone(&actors),
-        own_tx: own_tx.clone(),
-    };
     // 本 run 的回复缓冲：存在即"run 在飞"的标记（与原全局循环的
     // reply_buffers 语义一致），在 Stopped/兜底时取走投递。
     let mut buffer: Option<RunReplyBuffer> = None;
@@ -307,9 +359,9 @@ async fn run_actor(
             biased;
             () = ctx.token.cancelled() => break,
             _ = settle_tick.tick() => {
-                // 队列里还有未处理事件时，判死让步——Stopped 可能正排
-                // 在队里（原全局 watchdog 的 rx.is_empty() 守卫同款语
-                // 义；上游分派循环只增亚毫秒级残余窗口）。
+                // 队列里还有未处理事件时，判死与过期都让步——Stopped
+                // 可能正排在队里（原全局 watchdog 的 rx.is_empty()
+                // 守卫同款语义；上游分派循环只增亚毫秒级残余窗口）。
                 if !rx.is_empty() {
                     continue;
                 }
@@ -343,10 +395,11 @@ async fn run_actor(
                         .await;
                         own_has_buffer.store(buffer.is_some(), Ordering::Relaxed);
                     }
+                } else if try_expire_self(&session_id, &mut rx, &actors, ctx.idle_ttl) {
+                    // 空闲 TTL 到期且锁内复核确认零到达：entry 已摘，
+                    // 本 worker 退出（设计定稿见模块文档）。
+                    return;
                 }
-                // buffer 空：无事可做。**actor 常驻不回收**（2026-08-22
-                // 设计定稿，见模块文档）——退出即交接，交接即窗口；
-                // 没有退出就没有 stranded/乱序/丢余量三类竞态。
             }
             job = rx.recv() => {
                 let Some(job) = job else { break };
@@ -356,6 +409,36 @@ async fn run_actor(
             }
         }
     }
+}
+
+/// worker 过期判定：**entry 锁内**复核 `last_activity` 确超 TTL 才
+/// 摘除 entry（返回 true）。TTL 由事件到达驱动（dispatch 在同一把
+/// 锁内刷新）——复核通过 ⟺ TTL 全程零到达 ⟺ 队列必然为空，余量
+/// 结构性不存在（故无换代分支：摘了就走，下次 dispatch 惰性重建）。
+/// 全程同步（不变式：锁内零 await、零 IO、零二次 map 访问）。
+fn try_expire_self(
+    session_id: &SessionId,
+    rx: &mut mpsc::Receiver<DeliveryJob>,
+    actors: &Arc<DashMap<SessionId, ActorHandle>>,
+    idle_ttl: std::time::Duration,
+) -> bool {
+    use dashmap::mapref::entry::Entry;
+    let Entry::Occupied(e) = actors.entry(session_id.clone()) else {
+        return true; // 已不在表中：无牵无挂，退出
+    };
+    if e.get().last_activity.elapsed() < idle_ttl {
+        return false; // 期间有事件到达：放弃过期，继续服务
+    }
+    // 防御：余量按构造必空（复核通过 ⟺ 零到达）；若有，必是设计不
+    // 变量被破坏——留痕并照常摘除（rx 随 worker 退出丢弃，warn 可见）。
+    if rx.try_recv().is_ok() {
+        warn!(
+            session_id = %session_id.0,
+            "expiry found leftover despite fresh-TTL re-check (invariant broken?)"
+        );
+    }
+    e.remove();
+    true
 }
 
 /// 执行一条事件；panic 降级为 ERROR 日志（actor 与队列存活，后续事件
@@ -920,10 +1003,11 @@ mod tests {
     }
 
     /// 新测试的搭建辅助：内存 store + 单 feishu 实例（纯文本投递），
-    /// 判死探针/节拍/取消令牌可注入。返回 (pool, adapter, sid)。
+    /// 判死探针/节拍/TTL/取消令牌可注入。返回 (pool, adapter, sid)。
     async fn setup_pool(
         agent_dead: Box<dyn Fn(&SessionId) -> bool + Send + Sync>,
         settle_interval: std::time::Duration,
+        idle_ttl: std::time::Duration,
         token: CancellationToken,
     ) -> (DeliveryPool, Arc<MockAdapter>, SessionId) {
         let db = SqlitePoolOptions::new()
@@ -963,6 +1047,7 @@ mod tests {
             agent_dead,
             token,
             settle_interval,
+            idle_ttl,
         );
         (pool, adapter, sid)
     }
@@ -999,14 +1084,14 @@ mod tests {
         }
     }
 
-    /// M1/单表重构回归：actor 空闲回收后，下一个 run 必须由新 actor
-    /// 常驻设计回归（2026-08-22 设计定稿）：actor 不回收——闲置后同
-    /// 一 actor 继续服务后续 run，旗标/登记始终一致。
+    /// 过期设计回归（2026-08-22 定稿）：闲置超 TTL 的 worker 自我过
+    /// 期（entry 摘除，真回收）；后续 dispatch 惰性重建，正常投递。
     #[tokio::test]
-    async fn idle_actor_stays_and_keeps_serving() {
+    async fn idle_worker_expires_and_respawns_on_demand() {
         let (pool, adapter, sid) = setup_pool(
             Box::new(|_| false),
             std::time::Duration::from_millis(20),
+            std::time::Duration::from_millis(60),
             CancellationToken::new(),
         )
         .await;
@@ -1023,16 +1108,18 @@ mod tests {
         }
         wait_delivered(&adapter, "第一轮回复", "first run not delivered").await;
 
-        // 闲置数个节拍：actor 不被回收（登记保留、读数安静）。
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        assert!(pool.is_quiet(&sid), "idle actor reads quiet");
-        assert!(!pool.has_buffer(&sid), "idle actor holds no buffer");
-        assert!(
-            pool.actors.contains_key(&sid),
-            "resident actor must not be reaped"
-        );
+        // 越过 TTL+数个节拍：worker 已自我过期，entry 被摘除。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while pool.actors.contains_key(&sid) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "idle worker was not expired"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(pool.is_quiet(&sid), "expired session reads quiet");
 
-        // 第二轮：同一 actor 继续服务。
+        // 第二轮：dispatch 惰性重建 worker 并正常投递。
         for event in run_events("第二轮回复") {
             pool.dispatch(
                 &sid,
@@ -1042,7 +1129,164 @@ mod tests {
                 },
             );
         }
-        wait_delivered(&adapter, "第二轮回复", "second run not delivered").await;
+        wait_delivered(&adapter, "第二轮回复", "post-expiry run not delivered").await;
+    }
+
+    /// TTL 由事件到达驱动：判定节拍之间有事件到达（即便不产生
+    /// buffer 的事件），worker 不得过期——entry 时间戳在锁内被刷
+    /// 新，过期复核必然放弃。
+    #[tokio::test]
+    async fn event_arrival_defers_expiry() {
+        let (pool, adapter, sid) = setup_pool(
+            Box::new(|_| false),
+            std::time::Duration::from_millis(20),
+            std::time::Duration::from_millis(120),
+            CancellationToken::new(),
+        )
+        .await;
+        let routing = test_routing();
+
+        // 每 50ms 来一条不产生 buffer 的事件（ModelEvent::Request），
+        // 总时长 300ms 远超 TTL=120ms——worker 必须始终存活。
+        for _ in 0..6 {
+            pool.dispatch(
+                &sid,
+                DeliveryJob {
+                    routing: Arc::clone(&routing),
+                    event: Event::Model(ModelEvent::Request {
+                        message_id: crate::types::MessageId::new(),
+                        message_count: 1,
+                    }),
+                },
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(
+            pool.actors.contains_key(&sid),
+            "worker expired despite fresh event arrivals"
+        );
+
+        // 静默超过 TTL：必须过期。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while pool.actors.contains_key(&sid) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "worker not expired after silence"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let _ = adapter;
+    }
+
+    /// Closed 分支（worker 猝死的保险丝）：entry 残留死通道时，
+    /// dispatch 原地换代并重投——投递不受影响。
+    #[tokio::test]
+    async fn closed_branch_respawns_after_abnormal_death() {
+        let (pool, adapter, sid) = setup_pool(
+            Box::new(|_| false),
+            std::time::Duration::from_hours(1),
+            std::time::Duration::from_hours(1),
+            CancellationToken::new(),
+        )
+        .await;
+        let routing = test_routing();
+
+        // 植入尸体：tx 存活但 rx 已弃（channel 立闭），worker 句柄已完结。
+        let (tx, rx) = mpsc::channel::<DeliveryJob>(SESSION_EVENT_CAPACITY);
+        drop(rx);
+        pool.actors.insert(
+            sid.clone(),
+            ActorHandle {
+                tx,
+                worker: tokio::spawn(async {}),
+                last_activity: std::time::Instant::now(),
+                inflight: Arc::new(AtomicU32::new(0)),
+                has_buffer: Arc::new(AtomicBool::new(false)),
+            },
+        );
+
+        for event in run_events("换代后投递") {
+            pool.dispatch(
+                &sid,
+                DeliveryJob {
+                    routing: Arc::clone(&routing),
+                    event,
+                },
+            );
+        }
+        wait_delivered(&adapter, "换代后投递", "run not delivered after respawn").await;
+        // 换代后 entry 的时间戳必须是新的（spawn_handle 创建即写入），
+        // 新 worker 不会因陈旧时间戳立刻过期（复审 should-fix pin）。
+        let fresh = pool
+            .actors
+            .get(&sid)
+            .is_some_and(|h| h.last_activity.elapsed() < std::time::Duration::from_secs(1));
+        assert!(fresh, "respawned worker has a stale last_activity");
+        // janitor 不得误收活 worker。
+        pool.janitor_sweep();
+        assert!(pool.actors.contains_key(&sid));
+    }
+
+    /// janitor 收尸：worker 已完结的 entry（含脏旗标）被摘除；活
+    /// worker 不动。
+    #[tokio::test]
+    async fn janitor_collects_corpses_keeps_living() {
+        let (pool, _adapter, sid) = setup_pool(
+            Box::new(|_| false),
+            std::time::Duration::from_hours(1),
+            std::time::Duration::from_hours(1),
+            CancellationToken::new(),
+        )
+        .await;
+
+        // 活 worker（正常 dispatch 建）。
+        pool.dispatch(
+            &sid,
+            DeliveryJob {
+                routing: test_routing(),
+                event: Event::Agent(AgentEvent::Lifecycle {
+                    state: AgentStatus::Running,
+                }),
+            },
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !pool.actors.contains_key(&sid) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "worker never registered"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        // 尸体：另一个 session，worker 已完结且旗标脏。
+        let corpse = SessionId::from("sess_corpse");
+        // 植入尸体：tx 存活但 rx 已弃（channel 立闭），worker 句柄已完结。
+        let (tx, rx) = mpsc::channel::<DeliveryJob>(SESSION_EVENT_CAPACITY);
+        drop(rx);
+        let corpse_worker = tokio::spawn(async {});
+        while !corpse_worker.is_finished() {
+            tokio::task::yield_now().await;
+        }
+        pool.actors.insert(
+            corpse.clone(),
+            ActorHandle {
+                tx,
+                worker: corpse_worker,
+                last_activity: std::time::Instant::now(),
+                inflight: Arc::new(AtomicU32::new(2)),
+                has_buffer: Arc::new(AtomicBool::new(true)),
+            },
+        );
+
+        pool.janitor_sweep();
+        assert!(
+            !pool.actors.contains_key(&corpse),
+            "corpse entry must be collected"
+        );
+        assert!(
+            pool.actors.contains_key(&sid),
+            "living worker must survive the janitor"
+        );
     }
 
     /// 三审 should-fix #2 回归：判死探针 panic 必须降级为"视为存活"
@@ -1060,6 +1304,7 @@ mod tests {
         let (pool, adapter, sid) = setup_pool(
             Box::new(probe),
             std::time::Duration::from_millis(30),
+            std::time::Duration::from_hours(1),
             CancellationToken::new(),
         )
         .await;
@@ -1100,14 +1345,15 @@ mod tests {
         );
     }
 
-    /// N1 回归：actor 退出（取消路径）时登记必须被退出 guard 摘除——
-    /// `is_quiet`/`has_buffer` 不得读到幽灵旗标，后续 dispatch 直接
-    /// 拿到新 actor（panic 路径同此 Drop，Rust 保证 unwind 触发）。
+    /// 关停路径回归：token 取消后 worker 退出（句柄完结），尸体由
+    /// janitor 收殓；其后的 dispatch 重建登记（此 pool 的 token 已
+    /// 死，新 worker 即生即灭属预期——此处只钉"收尸→重建"链路）。
     #[tokio::test]
-    async fn actor_exit_cleans_registration() {
+    async fn cancelled_worker_is_collected_and_respawned() {
         let token = CancellationToken::new();
         let (pool, _adapter, sid) = setup_pool(
             Box::new(|_| false),
+            std::time::Duration::from_hours(1),
             std::time::Duration::from_hours(1),
             token.clone(),
         )
@@ -1126,26 +1372,46 @@ mod tests {
         while !pool.actors.contains_key(&sid) {
             assert!(
                 std::time::Instant::now() < deadline,
-                "actor never registered"
+                "worker never registered"
             );
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
 
         token.cancel();
 
+        // worker 退出（句柄完结）；entry 尚在（尸体），janitor 收殓。
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         loop {
-            // 登记被摘除后：无 entry → has_buffer=false（幽灵旗标会
-            // 给出 has_buffer=true）。
-            if !pool.actors.contains_key(&sid) && !pool.has_buffer(&sid) {
+            let finished = pool.actors.get(&sid).is_none_or(|h| h.worker.is_finished());
+            if finished {
                 break;
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "exited actor left a ghost registration"
+                "worker did not exit on cancel"
             );
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
+        pool.janitor_sweep();
+        assert!(
+            !pool.actors.contains_key(&sid),
+            "janitor must collect the cancelled worker's corpse"
+        );
+
+        // 后续 dispatch 经 Vacant 路径重建登记。
+        pool.dispatch(
+            &sid,
+            DeliveryJob {
+                routing: test_routing(),
+                event: Event::Agent(AgentEvent::Lifecycle {
+                    state: AgentStatus::Running,
+                }),
+            },
+        );
+        assert!(
+            pool.actors.contains_key(&sid),
+            "dispatch must respawn after corpse collection"
+        );
     }
 
     /// S2 回归：并发会话数超过 IO 信号量（16）时全量投递仍完成——
@@ -1156,6 +1422,7 @@ mod tests {
         let (pool, adapter, _sid) = setup_pool(
             Box::new(|_| false),
             std::time::Duration::from_millis(50),
+            std::time::Duration::from_hours(1),
             CancellationToken::new(),
         )
         .await;

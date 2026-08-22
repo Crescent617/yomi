@@ -176,6 +176,7 @@ struct ObsCardState {
     /// heartbeat PATCH can never land *after* the settle morph and paint a
     /// stale "running" render over the reply card — the settle always
     /// wins, and a late heartbeat sees the state gone and skips (M2).
+    /// 终态路径统一经 [`ObsTracker::take_state_locked`] 锁内摘除。
     patch_lock: Arc<tokio::sync::Mutex<()>>,
     /// Standalone-compact card (`/compact` outside a run): materialized on
     /// `Compacting { active: true }` when no run state exists, settled by
@@ -888,6 +889,26 @@ impl ObsTracker {
         }
     }
 
+    /// 三条终态路径（settle/freeze/compact）共用的**锁内摘除**
+    /// prologue（M2 不变式的唯一载体）：持 `patch_lock` 期间摘除
+    /// state——在飞的心跳/节流 PATCH 随后拿锁时重校验见 state 已删
+    /// 即跳过，本路径发出的终态渲染永远是最后落在卡上的内容（旧
+    /// 顺序：校验→发送→结算，在飞 PATCH 可晚于 morph 落地，过期
+    /// "运行中"盖回复卡且无自愈）。返回的 guard 必须活到终态
+    /// PATCH 发出之后。
+    async fn take_state_locked(
+        &self,
+        session_id: &SessionId,
+    ) -> Option<(ObsCardState, tokio::sync::OwnedMutexGuard<()>)> {
+        let lock = self
+            .states
+            .get(session_id)
+            .map(|e| Arc::clone(&e.patch_lock))?;
+        let guard = lock.lock_owned().await;
+        let state = self.states.remove(session_id).map(|(_, s)| s)?;
+        Some((state, guard))
+    }
+
     /// Settle the status card and clear the run's receipts. Returns the
     /// reply back when nothing was settled (no run state existed, or the
     /// settle send failed), so the caller can fall back to a plain send.
@@ -914,19 +935,7 @@ impl ObsTracker {
         // sessions whose real `Stopped` never arrives).
         let mid_run_posts = self.has_mid_run_posts(session_id);
         self.receipts.remove(session_id);
-        // 与心跳/节流 PATCH 同锁（M2）：锁内摘除状态——在飞的心跳
-        // PATCH 随后拿锁时重校验见状态已删即放弃，本函数发出的终态
-        // 渲染永远是最后落在卡上的内容（旧顺序：校验→发送→结算，在飞
-        // PATCH 可晚于 morph 落地，过期"运行中"盖回复卡且无自愈）。
-        let Some(lock) = self
-            .states
-            .get(session_id)
-            .map(|e| Arc::clone(&e.patch_lock))
-        else {
-            return SettleOutcome::unsettled(reply);
-        };
-        let _guard = lock.lock().await;
-        let Some((_, state)) = self.states.remove(session_id) else {
+        let Some((state, _guard)) = self.take_state_locked(session_id).await else {
             return SettleOutcome::unsettled(reply);
         };
         let notice = settle.notice();
@@ -994,16 +1003,7 @@ impl ObsTracker {
     /// it too; duplication in this rare edge is preferred over loss.
     async fn freeze_card(&self, session_id: &SessionId, settle: &Settle, keep_trace: bool) {
         self.receipts.remove(session_id);
-        // 同 settle_card 的 M2 锁序：锁内摘除，在飞 PATCH 不得盖终态。
-        let Some(lock) = self
-            .states
-            .get(session_id)
-            .map(|e| Arc::clone(&e.patch_lock))
-        else {
-            return;
-        };
-        let _guard = lock.lock().await;
-        let Some((_, state)) = self.states.remove(session_id) else {
+        let Some((state, _guard)) = self.take_state_locked(session_id).await else {
             return;
         };
         if state.status_msg_id.is_empty() {
@@ -1036,16 +1036,7 @@ impl ObsTracker {
     /// followed by `/stop` then morphs instead of splitting, visually
     /// identical since the new card anchors below the trigger anyway.)
     async fn settle_compact(&self, session_id: &SessionId, summary: &str, is_error: bool) {
-        // 同 settle_card 的 M2 锁序：锁内摘除，在飞 PATCH 不得盖终态。
-        let Some(lock) = self
-            .states
-            .get(session_id)
-            .map(|e| Arc::clone(&e.patch_lock))
-        else {
-            return;
-        };
-        let _guard = lock.lock().await;
-        let Some((_, state)) = self.states.remove(session_id) else {
+        let Some((state, _guard)) = self.take_state_locked(session_id).await else {
             return;
         };
         let card = render_compact_terminal(&state, summary, is_error);
