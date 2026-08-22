@@ -21,6 +21,7 @@ pub(crate) mod ask;
 
 pub(crate) mod mailbox;
 
+pub(crate) mod cron_card;
 pub(crate) mod settings;
 
 pub(crate) mod comment;

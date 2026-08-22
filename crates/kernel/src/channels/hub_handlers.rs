@@ -343,6 +343,12 @@ pub(crate) async fn handle_incoming_message(
             )
             .await
         }
+        ChannelCommand::Cron => {
+            if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
+                return Ok(Some(deny));
+            }
+            super::cron_card::handle_cron_command(&kernel, adapter, &msg, reply_msg_id).await
+        }
         ChannelCommand::BackgroundTasks { all } => {
             if let Some(deny) = super::approval::check_admin(config, &msg.external_user_id) {
                 return Ok(Some(deny));

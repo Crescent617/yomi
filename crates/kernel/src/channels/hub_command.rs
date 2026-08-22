@@ -47,6 +47,7 @@ pub(crate) const CMD_MAILBOX: &str = "/mailbox";
 
 pub(crate) const CMD_SHELL: &str = "/bg";
 pub(crate) const CMD_SETTINGS: &str = "/settings";
+pub(crate) const CMD_CRON: &str = "/cron";
 
 pub(crate) const CMD_BIND: &str = "/bind";
 
@@ -73,6 +74,7 @@ pub(crate) const COMMANDS: &[(&str, &[&str])] = &[
     (CMD_MAILBOX, &["/mb"]),
     (CMD_SHELL, &["/shell"]),
     (CMD_SETTINGS, &[]),
+    (CMD_CRON, &[]),
     (CMD_BIND, &[]),
     (CMD_SESSIONS, &[]),
     (CMD_PERMITS, &[]),
@@ -106,6 +108,7 @@ pub(crate) const HELP_TEXT: &str = "\
 `/mention` — show the @-requirement here; `/mention on|off|reset` to override it
 `/threads` — show reply-in-thread mode for this chat; `/threads on|off|reset` to override it
 `/settings` — settings panel card: mention / reply-in-thread / model overrides as dropdowns
+`/cron` — cron panel card: pause / resume / delete scheduled jobs (admin; **all** jobs, any chat)
 `/bind` — show this conversation's session id; `/bind <session_id>` to retarget it
 `/permits` — list pending doc-permission requests
 `/approve <id> [perm]` — approve a doc-permission request
@@ -198,6 +201,10 @@ pub(crate) enum ChannelCommand {
     /// Chat-scope settings panel card (`/settings`, admin): mention /
     /// reply-in-thread / model overrides as select dropdowns.
     Settings,
+    /// Chat-scope cron panel card (`/cron`, admin): pause / resume /
+    /// delete scheduled jobs — **global** list (any chat's jobs can be
+    /// deleted from here).
+    Cron,
     /// List this channel's recent sessions (admin), with the page offset.
     Sessions(usize),
     /// A malformed `/sessions` command.
@@ -353,6 +360,7 @@ pub(crate) fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
             _ => ChannelCommand::InvalidThreadsCommand,
         },
         CMD_SETTINGS => ChannelCommand::Settings,
+        CMD_CRON => ChannelCommand::Cron,
         CMD_MAILBOX => match (parts.next(), parts.next(), parts.next()) {
             (None, None, None) => ChannelCommand::Mailbox(super::mailbox::MailboxSub::Show),
             (Some("clear"), scope, None) => match scope {

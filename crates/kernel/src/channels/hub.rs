@@ -331,6 +331,14 @@ impl ChannelHub {
                                             &name, &config, &kernel, &store, &adapter, action,
                                         )
                                         .await;
+                                    } else if ns.starts_with("cron_") {
+                                        let Some(kernel) = kernel_weak.upgrade() else {
+                                            return;
+                                        };
+                                        super::cron_card::handle_card_action(
+                                            &name, &config, &kernel, &adapter, action,
+                                        )
+                                        .await;
                                     } else {
                                         super::approval::handle_card_action(
                                             &name, &config, &store, &adapter, action,
