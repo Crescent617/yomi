@@ -6,6 +6,7 @@ use crate::event::StopReason;
 use crate::storage::migrations::run_migrations;
 use crate::types::ContentBlock;
 use sqlx::sqlite::SqlitePoolOptions;
+use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::sync::mpsc as tokio_mpsc;
 
 /// 极简 adapter：只记录 `send_message` 的文本（typing 用默认 no-op）。
@@ -364,7 +365,7 @@ async fn idle_worker_expires_and_respawns_on_demand() {
 
     // 越过 TTL+数个节拍：worker 已自我过期，entry 被摘除。
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    while pool.actors.contains_key(&sid) {
+    while pool.has_worker(&sid) {
         assert!(
             std::time::Instant::now() < deadline,
             "idle worker was not expired"
@@ -413,7 +414,7 @@ async fn in_flight_buffer_blocks_expiry() {
     );
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     assert!(
-        pool.actors.contains_key(&sid),
+        pool.has_worker(&sid),
         "worker expired while a run was in flight"
     );
 
@@ -429,7 +430,7 @@ async fn in_flight_buffer_blocks_expiry() {
     }
     wait_delivered(&adapter, "收尾", "settle not delivered").await;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    while pool.actors.contains_key(&sid) {
+    while pool.has_worker(&sid) {
         assert!(
             std::time::Instant::now() < deadline,
             "worker not expired after buffer settled"
@@ -438,63 +439,9 @@ async fn in_flight_buffer_blocks_expiry() {
     }
 }
 
-/// Full 丢件分支（整审 should-fix，v0.9.6 前既有缺口）：队列打满
-/// 时 dispatch 丢件记 ERROR 且不 panic、不影响后续投递。
-#[tokio::test]
-async fn full_queue_drops_event_without_harm() {
-    let (pool, adapter, sid) = setup_pool(
-        Box::new(|_| false),
-        std::time::Duration::from_hours(1),
-        std::time::Duration::from_hours(1),
-        CancellationToken::new(),
-    )
-    .await;
-    let routing = test_routing();
-
-    // 植入 worker 永不消费（pending）且通道已满的 entry。
-    let (tx, rx) = mpsc::channel::<DeliveryJob>(SESSION_EVENT_CAPACITY);
-    for _ in 0..SESSION_EVENT_CAPACITY {
-        tx.try_send(DeliveryJob {
-            routing: Arc::clone(&routing),
-            event: Event::Model(ModelEvent::Request {
-                message_id: crate::types::MessageId::new(),
-                message_count: 1,
-            }),
-        })
-        .unwrap();
-    }
-    pool.actors.insert(
-        sid.clone(),
-        ActorHandle {
-            tx,
-            worker: tokio::spawn(async move {
-                let _rx = rx;
-                std::future::pending::<()>().await;
-            }),
-            last_activity: std::time::Instant::now(),
-            inflight: Arc::new(AtomicU32::new(0)),
-            has_buffer: Arc::new(AtomicBool::new(false)),
-        },
-    );
-
-    // 打满后再投：丢件、不 panic。
-    pool.dispatch(
-        &sid,
-        DeliveryJob {
-            routing: Arc::clone(&routing),
-            event: Event::Model(ModelEvent::Request {
-                message_id: crate::types::MessageId::new(),
-                message_count: 1,
-            }),
-        },
-    );
-    // entry 未被破坏（worker 仍在）。
-    assert!(pool.actors.contains_key(&sid));
-    assert!(
-        adapter.sent.lock().await.is_empty(),
-        "dropped event must not be delivered"
-    );
-}
+/// Full 丢件分支的覆盖已随机制换芯上移：`keyed_pool_test.rs` 的
+/// `full_queue_rolls_back_accounting`（capacity=1 精确造 Full，钉
+/// 丢件 + 账回滚 + wait_idle 不挂）。本层不再有自有实现可测。
 
 /// TTL 由事件到达驱动：判定节拍之间有事件到达（即便不产生
 /// buffer 的事件），worker 不得过期——entry 时间戳在锁内被刷
@@ -526,13 +473,13 @@ async fn event_arrival_defers_expiry() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     assert!(
-        pool.actors.contains_key(&sid),
+        pool.has_worker(&sid),
         "worker expired despite fresh event arrivals"
     );
 
     // 静默超过 TTL：必须过期。
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    while pool.actors.contains_key(&sid) {
+    while pool.has_worker(&sid) {
         assert!(
             std::time::Instant::now() < deadline,
             "worker not expired after silence"
@@ -542,34 +489,43 @@ async fn event_arrival_defers_expiry() {
     let _ = adapter;
 }
 
-/// Closed 分支（worker 猝死的保险丝）：entry 残留死通道时，
-/// dispatch 原地换代并重投——投递不受影响。
+/// Closed 分支（worker 猝死的保险丝）与关停后行为：pool token
+/// 取消 → worker 退出、entry 残留死通道 → 后续 dispatch 走
+/// Closed 原地换代（新 worker 同 token 即生即灭）——投递惰性、
+/// 不 panic、不挂死。机制层的确定性覆盖在
+/// `keyed_pool_test.rs::dispatch_after_cancel_is_inert`；本测试钉
+/// delivery 业务面：换代后零投递、登记仍在、适配器无副作用。
+/// （手绘版"植入尸体 entry"的写法随 `ActorHandle` 删除而不可
+/// 再注入，真实猝死路径由 cancel 等价驱动。）
 #[tokio::test]
-async fn closed_branch_respawns_after_abnormal_death() {
+async fn dispatch_after_cancel_is_inert_and_safe() {
+    let token = CancellationToken::new();
     let (pool, adapter, sid) = setup_pool(
         Box::new(|_| false),
         std::time::Duration::from_hours(1),
         std::time::Duration::from_hours(1),
-        CancellationToken::new(),
+        token.clone(),
     )
     .await;
     let routing = test_routing();
 
-    // 植入尸体：tx 存活但 rx 已弃（channel 立闭），worker 句柄已完结。
-    let (tx, rx) = mpsc::channel::<DeliveryJob>(SESSION_EVENT_CAPACITY);
-    drop(rx);
-    pool.actors.insert(
-        sid.clone(),
-        ActorHandle {
-            tx,
-            worker: tokio::spawn(async {}),
-            last_activity: std::time::Instant::now(),
-            inflight: Arc::new(AtomicU32::new(0)),
-            has_buffer: Arc::new(AtomicBool::new(false)),
+    pool.dispatch(
+        &sid,
+        DeliveryJob {
+            routing: Arc::clone(&routing),
+            event: Event::Agent(AgentEvent::Lifecycle {
+                state: AgentStatus::Running,
+            }),
         },
     );
+    assert!(pool.has_worker(&sid), "worker never registered");
 
-    for event in run_events("换代后投递") {
+    token.cancel();
+    // 给旧 worker 退出窗口（drain=false：cancel 即 break，rx 随任
+    // 务 drop → 后续 dispatch 必走 Closed 换代）。
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    for event in run_events("关停后投递") {
         pool.dispatch(
             &sid,
             DeliveryJob {
@@ -578,80 +534,22 @@ async fn closed_branch_respawns_after_abnormal_death() {
             },
         );
     }
-    wait_delivered(&adapter, "换代后投递", "run not delivered after respawn").await;
-    // 换代后 entry 的时间戳必须是新的（spawn_handle 创建即写入），
-    // 新 worker 不会因陈旧时间戳立刻过期（复审 should-fix pin）。
-    let fresh = pool
-        .actors
-        .get(&sid)
-        .is_some_and(|h| h.last_activity.elapsed() < std::time::Duration::from_secs(1));
-    assert!(fresh, "respawned worker has a stale last_activity");
-    // janitor 不得误收活 worker。
-    pool.janitor_sweep();
-    assert!(pool.actors.contains_key(&sid));
-}
-
-/// janitor 收尸：worker 已完结的 entry（含脏旗标）被摘除；活
-/// worker 不动。
-#[tokio::test]
-async fn janitor_collects_corpses_keeps_living() {
-    let (pool, _adapter, sid) = setup_pool(
-        Box::new(|_| false),
-        std::time::Duration::from_hours(1),
-        std::time::Duration::from_hours(1),
-        CancellationToken::new(),
-    )
-    .await;
-
-    // 活 worker（正常 dispatch 建）。
-    pool.dispatch(
-        &sid,
-        DeliveryJob {
-            routing: test_routing(),
-            event: Event::Agent(AgentEvent::Lifecycle {
-                state: AgentStatus::Running,
-            }),
-        },
-    );
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    while !pool.actors.contains_key(&sid) {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "worker never registered"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-
-    // 尸体：另一个 session，worker 已完结且旗标脏。
-    let corpse = SessionId::from("sess_corpse");
-    // 植入尸体：tx 存活但 rx 已弃（channel 立闭），worker 句柄已完结。
-    let (tx, rx) = mpsc::channel::<DeliveryJob>(SESSION_EVENT_CAPACITY);
-    drop(rx);
-    let corpse_worker = tokio::spawn(async {});
-    while !corpse_worker.is_finished() {
-        tokio::task::yield_now().await;
-    }
-    pool.actors.insert(
-        corpse.clone(),
-        ActorHandle {
-            tx,
-            worker: corpse_worker,
-            last_activity: std::time::Instant::now(),
-            inflight: Arc::new(AtomicU32::new(2)),
-            has_buffer: Arc::new(AtomicBool::new(true)),
-        },
-    );
-
-    pool.janitor_sweep();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert!(
-        !pool.actors.contains_key(&corpse),
-        "corpse entry must be collected"
+        adapter.sent.lock().await.is_empty(),
+        "cancelled pool must not deliver"
     );
     assert!(
-        pool.actors.contains_key(&sid),
-        "living worker must survive the janitor"
+        pool.has_worker(&sid),
+        "Closed 臂在 cancelled pool 不换代：原 entry 保留"
     );
 }
+
+/// janitor 收尸的覆盖已随机制换芯消失：池化后 worker 尸体不再
+/// 产生——TTL 摘牌由 worker 锁内自了（`keyed_pool` 全程测试）、
+/// panic 被双层网吞掉（worker 不死）、cancel 即全池关停（entry
+/// 无清扫需求）。原 janitor 两测试（`janitor_collects_*`、尸体
+/// 重建）随之退役，等价行为见上一条 `dispatch_after_cancel_*`。
 
 /// 三审 should-fix #2 回归：判死探针 panic 必须降级为"视为存活"
 /// ——actor 不死、buffer 不被误结算，后续事件正常投递。
@@ -703,79 +601,7 @@ async fn panicking_probe_is_downgraded_to_alive() {
         );
     }
     wait_delivered(&adapter, "探针panic后仍投递", "run lost after probe panic").await;
-    assert!(
-        pool.actors.contains_key(&sid),
-        "actor must survive probe panics"
-    );
-}
-
-/// 关停路径回归：token 取消后 worker 退出（句柄完结），尸体由
-/// janitor 收殓；其后的 dispatch 重建登记（此 pool 的 token 已
-/// 死，新 worker 即生即灭属预期——此处只钉"收尸→重建"链路）。
-#[tokio::test]
-async fn cancelled_worker_is_collected_and_respawned() {
-    let token = CancellationToken::new();
-    let (pool, _adapter, sid) = setup_pool(
-        Box::new(|_| false),
-        std::time::Duration::from_hours(1),
-        std::time::Duration::from_hours(1),
-        token.clone(),
-    )
-    .await;
-
-    pool.dispatch(
-        &sid,
-        DeliveryJob {
-            routing: test_routing(),
-            event: Event::Agent(AgentEvent::Lifecycle {
-                state: AgentStatus::Running,
-            }),
-        },
-    );
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    while !pool.actors.contains_key(&sid) {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "worker never registered"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-
-    token.cancel();
-
-    // worker 退出（句柄完结）；entry 尚在（尸体），janitor 收殓。
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    loop {
-        let finished = pool.actors.get(&sid).is_none_or(|h| h.worker.is_finished());
-        if finished {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "worker did not exit on cancel"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-    pool.janitor_sweep();
-    assert!(
-        !pool.actors.contains_key(&sid),
-        "janitor must collect the cancelled worker's corpse"
-    );
-
-    // 后续 dispatch 经 Vacant 路径重建登记。
-    pool.dispatch(
-        &sid,
-        DeliveryJob {
-            routing: test_routing(),
-            event: Event::Agent(AgentEvent::Lifecycle {
-                state: AgentStatus::Running,
-            }),
-        },
-    );
-    assert!(
-        pool.actors.contains_key(&sid),
-        "dispatch must respawn after corpse collection"
-    );
+    assert!(pool.has_worker(&sid), "actor must survive probe panics");
 }
 
 /// S2 回归：并发会话数超过 IO 信号量（16）时全量投递仍完成——
