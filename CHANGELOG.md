@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.9] - 2026-08-22
+
+### Changed
+
+- `/cron` 面板不再显示已完成（Completed）的任务——列表只保留仍在生效或失败待处理的任务；README 补充了 Channels（飞书/Telegram 接入）的完整说明。
+
 ## [0.9.8] - 2026-08-22
 
 ### Added
