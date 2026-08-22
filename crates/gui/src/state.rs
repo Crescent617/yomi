@@ -107,6 +107,12 @@ impl AppState {
                 old.stop().await;
             });
         } else {
+            // runtime 外的理论 fallback（swap 总被 async Tauri
+            // command 在 runtime 内调用）。安全前提：GUI kernel 恒
+            // 为 `RemoteKernel`（`daemon::get_kernel`），其 `stop`
+            // 的无 runtime 分支只用 `lock()`（不依赖 reactor）——
+            // 若将来换入进程内 `Kernel`（其 stop 含 tokio
+            // timeout），此处必须先建起 reactor。
             futures::executor::block_on(old.stop());
         }
     }

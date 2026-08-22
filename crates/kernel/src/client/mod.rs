@@ -99,8 +99,9 @@ pub async fn read_file_bytes(
 pub trait KernelApi: Send + Sync {
     /// Gracefully stop the kernel and all background tasks：本地
     /// kernel 先 cancel 再等持久化排空（10s 上界）最后关 bus；
-    /// 远程 kernel 的生命周期在服务端，仅断开本地连接
-    /// （fire-and-forget）。**唯一的关停入口**。
+    /// 远程 kernel 的生命周期在服务端——`stop` 仅断开本地连接
+    /// （runtime 内 fire-and-forget；无 runtime 时同步等锁断开，
+    /// 见 `swap_kernel` 的 `block_on` fallback）。**唯一的关停入口**。
     async fn stop(&self);
 
     /// Whether the kernel is currently reachable.
@@ -1287,10 +1288,7 @@ impl RemoteKernel {
 impl KernelApi for RemoteKernel {
     async fn stop(&self) {
         // Remote kernel lifecycle is managed server-side.
-        // Just drop any local connection resources.（无 runtime 时
-        // 走 `try_lock` 同步兜底——`swap_kernel` 的 block_on
-        // fallback 会经此路径；直接 `tokio::spawn` 在无 reactor
-        // 时会 panic。）
+        // Just drop any local connection resources.
         let conn = self.connection.clone();
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
@@ -1299,7 +1297,13 @@ impl KernelApi for RemoteKernel {
                     c.cancel.cancel();
                 }
             });
-        } else if let Ok(mut guard) = conn.try_lock() {
+        } else {
+            // 无 runtime（`swap_kernel` 的 block_on fallback 路径）：
+            // tokio Mutex 的 `lock()` 不依赖 reactor——必须真正等
+            // 到锁并 cancel（`try_lock` 锁占时静默跳过 = 连接与后
+            // 台 heartbeat 泄漏，`Connection` 无 `Drop` 兜底——
+            // 复审 must-fix）。
+            let mut guard = futures::executor::block_on(conn.lock());
             if let Some(c) = guard.take() {
                 c.cancel.cancel();
             }
