@@ -1836,7 +1836,7 @@ async fn channel_trigger_titles_session_from_user_text_not_history() {
         .expect("session created");
     let title = wait_for_title(&kernel, &sid).await;
     assert_eq!(title, "标题应该是这句话");
-    kernel.stop();
+    kernel.stop().await;
 }
 
 /// An image-only first message (no raw text) gets no title input at
@@ -1905,7 +1905,7 @@ async fn image_only_trigger_leaves_session_untitled() {
     // Give any (misguided) title task a chance to run; none should fire.
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     assert!(kernel.get_session(&sid).await.unwrap().title.is_none());
-    kernel.stop();
+    kernel.stop().await;
 }
 
 /// `/thread <text>` titles the session by the payload text, without
@@ -1970,7 +1970,7 @@ async fn thread_command_titles_session_from_payload_text() {
         .expect("session created");
     let title = wait_for_title(&kernel, &sid).await;
     assert_eq!(title, "看看这个");
-    kernel.stop();
+    kernel.stop().await;
 }
 
 /// `yomi channel new-thread`: posts the anchor, creates a session keyed
@@ -2070,7 +2070,7 @@ async fn channel_new_thread_runs_task_in_session_keyed_by_anchor() {
         .create_thread_in_chat(&kernel, Some("tg"), "telegram", "chat", None, "x")
         .await;
     assert!(err.is_err(), "telegram has no threads");
-    kernel.stop();
+    kernel.stop().await;
 }
 
 /// `/thread` works in private chats too (Feishu threads exist there):
@@ -6775,7 +6775,7 @@ async fn trigger_touches_session_recency() {
         }
     }
     assert!(t1 > t0, "updated_at not refreshed: {t0} -> {t1}");
-    kernel.stop();
+    kernel.stop().await;
 }
 
 #[tokio::test]
@@ -7044,7 +7044,7 @@ async fn mailbox_command_show_retract_clear_and_card_actions() {
         parse_channel_command(Some("/mailbox retract x")),
         ChannelCommand::InvalidMailboxCommand
     ));
-    kernel.stop();
+    kernel.stop().await;
 }
 
 /// `/q` 带图：图片经延迟下载进入排队消息（与 /steer 同路径），不被丢弃。
@@ -7152,7 +7152,7 @@ async fn queue_command_carries_images() {
         "image block must ride along: blocks_len={}",
         item.blocks_len
     );
-    kernel.stop();
+    kernel.stop().await;
 }
 
 // ── suggest_command / /shell ─────────────────────────────────────────

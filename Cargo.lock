@@ -8828,6 +8828,7 @@ dependencies = [
  "directories",
  "dotenvy",
  "fix-path-env",
+ "futures",
  "image",
  "keepawake",
  "kernel",

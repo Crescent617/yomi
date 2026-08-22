@@ -41,7 +41,7 @@ const IDLE_TTL: Duration = Duration::from_mins(5);
 /// `DRAIN_TIMEOUT`）——病态慢盘下不为排空无限拖延（积压最坏 =
 /// 队列深 × 单写延迟，无界）；超时照走（退回旧码同型窗口），
 /// `what` 说明调用点以便定位。（关停全池排空的 10s 上界在
-/// `Kernel::graceful_stop`，两者互参。）
+/// `Kernel::stop`，两者互参。）
 pub(crate) async fn wait_drained(pool: &PersistPool, sid: &SessionId, what: &'static str) {
     wait_drained_within(pool, sid, what, DRAIN_TIMEOUT).await;
 }

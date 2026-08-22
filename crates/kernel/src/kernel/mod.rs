@@ -590,24 +590,15 @@ impl Kernel {
         });
     }
 
-    /// Gracefully stop the kernel and all background tasks.
-    pub fn stop(&self) {
-        self.shutdown.cancel();
-        self.input_bus.shutdown();
-        if let Some(ref bus) = self.agent_shared.event_bus {
-            bus.shutdown();
-        }
-    }
-
-    /// 优雅关停：`stop` 的取消语义 + 先等持久化池排空（10s 上界，
-    /// 超时 warn 退出——单 key 排空的 30s 上界在
-    /// `persist_pool::wait_drained`，两者互参）——daemon 重启/CLI
-    /// 退出必须走它：否则 `drain_on_cancel` 的排空承诺被进程退出
-    /// 截断，已入队的落盘写随 runtime drop 半途夭折（2026-08-22
-    /// 复审 must-fix）。
-    /// 顺序：cancel（conductor 停分发、池开始 drain）→ 等排空 →
-    /// 再关 bus（排空期间 conductor 残臂仍可能 publish）。
-    pub async fn graceful_stop(&self) {
+    /// Gracefully stop the kernel and all background tasks：先
+    /// cancel 全部后台（conductor 停分发、持久化池开始 drain），
+    /// 再等持久化池排空（10s 上界，超时 warn——单 key 排空的
+    /// 30s 上界在 `persist_pool::wait_drained`，两者互参），最后
+    /// 关 bus（排空期间 conductor 残臂仍可能 publish）。
+    /// **唯一的关停入口**——daemon 重启/CLI 退出走它，已入队的
+    /// 落盘写不被进程退出截断；只需"立即信号"的场景请直接取消
+    /// `shutdown` token（本方法就是从这个 cancel 开始的）。
+    pub async fn stop(&self) {
         self.shutdown.cancel();
         if let Some(ref pool) = self.agent_shared.persist_pool {
             if tokio::time::timeout(std::time::Duration::from_secs(10), pool.wait_all_idle())

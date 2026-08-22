@@ -177,7 +177,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         break;
     }
 
-    kernel.graceful_stop().await;
+    kernel.stop().await;
     Ok(())
 }
 

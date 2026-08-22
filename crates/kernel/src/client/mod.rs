@@ -97,12 +97,11 @@ pub async fn read_file_bytes(
 /// Unified API for both local (in-process) and remote (IPC) kernels.
 #[async_trait]
 pub trait KernelApi: Send + Sync {
-    /// Gracefully stop the kernel and all background tasks.
-    fn stop(&self);
-
-    /// 优雅关停：等持久化排空后再停（daemon 重启/进程退出路径必
-    /// 须走它）；远程 kernel 语义同 `stop`（生命周期在服务端）。
-    async fn graceful_stop(&self);
+    /// Gracefully stop the kernel and all background tasks：本地
+    /// kernel 先 cancel 再等持久化排空（10s 上界）最后关 bus；
+    /// 远程 kernel 的生命周期在服务端，仅断开本地连接
+    /// （fire-and-forget）。**唯一的关停入口**。
+    async fn stop(&self);
 
     /// Whether the kernel is currently reachable.
     ///
@@ -350,12 +349,8 @@ pub trait KernelApi: Send + Sync {
 
 #[async_trait]
 impl KernelApi for Kernel {
-    fn stop(&self) {
-        Self::stop(self);
-    }
-
-    async fn graceful_stop(&self) {
-        Self::graceful_stop(self).await;
+    async fn stop(&self) {
+        Self::stop(self).await;
     }
 
     async fn is_connected(&self) -> bool {
@@ -1290,21 +1285,25 @@ impl RemoteKernel {
 
 #[async_trait]
 impl KernelApi for RemoteKernel {
-    fn stop(&self) {
+    async fn stop(&self) {
         // Remote kernel lifecycle is managed server-side.
-        // Just drop any local connection resources.
+        // Just drop any local connection resources.（无 runtime 时
+        // 走 `try_lock` 同步兜底——`swap_kernel` 的 block_on
+        // fallback 会经此路径；直接 `tokio::spawn` 在无 reactor
+        // 时会 panic。）
         let conn = self.connection.clone();
-        tokio::spawn(async move {
-            let mut guard = conn.lock().await;
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let mut guard = conn.lock().await;
+                if let Some(c) = guard.take() {
+                    c.cancel.cancel();
+                }
+            });
+        } else if let Ok(mut guard) = conn.try_lock() {
             if let Some(c) = guard.take() {
                 c.cancel.cancel();
             }
-        });
-    }
-
-    async fn graceful_stop(&self) {
-        // 远程 kernel 的生命周期在服务端：语义同 `stop`。
-        self.stop();
+        }
     }
 
     async fn is_connected(&self) -> bool {

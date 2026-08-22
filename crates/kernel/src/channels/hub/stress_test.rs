@@ -325,7 +325,7 @@ async fn flood_91_sessions_all_delivered() {
     );
 
     token.cancel();
-    kernel.graceful_stop().await;
+    kernel.stop().await;
     eprintln!("stress result: {SESSIONS} sessions fully delivered in {elapsed:?}, bus drops = 0");
 }
 

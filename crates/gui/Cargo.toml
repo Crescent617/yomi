@@ -39,6 +39,7 @@ portable-pty = { workspace = true }
 
 # Internal crate — zero modifications to kernel
 kernel = { workspace = true }
+futures = { workspace = true }
 async-trait = { workspace = true }
 
 # tauri-pilot plugin (debug builds only)

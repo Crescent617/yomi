@@ -267,16 +267,15 @@ impl KernelServer {
             }
         }
         tracing::info!("Server shutting down, accept loop stopped");
-        // 幂等 cancel（`shutdown` 的另一半）+ 等持久化排空再退出——
-        // daemon 重启路径上已入队的落盘写必须走完（复审 must-fix）。
-        self.shutdown.cancel();
-        self.kernel.graceful_stop().await;
+        // Idempotent: cancels all connections/background tasks and stops the
+        // kernel (含持久化排空) regardless of which token ended the loop.
+        self.shutdown().await;
         Ok(())
     }
 
-    pub fn shutdown(&self) {
+    pub async fn shutdown(&self) {
         self.shutdown.cancel();
-        self.kernel.stop();
+        self.kernel.stop().await;
     }
 
     pub fn connection_count(&self) -> usize {

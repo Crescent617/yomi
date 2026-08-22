@@ -90,7 +90,7 @@ async fn auto_gc_collects_expired_sessions_on_start() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
-    kernel.stop();
+    kernel.stop().await;
 }
 
 /// With `gc.auto = false` (the default) `Kernel::start` spawns no gc pass.
@@ -128,7 +128,7 @@ async fn auto_gc_disabled_by_default() {
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     assert!(storage.session_store().get(&id).await.unwrap().is_some());
 
-    kernel.stop();
+    kernel.stop().await;
 }
 
 /// `create_session` without an explicit `working_dir` inherits the project
@@ -196,7 +196,7 @@ async fn create_session_inherits_project_dir_when_working_dir_absent() {
         .unwrap();
     assert_eq!(stored_dir(&sid).await, None);
 
-    kernel.stop();
+    kernel.stop().await;
 }
 
 /// Mailbox 管理面端到端：入队可见、撤回、按范围清空、`MailboxChanged`
@@ -295,5 +295,5 @@ async fn mailbox_management_snapshot_remove_clear() {
     );
     let snap = kernel.mailbox_snapshot(&sid).await;
     assert!(snap.steer.is_empty() && snap.queue.is_empty());
-    kernel.stop();
+    kernel.stop().await;
 }
