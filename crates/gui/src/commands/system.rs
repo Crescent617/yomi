@@ -318,16 +318,27 @@ pub async fn open_default(target: String) -> Result<(), GuiError> {
     Ok(())
 }
 
+/// 附件解析的有效 base：显式 `base_dir` 优先，缺省（或空串）回落默认
+/// 工作区（`session_workspace_dir` 的 None 分支，与 daemon 侧同一规则）。
+fn effective_attachment_base(
+    data_dir: &std::path::Path,
+    base_dir: Option<String>,
+) -> std::path::PathBuf {
+    base_dir
+        .filter(|d| !d.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| kernel::utils::path::session_workspace_dir(data_dir, None))
+}
+
 /// Resolve a declared attachment path against the session workspace
 /// (`kernel::utils::attachments::resolve_attachment`), mapping every
 /// failure to the same user-facing error. Local-mode fast path of
 /// [`open_attachment`].
 async fn resolve_attachment_arg(
-    base_dir: Option<String>,
+    base: &std::path::Path,
     path: &str,
 ) -> Result<std::path::PathBuf, GuiError> {
-    let base = base_dir.filter(|d| !d.is_empty());
-    kernel::utils::attachments::resolve_attachment(base.as_deref().map(std::path::Path::new), path)
+    kernel::utils::attachments::resolve_attachment(Some(base), path)
         .await
         .ok_or_else(|| {
             GuiError::unknown(format!(
@@ -352,7 +363,16 @@ pub async fn open_attachment(
     path: String,
 ) -> Result<(), GuiError> {
     let target = match state.connection_mode() {
-        crate::state::ConnectionMode::Local => resolve_attachment_arg(base_dir, &path).await?,
+        crate::state::ConnectionMode::Local => {
+            // 毒锁容错：data_dir 是整体替换写，读到上一份可用值即可
+            let data_dir = state
+                .data_dir
+                .read()
+                .map(|g| g.clone())
+                .unwrap_or_else(|e| e.into_inner().clone());
+            let base = effective_attachment_base(&data_dir, base_dir);
+            resolve_attachment_arg(&base, &path).await?
+        }
         crate::state::ConnectionMode::Remote(addr) => {
             fetch_remote_attachment(&app, &state.kernel_snapshot(), &addr, base_dir, &path).await?
         }

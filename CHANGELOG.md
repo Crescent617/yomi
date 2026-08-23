@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- 修复未绑定项目的会话（如飞书渠道）产生的相对路径附件在 GUI 无法打开或预览的问题：会话工作目录为空时按默认工作区解析。
+
 ## [0.9.14] - 2026-08-23
 
 ### Changed

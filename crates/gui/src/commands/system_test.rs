@@ -53,3 +53,66 @@ fn cache_entry_name_encodes_content_identity() {
     // Degenerate basename falls back to a placeholder.
     assert_eq!(cache_entry_name(1, 2, "/"), "2-1-file");
 }
+
+#[tokio::test]
+async fn resolve_attachment_arg_resolves_relative_inside_base() {
+    let base = tempfile::tempdir().unwrap();
+    std::fs::write(base.path().join("report.pdf"), b"pdf").unwrap();
+
+    let resolved = super::resolve_attachment_arg(base.path(), "report.pdf")
+        .await
+        .unwrap();
+
+    // resolve_attachment 返回规范路径（macOS 上 tempdir 是 /var→/private/var 链接）
+    assert_eq!(
+        resolved,
+        base.path().join("report.pdf").canonicalize().unwrap()
+    );
+}
+
+#[tokio::test]
+async fn resolve_attachment_arg_absolute_path_is_taken_as_is() {
+    // 绝对路径 as-is，不触碰 base（base 故意给不存在）
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(file.path(), b"pdf").unwrap();
+
+    let resolved = super::resolve_attachment_arg(
+        std::path::Path::new("/nonexistent-base"),
+        &file.path().to_string_lossy(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(resolved, file.path().canonicalize().unwrap());
+}
+
+#[test]
+fn effective_attachment_base_prefers_explicit_dir() {
+    let base = super::effective_attachment_base(
+        std::path::Path::new("/data"),
+        Some("/explicit".to_string()),
+    );
+    assert_eq!(base, std::path::PathBuf::from("/explicit"));
+}
+
+#[test]
+fn effective_attachment_base_falls_back_on_missing_or_empty() {
+    let default_ws = std::path::PathBuf::from("/data/workspace");
+    assert_eq!(
+        super::effective_attachment_base(std::path::Path::new("/data"), None),
+        default_ws
+    );
+    assert_eq!(
+        super::effective_attachment_base(std::path::Path::new("/data"), Some(String::new())),
+        default_ws
+    );
+}
+
+#[tokio::test]
+async fn resolve_attachment_arg_rejects_workspace_escape() {
+    let base = tempfile::tempdir().unwrap();
+    let err = super::resolve_attachment_arg(base.path(), "../outside.txt")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("attachment unavailable"));
+}

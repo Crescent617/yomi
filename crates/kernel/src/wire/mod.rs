@@ -30,7 +30,8 @@ pub enum ReqMethod {
 
     // ── Files ────────────────────────────────────────────────────────────
     /// Read a byte range of a daemon-side file (asset or declared
-    /// attachment; see `crate::utils::file_read`). `offset` defaults to 0;
+    /// attachment; see `crate::utils::file_read`). Attachment `base_dir`
+    /// 缺省按 `<data_dir>/workspace` 解析。`offset` defaults to 0;
     /// `limit` defaults to a server-side chunk size, and `Some(0)` returns
     /// metadata only.
     ReadFile {

@@ -31,6 +31,8 @@ pub enum FileSource {
     Asset { url: String },
     /// A declared attachment path. Relative paths must stay inside
     /// `base_dir` (the session workspace); absolute paths are taken as-is.
+    /// `base_dir` 缺省按 `<data_dir>/workspace` 解析（共享规则见
+    /// `attachments::resolve_attachment_with_default_workspace`）。
     Attachment {
         base_dir: Option<String>,
         path: String,
@@ -72,8 +74,9 @@ async fn resolve(source: &FileSource, data_dir: &Path) -> Option<PathBuf> {
             crate::utils::asset::asset_path(url, data_dir).filter(|path| path.is_file())
         }
         FileSource::Attachment { base_dir, path } => {
-            crate::utils::attachments::resolve_attachment(
-                base_dir.as_deref().filter(|d| !d.is_empty()).map(Path::new),
+            crate::utils::attachments::resolve_attachment_with_default_workspace(
+                data_dir,
+                base_dir.as_deref().map(Path::new),
                 path,
             )
             .await

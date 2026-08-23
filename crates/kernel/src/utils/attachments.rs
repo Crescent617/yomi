@@ -105,6 +105,27 @@ pub async fn resolve_attachment(base: Option<&Path>, path: &str) -> Option<PathB
     meta.is_file().then_some(candidate)
 }
 
+/// Like [`resolve_attachment`], but a missing (or empty) `base_dir` falls
+/// back to the default workspace (`<data_dir>/workspace`) — sessions
+/// without a stored working_dir (e.g. unbound channel sessions) resolve
+/// relative paths there. 全系统唯一的缺省回落点；绝对路径行为与上相同
+/// （as-is）。
+pub async fn resolve_attachment_with_default_workspace(
+    data_dir: &Path,
+    base_dir: Option<&Path>,
+    path: &str,
+) -> Option<PathBuf> {
+    let fallback;
+    let base = match base_dir {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => {
+            fallback = crate::utils::path::session_workspace_dir(data_dir, None);
+            &fallback
+        }
+    };
+    resolve_attachment(Some(base), path).await
+}
+
 #[cfg(test)]
 #[path = "attachments_test.rs"]
 mod tests;

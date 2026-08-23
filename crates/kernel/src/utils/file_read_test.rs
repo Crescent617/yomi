@@ -228,3 +228,44 @@ fn file_source_serializes_snake_case() {
         serde_json::json!({"asset": {"url": "asset://x.png"}})
     );
 }
+
+#[tokio::test]
+async fn read_file_attachment_falls_back_to_default_workspace_when_base_dir_missing() {
+    // DB 无 working_dir 的会话（未绑项目）：base_dir 缺省按 <data_dir>/workspace 解析
+    let data = tempfile::tempdir().unwrap();
+    let ws = data.path().join("workspace");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(ws.join("note.txt"), b"hello").unwrap();
+
+    let source = FileSource::Attachment {
+        base_dir: None,
+        path: "note.txt".to_string(),
+    };
+    let bytes = read_file(&source, data.path(), None, Some(0))
+        .await
+        .unwrap();
+
+    assert_eq!(bytes.file_size, 5);
+}
+
+#[tokio::test]
+async fn read_file_attachment_absolute_path_is_taken_as_is() {
+    // 绝对路径不受 base_dir/回落影响（防"越界守卫误杀绝对路径"回归——data_dir 故意给不存在）
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(file.path(), b"abs").unwrap();
+
+    let source = FileSource::Attachment {
+        base_dir: None,
+        path: file.path().to_string_lossy().to_string(),
+    };
+    let bytes = read_file(
+        &source,
+        std::path::Path::new("/nonexistent-data-dir"),
+        None,
+        Some(0),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(bytes.file_size, 3);
+}

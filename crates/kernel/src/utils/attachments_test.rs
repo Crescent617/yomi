@@ -216,3 +216,57 @@ fn block_inside_unterminated_fence_is_kept() {
     assert_eq!(cleaned, text);
     assert!(paths.is_empty());
 }
+
+// ── resolve_attachment_with_default_workspace ──────────────────────────
+
+#[tokio::test]
+async fn default_workspace_fallback_resolves_relative_when_base_missing() {
+    let data = tempfile::tempdir().unwrap();
+    let ws = data.path().join("workspace");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(ws.join("a.pdf"), b"x").unwrap();
+
+    let resolved = resolve_attachment_with_default_workspace(data.path(), None, "a.pdf").await;
+
+    assert_eq!(resolved, Some(ws.join("a.pdf").canonicalize().unwrap()));
+}
+
+#[tokio::test]
+async fn default_workspace_fallback_explicit_base_wins() {
+    let data = tempfile::tempdir().unwrap(); // 回落目标（不含文件）
+    let base = tempfile::tempdir().unwrap(); // 显式 base（含文件）
+    std::fs::write(base.path().join("a.pdf"), b"x").unwrap();
+
+    let resolved =
+        resolve_attachment_with_default_workspace(data.path(), Some(base.path()), "a.pdf").await;
+
+    assert_eq!(
+        resolved,
+        Some(base.path().join("a.pdf").canonicalize().unwrap())
+    );
+}
+
+#[tokio::test]
+async fn default_workspace_fallback_missing_file_returns_none() {
+    let data = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(data.path().join("workspace")).unwrap();
+
+    assert!(
+        resolve_attachment_with_default_workspace(data.path(), None, "missing.pdf")
+            .await
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn default_workspace_fallback_empty_base_dir_also_falls_back() {
+    let data = tempfile::tempdir().unwrap();
+    let ws = data.path().join("workspace");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(ws.join("a.pdf"), b"x").unwrap();
+
+    let resolved =
+        resolve_attachment_with_default_workspace(data.path(), Some(Path::new("")), "a.pdf").await;
+
+    assert_eq!(resolved, Some(ws.join("a.pdf").canonicalize().unwrap()));
+}
