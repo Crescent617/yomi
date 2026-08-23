@@ -90,7 +90,7 @@ async fn skill_section_indexes_only_top_level_skills() {
     )
     .unwrap();
 
-    let skills = crate::skill::SkillLoader::new(vec![skills_dir])
+    let skills = crate::skill::SkillScanner::new(vec![skills_dir])
         .load_all()
         .await;
     let prompt = SystemPromptBuilder::new()

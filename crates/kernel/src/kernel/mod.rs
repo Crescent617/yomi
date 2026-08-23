@@ -1166,10 +1166,11 @@ impl Kernel {
             None => None,
         };
 
-        let mut skills = self.agent_config.skills.clone();
-        if let Some(dir) = workspace_skill_dir.as_ref() {
-            skills = crate::skill::load_workspace_skills(dir, skills).await;
-        }
+        let skill_folders = crate::skill::session_skill_folders(
+            &self.agent_shared.skill_folders,
+            workspace_skill_dir,
+        );
+        let skills = self.agent_shared.skill_loader.load(skill_folders).await;
 
         Ok(skills)
     }

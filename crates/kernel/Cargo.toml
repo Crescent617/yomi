@@ -34,6 +34,7 @@ reqwest = { workspace = true }
 eventsource-stream = { workspace = true }
 sqlx = { workspace = true }
 arc-swap = { workspace = true }
+moka = { workspace = true }
 
 # Tool dependencies
 regex = { workspace = true }

@@ -98,7 +98,7 @@ KIMI_AGENT_API_KEY = "sk-..."
 | `auto_approve` | string | `safe` / `caution` / `dangerous` | `"safe"` |
 | `data_dir` | string | 数据目录（支持 `~`） | `"~/.yomi"` |
 | `log_dir` | string | 日志目录 | `<data_dir>/logs` |
-| `skill_folders` | string[] | 技能目录 | `<data_dir>/skills`、`~/.agents/skills` |
+| `skill_folders` | string[] | 技能目录，按优先级从低到高排列：同名 skill 由靠后的目录胜出 | `~/.agents/skills`、`<data_dir>/skills` |
 | `max_checkpoints` | integer | 每会话检查点上限 | `5` |
 
 ---

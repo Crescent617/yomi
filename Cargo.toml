@@ -66,6 +66,7 @@ tuirealm = "4.0"
 unicode-width = "0.2"
 arboard = { version = "3.3", default-features = false }
 arc-swap = "1"
+moka = { version = "0.12", features = ["future"] }
 base64 = "0.22"
 globset = "0.4"
 ignore = "0.4"

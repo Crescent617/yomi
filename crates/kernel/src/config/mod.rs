@@ -253,6 +253,7 @@ pub struct Config {
     pub data_dir: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_dir: Option<PathBuf>,
+    /// Skill 目录列表，按优先级从低到高排列（同名 skill 由靠后的目录胜出）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_folders: Option<Vec<String>>,
     /// Experimental feature flags

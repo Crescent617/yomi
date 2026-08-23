@@ -38,8 +38,8 @@ fn test_default_skill_folders() {
     let folders = default_skill_folders(&data);
 
     assert_eq!(folders.len(), 2);
-    assert_eq!(folders[0], PathBuf::from("/data/skills"));
-    assert!(folders[1].to_string_lossy().ends_with("/.agents/skills"));
+    assert!(folders[0].to_string_lossy().ends_with("/.agents/skills"));
+    assert_eq!(folders[1], PathBuf::from("/data/skills"));
 }
 
 #[test]

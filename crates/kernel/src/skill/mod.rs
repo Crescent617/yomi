@@ -3,12 +3,15 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub mod loader;
+
+pub use loader::SkillLoader;
+
 /// A loaded skill with metadata and content
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Skill {
     pub name: String,
     pub description: String,
-    pub triggers: Vec<String>,
     /// Frontmatter `disable-model-invocation: true`: loadable by name/path
     /// (the `skill` tool resolves paths directly, never consults the index)
     /// but excluded from the prompt index — auto-invocation is opt-out.
@@ -20,22 +23,15 @@ pub struct Skill {
 /// Frontmatter metadata for a skill
 #[derive(Debug, Deserialize)]
 struct SkillFrontmatter {
-    /// Name is kept for backwards compatibility but no longer used.
-    /// Skill name is now derived from the file path.
-    #[allow(dead_code)]
-    #[serde(default)]
-    name: String,
     #[serde(default)]
     description: String,
-    #[serde(default)]
-    triggers: Vec<String>,
     #[serde(default, rename = "disable-model-invocation")]
     disable_model_invocation: bool,
 }
 
-/// Skill loader that scans directories for SKILL.md files
+/// Skill scanner that scans directories for SKILL.md files
 #[derive(Debug, Clone)]
-pub struct SkillLoader {
+pub struct SkillScanner {
     folders: Vec<PathBuf>,
 }
 
@@ -57,19 +53,15 @@ pub async fn workspace_skill_dir(cwd: &Path) -> Option<PathBuf> {
         .then_some(dir)
 }
 
-/// Load workspace skills from `dir` and merge them over `global`; workspace
-/// skills win on name collision. The scan is best-effort — failures are
-/// logged and skipped — so `global` is effectively the fallback.
-pub async fn load_workspace_skills(dir: &Path, global: Vec<Arc<Skill>>) -> Vec<Arc<Skill>> {
-    let workspace = SkillLoader::new(vec![dir.to_path_buf()]).load_all().await;
-    tracing::info!(
-        "loaded {} skill(s) from workspace {}",
-        workspace.len(),
-        dir.display()
-    );
-    let mut merged = merge_skills(global, workspace);
-    drop_manual_skills(&mut merged);
-    merged
+/// spawn 装配用的目录列表：全局目录 + 工作区目录（追加在末尾 = 最高优
+/// 先级层）。两个 spawn 点（conductor、panel）共用，防漂移。
+pub fn session_skill_folders(
+    global_folders: &[PathBuf],
+    workspace_dir: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut folders = global_folders.to_vec();
+    folders.extend(workspace_dir);
+    folders
 }
 
 /// Merge two skill sets; `workspace` entries override `global` on name
@@ -94,7 +86,7 @@ fn is_skill_file(path: &Path) -> bool {
         .ends_with("SKILL.md")
 }
 
-impl SkillLoader {
+impl SkillScanner {
     pub const fn new(folders: Vec<PathBuf>) -> Self {
         Self { folders }
     }
@@ -237,7 +229,6 @@ impl SkillLoader {
         Ok(Skill {
             name: skill_name,
             description: frontmatter.description,
-            triggers: frontmatter.triggers,
             disable_model_invocation: frontmatter.disable_model_invocation,
             source_path: path.to_path_buf(),
         })
@@ -276,10 +267,11 @@ impl SkillLoader {
         }
     }
 
-    /// Find a skill file by name in configured folders (async version)
-    /// Returns the path to the skill file if found
+    /// Find a skill file by name, searching folders from highest to lowest
+    /// precedence (last folder first — same layering convention as
+    /// [`crate::skill::SkillLoader`]).
     pub async fn find_skill_file(&self, name: &str) -> Option<PathBuf> {
-        for folder in &self.folders {
+        for folder in self.folders.iter().rev() {
             if let Some(path) = Self::resolve_skill_path(folder, name).await {
                 return Some(path);
             }
@@ -340,25 +332,6 @@ pub fn drop_manual_skills(skills: &mut Vec<Arc<Skill>>) {
     if skills.len() != before {
         tracing::debug!("drop_manual_skills: {} -> {}", before, skills.len());
     }
-}
-
-/// Deduplicate skills by name, keeping the first occurrence.
-/// This is a utility function that can be used after loading skills from multiple sources
-/// (e.g., folders and plugins) to ensure no duplicate names exist.
-pub fn deduplicate_skills(skills: &mut Vec<Arc<Skill>>) {
-    let mut seen_names = std::collections::HashSet::new();
-    skills.retain(|skill| {
-        if seen_names.contains(&skill.name) {
-            tracing::debug!(
-                "Duplicate skill name '{}' found, keeping first instance.",
-                skill.name
-            );
-            false
-        } else {
-            seen_names.insert(skill.name.clone());
-            true
-        }
-    });
 }
 
 #[cfg(test)]

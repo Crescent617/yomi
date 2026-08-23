@@ -4,7 +4,7 @@ use super::*;
 fn test_derive_skill_name_single_level() {
     let root = Path::new("/home/user/.skills");
     let path = Path::new("/home/user/.skills/debugging/SKILL.md");
-    assert_eq!(SkillLoader::derive_skill_name(path, root), "debugging");
+    assert_eq!(SkillScanner::derive_skill_name(path, root), "debugging");
 }
 
 #[test]
@@ -12,7 +12,7 @@ fn test_derive_skill_name_two_levels() {
     let root = Path::new("/home/user/.skills");
     let path = Path::new("/home/user/.skills/superpowers/writing/SKILL.md");
     assert_eq!(
-        SkillLoader::derive_skill_name(path, root),
+        SkillScanner::derive_skill_name(path, root),
         "superpowers:writing"
     );
 }
@@ -22,7 +22,7 @@ fn test_derive_skill_name_three_levels() {
     let root = Path::new("/home/user/.skills");
     let path = Path::new("/home/user/.skills/superpowers/writing/plans/SKILL.md");
     assert_eq!(
-        SkillLoader::derive_skill_name(path, root),
+        SkillScanner::derive_skill_name(path, root),
         "superpowers:writing:plans"
     );
 }
@@ -31,14 +31,14 @@ fn test_derive_skill_name_three_levels() {
 fn test_derive_skill_name_at_root() {
     let root = Path::new("/home/user/.skills");
     let path = Path::new("/home/user/.skills/SKILL.md");
-    assert_eq!(SkillLoader::derive_skill_name(path, root), "SKILL");
+    assert_eq!(SkillScanner::derive_skill_name(path, root), "SKILL");
 }
 
 #[test]
 fn test_derive_skill_name_different_filename() {
     let root = Path::new("/home/user/.skills");
     let path = Path::new("/home/user/.skills/mycorp/team/SKILL.md");
-    assert_eq!(SkillLoader::derive_skill_name(path, root), "mycorp:team");
+    assert_eq!(SkillScanner::derive_skill_name(path, root), "mycorp:team");
 }
 
 #[test]
@@ -46,7 +46,7 @@ fn test_derive_skill_name_with_windows_separator() {
     // This test is mainly to ensure the logic works with different path separators
     let root = Path::new("/root/skills");
     let path = Path::new("/root/skills/a/b/c/SKILL.md");
-    assert_eq!(SkillLoader::derive_skill_name(path, root), "a:b:c");
+    assert_eq!(SkillScanner::derive_skill_name(path, root), "a:b:c");
 }
 
 fn write_skill(dir: &Path, description: &str) {
@@ -73,7 +73,7 @@ async fn load_all_indexes_only_top_level_skills() {
     write_skill(&root.join("a/b/c"), "deeper — not indexed");
     write_skill(&root.join("a/b/c/d"), "deepest — not indexed");
 
-    let skills = SkillLoader::new(vec![root.to_path_buf()]).load_all().await;
+    let skills = SkillScanner::new(vec![root.to_path_buf()]).load_all().await;
 
     assert_eq!(skill_names(&skills), vec!["a"]);
 }
@@ -95,7 +95,7 @@ async fn load_all_skips_broken_entries_instead_of_failing_the_folder() {
         std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
     }
 
-    let skills = SkillLoader::new(vec![root.to_path_buf()]).load_all().await;
+    let skills = SkillScanner::new(vec![root.to_path_buf()]).load_all().await;
 
     #[cfg(unix)]
     {
@@ -129,7 +129,6 @@ fn merge_skills_workspace_overrides_global_on_name_collision() {
         Arc::new(Skill {
             name: name.to_string(),
             description: description.to_string(),
-            triggers: Vec::new(),
             disable_model_invocation: false,
             source_path: PathBuf::from("/tmp/SKILL.md"),
         })
@@ -151,7 +150,7 @@ async fn load_all_tolerates_a_missing_folder() {
     let root = tempfile::tempdir().unwrap();
     write_skill(&root.path().join("present"), "loads fine");
 
-    let skills = SkillLoader::new(vec![
+    let skills = SkillScanner::new(vec![
         root.path().join("does-not-exist"),
         root.path().to_path_buf(),
     ])
@@ -182,7 +181,7 @@ async fn load_all_follows_symlinks() {
     // Dangling symlink: skipped, must not kill the scan.
     std::os::unix::fs::symlink(root.join("no-such-target"), root.join("dangling")).unwrap();
 
-    let skills = SkillLoader::new(vec![root.to_path_buf()]).load_all().await;
+    let skills = SkillScanner::new(vec![root.to_path_buf()]).load_all().await;
 
     assert_eq!(skill_names(&skills), vec!["flat", "linked-dir"]);
 }
@@ -201,7 +200,7 @@ async fn load_all_parses_disable_model_invocation_flag() {
 
     // load_all 本身不过滤（`yomi skill list` 要能看到全部），flag 由
     // drop_manual_skills 在索引装配时消费。
-    let skills = SkillLoader::new(vec![root.to_path_buf()]).load_all().await;
+    let skills = SkillScanner::new(vec![root.to_path_buf()]).load_all().await;
 
     assert!(
         skills
@@ -225,7 +224,6 @@ fn drop_manual_skills_after_merge_respects_workspace_override() {
         Arc::new(Skill {
             name: name.to_string(),
             description: String::new(),
-            triggers: Vec::new(),
             disable_model_invocation: disable,
             source_path: PathBuf::from("/tmp/SKILL.md"),
         })
@@ -239,4 +237,16 @@ fn drop_manual_skills_after_merge_respects_workspace_override() {
     drop_manual_skills(&mut merged);
 
     assert_eq!(skill_names(&merged), vec!["a", "c"]);
+}
+
+#[test]
+fn session_skill_folders_appends_workspace_as_highest_precedence_layer() {
+    assert_eq!(
+        session_skill_folders(&[PathBuf::from("/global")], Some(PathBuf::from("/ws"))),
+        vec![PathBuf::from("/global"), PathBuf::from("/ws")]
+    );
+    assert_eq!(
+        session_skill_folders(&[PathBuf::from("/global")], None),
+        vec![PathBuf::from("/global")]
+    );
 }

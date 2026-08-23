@@ -22,8 +22,6 @@ pub struct AgentConfig {
     pub max_iterations: usize,
     pub enable_subagent: bool,
     pub system_prompt: String,
-    #[serde(skip)]
-    pub skills: Vec<Arc<Skill>>,
     /// Tool blocklist (regex patterns) for disabling tools
     pub tool_blocklist: Vec<String>,
     /// Compactor configuration for context management
@@ -216,7 +214,6 @@ impl Default for AgentConfig {
             max_iterations: 100,
             enable_subagent: true,
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
-            skills: Vec::new(),
             tool_blocklist: Vec::new(),
             compactor: Compactor::default(),
             max_tool_output_length: 40_000,
@@ -368,8 +365,10 @@ pub struct AgentShared {
     pub usage_store: Option<Arc<dyn crate::storage::UsageStore>>,
     /// Shared permission state for all agents in a session
     pub permission_state: Option<crate::permission::PermissionState>,
-    /// Skill folders for the `skill_load` tool
+    /// Skill 目录（低→高优先级）：spawn 装配的输入，也供 skill_load 工具按名解析
     pub skill_folders: Vec<std::path::PathBuf>,
+    /// Skill 热加载协调器：每次 spawn 按目录现场扫描，同目录并发扫描单飞合并
+    pub skill_loader: crate::skill::SkillLoader,
     /// File state store for tracking file modification times (cleared on compaction)
     pub file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
     /// Checkpoint store for file history tracking
@@ -473,6 +472,7 @@ impl AgentShared {
             usage_store,
             permission_state,
             skill_folders,
+            skill_loader: crate::skill::SkillLoader::new(),
             file_state_store,
             checkpoint_store,
             data_dir,

@@ -8,8 +8,6 @@ async fn test_load_skill_by_path() {
     let temp = TempDir::new().unwrap();
     let skill_content = r"---
 description: Test skill
-triggers:
-  - test
 ---
 
 # Test Skill
@@ -121,4 +119,29 @@ description: Writing superpower
 
     assert!(result.success());
     assert!(result.text_content().contains("Writing Superpower"));
+}
+
+#[tokio::test]
+async fn test_load_skill_by_name_prefers_higher_precedence_folder() {
+    // folders 按优先级从低到高传入；同名 skill 由靠后的目录胜出。
+    let low = TempDir::new().unwrap();
+    let high = TempDir::new().unwrap();
+    for (dir, desc) in [(&low, "low version"), (&high, "high version")] {
+        let skill_dir = dir.path().join("debugging");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!("---\ndescription: {desc}\n---\n"),
+        )
+        .unwrap();
+    }
+
+    let tool = SkillTool::new(vec![low.path().to_path_buf(), high.path().to_path_buf()]);
+    let args = serde_json::json!({ "name": "debugging" });
+
+    let ctx = ToolExecCtx::new("test_tool_call", low.path(), "test-session");
+    let result = tool.exec(args, ctx).await.unwrap();
+
+    assert!(result.success());
+    assert!(result.text_content().contains("high version"));
 }

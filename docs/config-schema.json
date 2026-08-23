@@ -101,7 +101,7 @@
       "type": ["string", "null"]
     },
     "skill_folders": {
-      "description": "List of skill folder paths. Defaults to standard locations if omitted.",
+      "description": "List of skill folder paths, ordered by precedence (low → high): on name collision the later folder wins. Defaults to [~/.agents/skills, <data_dir>/skills] if omitted.",
       "type": ["array", "null"],
       "items": { "type": "string" }
     },

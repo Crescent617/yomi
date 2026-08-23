@@ -39,7 +39,7 @@
 | `compactor` | `src/compactor/` | 上下文压缩：当消息量接近上下文窗口阈值时自动 summary 压缩 |
 | `config` | `src/config.rs` | TOML 配置 + 环境变量覆盖（前缀 `YOMI_`），支持 `ModelProvider::OpenAI` / `Anthropic` |
 | `prompt` | `src/prompt.rs` | 系统提示构建（`SystemPromptBuilder`） |
-| `skill` | `src/skill.rs` | 技能加载：`SkillLoader` 从磁盘加载 YAML 技能定义 |
+| `skill` | `src/skill/` | 技能：`SkillScanner` 扫描磁盘 YAML 定义；`SkillLoader` 热加载（TTL 缓存 + 并发单飞 + 分层合并） |
 | `transport` | `src/transport/` | IPC 底层传输：帧协议（长度前缀 + JSON） |
 | `types` | `src/types.rs` | 核心类型：`SessionId`、`MessageId`、`Message`、`ContentBlock`、`ToolDefinition`、`ToolOutput`、ID 生成宏（`define_id!`） |
 | `utils` | `src/utils/` | 搜索（Bing/Brave/DDG/SearXNG）、HTML 转文本、图片处理、路径工具、token 计数等 |

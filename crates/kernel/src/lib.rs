@@ -56,7 +56,7 @@ pub use provider::{AnthropicProvider, NoKeyProvider, OpenAIProvider, OpenAIRespo
 pub use provider::{
     HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, ThinkingConfig, ToolCallRequest,
 };
-pub use skill::{deduplicate_skills, drop_manual_skills, Skill, SkillLoader};
+pub use skill::{drop_manual_skills, Skill, SkillLoader, SkillScanner};
 pub use storage::{
     file_state::{FileState, FileStateStore, JsonlFileStateStore},
     message::{JsonlMessageStore, MessageStore},
@@ -85,7 +85,6 @@ pub use types::*;
 pub use utils::path::{default_skill_folders, expand_tilde, DEFAULT_DATA_DIR};
 
 use crate::agent::AgentConfig;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -130,33 +129,14 @@ pub fn create_provider_for_model(model: &ModelConfig) -> Result<Arc<dyn Provider
     }
 }
 
-/// Load skills from disk and build a complete `AgentConfig` from a `Config`.
-/// `base_dir` is used to resolve relative skill folder paths.
-pub async fn build_agent_config(config: &Config, base_dir: &Path) -> AgentConfig {
-    let skill_folders = config
-        .skill_folders()
-        .iter()
-        .map(PathBuf::from)
-        .map(|p| if p.is_relative() { base_dir.join(p) } else { p })
-        .collect::<Vec<_>>();
-
-    let mut skills = SkillLoader::new(skill_folders).load_all().await;
-
-    deduplicate_skills(&mut skills);
-    drop_manual_skills(&mut skills);
-
-    if !skills.is_empty() {
-        tracing::info!("Loaded {} skill(s)", skills.len());
-        for skill in &skills {
-            tracing::debug!("  - {} (from {})", skill.name, skill.source_path.display());
-        }
-    }
-
+/// Build a complete `AgentConfig` from a `Config`. Skills are not part of
+/// the config anymore — each session spawn scans them fresh from disk via
+/// `skill::SkillLoader`.
+pub async fn build_agent_config(config: &Config) -> AgentConfig {
     let mut agent = config.agent.clone();
     // Bake the identity name into the prompt template: custom prompts get the
     // same `{{name}}` treatment, prompts without the placeholder pass through.
     agent.system_prompt = agent.rendered_system_prompt();
-    agent.skills = skills;
     agent.enable_cron_tool = config.features.cron_tool_enabled();
     agent.enable_todo_tool = config.features.todo_tool_enabled();
     agent.enable_attachments = config.features.attachments_enabled();
@@ -195,7 +175,7 @@ pub async fn build_kernel(config: &Config, enable_cron: bool) -> Result<Arc<Kern
         })
         .collect();
 
-    let agent_config = build_agent_config(config, &config.data_dir).await;
+    let agent_config = build_agent_config(config).await;
 
     let kernel = Kernel::new(
         &storage,

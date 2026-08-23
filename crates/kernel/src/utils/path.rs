@@ -24,10 +24,12 @@ pub fn expand_tilde(path: impl AsRef<str>) -> PathBuf {
     PathBuf::from(path)
 }
 
-/// Generate default skill folders based on `data_dir`
-/// (project-level skills are resolved per-session by the kernel).
+/// Generate default skill folders based on `data_dir`, ordered by
+/// precedence (low → high): the data-dir layer wins on name collision.
+/// (Project-level skills are appended after these per session, making them
+/// the highest-precedence layer.)
 pub fn default_skill_folders(data_dir: &std::path::Path) -> Vec<PathBuf> {
-    vec![data_dir.join("skills"), expand_tilde("~/.agents/skills")]
+    vec![expand_tilde("~/.agents/skills"), data_dir.join("skills")]
 }
 
 /// Session workspace cwd rule: the session's `working_dir` when set, else

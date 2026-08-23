@@ -1,4 +1,4 @@
-use crate::skill::SkillLoader;
+use crate::skill::SkillScanner;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{Result, ToolOutput};
 use async_trait::async_trait;
@@ -10,13 +10,13 @@ pub const SKILL_FILENAME: &str = "SKILL.md";
 
 /// Tool for loading skill content
 pub struct SkillTool {
-    loader: SkillLoader,
+    loader: SkillScanner,
 }
 
 impl SkillTool {
     pub fn new(skill_folders: Vec<PathBuf>) -> Self {
         Self {
-            loader: SkillLoader::new(skill_folders),
+            loader: SkillScanner::new(skill_folders),
         }
     }
 }
@@ -78,7 +78,7 @@ impl Tool for SkillTool {
         };
 
         // Read and return the skill content
-        match SkillLoader::read_skill_content(&skill_path).await {
+        match SkillScanner::read_skill_content(&skill_path).await {
             Ok(content) => {
                 let summary = format!("Loaded skill from {}", skill_path.display());
                 Ok(ToolOutput::text_with_summary(content, &summary))

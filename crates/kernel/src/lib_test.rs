@@ -11,7 +11,7 @@ fn hermetic_config() -> Config {
 #[tokio::test]
 async fn build_agent_config_renders_default_name() {
     let config = hermetic_config();
-    let agent = build_agent_config(&config, std::path::Path::new(".")).await;
+    let agent = build_agent_config(&config).await;
     assert!(agent.system_prompt.starts_with("You are Yomi,"));
     assert!(!agent.system_prompt.contains("{{name}}"));
 }
@@ -20,6 +20,6 @@ async fn build_agent_config_renders_default_name() {
 async fn build_agent_config_renders_configured_name() {
     let mut config = hermetic_config();
     config.agent.name = "Claw".to_string();
-    let agent = build_agent_config(&config, std::path::Path::new(".")).await;
+    let agent = build_agent_config(&config).await;
     assert!(agent.system_prompt.starts_with("You are Claw,"));
 }

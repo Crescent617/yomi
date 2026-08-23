@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- skill 热加载：新会话自动看到技能目录里的增删改，无需重启 daemon；生效延迟最长约 1 分钟（目录扫描结果有缓存），进行中的会话不受影响。
+
+### Changed
+
+- `skill_folders` 同名 skill 的胜出方改为「靠后的目录胜出」（此前为靠前的目录）。
+- 默认 `skill_folders` 顺序相应调整，默认配置的胜出行为不变；自配多目录的用户需按低→高优先级调整顺序。
+- `yomi skill list` 改为只显示各层合并后的胜出项（NAME + LOCATION），不再列出描述与被覆盖的同名项；手动 skill 以计数提示。
+
 ## [0.9.12] - 2026-08-23
 
 ### Added

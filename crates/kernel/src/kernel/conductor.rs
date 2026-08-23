@@ -613,19 +613,21 @@ impl Conductor {
             None => None,
         };
 
-        // Merge global skills with workspace skills (workspace wins on collision)
-        let mut skills = self.agent_config.skills.clone();
-        if let Some(dir) = workspace_skill_dir.as_ref() {
-            skills = crate::skill::load_workspace_skills(dir, skills).await;
-        }
+        // 磁盘即真相：spawn 现场分层扫描（同目录并发单飞），工作区目录优先级最高
+        let skill_folders = crate::skill::session_skill_folders(
+            &self.agent_shared.skill_folders,
+            workspace_skill_dir.clone(),
+        );
+        let skills = self.agent_shared.skill_loader.load(skill_folders).await;
 
         // Clone AgentShared so we can mutate skill_folders per-session
+        // （追加 workspace 供 skill_load 工具按名解析；与 loader 同一目录
+        // 列表（重复留最后），工具 rev 扫描与分层合并同胜者）
         let mut base_clone: AgentShared = (*self.agent_shared).clone();
-        if let Some(dir) = workspace_skill_dir.as_ref() {
-            if !base_clone.skill_folders.contains(dir) {
-                base_clone.skill_folders.push(dir.clone());
-            }
-        }
+        base_clone.skill_folders = crate::skill::session_skill_folders(
+            &self.agent_shared.skill_folders,
+            workspace_skill_dir.clone(),
+        );
         let checkpoint_store = base_clone.checkpoint_store.clone();
         let shared = Arc::new(base_clone.with_per_session(
             permission_state,
