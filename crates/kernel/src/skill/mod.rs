@@ -12,9 +12,8 @@ pub use loader::SkillLoader;
 pub struct Skill {
     pub name: String,
     pub description: String,
-    /// Frontmatter `disable-model-invocation: true`: loadable by name/path
-    /// (the `skill` tool resolves paths directly, never consults the index)
-    /// but excluded from the prompt index — auto-invocation is opt-out.
+    /// Frontmatter `disable-model-invocation: true`: excluded from the
+    /// prompt index, still loadable by name/path.
     #[serde(default)]
     pub disable_model_invocation: bool,
     pub source_path: PathBuf,
@@ -53,8 +52,7 @@ pub async fn workspace_skill_dir(cwd: &Path) -> Option<PathBuf> {
         .then_some(dir)
 }
 
-/// spawn 装配用的目录列表：全局目录 + 工作区目录（追加在末尾 = 最高优
-/// 先级层）。两个 spawn 点（conductor、panel）共用，防漂移。
+/// spawn 装配的目录列表：全局目录 + 工作区目录（末尾 = 最高优先级层）。
 pub fn session_skill_folders(
     global_folders: &[PathBuf],
     workspace_dir: Option<PathBuf>,
@@ -62,20 +60,6 @@ pub fn session_skill_folders(
     let mut folders = global_folders.to_vec();
     folders.extend(workspace_dir);
     folders
-}
-
-/// Merge two skill sets; `workspace` entries override `global` on name
-/// collision. Order is stable: global order is preserved (overridden entries
-/// keep their position), workspace-only skills are appended.
-pub fn merge_skills(global: Vec<Arc<Skill>>, workspace: Vec<Arc<Skill>>) -> Vec<Arc<Skill>> {
-    let mut merged = global;
-    for skill in workspace {
-        match merged.iter_mut().find(|s| s.name == skill.name) {
-            Some(existing) => *existing = skill,
-            None => merged.push(skill),
-        }
-    }
-    merged
 }
 
 /// Skill files are any `*SKILL.md` (e.g. `SKILL.md`, `debugging/SKILL.md`).
@@ -322,10 +306,9 @@ impl SkillScanner {
     }
 }
 
-/// Drop skills marked `disable-model-invocation`: they stay loadable by
-/// name/path (the `skill` tool resolves paths directly, never consults the
-/// index) but never enter the prompt index. Apply after the final merge so a
-/// workspace skill can disable a same-named global one.
+/// Drop skills marked `disable-model-invocation` (loadable by name/path,
+/// never indexed). Apply after the final merge so a later layer can disable
+/// a same-named earlier one.
 pub fn drop_manual_skills(skills: &mut Vec<Arc<Skill>>) {
     let before = skills.len();
     skills.retain(|s| !s.disable_model_invocation);

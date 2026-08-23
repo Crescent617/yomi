@@ -123,28 +123,6 @@ async fn workspace_skill_dir_resolves_only_when_present() {
     );
 }
 
-#[test]
-fn merge_skills_workspace_overrides_global_on_name_collision() {
-    fn skill(name: &str, description: &str) -> Arc<Skill> {
-        Arc::new(Skill {
-            name: name.to_string(),
-            description: description.to_string(),
-            disable_model_invocation: false,
-            source_path: PathBuf::from("/tmp/SKILL.md"),
-        })
-    }
-
-    let merged = merge_skills(
-        vec![skill("a", "global a"), skill("b", "global b")],
-        vec![skill("b", "workspace b"), skill("c", "workspace c")],
-    );
-
-    // Workspace overrides in place (global order preserved); workspace-only
-    // skills are appended.
-    let descriptions: Vec<&str> = merged.iter().map(|s| s.description.as_str()).collect();
-    assert_eq!(descriptions, vec!["global a", "workspace b", "workspace c"]);
-}
-
 #[tokio::test]
 async fn load_all_tolerates_a_missing_folder() {
     let root = tempfile::tempdir().unwrap();
@@ -216,27 +194,6 @@ async fn load_all_parses_disable_model_invocation_flag() {
             .unwrap()
             .disable_model_invocation
     );
-}
-
-#[test]
-fn drop_manual_skills_after_merge_respects_workspace_override() {
-    fn flagged(name: &str, disable: bool) -> Arc<Skill> {
-        Arc::new(Skill {
-            name: name.to_string(),
-            description: String::new(),
-            disable_model_invocation: disable,
-            source_path: PathBuf::from("/tmp/SKILL.md"),
-        })
-    }
-
-    let mut merged = merge_skills(
-        vec![flagged("a", false), flagged("b", false), flagged("c", true)],
-        // workspace 同名覆盖：禁用全局自动的 b，启用全局手动的 c。
-        vec![flagged("b", true), flagged("c", false)],
-    );
-    drop_manual_skills(&mut merged);
-
-    assert_eq!(skill_names(&merged), vec!["a", "c"]);
 }
 
 #[test]

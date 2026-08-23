@@ -143,6 +143,26 @@ async fn three_layers_override_in_place() {
 }
 
 #[tokio::test]
+async fn later_auto_layer_re_enables_earlier_manual_skill() {
+    // flag 随胜者走：前层 manual + 后层 auto → 该项重新进入索引
+    let earlier = tempfile::tempdir().unwrap();
+    write_manual_skill(&earlier.path().join("x"), "earlier manual");
+    let later = tempfile::tempdir().unwrap();
+    write_skill(&later.path().join("x"), "later auto");
+
+    let loader = SkillLoader::new();
+    let skills = loader
+        .load(vec![
+            earlier.path().to_path_buf(),
+            later.path().to_path_buf(),
+        ])
+        .await;
+
+    assert_eq!(names(&skills), vec!["x"]);
+    assert_eq!(skills[0].description, "later auto");
+}
+
+#[tokio::test]
 async fn duplicate_folders_are_deduped_keeping_last_occurrence() {
     let dir_a = tempfile::tempdir().unwrap();
     write_skill(&dir_a.path().join("x"), "from a");
