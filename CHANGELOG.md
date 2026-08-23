@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.13] - 2026-08-23
+
 ### Added
 
 - skill 热加载：新会话自动看到技能目录里的增删改，无需重启 daemon；生效延迟最长约 1 分钟（目录扫描结果有缓存），进行中的会话不受影响。
