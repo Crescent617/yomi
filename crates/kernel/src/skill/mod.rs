@@ -9,6 +9,11 @@ pub struct Skill {
     pub name: String,
     pub description: String,
     pub triggers: Vec<String>,
+    /// Frontmatter `disable-model-invocation: true`: loadable by name/path
+    /// (the `skill` tool resolves paths directly, never consults the index)
+    /// but excluded from the prompt index — auto-invocation is opt-out.
+    #[serde(default)]
+    pub disable_model_invocation: bool,
     pub source_path: PathBuf,
 }
 
@@ -24,6 +29,8 @@ struct SkillFrontmatter {
     description: String,
     #[serde(default)]
     triggers: Vec<String>,
+    #[serde(default, rename = "disable-model-invocation")]
+    disable_model_invocation: bool,
 }
 
 /// Skill loader that scans directories for SKILL.md files
@@ -35,9 +42,11 @@ pub struct SkillLoader {
 /// Directory (relative to a session's working directory) scanned for workspace skills.
 pub const WORKSPACE_SKILLS_DIR: &str = ".agents/skills";
 
-/// Maximum directory depth scanned below a skill root: `foo/SKILL.md` is
-/// level 1, `foo/bar/baz/SKILL.md` is level 3; anything deeper is ignored.
-pub const MAX_SCAN_DEPTH: usize = 3;
+/// Scan depth below a skill root: only the top level is indexed
+/// (`foo/SKILL.md`); nested SKILL.md files (`suite/child/SKILL.md`) never
+/// enter the index — a suite's top-level SKILL.md routes to its children,
+/// which load on demand via the `skill` tool or `read`.
+pub const MAX_SCAN_DEPTH: usize = 1;
 
 /// Resolve the workspace skills directory for `cwd`, if it exists.
 pub async fn workspace_skill_dir(cwd: &Path) -> Option<PathBuf> {
@@ -58,7 +67,9 @@ pub async fn load_workspace_skills(dir: &Path, global: Vec<Arc<Skill>>) -> Vec<A
         workspace.len(),
         dir.display()
     );
-    merge_skills(global, workspace)
+    let mut merged = merge_skills(global, workspace);
+    drop_manual_skills(&mut merged);
+    merged
 }
 
 /// Merge two skill sets; `workspace` entries override `global` on name
@@ -107,8 +118,8 @@ impl SkillLoader {
         skills
     }
 
-    /// Load skills from a single folder, descending at most [`MAX_SCAN_DEPTH`]
-    /// levels below the root.
+    /// Load skills from a single folder; only top-level `SKILL.md` files are
+    /// indexed (see [`MAX_SCAN_DEPTH`]).
     ///
     /// Anything broken along the way (unreadable directory, failed stat,
     /// malformed SKILL.md) is logged and skipped so one bad entry cannot take
@@ -227,6 +238,7 @@ impl SkillLoader {
             name: skill_name,
             description: frontmatter.description,
             triggers: frontmatter.triggers,
+            disable_model_invocation: frontmatter.disable_model_invocation,
             source_path: path.to_path_buf(),
         })
     }
@@ -315,6 +327,18 @@ impl SkillLoader {
                 path.display()
             ))
         })
+    }
+}
+
+/// Drop skills marked `disable-model-invocation`: they stay loadable by
+/// name/path (the `skill` tool resolves paths directly, never consults the
+/// index) but never enter the prompt index. Apply after the final merge so a
+/// workspace skill can disable a same-named global one.
+pub fn drop_manual_skills(skills: &mut Vec<Arc<Skill>>) {
+    let before = skills.len();
+    skills.retain(|s| !s.disable_model_invocation);
+    if skills.len() != before {
+        tracing::debug!("drop_manual_skills: {} -> {}", before, skills.len());
     }
 }
 

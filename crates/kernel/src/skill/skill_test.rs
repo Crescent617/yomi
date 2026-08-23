@@ -65,17 +65,17 @@ fn skill_names(skills: &[Arc<Skill>]) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn load_all_scans_at_most_three_levels_deep() {
+async fn load_all_indexes_only_top_level_skills() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path();
-    write_skill(&root.join("a"), "level 1");
-    write_skill(&root.join("a/b"), "level 2");
-    write_skill(&root.join("a/b/c"), "level 3");
-    write_skill(&root.join("a/b/c/d"), "level 4 — beyond MAX_SCAN_DEPTH");
+    write_skill(&root.join("a"), "top level — indexed");
+    write_skill(&root.join("a/b"), "nested — routed to by a, not indexed");
+    write_skill(&root.join("a/b/c"), "deeper — not indexed");
+    write_skill(&root.join("a/b/c/d"), "deepest — not indexed");
 
     let skills = SkillLoader::new(vec![root.to_path_buf()]).load_all().await;
 
-    assert_eq!(skill_names(&skills), vec!["a", "a:b", "a:b:c"]);
+    assert_eq!(skill_names(&skills), vec!["a"]);
 }
 
 #[tokio::test]
@@ -130,6 +130,7 @@ fn merge_skills_workspace_overrides_global_on_name_collision() {
             name: name.to_string(),
             description: description.to_string(),
             triggers: Vec::new(),
+            disable_model_invocation: false,
             source_path: PathBuf::from("/tmp/SKILL.md"),
         })
     }
@@ -184,4 +185,58 @@ async fn load_all_follows_symlinks() {
     let skills = SkillLoader::new(vec![root.to_path_buf()]).load_all().await;
 
     assert_eq!(skill_names(&skills), vec!["flat", "linked-dir"]);
+}
+
+#[tokio::test]
+async fn load_all_parses_disable_model_invocation_flag() {
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path();
+    write_skill(&root.join("auto"), "auto");
+    std::fs::create_dir_all(root.join("manual")).unwrap();
+    std::fs::write(
+        root.join("manual/SKILL.md"),
+        "---\ndescription: manual only\ndisable-model-invocation: true\n---\n",
+    )
+    .unwrap();
+
+    // load_all 本身不过滤（`yomi skill list` 要能看到全部），flag 由
+    // drop_manual_skills 在索引装配时消费。
+    let skills = SkillLoader::new(vec![root.to_path_buf()]).load_all().await;
+
+    assert!(
+        skills
+            .iter()
+            .find(|s| s.name == "manual")
+            .unwrap()
+            .disable_model_invocation
+    );
+    assert!(
+        !skills
+            .iter()
+            .find(|s| s.name == "auto")
+            .unwrap()
+            .disable_model_invocation
+    );
+}
+
+#[test]
+fn drop_manual_skills_after_merge_respects_workspace_override() {
+    fn flagged(name: &str, disable: bool) -> Arc<Skill> {
+        Arc::new(Skill {
+            name: name.to_string(),
+            description: String::new(),
+            triggers: Vec::new(),
+            disable_model_invocation: disable,
+            source_path: PathBuf::from("/tmp/SKILL.md"),
+        })
+    }
+
+    let mut merged = merge_skills(
+        vec![flagged("a", false), flagged("b", false), flagged("c", true)],
+        // workspace 同名覆盖：禁用全局自动的 b，启用全局手动的 c。
+        vec![flagged("b", true), flagged("c", false)],
+    );
+    drop_manual_skills(&mut merged);
+
+    assert_eq!(skill_names(&merged), vec!["a", "c"]);
 }

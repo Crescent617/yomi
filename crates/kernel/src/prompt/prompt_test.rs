@@ -71,3 +71,38 @@ fn contract_sections_append_verbatim() {
     assert!(prompt.starts_with("base\n\n# Attachments"));
     assert!(prompt.contains("\n\n# Mentions"));
 }
+
+#[tokio::test]
+async fn skill_section_indexes_only_top_level_skills() {
+    // loader → prompt 链路：套件子 skill 不进索引，由父级 SKILL.md 路由。
+    let dir = temp_dir("skills-top-level");
+    let skills_dir = dir.join("skills");
+    let suite = skills_dir.join("suite");
+    std::fs::create_dir_all(suite.join("child")).unwrap();
+    std::fs::write(
+        suite.join("SKILL.md"),
+        "---\ndescription: parent router\n---\n",
+    )
+    .unwrap();
+    std::fs::write(
+        suite.join("child/SKILL.md"),
+        "---\ndescription: nested child\n---\n",
+    )
+    .unwrap();
+
+    let skills = crate::skill::SkillLoader::new(vec![skills_dir])
+        .load_all()
+        .await;
+    let prompt = SystemPromptBuilder::new()
+        .base_prompt("base")
+        .with_skills(&skills)
+        .build()
+        .await;
+
+    assert!(prompt.contains("name: suite\n"));
+    assert!(prompt.contains("parent router"));
+    assert!(!prompt.contains("suite:child"));
+    assert!(!prompt.contains("nested child"));
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}

@@ -56,7 +56,7 @@ pub use provider::{AnthropicProvider, NoKeyProvider, OpenAIProvider, OpenAIRespo
 pub use provider::{
     HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, ThinkingConfig, ToolCallRequest,
 };
-pub use skill::{deduplicate_skills, Skill, SkillLoader};
+pub use skill::{deduplicate_skills, drop_manual_skills, Skill, SkillLoader};
 pub use storage::{
     file_state::{FileState, FileStateStore, JsonlFileStateStore},
     message::{JsonlMessageStore, MessageStore},
@@ -143,6 +143,7 @@ pub async fn build_agent_config(config: &Config, base_dir: &Path) -> AgentConfig
     let mut skills = SkillLoader::new(skill_folders).load_all().await;
 
     deduplicate_skills(&mut skills);
+    drop_manual_skills(&mut skills);
 
     if !skills.is_empty() {
         tracing::info!("Loaded {} skill(s)", skills.len());
