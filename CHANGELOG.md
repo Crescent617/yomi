@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.12] - 2026-08-23
+
+### Added
+
+- skill 文件可在头部设置 `disable-model-invocation: true` 改为手动触发：不再自动出现在可用 skill 列表中，需要时按名称加载；项目目录中的同名 skill 可用来禁用某个全局 skill。
+
+### Changed
+
+- skill 列表现在只收录各技能目录顶层的 skill：套件（一个目录下含多个子 skill）不再把子 skill 全部列出，改为由顶层说明引导、按需加载，列表更精简。
+
 ## [0.9.11] - 2026-08-22
 
 ### Fixed
