@@ -327,7 +327,7 @@ impl Agent {
                                     () = self.mailbox.wait_for_mail() => {
                                         continue;
                                     }
-                                    () = tokio::time::sleep(std::time::Duration::from_mins(5)) => {
+                                    () = tokio::time::sleep(std::time::Duration::from_mins(2)) => {
                                         if !self.mailbox.is_empty() {
                                             continue;
                                         }

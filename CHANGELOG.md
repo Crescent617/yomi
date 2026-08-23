@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- 会话空闲退出时限由 5 分钟缩短为 2 分钟：空闲 2 分钟后继续的对话会以最新技能与记忆重新装配上下文。
+
 ## [0.9.13] - 2026-08-23
 
 ### Added
