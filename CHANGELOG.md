@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.16] - 2026-08-24
+
+### Fixed
+
+- 修复分享图片里表格排版与正文不一致的问题：内容最多的列（通常是最后一列）不再被挤压到最窄，各列宽度按内容多少成比例分配。
+
 ## [0.9.15] - 2026-08-23
 
 ### Fixed
