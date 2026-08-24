@@ -15,6 +15,7 @@ import {
   type InlineRun,
   type InlineStyle,
 } from "./share-markdown";
+import { fitTableColumnWidths, TABLE_MIN_COL_W } from "./share-table";
 
 const SCALE = 2;
 const DEFAULT_CARD_WIDTH = 720;
@@ -36,7 +37,6 @@ const TABLE_SIZE = 15;
 const TABLE_LH = 26;
 const TABLE_COL_GAP = 24;
 const TABLE_ROW_GAP = 6;
-const TABLE_MIN_COL_W = 48;
 const MAX_BODY_HEIGHT = 1500;
 const MONO_FONT = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const HEADING = {
@@ -415,8 +415,10 @@ function layoutBlocks(
           return w;
         };
 
-        // Natural column widths, then shrink the widest until the table fits.
-        const widths = boldHeader.map((runs, k) => {
+        // Natural column widths, shrunk proportionally when the table
+        // overflows (so a content-heavy column keeps its fair share,
+        // matching how the chat body's HTML tables lay out).
+        const natural = boldHeader.map((runs, k) => {
           let w = cellTextWidth(runs);
           for (const row of block.rows) {
             w = Math.max(w, cellTextWidth(row[k] ?? []));
@@ -424,23 +426,8 @@ function layoutBlocks(
           return Math.max(w, TABLE_MIN_COL_W);
         });
         const inner = maxWidth - TABLE_COL_GAP * (cols - 1);
+        const widths = fitTableColumnWidths(natural, inner);
         const totalW = () => widths.reduce((a, b) => a + b, 0);
-        while (totalW() > inner) {
-          let idx = -1;
-          for (let k = 0; k < cols; k++) {
-            if (
-              widths[k] > TABLE_MIN_COL_W &&
-              (idx < 0 || widths[k] > widths[idx])
-            ) {
-              idx = k;
-            }
-          }
-          if (idx < 0) break;
-          widths[idx] -= Math.min(
-            totalW() - inner,
-            widths[idx] - TABLE_MIN_COL_W,
-          );
-        }
         const colX = widths.map((_, k) => {
           let x = 0;
           for (let j = 0; j < k; j++) x += widths[j] + TABLE_COL_GAP;
