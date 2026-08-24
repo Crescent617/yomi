@@ -101,7 +101,7 @@ gh run watch <run_id> --exit-status --interval 60
 
 ### 9. 发版落地检查
 
-CI 成功 ≠ tap 已更新（CI 还要推 formula/cask）。先排一次性 cron（max_runs 1）或 `nohup sh -c 'sleep 90; ...' &` 延迟 1-2 分钟再查，不立刻查。
+CI 成功时 tap 已由同一 workflow 推送完毕，`brew update` 后即可见，无需等待。
 
 1. **release note**：`gh release view "v${RELEASE_VERSION}" --json body --jq .body`，内容与本版本 CHANGELOG section 一致。
 2. **tap 已更新**：`brew update && brew info crescent617/tap/yomi | head -2` 显示新版本号。tap 由 CI 自动推送，永远不要手动改 tap——手动 commit rebase 会撞 "patch contents already upstream"（v0.9.x 踩过）。
