@@ -1,6 +1,6 @@
 ---
 name: release-it
-description: "Release a new version of yomi. Check current version against tags, bump if needed, tag, and push."
+description: "Release a new version of yomi and roll it out to the local dogfood machine. Use when asked to 发版/release yomi（含发版后等 CI、tap 检查、本机升级重启）。"
 ---
 
 # Skill: release-it
@@ -80,10 +80,38 @@ git push origin main
 git push origin "v${RELEASE_VERSION}"
 ```
 
-### 8. 验证 release note
+### 8. 等 CI（异步，不轮询）
 
-CI（release.yml）跑完后，确认 GitHub Release 带上了本版本的 release note（内容与 CHANGELOG 一致）：
+push tag 后拿 run id：
 
 ```bash
-gh release view "v${RELEASE_VERSION}" --json body --jq .body
+gh run list --limit 1 --json databaseId -q '.[0].databaseId'
 ```
+
+用后台 shell 等，完成会自动通知，会话不阻塞：
+
+```bash
+gh run watch <run_id> --exit-status --interval 60
+```
+
+不排定点 cron 猜 CI 时长、不同步 watch 阻塞会话。完成通知到达后：
+
+- exit code 非 0 = CI 失败：`gh run view <run_id> --log-failed` 查日志，报告用户，中止后续步骤。
+- exit code 0 才进入下一步。
+
+### 9. 发版落地检查
+
+CI 成功 ≠ tap 已更新（CI 还要推 formula/cask）。先排一次性 cron（max_runs 1）或 `nohup sh -c 'sleep 90; ...' &` 延迟 1-2 分钟再查，不立刻查。
+
+1. **release note**：`gh release view "v${RELEASE_VERSION}" --json body --jq .body`，内容与本版本 CHANGELOG section 一致。
+2. **tap 已更新**：`brew update && brew info crescent617/tap/yomi | head -2` 显示新版本号。tap 由 CI 自动推送，永远不要手动改 tap——手动 commit rebase 会撞 "patch contents already upstream"（v0.9.x 踩过）。
+
+### 10. 本机升级 + 重启（dogfood 机）
+
+顺序固定：升级 → 验软链 → 简报 → 排自检 cron → 延迟重启。
+
+1. 升级 CLI + GUI：`brew update && brew install -y crescent617/tap/{yomi,yomi-app}`
+2. 验软链：`ls -la /opt/homebrew/bin/yomi` 必须是指向 Cellar 的 symlink（部署脚本曾放普通文件遮蔽 brew link）。
+3. 先向用户简报升级内容，再延迟重启：`nohup sh -c 'sleep 8; yomi daemon restart' &`。执行重启的 shell 要富 PATH（瘦 PATH 缺 rg，daemon 起来后 grep 工具残废）。代价：飞书 ws 服务端僵尸连接约 10 分钟，期间事件会丢——挑用户空闲时做。
+4. 重启前预排一次性自检 cron（max_runs 1、send_message，sqlite 持久化跨重启）：醒后核对 `yomi daemon status`、`yomi --version` == 本次发布版本、日志无 ERROR。
+5. GUI（Yomi.app）磁盘升级不替换运行中进程：提醒用户手动退出重开，daemon restart 代替不了。
