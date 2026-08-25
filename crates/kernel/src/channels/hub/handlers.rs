@@ -9,8 +9,9 @@ use std::sync::Arc;
 use tracing::warn;
 
 use crate::channels::hub_command::{
-    format_current_model, format_model_list, format_session_info, format_unknown_model,
-    parse_channel_command, suggest_command, ChannelCommand, OverrideMode, HELP_TEXT,
+    format_current_model, format_model_list, format_runtime_status, format_session_info,
+    format_unknown_model, format_usage, parse_channel_command, suggest_command, ChannelCommand,
+    OverrideMode, HELP_TEXT,
 };
 use crate::channels::hub_context::{append_message_images, prepare_trigger, TriggerKind};
 use crate::channels::hub_deliver::send_info_reply;
@@ -312,6 +313,58 @@ pub(crate) async fn handle_incoming_message(
         }
         ChannelCommand::InvalidSessionsCommand => Ok(Some(
             "Usage: `/sessions` for the 10 most recent sessions; `/sessions <offset>` for the next page (admin)."
+                .to_string(),
+        )),
+        ChannelCommand::Status => {
+            if let Some(deny) = crate::channels::approval::check_admin(config, &msg.external_user_id) {
+                return Ok(Some(deny));
+            }
+            let cron_jobs = match kernel.cron_store() {
+                Some(store) => match store.list_active().await {
+                    Ok(jobs) => Some(jobs.len()),
+                    Err(e) => {
+                        warn!(error = %e, "cron job count failed");
+                        None
+                    }
+                },
+                None => None,
+            };
+            let channels = kernel
+                .channel_manager
+                .as_ref()
+                .map(|hub| hub.list_channels())
+                .unwrap_or_default();
+            let body = format_runtime_status(
+                kernel.started_at(),
+                kernel.live_session_count(),
+                kernel.list_all_background_shells().len(),
+                kernel.list_all_running_subagents().await?.len(),
+                cron_jobs,
+                &channels,
+            );
+            send_info_reply(adapter, &msg, reply_msg_id, "🩺 Runtime", body).await?;
+            Ok(None)
+        }
+        ChannelCommand::Usage(days) => {
+            if let Some(deny) = crate::channels::approval::check_admin(config, &msg.external_user_id) {
+                return Ok(Some(deny));
+            }
+            let window = days as i64;
+            let summary = kernel.get_usage_summary(window).await?;
+            let daily = kernel.get_daily_usage(window).await?;
+            let models = kernel.get_model_usage(window).await?;
+            send_info_reply(
+                adapter,
+                &msg,
+                reply_msg_id,
+                &format!("📊 Usage · {days}d"),
+                format_usage(days, &summary, &daily, &models),
+            )
+            .await?;
+            Ok(None)
+        }
+        ChannelCommand::InvalidUsageCommand => Ok(Some(
+            "Usage: `/usage [days]` — token usage for the last N days (default 7, max 90)."
                 .to_string(),
         )),
         ChannelCommand::Mailbox(sub) => {

@@ -1460,6 +1460,50 @@ async fn bind_at_chat_level_binds_the_chat_scope() {
     assert_eq!(rig.store.find_mapping("mock", "msg-1").await.unwrap(), None);
 }
 
+/// `/status` and `/usage`: admin-gated daemon reports; the admin gets a
+/// card, and at chat level it lands in the main flow (scope rule).
+#[tokio::test]
+async fn status_and_usage_require_admin_and_card_into_main_flow() {
+    let rig = ChatLevelRig::new().await;
+    rig.mock
+        .status_card_ok
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+    for raw in ["/status", "/usage"] {
+        let mut outsider = chat_level_cmd(raw);
+        outsider.external_user_id = "ou_random".to_string();
+        let reply = rig.call(outsider).await.unwrap();
+        assert_eq!(
+            reply.as_deref(),
+            Some("Permission denied: not in admin_users."),
+            "{raw}"
+        );
+    }
+    assert!(rig.mock.cards.lock().await.is_empty());
+
+    let reply = rig.call(chat_level_cmd("/status")).await.unwrap();
+    assert!(reply.is_none(), "status answers via card: {reply:?}");
+    let reply = rig.call(chat_level_cmd("/usage")).await.unwrap();
+    assert!(reply.is_none(), "usage answers via card: {reply:?}");
+
+    let cards = rig.mock.cards.lock().await;
+    assert_eq!(cards.len(), 2);
+    assert!(cards[0].1.contains("🩺 Runtime"), "card: {}", cards[0].1);
+    assert!(
+        cards[0].1.contains("**Active runs**"),
+        "card: {}",
+        cards[0].1
+    );
+    assert!(cards[1].1.contains("📊 Usage · 7d"), "card: {}", cards[1].1);
+    assert!(
+        cards[1].1.contains("**Total (7d)**"),
+        "card: {}",
+        cards[1].1
+    );
+    assert_eq!(cards[0].2, None, "chat-level feedback must not anchor");
+    assert_eq!(cards[1].2, None, "chat-level feedback must not anchor");
+}
+
 /// `/restart` (admin-only): the ack goes out inline via the adapter —
 /// never through the spawned reply path, which the shutdown could abort —
 /// and only then is the restart requested.
@@ -2580,6 +2624,122 @@ fn command_session_key_elsewhere_addresses_the_conversation() {
         command_session_key(&private, true, "chat-1", "chat-1"),
         "chat-1"
     );
+}
+
+#[test]
+fn status_usage_command_parse() {
+    assert!(matches!(
+        parse_channel_command(Some("/status")),
+        ChannelCommand::Status
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/usage")),
+        ChannelCommand::Usage(7)
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/u 30")),
+        ChannelCommand::Usage(30)
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/usage@yomi_bot 90")),
+        ChannelCommand::Usage(90)
+    ));
+    for raw in ["/usage 0", "/usage 91", "/usage abc", "/usage 7 extra"] {
+        assert!(
+            matches!(
+                parse_channel_command(Some(raw)),
+                ChannelCommand::InvalidUsageCommand
+            ),
+            "{raw}"
+        );
+    }
+    // No-arg commands with extra args are not commands (existing
+    // convention: they pass through as message text).
+    assert!(matches!(
+        parse_channel_command(Some("/status now")),
+        ChannelCommand::None
+    ));
+}
+
+#[test]
+fn format_runtime_status_lines() {
+    let boot = chrono::Utc::now() - chrono::Duration::hours(3);
+    let body = format_runtime_status(
+        boot,
+        2,
+        3,
+        1,
+        Some(6),
+        &[ChannelInfo {
+            name: "feishu".to_string(),
+            status: ChannelStatus::Connecting,
+        }],
+    );
+    assert!(body.contains("up 3h"), "{body}");
+    assert!(body.contains("**Active runs**: 2"), "{body}");
+    assert!(body.contains("**Background shells**: 3"), "{body}");
+    assert!(body.contains("**Running subagents**: 1"), "{body}");
+    assert!(body.contains("**Cron jobs**: 6 active"), "{body}");
+    assert!(body.contains("feishu (up)"), "{body}");
+
+    // A cleanly-exited receiver renders as stopped.
+    let body = format_runtime_status(
+        boot,
+        0,
+        0,
+        0,
+        None,
+        &[ChannelInfo {
+            name: "tg".to_string(),
+            status: ChannelStatus::Idle,
+        }],
+    );
+    assert!(body.contains("tg (stopped)"), "{body}");
+
+    // No cron store / no channels: those lines are omitted entirely.
+    let body = format_runtime_status(boot, 0, 0, 0, None, &[]);
+    assert!(!body.contains("Cron jobs"), "{body}");
+    assert!(!body.contains("Channels"), "{body}");
+}
+
+#[test]
+fn format_usage_sections() {
+    let summary = crate::storage::usage::UsageSummary {
+        prompt_tokens: 8_000_000,
+        completion_tokens: 4_400_000,
+        cached_tokens: 3_100_000,
+        request_count: 482,
+    };
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let day = |date: &str, total: u64, req: u64| crate::storage::usage::DailyUsage {
+        date: date.to_string(),
+        prompt_tokens: total / 2,
+        completion_tokens: total / 2,
+        cached_tokens: 0,
+        request_count: req,
+        models: vec![],
+    };
+    let daily = vec![day("2026-08-24", 2_100_000, 88), day(&today, 1_800_000, 67)];
+    let models = vec![crate::storage::usage::ModelUsage {
+        model: "k3-hs".to_string(),
+        provider: "openai".to_string(),
+        prompt_tokens: 6_000_000,
+        completion_tokens: 2_200_000,
+        cached_tokens: 0,
+        request_count: 301,
+    }];
+    let body = format_usage(7, &summary, &daily, &models);
+    assert!(
+        body.contains("**Total (7d)**: 12.4m tok (3.1m cached) · 482 req"),
+        "{body}"
+    );
+    assert!(body.contains("**Today**: 1.8m tok · 67 req"), "{body}");
+    assert!(body.contains("`k3-hs` · 8.2m tok · 301 req"), "{body}");
+    assert!(body.contains("08-24 · 2.1m tok · 88 req"), "{body}");
+
+    // The latest daily row is not today → no Today line.
+    let body = format_usage(7, &summary, &daily[..1], &models);
+    assert!(!body.contains("**Today**"), "{body}");
 }
 
 #[tokio::test]

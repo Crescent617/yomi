@@ -78,6 +78,8 @@ pub struct Kernel {
     notification_bus: Arc<crate::notification::NotificationBus>,
     /// Global shutdown token for graceful stop.
     shutdown: tokio_util::sync::CancellationToken,
+    /// Daemon boot time (for `/status` uptime).
+    started_at: DateTime<Utc>,
 }
 
 const SESSION_JSONL_CHUNK_BYTES: u64 = 256 * 1024;
@@ -540,6 +542,7 @@ impl Kernel {
             extension_registry,
             notification_bus,
             shutdown,
+            started_at: Utc::now(),
         }))
     }
 
@@ -1133,6 +1136,11 @@ impl Kernel {
     /// Return the number of sessions currently live in memory.
     pub fn live_session_count(&self) -> usize {
         self.conductor.active_count()
+    }
+
+    /// Daemon boot time (drives `/status` uptime).
+    pub fn started_at(&self) -> DateTime<Utc> {
+        self.started_at
     }
 
     /// Whether the session has a live agent task with an active (non-idle) run.

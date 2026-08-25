@@ -53,6 +53,10 @@ pub(crate) const CMD_BIND: &str = "/bind";
 
 pub(crate) const CMD_SESSIONS: &str = "/sessions";
 
+pub(crate) const CMD_STATUS: &str = "/status";
+
+pub(crate) const CMD_USAGE: &str = "/usage";
+
 /// All channel commands: canonical name plus short aliases. Matching is
 /// exact (after stripping an `@bot` suffix), so table order is irrelevant
 /// and lookalike words (`/clearance`) never resolve.
@@ -77,6 +81,8 @@ pub(crate) const COMMANDS: &[(&str, &[&str])] = &[
     (CMD_CRON, &[]),
     (CMD_BIND, &[]),
     (CMD_SESSIONS, &[]),
+    (CMD_STATUS, &[]),
+    (CMD_USAGE, &["/u"]),
     (CMD_PERMITS, &[]),
     (CMD_APPROVE, &[]),
     (CMD_DENY, &[]),
@@ -93,6 +99,8 @@ pub(crate) const HELP_TEXT: &str = "\
 `/models` — list configured models (current one marked)
 `/model` (`/m`) — show current model; `/model <key>` to switch
 `/sessions` — recent 10 sessions of this channel with jump links; `/sessions <offset>` for the next page (admin)
+`/status` — daemon runtime: uptime, active runs, shells, subagents, cron jobs (admin)
+`/usage` (`/u`) — token usage for the last N days; `/usage [days]` (default 7, max 90) (admin)
 
 **Session control**
 `/clear` (`/c`) — clear context and start fresh
@@ -209,6 +217,13 @@ pub(crate) enum ChannelCommand {
     Sessions(usize),
     /// A malformed `/sessions` command.
     InvalidSessionsCommand,
+    /// Daemon runtime snapshot (admin): uptime, active runs, shells,
+    /// subagents, cron jobs, channels.
+    Status,
+    /// Token usage report (admin) for the last N days.
+    Usage(usize),
+    /// A malformed `/usage` command.
+    InvalidUsageCommand,
     /// Command-shaped (`/word`) but matches no known command or alias.
     Unknown(String),
     /// Not a command.
@@ -418,6 +433,15 @@ pub(crate) fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
                 .unwrap_or(ChannelCommand::InvalidSessionsCommand),
             _ => ChannelCommand::InvalidSessionsCommand,
         },
+        CMD_STATUS if parts.next().is_none() => ChannelCommand::Status,
+        CMD_USAGE => match (parts.next(), parts.next()) {
+            (None, None) => ChannelCommand::Usage(USAGE_DEFAULT_DAYS),
+            (Some(n), None) => match n.parse::<usize>() {
+                Ok(days) if (1..=USAGE_MAX_DAYS).contains(&days) => ChannelCommand::Usage(days),
+                _ => ChannelCommand::InvalidUsageCommand,
+            },
+            _ => ChannelCommand::InvalidUsageCommand,
+        },
         _ => ChannelCommand::None,
     }
 }
@@ -612,6 +636,119 @@ pub(crate) fn format_unknown_model(key: &str, models: &[crate::kernel::ModelInfo
             "Model `{key}` was not found.\n\nAvailable model keys: {keys}\n\nUse `/models` for details."
         )
     }
+}
+
+/// `/usage` window default and cap (days).
+pub(crate) const USAGE_DEFAULT_DAYS: usize = 7;
+
+pub(crate) const USAGE_MAX_DAYS: usize = 90;
+
+/// Uptime since boot: the `format_age` buckets as a bare duration
+/// ("2d", "3h", "5m", "<1m").
+pub(crate) fn format_uptime(boot: chrono::DateTime<chrono::Utc>) -> String {
+    let up = chrono::Utc::now() - boot;
+    if up.num_days() > 0 {
+        format!("{}d", up.num_days())
+    } else if up.num_hours() > 0 {
+        format!("{}h", up.num_hours())
+    } else if up.num_minutes() > 0 {
+        format!("{}m", up.num_minutes())
+    } else {
+        "<1m".to_string()
+    }
+}
+
+/// `/status` body: one line per runtime gauge. `cron_jobs` is `None`
+/// when the cron store is disabled; channels render as `name (state)`.
+pub(crate) fn format_runtime_status(
+    boot: chrono::DateTime<chrono::Utc>,
+    active_runs: usize,
+    shells: usize,
+    subagents: usize,
+    cron_jobs: Option<usize>,
+    channels: &[crate::channels::ChannelInfo],
+) -> String {
+    // ChannelStatus 的实际状态机：receiver 任务存活期间恒为
+    // Connecting（启动值），干净退出才翻 Idle，出错翻 Error（见
+    // hub/mod.rs 的 status_recv 写入点）——所以存活映射 "up"。
+    let state = |s: &crate::channels::ChannelStatus| match s {
+        crate::channels::ChannelStatus::Connecting => "up",
+        crate::channels::ChannelStatus::Idle => "stopped",
+        crate::channels::ChannelStatus::Error => "error",
+    };
+    let mut lines = vec![
+        format!(
+            "- **Daemon**: yomi v{} · wire v{} · up {}",
+            env!("CARGO_PKG_VERSION"),
+            crate::wire::WIRE_PROTOCOL_VERSION,
+            format_uptime(boot)
+        ),
+        format!("- **Active runs**: {active_runs}"),
+        format!("- **Background shells**: {shells}"),
+        format!("- **Running subagents**: {subagents}"),
+    ];
+    if let Some(n) = cron_jobs {
+        lines.push(format!("- **Cron jobs**: {n} active"));
+    }
+    if !channels.is_empty() {
+        let list = channels
+            .iter()
+            .map(|c| format!("{} ({})", c.name, state(&c.status)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("- **Channels**: {list}"));
+    }
+    lines.join("\n")
+}
+
+/// `/usage` body: window totals, today, top models (≤5), newest daily
+/// rows (≤7). `daily` is ascending and only covers days with usage, so
+/// the "today" line appears only when the latest row really is today.
+pub(crate) fn format_usage(
+    days: usize,
+    summary: &crate::storage::usage::UsageSummary,
+    daily: &[crate::storage::usage::DailyUsage],
+    models: &[crate::storage::usage::ModelUsage],
+) -> String {
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let mut lines = vec![format!(
+        "- **Total ({days}d)**: {} tok ({} cached) · {} req",
+        fmt_tokens(summary.total_tokens()),
+        fmt_tokens(summary.cached_tokens),
+        summary.request_count
+    )];
+    if let Some(d) = daily.last().filter(|d| d.date == today) {
+        lines.push(format!(
+            "- **Today**: {} tok · {} req",
+            fmt_tokens(d.total_tokens()),
+            d.request_count
+        ));
+    }
+    if !models.is_empty() {
+        lines.push(String::new());
+        lines.push("**By model**".to_string());
+        for m in models.iter().take(5) {
+            lines.push(format!(
+                "- `{}` · {} tok · {} req",
+                m.model,
+                fmt_tokens(m.total_tokens()),
+                m.request_count
+            ));
+        }
+    }
+    if daily.len() > 1 {
+        lines.push(String::new());
+        lines.push("**Daily**".to_string());
+        for d in daily.iter().rev().take(7) {
+            lines.push(format!(
+                "- {} · {} tok · {} req",
+                &d.date[5..],
+                fmt_tokens(d.total_tokens()),
+                d.request_count
+            ));
+        }
+    }
+    lines.join("\n")
 }
 
 /// 打错命令时的建议：与任一命令名/别名编辑距离 ≤2 即提示（取最近者）。
