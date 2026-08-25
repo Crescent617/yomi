@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.18] - 2026-08-25
+
+### Added
+
+- 新命令 `/status`（管理员）：查看 daemon 运行状态——运行时长、进行中的回复数、后台任务数、运行中的子代理数、活跃定时任务数与各渠道连接状态。
+- 新命令 `/usage`（别名 `/u`，管理员）：查看 token 用量——默认最近 7 天，`/usage <天数>` 指定窗口（最长 90 天）；含窗口总量、今日用量、按模型与按日明细。
+
 ## [0.9.17] - 2026-08-25
 
 ### Changed
