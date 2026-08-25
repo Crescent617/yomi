@@ -15,6 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.17] - 2026-08-25
+
+### Changed
+
+- 开启话题回复（`reply_in_thread`）的群里，在群主流程直接发命令（如 `/help`、`/info`、`/settings`、`/threads`，含打错的未知命令）时，回复不再单开话题，直接落在群主流程；只有发起对话的消息（普通提问、`/steer`、`/queue`、`/thread`）才会新开话题。
+
+### Fixed
+
+- 修复话题回复模式下在群主流程发 `/clear` 总是假报「已清空」的问题：顶层 `/clear`、`/stop`、`/compact` 现在作用于群级会话，没有会话时如实提示。
+- 修复话题回复模式下顶层 `/bind` 绑到一个永远收不到后续消息的孤立会话的问题：现在绑定群级会话。
+
 ## [0.9.16] - 2026-08-24
 
 ### Fixed
