@@ -24,7 +24,7 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 
 ## 配置
 
-- `yomi config show` / `get` / `set`；`set` 之后必须 `daemon restart` 生效（没有 reload 命令）。
+- `yomi config show` / `get` / `set`；`set` 之后必须 `daemon restart` 生效
 
 ## 会话（自己或兄弟会话）
 
