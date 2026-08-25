@@ -238,6 +238,21 @@ pub(crate) fn consumes_history(cmd: &ChannelCommand) -> bool {
     )
 }
 
+/// Whether the command opens/continues a conversation: only run
+/// triggers do (a plain message, `/steer`, `/queue`, `/thread`). Every
+/// other command is scoped feedback — including unknown/malformed
+/// commands — and must not open a one-reply thread when sent at chat
+/// level (see [`crate::channels::hub_routing::command_reply_anchor`]).
+pub(crate) fn opens_conversation(cmd: &ChannelCommand) -> bool {
+    matches!(
+        cmd,
+        ChannelCommand::None
+            | ChannelCommand::Steer(_)
+            | ChannelCommand::Queue(_)
+            | ChannelCommand::Thread(_)
+    )
+}
+
 pub(crate) fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
     let Some(text) = raw_text.map(str::trim).filter(|text| !text.is_empty()) else {
         return ChannelCommand::None;

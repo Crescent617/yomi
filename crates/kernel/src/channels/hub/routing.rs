@@ -170,6 +170,27 @@ pub(crate) fn reply_anchor(msg: &ChannelMessage, reply_in_thread: bool) -> Optio
         .filter(|_| msg.thread_id.is_some() || (reply_in_thread && msg.is_group))
 }
 
+/// The reply anchor for a command's feedback. At chat level (a
+/// top-level group message in `reply_in_thread` mode) only
+/// conversation-opening triggers anchor — their reply opens the
+/// thread. All other command feedback (info, admin, usage errors)
+/// addresses the chat as a whole and stays in the main flow,
+/// unanchored. Everywhere else the regular [`reply_anchor`] rules
+/// apply.
+pub(crate) fn command_reply_anchor(
+    msg: &ChannelMessage,
+    reply_in_thread: bool,
+    cmd: &crate::channels::hub_command::ChannelCommand,
+) -> Option<String> {
+    if is_chat_level_message(msg, reply_in_thread)
+        && !crate::channels::hub_command::opens_conversation(cmd)
+    {
+        None
+    } else {
+        reply_anchor(msg, reply_in_thread)
+    }
+}
+
 /// Compute the session mapping key for an incoming message.
 ///
 /// In `reply_in_thread` group chats each conversation thread gets its own
@@ -282,6 +303,25 @@ pub(crate) async fn effective_mapping_key(
 /// top-level `/info` shows the chat-level session.
 pub(crate) fn is_chat_level_message(msg: &ChannelMessage, reply_in_thread: bool) -> bool {
     reply_in_thread && msg.is_group && msg.thread_id.is_none() && msg.root_id.is_none()
+}
+
+/// The session key a session-addressing command resolves at its
+/// location: a chat-level message addresses the chat session,
+/// anything else its conversation's key. (`reply_in_thread` keys
+/// top-level messages by their own message id — a scope no follow-up
+/// ever reaches — so resolving such commands by the plain mapping key
+/// would always miss the session the user means.)
+pub(crate) fn command_session_key<'a>(
+    msg: &ChannelMessage,
+    reply_in_thread: bool,
+    chat_id: &'a str,
+    mapping_key: &'a str,
+) -> &'a str {
+    if is_chat_level_message(msg, reply_in_thread) {
+        chat_id
+    } else {
+        mapping_key
+    }
 }
 
 /// The subscription scope key for a `/subscribe`/`/unsubscribe` command:

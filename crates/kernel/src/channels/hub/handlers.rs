@@ -15,9 +15,9 @@ use crate::channels::hub_command::{
 use crate::channels::hub_context::{append_message_images, prepare_trigger, TriggerKind};
 use crate::channels::hub_deliver::send_info_reply;
 use crate::channels::hub_routing::{
-    effective_mapping_key, get_or_create_session, history_container, is_chat_level_message,
-    reply_anchor, resolve_reply_in_thread, resolve_require_mention, session_jump_link,
-    session_model_key, subscription_scope_key, thread_refusal, MentionSource,
+    command_reply_anchor, command_session_key, effective_mapping_key, get_or_create_session,
+    history_container, is_chat_level_message, resolve_reply_in_thread, resolve_require_mention,
+    session_jump_link, session_model_key, subscription_scope_key, thread_refusal, MentionSource,
 };
 
 use crate::channels::{
@@ -35,7 +35,8 @@ pub(crate) async fn handle_incoming_message(
 ) -> Result<Option<String>> {
     let chat_id = msg.external_chat_id.clone();
     let rit = resolve_reply_in_thread(store, config, &chat_id).await;
-    let reply_msg_id = reply_anchor(&msg, rit);
+    let cmd = parse_channel_command(msg.raw_text.as_deref());
+    let reply_msg_id = command_reply_anchor(&msg, rit, &cmd);
     let mapping_key =
         effective_mapping_key(store, adapter, channel_name, &msg, &chat_id, rit).await?;
     tracing::debug!(
@@ -48,7 +49,6 @@ pub(crate) async fn handle_incoming_message(
         "session mapping"
     );
 
-    let cmd = parse_channel_command(msg.raw_text.as_deref());
     match cmd {
         ChannelCommand::Help => {
             send_info_reply(adapter, &msg, reply_msg_id, "📖 Commands", HELP_TEXT.to_string())
@@ -56,10 +56,15 @@ pub(crate) async fn handle_incoming_message(
             Ok(None)
         }
         ChannelCommand::Clear => {
-            if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
-                if let Err(e) = kernel.clear_session(&sid) {
-                    tracing::warn!("Failed to clear session {}: {}", sid.0, e);
-                }
+            // Chat-level messages address the chat session
+            // (command_session_key); with no session there, say so
+            // instead of claiming success for a no-op.
+            let key = command_session_key(&msg, rit, &chat_id, &mapping_key);
+            let Some(sid) = store.find_mapping(channel_name, key).await? else {
+                return Ok(Some("No session here yet — nothing to clear.".to_string()));
+            };
+            if let Err(e) = kernel.clear_session(&sid) {
+                tracing::warn!("Failed to clear session {}: {}", sid.0, e);
             }
             Ok(Some("🧹 Context cleared.".to_string()))
         }
@@ -68,7 +73,8 @@ pub(crate) async fn handle_incoming_message(
             // status card (materialized on `Compacting`, settled by
             // `Compacted`) — that card is the feedback. Otherwise this
             // text ack is the only one (the outcome is only logged).
-            if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
+            let key = command_session_key(&msg, rit, &chat_id, &mapping_key);
+            if let Some(sid) = store.find_mapping(channel_name, key).await? {
                 if let Err(e) = kernel.compact_session(&sid) {
                     // Publish failed — no events will fire, so neither the
                     // card nor a swallowed ack may stand in for feedback.
@@ -88,7 +94,8 @@ pub(crate) async fn handle_incoming_message(
             Ok(Some("No session to compact.".to_string()))
         }
         ChannelCommand::Stop => {
-            if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
+            let key = command_session_key(&msg, rit, &chat_id, &mapping_key);
+            if let Some(sid) = store.find_mapping(channel_name, key).await? {
                 kernel.cancel(&sid);
                 return Ok(Some("⏹ Stopped.".to_string()));
             }
@@ -314,7 +321,7 @@ pub(crate) async fn handle_incoming_message(
             // Same scope resolution as `/info`: chat-level messages show
             // the chat session, in-thread ones the thread's.
             let chat_level = is_chat_level_message(&msg, rit);
-            let key = if chat_level { &chat_id } else { &mapping_key };
+            let key = command_session_key(&msg, rit, &chat_id, &mapping_key);
             let Some(sid) = store.find_mapping(channel_name, key).await? else {
                 return Ok(Some(format!(
                     "No session yet in this {}.",
@@ -354,7 +361,7 @@ pub(crate) async fn handle_incoming_message(
                 return Ok(Some(deny));
             }
             let chat_level = is_chat_level_message(&msg, rit);
-            let key = if chat_level { &chat_id } else { &mapping_key };
+            let key = command_session_key(&msg, rit, &chat_id, &mapping_key);
             let (sid, shells, subagents) = if all {
                 let shells = kernel.list_all_background_shells();
                 let subagents = kernel.list_all_running_subagents().await?;
@@ -414,7 +421,7 @@ pub(crate) async fn handle_incoming_message(
             // Chat-level messages show the chat session, in-thread ones
             // the thread's. Read-only: never creates a session or mapping.
             let chat_level = is_chat_level_message(&msg, rit);
-            let key = if chat_level { &chat_id } else { &mapping_key };
+            let key = command_session_key(&msg, rit, &chat_id, &mapping_key);
             let Some(sid) = store.find_mapping(channel_name, key).await? else {
                 let model_key =
                     session_model_key(channel_name, store, &kernel, &chat_id, key).await?;
@@ -569,6 +576,7 @@ pub(crate) async fn handle_incoming_message(
                 adapter,
                 &msg,
                 &chat_id,
+                rit,
                 &mapping_key,
                 reply_msg_id.clone(),
                 target,
@@ -620,12 +628,15 @@ pub(crate) async fn handle_incoming_message(
 }
 
 /// `/bind`: show or retarget the current scope's session binding.
-/// Retargeting is admin-only. A session already routed elsewhere is
-/// refused: for chat scopes that means another chat/channel (a reply
-/// could land in the wrong chat); for doc-comment scopes, ANY other
-/// mapping (the delivery target comes from the mapping row itself, so
-/// sharing across comment threads would post answers to the wrong
-/// document). Unrouted sessions (GUI/CLI-created) are free to adopt.
+/// Retargeting is admin-only. The scope follows `command_session_key`:
+/// a chat-level command binds the chat itself (its message-id key
+/// would bind a scope no follow-up ever reaches). A session already
+/// routed elsewhere is refused: for chat scopes that means another
+/// chat/channel (a reply could land in the wrong chat); for doc-comment
+/// scopes, ANY other mapping (the delivery target comes from the
+/// mapping row itself, so sharing across comment threads would post
+/// answers to the wrong document). Unrouted sessions (GUI/CLI-created)
+/// are free to adopt.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_bind(
     channel_name: &str,
@@ -635,11 +646,13 @@ pub(crate) async fn handle_bind(
     adapter: &Arc<dyn PlatformAdapter>,
     msg: &ChannelMessage,
     chat_id: &str,
+    rit: bool,
     mapping_key: &str,
     reply_msg_id: Option<String>,
     target: Option<String>,
 ) -> Result<String> {
-    let current = store.find_mapping(channel_name, mapping_key).await?;
+    let scope_key = command_session_key(msg, rit, chat_id, mapping_key);
+    let current = store.find_mapping(channel_name, scope_key).await?;
     let Some(target) = target else {
         return Ok(match current {
             Some(sid) => format!(
@@ -669,7 +682,7 @@ pub(crate) async fn handle_bind(
     let mut moved = false;
     if let Some(routing) = store.find_routing_by_session(&sid).await? {
         let compatible = if msg.doc_comment.is_some() {
-            routing.mapping_key == mapping_key
+            routing.mapping_key == scope_key
         } else {
             routing.channel_name == channel_name && routing.external_chat_id == chat_id
         };
@@ -703,7 +716,7 @@ pub(crate) async fn handle_bind(
     store
         .save_mapping(
             channel_name,
-            mapping_key,
+            scope_key,
             &sid,
             chat_id,
             reply_msg_id.as_deref(),

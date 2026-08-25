@@ -1268,6 +1268,198 @@ async fn bind_command_move_and_bind_back() {
     drop(outgoing);
 }
 
+// ── Chat-level command scope (reply_in_thread) ──────────────────────
+
+/// Test rig for chat-level command tests: a Feishu-shaped config with
+/// reply_in_thread on, plus a `call` driving the handler directly.
+struct ChatLevelRig {
+    store: Arc<dyn ChannelStore>,
+    kernel: Arc<Kernel>,
+    mock: Arc<MockAdapter>,
+    obs: Arc<ObsTracker>,
+    config: ChannelConfig,
+    /// Keeps the kernel's data dir alive (dropped last, after the kernel).
+    _tmp: tempfile::TempDir,
+}
+
+impl ChatLevelRig {
+    async fn new() -> Self {
+        let (_pool, store) = create_test_pool().await;
+        let store: Arc<dyn ChannelStore> = store;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut kconfig = crate::config::Config {
+            data_dir: tmp.path().to_path_buf(),
+            ..crate::config::Config::default()
+        };
+        kconfig.finalize();
+        let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+        let mock = Arc::new(MockAdapter::new("mock"));
+        let obs = Arc::new(ObsTracker::new());
+        let config = ChannelConfig {
+            name: "mock".to_string(),
+            enabled: true,
+            platform: PlatformConfig::Feishu {
+                app_id: "app".to_string(),
+                app_secret: "secret".to_string(),
+            },
+            admin_users: vec!["user-1".to_string()],
+            reply_in_thread: true,
+            ..Default::default()
+        };
+        Self {
+            store,
+            kernel,
+            mock,
+            obs,
+            config,
+            _tmp: tmp,
+        }
+    }
+
+    async fn call(&self, msg: ChannelMessage) -> Result<Option<String>> {
+        let adapter: Arc<dyn PlatformAdapter> = self.mock.clone();
+        handle_incoming_message(
+            "mock",
+            &self.config,
+            &self.store,
+            Arc::clone(&self.kernel),
+            msg,
+            &self.obs,
+            &adapter,
+        )
+        .await
+    }
+
+    async fn new_session(&self) -> SessionId {
+        self.kernel
+            .create_session(crate::kernel::CreateSessionInput {
+                project_id: None,
+                working_dir: None,
+                auto_approve_level: Some(crate::permission::Level::Dangerous),
+                tool_blocklist: vec![],
+                model_key: None,
+            })
+            .await
+            .unwrap()
+    }
+}
+
+fn chat_level_cmd(raw: &str) -> ChannelMessage {
+    let mut msg = channel_message(None, true, true);
+    msg.raw_text = Some(raw.to_string());
+    msg
+}
+
+/// Chat-level command feedback in a `reply_in_thread` group lands in the
+/// main flow (no anchor); the same command inside a thread stays
+/// anchored to the command message.
+#[tokio::test]
+async fn help_card_anchor_follows_command_scope() {
+    let rig = ChatLevelRig::new().await;
+    rig.mock
+        .status_card_ok
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+    rig.call(chat_level_cmd("/help")).await.unwrap();
+    let mut threaded = channel_message(Some("t1"), true, true);
+    threaded.raw_text = Some("/help".to_string());
+    rig.call(threaded).await.unwrap();
+
+    let cards = rig.mock.cards.lock().await;
+    assert_eq!(cards.len(), 2);
+    assert_eq!(cards[0].2, None, "chat-level feedback must not anchor");
+    assert_eq!(
+        cards[1].2.as_deref(),
+        Some("msg-1"),
+        "in-thread feedback anchors to the command message"
+    );
+}
+
+/// `/clear` at chat level addresses the chat session — honestly
+/// reporting when there is none (the message-id key could never match
+/// a session, and the old code claimed success for that no-op).
+#[tokio::test]
+async fn clear_at_chat_level_addresses_the_chat_session() {
+    let rig = ChatLevelRig::new().await;
+
+    let reply = rig.call(chat_level_cmd("/clear")).await.unwrap();
+    assert_eq!(
+        reply.as_deref(),
+        Some("No session here yet — nothing to clear.")
+    );
+
+    let sid = rig.new_session().await;
+    rig.store
+        .save_mapping("mock", "chat-1", &sid, "chat-1", None)
+        .await
+        .unwrap();
+    let reply = rig.call(chat_level_cmd("/clear")).await.unwrap();
+    assert_eq!(reply.as_deref(), Some("🧹 Context cleared."));
+}
+
+/// `/stop` at chat level addresses the chat session (same scope rule).
+#[tokio::test]
+async fn stop_at_chat_level_addresses_the_chat_session() {
+    let rig = ChatLevelRig::new().await;
+
+    let reply = rig.call(chat_level_cmd("/stop")).await.unwrap();
+    assert_eq!(reply.as_deref(), Some("No active session to stop."));
+
+    let sid = rig.new_session().await;
+    rig.store
+        .save_mapping("mock", "chat-1", &sid, "chat-1", None)
+        .await
+        .unwrap();
+    let reply = rig.call(chat_level_cmd("/stop")).await.unwrap();
+    assert_eq!(reply.as_deref(), Some("⏹ Stopped."));
+}
+
+/// `/compact` at chat level addresses the chat session (same scope
+/// rule) — honest when there is none.
+#[tokio::test]
+async fn compact_at_chat_level_addresses_the_chat_session() {
+    let rig = ChatLevelRig::new().await;
+
+    let reply = rig.call(chat_level_cmd("/compact")).await.unwrap();
+    assert_eq!(reply.as_deref(), Some("No session to compact."));
+
+    // With a chat session bound the lookup hits — the ack then depends
+    // on the status-card/bus path, but it must not be the no-session
+    // answer (locks the key switch).
+    let sid = rig.new_session().await;
+    rig.store
+        .save_mapping("mock", "chat-1", &sid, "chat-1", None)
+        .await
+        .unwrap();
+    let reply = rig.call(chat_level_cmd("/compact")).await.unwrap();
+    assert_ne!(
+        reply.as_deref(),
+        Some("No session to compact."),
+        "must address the chat session: {reply:?}"
+    );
+}
+
+/// `/bind` at chat level binds the chat scope — not the command
+/// message's own id, a scope no follow-up ever reaches in
+/// `reply_in_thread` mode.
+#[tokio::test]
+async fn bind_at_chat_level_binds_the_chat_scope() {
+    let rig = ChatLevelRig::new().await;
+    let sid = rig.new_session().await;
+
+    let reply = rig
+        .call(chat_level_cmd(&format!("/bind {}", sid.0)))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(reply.contains("Bound this conversation"), "{reply}");
+    assert_eq!(
+        rig.store.find_mapping("mock", "chat-1").await.unwrap(),
+        Some(sid.clone())
+    );
+    assert_eq!(rig.store.find_mapping("mock", "msg-1").await.unwrap(), None);
+}
+
 /// `/restart` (admin-only): the ack goes out inline via the adapter —
 /// never through the spawned reply path, which the shutdown could abort —
 /// and only then is the restart requested.
@@ -2299,6 +2491,95 @@ fn reply_anchor_never_anchors_private_chats() {
 fn reply_anchor_requires_message_id() {
     let msg = channel_message(None, true, false);
     assert_eq!(reply_anchor(&msg, true), None);
+}
+
+#[test]
+fn command_reply_anchor_chat_level_feedback_stays_in_main_flow() {
+    // A top-level group message in reply_in_thread mode: command
+    // feedback — including unknown/malformed commands — addresses the
+    // chat as a whole and does not open a one-reply thread.
+    let msg = channel_message(None, true, true);
+    assert_eq!(
+        command_reply_anchor(&msg, true, &ChannelCommand::Info),
+        None
+    );
+    assert_eq!(
+        command_reply_anchor(&msg, true, &ChannelCommand::Unknown("/infp".to_string())),
+        None
+    );
+    assert_eq!(
+        command_reply_anchor(&msg, true, &ChannelCommand::InvalidThreadsCommand),
+        None
+    );
+}
+
+#[test]
+fn command_reply_anchor_chat_level_triggers_open_a_thread() {
+    // Run triggers are the only chat-level messages whose reply anchors
+    // — the anchor is what opens the conversation's thread.
+    let msg = channel_message(None, true, true);
+    for cmd in [
+        ChannelCommand::None,
+        ChannelCommand::Steer("x".to_string()),
+        ChannelCommand::Queue("x".to_string()),
+        ChannelCommand::Thread("x".to_string()),
+    ] {
+        assert_eq!(
+            command_reply_anchor(&msg, true, &cmd).as_deref(),
+            Some("msg-1")
+        );
+    }
+}
+
+#[test]
+fn command_reply_anchor_elsewhere_matches_reply_anchor() {
+    // In-thread commands stay anchored (the reply stays in the thread).
+    let threaded = channel_message(Some("thread-1"), true, true);
+    assert_eq!(
+        command_reply_anchor(&threaded, true, &ChannelCommand::Info).as_deref(),
+        Some("msg-1")
+    );
+    // reply_in_thread off: group feedback was never anchored.
+    let group = channel_message(None, true, true);
+    assert_eq!(
+        command_reply_anchor(&group, false, &ChannelCommand::Info),
+        None
+    );
+    // Private chats never anchor.
+    let private = channel_message(None, false, true);
+    assert_eq!(
+        command_reply_anchor(&private, true, &ChannelCommand::Info),
+        None
+    );
+}
+
+#[test]
+fn command_session_key_chat_level_addresses_the_chat() {
+    // reply_in_thread keys top-level messages by their own id — a scope
+    // no follow-up ever reaches; session commands there address the chat.
+    let msg = channel_message(None, true, true);
+    assert_eq!(command_session_key(&msg, true, "chat-1", "msg-1"), "chat-1");
+}
+
+#[test]
+fn command_session_key_elsewhere_addresses_the_conversation() {
+    let mut threaded = channel_message(Some("thread-1"), true, true);
+    threaded.root_id = Some("root-1".to_string());
+    assert_eq!(
+        command_session_key(&threaded, true, "chat-1", "root-1"),
+        "root-1"
+    );
+    // reply_in_thread off: unchanged (the mapping key already is the chat).
+    let top = channel_message(None, true, true);
+    assert_eq!(
+        command_session_key(&top, false, "chat-1", "chat-1"),
+        "chat-1"
+    );
+    let private = channel_message(None, false, true);
+    assert_eq!(
+        command_session_key(&private, true, "chat-1", "chat-1"),
+        "chat-1"
+    );
 }
 
 #[tokio::test]

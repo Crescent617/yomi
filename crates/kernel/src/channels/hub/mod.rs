@@ -22,13 +22,14 @@ pub(crate) mod routing;
 mod stress_tests;
 
 use crate::channels::delivery_pool::{DeliveryJob, DeliveryPool};
+use crate::channels::hub_command::parse_channel_command;
 use crate::channels::hub_context::{
     advance_history_cursor, prepare_trigger, record_passive_receipt, TriggerKind,
 };
 use crate::channels::hub_deliver::send_command_reply;
 use crate::channels::hub_gate::{gate_message, send_gate_reaction, Gate};
 use crate::channels::hub_handlers::handle_incoming_message;
-use crate::channels::hub_routing::{reply_anchor, resolve_reply_in_thread};
+use crate::channels::hub_routing::{command_reply_anchor, resolve_reply_in_thread};
 
 use crate::channels::{
     ask::AskCardRegistry, obs::ObsTracker, ChannelConfig, ChannelEvent, ChannelInfo,
@@ -477,7 +478,11 @@ impl ChannelHub {
                                     &msg.external_chat_id,
                                 )
                                 .await;
-                                let reply_msg_id = reply_anchor(&msg, rit);
+                                let reply_msg_id = command_reply_anchor(
+                                    &msg,
+                                    rit,
+                                    &parse_channel_command(msg.raw_text.as_deref()),
+                                );
                                 let adapter = Arc::clone(&adapter_dispatch);
                                 tokio::spawn(async move {
                                     if let Err(e) = send_command_reply(
