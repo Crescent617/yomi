@@ -23,6 +23,13 @@ use tokio::sync::{broadcast, Mutex};
 const CONNECT_RETRY_TIMEOUT: Duration = Duration::from_secs(10);
 /// Interval between connection retries.
 const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(10);
+
+/// Error message returned by [`KernelApi::restart`] when the daemon came
+/// back but the saved config could not be applied. Callers (e.g. the CLI)
+/// match on it to tell "restart succeeded but config is broken" apart from
+/// a genuinely failed restart — only the latter may fall back to killing.
+pub const RESTART_CONFIG_NOT_APPLIED: &str =
+    "daemon restarted but the saved config could not be applied";
 /// RPC request timeout.
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 /// Heartbeat interval in seconds.
@@ -1355,9 +1362,7 @@ impl KernelApi for RemoteKernel {
 
         let config = self.get_config().await?;
         if config.full_config.is_empty() {
-            return Err(KernelError::config(
-                "daemon restarted but the saved config could not be applied",
-            ));
+            return Err(KernelError::config(RESTART_CONFIG_NOT_APPLIED));
         }
         Ok(())
     }

@@ -257,6 +257,7 @@ pub async fn restart_daemon() -> Result<()> {
     const WIRE_RESTART_TIMEOUT: Duration = Duration::from_secs(20);
 
     tracing::info!("Restarting daemon...");
+    let old_pid = read_daemon_pid().await;
     let wire_result: Result<()> = match connect_strict().await {
         Ok(kernel) => {
             match tokio::time::timeout(
@@ -266,6 +267,12 @@ pub async fn restart_daemon() -> Result<()> {
             .await
             {
                 Ok(Ok(())) => Ok(()),
+                // The daemon DID come back, but the saved config could not
+                // be applied — that is a config problem to surface, never
+                // a reason to kill the fresh daemon via the signal path.
+                Ok(Err(e)) if is_config_not_applied(&e) => {
+                    return Err(anyhow::anyhow!("{e}"));
+                }
                 Ok(Err(e)) => Err(anyhow::anyhow!("wire restart rejected: {e}")),
                 Err(_) => Err(anyhow::anyhow!("wire restart timed out")),
             }
@@ -278,7 +285,12 @@ pub async fn restart_daemon() -> Result<()> {
             return Ok(());
         }
         Err(e) => {
-            tracing::warn!("wire restart unavailable ({e}); falling back to signal-based restart");
+            tracing::warn!("wire restart unavailable ({e}); verifying before signal fallback");
+            if self_restart_settled(old_pid).await {
+                tracing::info!("Daemon restarted successfully (wire, settled during grace)");
+                return Ok(());
+            }
+            tracing::warn!("falling back to signal-based restart");
         }
     }
 
@@ -291,6 +303,46 @@ pub async fn restart_daemon() -> Result<()> {
     spawn_daemon_with_auto_exit(false).await?;
     tracing::info!("Daemon restarted successfully (signal)");
     Ok(())
+}
+
+/// Read the daemon's pid file (missing/invalid → None).
+async fn read_daemon_pid() -> Option<u32> {
+    tokio::fs::read_to_string(pid_file_path())
+        .await
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+}
+
+/// `KernelApi::restart` 的"已重启但配置未生效"错误判定。`KernelError`
+/// 的 Display 带变体前缀（如 `"Configuration error: "`），不能拿
+/// `to_string()` 与消息常量裸比，必须结构匹配。
+fn is_config_not_applied(e: &kernel::types::KernelError) -> bool {
+    matches!(
+        e,
+        kernel::types::KernelError::Config(msg) if msg == kernel::client::RESTART_CONFIG_NOT_APPLIED
+    )
+}
+
+/// Grace poll after a failed/timed-out wire restart: the daemon may have
+/// accepted the request and be mid-self-restart — its drain plus respawn
+/// can outlast our outer timeout. If a *different* pid comes to own the
+/// socket, the restart already happened; never SIGTERM that fresh daemon.
+async fn self_restart_settled(old_pid: Option<u32>) -> bool {
+    const SETTLE_GRACE: Duration = Duration::from_secs(10);
+    const SETTLE_POLL: Duration = Duration::from_millis(200);
+
+    let Some(old_pid) = old_pid else {
+        return false;
+    };
+    let start = tokio::time::Instant::now();
+    while start.elapsed() < SETTLE_GRACE {
+        sleep(SETTLE_POLL).await;
+        let pid = read_daemon_pid().await;
+        if pid.is_some() && pid != Some(old_pid) && try_connect().await.is_some() {
+            return true;
+        }
+    }
+    false
 }
 
 /// Connect to a running daemon with a strict hello handshake.
@@ -381,3 +433,7 @@ pub async fn daemon_status() -> Result<String> {
         Ok("Daemon is not running".to_string())
     }
 }
+
+#[cfg(test)]
+#[path = "daemon_test.rs"]
+mod tests;
