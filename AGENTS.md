@@ -46,7 +46,7 @@ cargo fmt -- --check
 # Harness 回归冒烟（改 prompt 装配/工具 desc/内置模板/conductor/cron 后跑）
 evals/harness-e2e.sh
 
-# 通道类改动（slash 命令、卡片、回复行为）：另需 feishu-e2e 真链路验证（测试账号，见 .agents/skills/feishu-e2e）
+# 通道类改动（slash 命令、卡片、回复行为）：另需真链路验证（测试账号，见 .agents/skills/yomi-e2e）
 
 # running before commit
 just ci

@@ -293,7 +293,7 @@ janitor 的记忆分两层，**其他 agent 只消费第二层，不直接访问
 | `task-tickets` / `janitor` skill | 零~弱耦合（纯约定 + playbook） | yomi-extensions |
 | ~~`agent-templates` skill~~ | — | **已删除**（2026-08 收敛）：发现由 `agent` 工具 desc 自足承载（内置一句话用途 + 目录约定），不再需要单独 skill |
 | 内置模板 planner/verifier/explorer/reviewer | 强耦合（schema 随 kernel 版本） | **预置进内核**（`crates/kernel/src/agent_tmpl/` + `include_str!`，三层合并的地板层） |
-| `feishu-e2e` / `release-it` / `yomi-self` | 维护者工作流 | 留在 yomi 主仓 `.agents/skills/` |
+| `yomi-e2e` / `release-it` / `yomi-self` | 维护者工作流 | 留在 yomi 主仓 `.agents/skills/` |
 
 理由：skill 迭代节奏远快于内核发版；`.agents/skills` 是跨厂商标准，约定型 skill 对机器上所有 agent 工具（Claude Code/Cursor/Codex）都有效；独立仓库是社区贡献的最小单位；主仓不背内容 churn。
 
