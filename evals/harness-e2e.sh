@@ -12,6 +12,9 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 YOMI="${YOMI:-$ROOT/target/debug/yomi}"
 DB="${YOMI_DB:-$HOME/.yomi/yomi.db}"
+# sessions 落盘在 data_dir（即 db 所在目录）的 sessions/ 下——隔离测试
+# （YOMI_DB 指向别处）时跟着走，不写死 ~/.yomi。
+SESS_DIR="$(dirname "$DB")/sessions"
 TICKET_SH="${TICKET_SH:-$HOME/.agents/skills/task-tickets/scripts/ticket.sh}"
 PASS=0; FAIL=0
 
@@ -41,8 +44,10 @@ echo "$cmd" | grep -q "echo a" && ok "cron ensure 原内容未被改写" || bad 
 sub=$(latest_sub)
 tpl=$(sqlite3 "$DB" "SELECT template FROM sessions WHERE id='$sub'")
 check "template 落库（verifier）" "verifier" "$tpl"
-grep -q "VERDICT: " "$HOME/.yomi/sessions/$sub.jsonl" 2>/dev/null \
-  && ok "verifier 输出含 VERDICT 锚点" || bad "verifier 输出含 VERDICT 锚点" "未找到（$sub）"
+# 「（${sub}）」的大括号不可省：UTF-8 locale 下全角括号会被并入变量名，
+# 触发 set -u 的 unbound variable 直接 abort（失败分支才炸，极隐蔽）。
+grep -q "VERDICT: " "$SESS_DIR/$sub.jsonl" 2>/dev/null \
+  && ok "verifier 输出含 VERDICT 锚点" || bad "verifier 输出含 VERDICT 锚点" "未找到（${sub}）"
 
 # ── 3. explorer 只读：不出现 write/edit 工具调用 ──
 "$YOMI" run --yolo --timeout 180 \
@@ -51,8 +56,8 @@ grep -q "VERDICT: " "$HOME/.yomi/sessions/$sub.jsonl" 2>/dev/null \
 sub=$(latest_sub)
 tpl=$(sqlite3 "$DB" "SELECT template FROM sessions WHERE id='$sub'")
 check "template 落库（explorer）" "explorer" "$tpl"
-if grep -o '"name":"[a-z_]*"' "$HOME/.yomi/sessions/$sub.jsonl" 2>/dev/null | grep -qE '"(write|edit)"'; then
-  bad "explorer 只读约束" "出现 write/edit 调用（$sub）"
+if grep -o '"name":"[a-z_]*"' "$SESS_DIR/$sub.jsonl" 2>/dev/null | grep -qE '"(write|edit)"'; then
+  bad "explorer 只读约束" "出现 write/edit 调用（${sub}）"
 else
   ok "explorer 只读约束"
 fi
