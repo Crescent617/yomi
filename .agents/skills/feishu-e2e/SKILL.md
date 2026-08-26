@@ -1,6 +1,6 @@
 ---
 name: feishu-e2e
-description: "飞书通道 E2E 调试：用 lark-cli（用户身份）触发真实消息事件，经日志 / session / sqlite 验证 yomi 行为。当调试飞书通道、话题、引用、历史注入问题，或需要验证 bot 实际看到了什么时使用。"
+description: "飞书通道 E2E 调试与验证：用 lark-cli（用户身份）触发真实消息事件，经日志 / session / sqlite 验证 yomi 行为。当调试飞书通道、话题、引用、历史注入问题，需要验证 bot 实际看到了什么，或通道类功能（slash 命令、卡片、回复行为）发版前要真链路验证时使用。"
 ---
 
 # Skill: feishu-e2e 飞书通道 E2E 调试
