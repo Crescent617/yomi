@@ -527,6 +527,10 @@ pub async fn run(args: RunArgs) -> Result<()> {
     )
     .await?;
 
+    // Always surface the session id on stderr so the session's jsonl event
+    // log can be looked up afterwards, no matter how the run was started.
+    eprintln!("[session] {}", session_id.0);
+
     // Subscribe BEFORE sending so no event of our run can be missed.
     let mut events = kernel.subscribe_session_events(&session_id, None).await?;
 
