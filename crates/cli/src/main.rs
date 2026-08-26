@@ -281,7 +281,7 @@ enum CronCommands {
         /// Action: run a shell command (exit 42 marks the job completed)
         #[arg(long)]
         command: Option<String>,
-        /// Target session for --message (default: a dedicated session)
+        /// Target session for --message (default: a fresh session per run)
         #[arg(long, requires = "message")]
         session: Option<String>,
         /// Working directory for --command
@@ -310,7 +310,7 @@ enum CronCommands {
         /// Replace the action with a shell command (exit 42 marks the job completed)
         #[arg(long)]
         command: Option<String>,
-        /// Target session for --message (omit for a dedicated session)
+        /// Target session for --message (omit for a fresh session per run)
         #[arg(long, requires = "message")]
         session: Option<String>,
         /// Working directory for --command
