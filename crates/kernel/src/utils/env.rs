@@ -1,5 +1,44 @@
 //! Environment variable utilities for the kernel crate
 
+/// 子进程注入的标准环境变量名（编译期拼出 `"YOMI_..."`）。shell 工具、
+/// `/workflow run`、cron shell job 的子进程都带这些变量，脚本据此
+/// 回连 yomi（如 `"$YOMI_DATA_DIR/workflows/..."`、`yomi session send
+/// --steer -s "$YOMI_SESSION_ID"`）。
+pub const YOMI_SESSION_ID: &str = crate::env_name!("SESSION_ID");
+pub const YOMI_DATA_DIR: &str = crate::env_name!("DATA_DIR");
+
+/// 给 tokio `Command` 注入 yomi 标准环境变量，返回 `&mut` 便于链式。
+/// `None` 的项会被**显式移除**而非保留继承值：父进程自身可能带着这些
+/// 变量（daemon 从 shell 工具里被拉起、测试跑在 yomi 会话内），不主动
+/// 清掉会让子进程拿到指向错误会话/目录的残留值。
+///
+/// 各调用点按手头上下文传参：shell 工具总有 session、`data_dir` 视构造
+/// 而定；workflow run 必有 `data_dir`、session 视会话；cron shell 只有
+/// `data_dir`。
+pub fn inject_child_env<'a>(
+    cmd: &'a mut tokio::process::Command,
+    data_dir: Option<&std::path::Path>,
+    session_id: Option<&str>,
+) -> &'a mut tokio::process::Command {
+    match data_dir {
+        Some(dir) => {
+            cmd.env(YOMI_DATA_DIR, dir);
+        }
+        None => {
+            cmd.env_remove(YOMI_DATA_DIR);
+        }
+    }
+    match session_id {
+        Some(sid) => {
+            cmd.env(YOMI_SESSION_ID, sid);
+        }
+        None => {
+            cmd.env_remove(YOMI_SESSION_ID);
+        }
+    }
+    cmd
+}
+
 /// Get environment variable - inlined for performance
 #[inline]
 pub fn env_var(name: &str) -> Option<String> {

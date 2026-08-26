@@ -236,12 +236,16 @@ pub struct ShellOutput {
 /// 以与 cron worker 一致的加固环境执行 shell 命令。
 /// 退出码 0 与 `SHELL_COMPLETE_EXIT_CODE` 都视为成功返回输出；
 /// 其他非零退出返回 `CronError::ShellFailed`（含 stderr）。
+///
+/// 注入 yomi 标准环境变量（见 [`crate::utils::env::inject_child_env`]；
+/// cron shell job 无会话，只有 `YOMI_DATA_DIR`）。
 pub async fn run_shell_command(
     command: &str,
     working_dir: Option<&str>,
+    data_dir: &std::path::Path,
 ) -> Result<ShellOutput, CronError> {
-    let output = tokio::process::Command::new("sh")
-        .arg("-c")
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.arg("-c")
         .arg(command)
         .current_dir(working_dir.unwrap_or("."))
         .kill_on_drop(true)
@@ -253,10 +257,9 @@ pub async fn run_shell_command(
         .env("GIT_SEQUENCE_EDITOR", "true")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("PAGER", "cat")
-        .env("EDITOR", "true")
-        .output()
-        .await
-        .map_err(CronError::Io)?;
+        .env("EDITOR", "true");
+    crate::utils::env::inject_child_env(&mut cmd, Some(data_dir), None);
+    let output = cmd.output().await.map_err(CronError::Io)?;
 
     let stdout = || String::from_utf8_lossy(&output.stdout).to_string();
     match output.status.code() {

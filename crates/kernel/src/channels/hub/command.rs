@@ -57,6 +57,8 @@ pub(crate) const CMD_STATUS: &str = "/status";
 
 pub(crate) const CMD_USAGE: &str = "/usage";
 
+pub(crate) const CMD_WORKFLOW: &str = "/workflow";
+
 /// All channel commands: canonical name plus short aliases. Matching is
 /// exact (after stripping an `@bot` suffix), so table order is irrelevant
 /// and lookalike words (`/clearance`) never resolve.
@@ -83,6 +85,7 @@ pub(crate) const COMMANDS: &[(&str, &[&str])] = &[
     (CMD_SESSIONS, &[]),
     (CMD_STATUS, &[]),
     (CMD_USAGE, &["/u"]),
+    (CMD_WORKFLOW, &["/wkfl"]),
     (CMD_PERMITS, &[]),
     (CMD_APPROVE, &[]),
     (CMD_DENY, &[]),
@@ -101,6 +104,7 @@ pub(crate) const HELP_TEXT: &str = "\
 `/sessions` — recent 10 sessions of this channel with jump links; `/sessions <offset>` for the next page (admin)
 `/status` — daemon runtime: uptime, active runs, shells, subagents, cron jobs (admin)
 `/usage` (`/u`) — token usage for the last N days; `/usage [days]` (default 7, max 90) (admin)
+`/workflow` (`/wkfl`) — workflow scripts in `~/.yomi/workflows/`; `/workflow ls` · `/workflow run <name> [args]` · `/workflow rm <name>` (run/rm admin)
 
 **Session control**
 `/clear` (`/c`) — clear context and start fresh
@@ -224,6 +228,22 @@ pub(crate) enum ChannelCommand {
     Usage(usize),
     /// A malformed `/usage` command.
     InvalidUsageCommand,
+    /// List workflow scripts in `<data_dir>/workflows/` (bare `/workflow`
+    /// behaves the same).
+    WorkflowList,
+    /// Run a workflow script by name, passing args through (admin).
+    /// Execution is direct (no agent); the result arrives as a follow-up
+    /// reply.
+    WorkflowRun {
+        /// Script name (bare file name).
+        name: String,
+        /// Arguments passed verbatim to the script.
+        args: Vec<String>,
+    },
+    /// Delete a workflow script by name (admin).
+    WorkflowRemove(String),
+    /// A malformed `/workflow` command.
+    InvalidWorkflowCommand,
     /// Command-shaped (`/word`) but matches no known command or alias.
     Unknown(String),
     /// Not a command.
@@ -442,6 +462,21 @@ pub(crate) fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
             },
             _ => ChannelCommand::InvalidUsageCommand,
         },
+        CMD_WORKFLOW => match parts.next() {
+            None | Some("ls" | "list") if parts.next().is_none() => ChannelCommand::WorkflowList,
+            Some("run") => match parts.next() {
+                Some(name) => ChannelCommand::WorkflowRun {
+                    name: name.to_string(),
+                    args: parts.map(str::to_string).collect(),
+                },
+                None => ChannelCommand::InvalidWorkflowCommand,
+            },
+            Some("rm" | "remove") => match (parts.next(), parts.next()) {
+                (Some(name), None) => ChannelCommand::WorkflowRemove(name.to_string()),
+                _ => ChannelCommand::InvalidWorkflowCommand,
+            },
+            _ => ChannelCommand::InvalidWorkflowCommand,
+        },
         _ => ChannelCommand::None,
     }
 }
@@ -656,6 +691,72 @@ pub(crate) fn format_uptime(boot: chrono::DateTime<chrono::Utc>) -> String {
     } else {
         "<1m".to_string()
     }
+}
+
+/// `/workflow` 子命令用法（解析失败时的回执）。
+pub(crate) const WORKFLOW_USAGE: &str = "Usage: `/workflow ls` · `/workflow run <name> [args]` · `/workflow rm <name>` — scripts live in `~/.yomi/workflows/` (run/rm admin).";
+
+/// `/workflow ls` body: one line per script, non-executable ones flagged
+/// (they cannot `run` until `chmod +x`).
+pub(crate) fn format_workflow_list(
+    dir: &std::path::Path,
+    entries: &[crate::workflow::WorkflowEntry],
+) -> String {
+    if entries.is_empty() {
+        return format!(
+            "No workflows yet. Drop an executable script (shebang + `chmod +x`) into `{}`.",
+            dir.display()
+        );
+    }
+    let mut lines: Vec<String> = entries
+        .iter()
+        .map(|e| {
+            if e.executable {
+                format!("- `{}`", e.name)
+            } else {
+                format!("- `{}` · not executable", e.name)
+            }
+        })
+        .collect();
+    lines.push(String::new());
+    lines.push(format!(
+        "Run with `/workflow run <name> [args]` · dir `{}`",
+        dir.display()
+    ));
+    lines.join("\n")
+}
+
+/// `/workflow run` 输出回显上限（字节）：头尾保留截断。
+pub(crate) const WORKFLOW_OUTPUT_MAX: usize = 3000;
+
+/// `/workflow run` 完成回执：状态行 + 代码块包裹的输出（头尾截断）。
+pub(crate) fn format_workflow_result(name: &str, outcome: &crate::workflow::RunOutcome) -> String {
+    let status = if outcome.timed_out {
+        format!(
+            "⏱ **Timed out** after {}s (killed)",
+            crate::workflow::RUN_TIMEOUT.as_secs()
+        )
+    } else {
+        match outcome.exit_code {
+            Some(0) => "✅ **exit 0**".to_string(),
+            Some(code) => format!("⚠️ **exit {code}**"),
+            None => "⚠️ **killed by signal**".to_string(),
+        }
+    };
+    let head = format!(
+        "`{name}` · {status} · {:.1}s",
+        outcome.elapsed.as_secs_f64()
+    );
+    let output = outcome.output.trim();
+    if output.is_empty() {
+        return format!("{head}\n\n(no output)");
+    }
+    let truncated = crate::tools::helper::truncate::truncate_keep_edges(
+        output,
+        WORKFLOW_OUTPUT_MAX,
+        "\n\n… [output truncated] …\n\n",
+    );
+    format!("{head}\n\n```\n{truncated}\n```")
 }
 
 /// `/status` body: one line per runtime gauge. `cron_jobs` is `None`

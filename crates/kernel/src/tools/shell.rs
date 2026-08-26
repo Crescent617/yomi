@@ -43,16 +43,19 @@ pub const SHELL_TOOL_NAME: &str = "shell";
 pub struct ShellToolCtx {
     input_bus: Option<Arc<InputBus>>,
     background_tasks: Arc<crate::agent::BgTaskTracker>,
+    data_dir: std::path::PathBuf,
 }
 
 impl ShellToolCtx {
     pub fn new(
         input_bus: Option<Arc<InputBus>>,
         background_tasks: Arc<crate::agent::BgTaskTracker>,
+        data_dir: std::path::PathBuf,
     ) -> Self {
         Self {
             input_bus,
             background_tasks,
+            data_dir,
         }
     }
 }
@@ -80,6 +83,11 @@ impl ShellTool {
 
     fn gen_task_id() -> String {
         format!("sh-{}", gen_base56_id(12))
+    }
+
+    /// The daemon's data dir, when the tool was built with a context.
+    fn data_dir(&self) -> Option<&std::path::Path> {
+        self.ctx.as_ref().map(|c| c.data_dir.as_path())
     }
 
     fn log_path(task_id: &str) -> std::path::PathBuf {
@@ -196,9 +204,14 @@ impl ShellTool {
     ///   (sudo, ssh, gpg, ...) fail fast instead of blocking on a hidden
     ///   prompt or garbling the TUI;
     /// - env vars disable the remaining interactive prompters (git, ssh);
-    /// - `YOMI_SESSION_ID` exposes the owning session, so scripts can steer
-    ///   back into it (e.g. `yomi session send --steer -s "$YOMI_SESSION_ID"`).
-    fn build_command(command: &str, working_dir: &std::path::Path, session_id: &str) -> Command {
+    /// - yomi 标准环境变量（`YOMI_SESSION_ID` / `YOMI_DATA_DIR`，见
+    ///   [`crate::utils::env::inject_child_env`]）让脚本回连 yomi。
+    fn build_command(
+        command: &str,
+        working_dir: &std::path::Path,
+        session_id: &str,
+        data_dir: Option<&std::path::Path>,
+    ) -> Command {
         let (shell, arg) = Self::shell_command();
         let mut cmd = Command::new(shell);
         cmd.arg(arg)
@@ -214,8 +227,8 @@ impl ShellTool {
             .env("SSH_ASKPASS_REQUIRE", "never")
             .env("PAGER", "cat")
             .env("EDITOR", "true")
-            .env(format!("{}SESSION_ID", crate::ENV_PREFIX), session_id)
             .kill_on_drop(true);
+        crate::utils::env::inject_child_env(&mut cmd, data_dir, Some(session_id));
 
         // BatchMode makes ssh fail instead of prompting (host-key confirm,
         // passphrase). Only set when the user hasn't configured their own,
@@ -249,7 +262,8 @@ impl ShellTool {
         session_id: &str,
         max_tool_output_length: usize,
     ) -> Result<ToolOutput> {
-        let output_fut = Self::build_command(command, working_dir, session_id).output();
+        let output_fut =
+            Self::build_command(command, working_dir, session_id, self.data_dir()).output();
 
         let timeout_duration = Duration::from_secs(timeout_secs.unwrap_or(300));
         let output_result = match cancel_token {
@@ -332,7 +346,8 @@ impl ShellTool {
         let output_path_str = output_path.to_string_lossy().to_string();
 
         // Start the process and get PID immediately
-        let child = Self::build_command(command, working_dir, session_id).spawn()?;
+        let child =
+            Self::build_command(command, working_dir, session_id, Some(&ctx.data_dir)).spawn()?;
 
         let pid = child.id().unwrap_or(0);
         let tracker_guard = ctx

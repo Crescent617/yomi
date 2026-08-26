@@ -10,8 +10,9 @@ use tracing::warn;
 
 use crate::channels::hub_command::{
     format_current_model, format_model_list, format_runtime_status, format_session_info,
-    format_unknown_model, format_usage, parse_channel_command, suggest_command, ChannelCommand,
-    OverrideMode, HELP_TEXT,
+    format_unknown_model, format_usage, format_workflow_list, format_workflow_result,
+    parse_channel_command, suggest_command, ChannelCommand, OverrideMode, HELP_TEXT,
+    WORKFLOW_USAGE,
 };
 use crate::channels::hub_context::{append_message_images, prepare_trigger, TriggerKind};
 use crate::channels::hub_deliver::send_info_reply;
@@ -367,6 +368,81 @@ pub(crate) async fn handle_incoming_message(
             "Usage: `/usage [days]` — token usage for the last N days (default 7, max 90)."
                 .to_string(),
         )),
+        ChannelCommand::WorkflowList => {
+            let data_dir = kernel.data_dir().await;
+            let entries = crate::workflow::list(&data_dir).await?;
+            let body = format_workflow_list(&crate::workflow::workflows_dir(&data_dir), &entries);
+            send_info_reply(adapter, &msg, reply_msg_id, "🧩 Workflows", body).await?;
+            Ok(None)
+        }
+        ChannelCommand::WorkflowRemove(name) => {
+            if let Some(deny) = crate::channels::approval::check_admin(config, &msg.external_user_id) {
+                return Ok(Some(deny));
+            }
+            if crate::workflow::remove(&kernel.data_dir().await, &name).await? {
+                Ok(Some(format!("🗑 Removed workflow `{name}`.")))
+            } else {
+                Ok(Some(format!(
+                    "Workflow `{name}` not found — `/workflow ls` to list."
+                )))
+            }
+        }
+        ChannelCommand::WorkflowRun { name, args } => {
+            if let Some(deny) = crate::channels::approval::check_admin(config, &msg.external_user_id) {
+                return Ok(Some(deny));
+            }
+            let data_dir = kernel.data_dir().await;
+            let Some(path) = crate::workflow::resolve(&data_dir, &name).await? else {
+                return Ok(Some(format!(
+                    "Workflow `{name}` not found — `/workflow ls` to list."
+                )));
+            };
+            if !crate::workflow::executable(&path).await {
+                return Ok(Some(format!(
+                    "`{name}` is not executable — fix with `chmod +x {}`.",
+                    path.display()
+                )));
+            }
+            // 脚本作用于当前会话的工作区（与 agent 所见一致）；没有会话
+            // 时落默认 workspace。
+            let key = command_session_key(&msg, rit, &chat_id, &mapping_key);
+            let sid = store.find_mapping(channel_name, key).await?;
+            let cwd = match &sid {
+                Some(sid) => kernel.session_cwd(sid).await,
+                None => crate::utils::path::session_workspace_dir(&data_dir, None),
+            };
+            // 异步执行 + 完成后回执：dispatch 循环串行，同步等待会阻塞
+            // 本渠道后续消息（最长 RUN_TIMEOUT）。
+            let adapter_bg = Arc::clone(adapter);
+            let msg_bg = msg.clone();
+            let reply_bg = reply_msg_id.clone();
+            let name_bg = name.clone();
+            let sid_str = sid.map(|s| s.0);
+            tokio::spawn(async move {
+                let outcome = crate::workflow::run(
+                    &path,
+                    &args,
+                    &cwd,
+                    &data_dir,
+                    sid_str.as_deref(),
+                    crate::workflow::RUN_TIMEOUT,
+                )
+                .await;
+                let body = match outcome {
+                    Ok(o) => format_workflow_result(&name_bg, &o),
+                    Err(e) => format!("`{name_bg}` failed to start: {e}"),
+                };
+                if let Err(e) =
+                    send_info_reply(&adapter_bg, &msg_bg, reply_bg, "🧩 Workflow", body).await
+                {
+                    warn!(error = %e, "workflow result reply failed");
+                }
+            });
+            Ok(Some(format!(
+                "▶️ Running `{name}`… result follows when done."
+            )))
+        }
+        ChannelCommand::InvalidWorkflowCommand => Ok(Some(WORKFLOW_USAGE.to_string())),
         ChannelCommand::Mailbox(sub) => {
             if let Some(deny) = crate::channels::approval::check_admin(config, &msg.external_user_id) {
                 return Ok(Some(deny));

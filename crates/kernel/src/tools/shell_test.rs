@@ -146,7 +146,12 @@ fn extract_log_body_keeps_inner_hash_lines() {
 
 #[test]
 fn build_command_disables_interactive_prompters() {
-    let cmd = ShellTool::build_command("true", Path::new("/tmp"), "sess_test");
+    let cmd = ShellTool::build_command(
+        "true",
+        Path::new("/tmp"),
+        "sess_test",
+        Some(Path::new("/data")),
+    );
     let env = |key: &str| {
         cmd.as_std()
             .get_envs()
@@ -159,6 +164,7 @@ fn build_command_disables_interactive_prompters() {
     assert_eq!(env("SSH_ASKPASS_REQUIRE").as_deref(), Some("never"));
     assert_eq!(env("GIT_PAGER").as_deref(), Some("cat"));
     assert_eq!(env("YOMI_SESSION_ID").as_deref(), Some("sess_test"));
+    assert_eq!(env("YOMI_DATA_DIR").as_deref(), Some("/data"));
 
     // GIT_SSH_COMMAND is only injected when the user hasn't set their own.
     match std::env::var("GIT_SSH_COMMAND") {
@@ -183,7 +189,8 @@ async fn spawned_command_cannot_open_controlling_tty() {
     // setsid detaches the child from the controlling terminal, so opening
     // /dev/tty fails — this is what makes sudo/ssh/gpg fail fast instead
     // of blocking on a hidden password prompt.
-    let mut cmd = ShellTool::build_command("echo x < /dev/tty", Path::new("/tmp"), "sess_test");
+    let mut cmd =
+        ShellTool::build_command("echo x < /dev/tty", Path::new("/tmp"), "sess_test", None);
     let output = cmd.output().await.unwrap();
 
     assert!(!output.status.success());
@@ -198,6 +205,7 @@ async fn spawned_command_reads_eof_on_stdin() {
         "read line; echo \"got:[$line]\"",
         Path::new("/tmp"),
         "sess_test",
+        None,
     );
     let output = cmd.output().await.unwrap();
 
@@ -208,7 +216,7 @@ async fn spawned_command_reads_eof_on_stdin() {
 #[cfg(unix)]
 #[tokio::test]
 async fn spawned_command_runs_normally() {
-    let mut cmd = ShellTool::build_command("echo hello", Path::new("/tmp"), "sess_test");
+    let mut cmd = ShellTool::build_command("echo hello", Path::new("/tmp"), "sess_test", None);
     let output = cmd.output().await.unwrap();
 
     assert!(output.status.success());

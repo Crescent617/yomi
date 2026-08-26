@@ -1964,7 +1964,12 @@ impl crate::cron::CronExecutor for Kernel {
                 command,
                 working_dir,
             } => {
-                let out = crate::cron::run_shell_command(command, working_dir.as_deref()).await?;
+                let out = crate::cron::run_shell_command(
+                    command,
+                    working_dir.as_deref(),
+                    &self.agent_shared.data_dir,
+                )
+                .await?;
                 Ok(if out.self_complete {
                     CronActionOutcome::SelfComplete
                 } else {

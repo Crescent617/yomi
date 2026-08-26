@@ -242,7 +242,7 @@ mod tests {
 
     #[tokio::test]
     async fn shell_runner_success_captures_stdout() {
-        let out = super::super::run_shell_command("echo hello", None)
+        let out = super::super::run_shell_command("echo hello", None, std::path::Path::new("/d"))
             .await
             .unwrap();
         assert_eq!(out.stdout.trim(), "hello");
@@ -250,25 +250,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shell_runner_injects_yomi_data_dir() {
+        let out = super::super::run_shell_command(
+            "echo \"dir=$YOMI_DATA_DIR\"; echo \"sid=$YOMI_SESSION_ID\"",
+            None,
+            std::path::Path::new("/d"),
+        )
+        .await
+        .unwrap();
+        // cron shell job 无会话：YOMI_SESSION_ID 被显式移除而非继承父进程
+        assert_eq!(out.stdout, "dir=/d\nsid=\n");
+    }
+
+    #[tokio::test]
     async fn shell_runner_complete_exit_code_marks_self_complete() {
         let cmd = format!("echo done; exit {}", super::super::SHELL_COMPLETE_EXIT_CODE);
-        let out = super::super::run_shell_command(&cmd, None).await.unwrap();
+        let out = super::super::run_shell_command(&cmd, None, std::path::Path::new("/d"))
+            .await
+            .unwrap();
         assert_eq!(out.stdout.trim(), "done");
         assert!(out.self_complete);
     }
 
     #[tokio::test]
     async fn shell_runner_other_nonzero_is_shell_failed() {
-        let err = super::super::run_shell_command("echo boom >&2; exit 1", None)
-            .await
-            .unwrap_err();
+        let err = super::super::run_shell_command(
+            "echo boom >&2; exit 1",
+            None,
+            std::path::Path::new("/d"),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, CronError::ShellFailed(e) if e.contains("boom")));
     }
 
     #[tokio::test]
     async fn shell_runner_signal_death_is_failure_not_self_complete() {
         // Killed by a signal → no exit code → failure, never self-complete.
-        let err = super::super::run_shell_command("kill -9 $$", None)
+        let err = super::super::run_shell_command("kill -9 $$", None, std::path::Path::new("/d"))
             .await
             .unwrap_err();
         assert!(matches!(err, CronError::ShellFailed(_)));

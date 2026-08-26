@@ -1,6 +1,58 @@
 use super::*;
 
 #[test]
+fn inject_child_env_sets_only_given_vars() {
+    let get = |cmd: &tokio::process::Command, key: &str| {
+        cmd.as_std()
+            .get_envs()
+            .find(|(k, _)| *k == std::ffi::OsStr::new(key))
+            .and_then(|(_, v)| v)
+            .map(|v| v.to_string_lossy().into_owned())
+    };
+
+    let mut cmd = tokio::process::Command::new("true");
+    inject_child_env(
+        &mut cmd,
+        Some(std::path::Path::new("/data")),
+        Some("sess_1"),
+    );
+    assert_eq!(get(&cmd, "YOMI_DATA_DIR").as_deref(), Some("/data"));
+    assert_eq!(get(&cmd, "YOMI_SESSION_ID").as_deref(), Some("sess_1"));
+
+    let mut cmd = tokio::process::Command::new("true");
+    inject_child_env(&mut cmd, Some(std::path::Path::new("/data")), None);
+    assert_eq!(get(&cmd, "YOMI_DATA_DIR").as_deref(), Some("/data"));
+    assert_eq!(get(&cmd, "YOMI_SESSION_ID"), None);
+
+    let mut cmd = tokio::process::Command::new("true");
+    inject_child_env(&mut cmd, None, Some("sess_1"));
+    assert_eq!(get(&cmd, "YOMI_DATA_DIR"), None);
+    assert_eq!(get(&cmd, "YOMI_SESSION_ID").as_deref(), Some("sess_1"));
+}
+
+#[test]
+fn yomi_env_var_names_use_prefix() {
+    assert_eq!(YOMI_SESSION_ID, "YOMI_SESSION_ID");
+    assert_eq!(YOMI_DATA_DIR, "YOMI_DATA_DIR");
+}
+
+/// `None` 项是显式移除：测试进程自身带着这两个变量时（比如整个测试
+/// 就跑在某个 yomi 会话的 shell 里），子进程不得继承到残留值。
+#[tokio::test]
+async fn inject_child_env_removes_inherited_values() {
+    std::env::set_var("YOMI_SESSION_ID", "sess_leak");
+    std::env::set_var("YOMI_DATA_DIR", "/leak");
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.arg("-c")
+        .arg("echo \"sid=$YOMI_SESSION_ID\"; echo \"dir=$YOMI_DATA_DIR\"");
+    inject_child_env(&mut cmd, None, None);
+    let out = cmd.output().await.unwrap();
+    std::env::remove_var("YOMI_SESSION_ID");
+    std::env::remove_var("YOMI_DATA_DIR");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "sid=\ndir=\n");
+}
+
+#[test]
 fn test_env_bool_parsing() {
     // Test via actual env var manipulation
     std::env::set_var("TEST_BOOL_TRUE", "true");

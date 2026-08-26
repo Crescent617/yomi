@@ -41,6 +41,7 @@ pub mod transport;
 pub mod types;
 pub mod utils;
 pub mod wire;
+pub mod workflow;
 pub use checkpoint::{Checkpoint, CheckpointStore, FileOp, RewindTarget, TrackedFileInfo};
 pub use config::{env_names, Config, ModelProvider};
 pub use cron::{

@@ -37,6 +37,8 @@ pub struct CronTool {
     /// sessions bound to `send_message` jobs (floored at caution inside
     /// [`crate::cron::ensure_action_session`]).
     config_auto_approve: crate::permission::Level,
+    /// Injected into shell-job children as `YOMI_DATA_DIR`.
+    data_dir: std::path::PathBuf,
 }
 
 impl CronTool {
@@ -46,6 +48,7 @@ impl CronTool {
         session_store: Option<Arc<dyn SessionStore>>,
         input_bus: Option<Arc<InputBus>>,
         config_auto_approve: crate::permission::Level,
+        data_dir: std::path::PathBuf,
     ) -> Self {
         Self {
             store,
@@ -53,6 +56,7 @@ impl CronTool {
             session_store,
             input_bus,
             config_auto_approve,
+            data_dir,
         }
     }
 
@@ -376,7 +380,7 @@ impl CronTool {
             CronAction::Shell {
                 command,
                 working_dir,
-            } => execute_shell(command, working_dir.as_deref()).await,
+            } => execute_shell(command, working_dir.as_deref(), &self.data_dir).await,
             CronAction::Internal { endpoint, .. } => Err(KernelError::tool(format!(
                 "unsupported action type (internal: {endpoint})"
             ))),
@@ -390,10 +394,14 @@ impl CronTool {
 ///
 /// A self-complete request (exit 42) is only honored by the scheduler on
 /// scheduled runs; this manual path just reports it.
-async fn execute_shell(command: &str, working_dir: Option<&str>) -> Result<String> {
+async fn execute_shell(
+    command: &str,
+    working_dir: Option<&str>,
+    data_dir: &std::path::Path,
+) -> Result<String> {
     let output = tokio::time::timeout(
         Duration::from_secs(TRIGGER_TIMEOUT_SECS),
-        crate::cron::run_shell_command(command, working_dir),
+        crate::cron::run_shell_command(command, working_dir, data_dir),
     )
     .await
     .map_err(|_| {

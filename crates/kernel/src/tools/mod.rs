@@ -270,6 +270,7 @@ impl ToolRegistry {
         let bash_ctx = ShellToolCtx::new(
             config.input_bus.cloned(),
             Arc::clone(&config.shared.background_tasks),
+            config.shared.data_dir.clone(),
         );
         let bash_tool = ShellTool::new().with_ctx(bash_ctx);
         self.register(bash_tool);
@@ -344,6 +345,7 @@ impl ToolRegistry {
                     config.shared.session_store.clone(),
                     config.input_bus.cloned(),
                     config.shared.config_auto_approve,
+                    config.shared.data_dir.clone(),
                 ));
             } else {
                 tracing::warn!("Cron tool enabled but cron store not configured; skipping");

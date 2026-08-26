@@ -32,6 +32,7 @@ async fn fixture(with_session_store: bool, with_input_bus: bool) -> TestFixture 
         // Fixture plays the "global config = safe" scenario: bound sessions
         // must be floored to caution.
         crate::permission::Level::Safe,
+        std::path::PathBuf::from("/tmp/yomi-cron-test"),
     );
 
     TestFixture {

@@ -1504,6 +1504,89 @@ async fn status_and_usage_require_admin_and_card_into_main_flow() {
     assert_eq!(cards[1].2, None, "chat-level feedback must not anchor");
 }
 
+/// `/workflow`：`ls` 走 info 卡（无权限门槛）；`run`/`rm` admin 门槛；
+/// `run` 立即 ack，完成回执经 adapter 异步到达，带 exit code、脚本
+/// 输出（含参数传递）与注入的 `YOMI_DATA_DIR`。
+#[cfg(unix)]
+#[tokio::test]
+async fn workflow_ls_run_rm_via_handler() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let rig = ChatLevelRig::new().await;
+    rig.mock
+        .status_card_ok
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+    // 在 kernel 的 data_dir 下造一个脚本（shebang + 可执行位）。
+    let dir = crate::workflow::workflows_dir(&rig.kernel.data_dir().await);
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("hello.sh");
+    std::fs::write(&script, "#!/bin/sh\necho \"wf:$1:$YOMI_DATA_DIR\"\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // `ls` 无 admin 门槛：经 info 卡列出脚本。
+    let mut outsider = chat_level_cmd("/wkfl ls");
+    outsider.external_user_id = "ou_random".to_string();
+    let reply = rig.call(outsider).await.unwrap();
+    assert!(reply.is_none(), "ls answers via card: {reply:?}");
+    let cards = rig.mock.cards.lock().await;
+    assert_eq!(cards.len(), 1);
+    assert!(cards[0].1.contains("🧩 Workflows"), "card: {}", cards[0].1);
+    assert!(cards[0].1.contains("hello.sh"), "card: {}", cards[0].1);
+    drop(cards);
+
+    // `run` / `rm` 有 admin 门槛。
+    for raw in ["/workflow run hello.sh", "/wkfl rm hello.sh"] {
+        let mut outsider = chat_level_cmd(raw);
+        outsider.external_user_id = "ou_random".to_string();
+        let reply = rig.call(outsider).await.unwrap();
+        assert_eq!(
+            reply.as_deref(),
+            Some("Permission denied: not in admin_users."),
+            "{raw}"
+        );
+    }
+
+    // `run`：立即 ack；完成回执异步到达——轮询等结果卡。
+    let reply = rig
+        .call(chat_level_cmd("/workflow run hello.sh ARG"))
+        .await
+        .unwrap();
+    assert_eq!(
+        reply.as_deref(),
+        Some("▶️ Running `hello.sh`… result follows when done.")
+    );
+    let want_dir = rig.kernel.data_dir().await;
+    let mut seen = String::new();
+    for _ in 0..50 {
+        let cards = rig.mock.cards.lock().await;
+        if let Some((_, body, _)) = cards.iter().find(|(_, b, _)| b.contains("exit")) {
+            seen = body.clone();
+            break;
+        }
+        drop(cards);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(seen.contains("🧩 Workflow"), "result card: {seen}");
+    assert!(seen.contains("exit 0"), "result card: {seen}");
+    assert!(
+        seen.contains(&format!("wf:ARG:{}", want_dir.display())),
+        "result card: {seen}"
+    );
+
+    // `rm`：删除后不再是可解析的 workflow。
+    let reply = rig.call(chat_level_cmd("/wkfl rm hello.sh")).await.unwrap();
+    assert_eq!(reply.as_deref(), Some("🗑 Removed workflow `hello.sh`."));
+    let reply = rig
+        .call(chat_level_cmd("/workflow rm hello.sh"))
+        .await
+        .unwrap();
+    assert!(
+        reply.as_deref().is_some_and(|r| r.contains("not found")),
+        "{reply:?}"
+    );
+}
+
 /// `/restart` (admin-only): the ack goes out inline via the adapter —
 /// never through the spawned reply path, which the shutdown could abort —
 /// and only then is the restart requested.
@@ -2659,6 +2742,80 @@ fn status_usage_command_parse() {
         parse_channel_command(Some("/status now")),
         ChannelCommand::None
     ));
+}
+
+#[test]
+fn workflow_command_parse() {
+    assert!(matches!(
+        parse_channel_command(Some("/workflow")),
+        ChannelCommand::WorkflowList
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/wkfl ls")),
+        ChannelCommand::WorkflowList
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/workflow list")),
+        ChannelCommand::WorkflowList
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/workflow run deploy.sh -p 8080")),
+        ChannelCommand::WorkflowRun { ref name, ref args }
+            if name == "deploy.sh" && args.as_slice() == ["-p", "8080"]
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/wkfl@yomi_bot rm old.py")),
+        ChannelCommand::WorkflowRemove(ref name) if name == "old.py"
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/workflow remove old.py")),
+        ChannelCommand::WorkflowRemove(ref name) if name == "old.py"
+    ));
+    for raw in [
+        "/workflow foo",
+        "/workflow ls extra",
+        "/workflow run",
+        "/workflow rm",
+        "/workflow rm a b",
+    ] {
+        assert!(
+            matches!(
+                parse_channel_command(Some(raw)),
+                ChannelCommand::InvalidWorkflowCommand
+            ),
+            "{raw}"
+        );
+    }
+}
+
+#[test]
+fn format_workflow_result_variants() {
+    use crate::channels::hub_command::format_workflow_result;
+
+    let outcome = |exit_code, output: &str, timed_out| crate::workflow::RunOutcome {
+        exit_code,
+        output: output.to_string(),
+        timed_out,
+        elapsed: std::time::Duration::from_millis(1500),
+    };
+
+    let body = format_workflow_result("a.sh", &outcome(Some(0), "hello\n", false));
+    assert!(body.contains("`a.sh`"), "{body}");
+    assert!(body.contains("exit 0"), "{body}");
+    assert!(body.contains("1.5s"), "{body}");
+    assert!(body.contains("```\nhello\n```"), "{body}");
+
+    let body = format_workflow_result("a.sh", &outcome(Some(3), "", false));
+    assert!(body.contains("exit 3"), "{body}");
+    assert!(body.contains("(no output)"), "{body}");
+
+    let body = format_workflow_result("a.sh", &outcome(None, "partial", true));
+    assert!(body.contains("Timed out"), "{body}");
+    assert!(body.contains("partial"), "{body}");
+
+    let long = "x".repeat(6000);
+    let body = format_workflow_result("a.sh", &outcome(Some(0), &long, false));
+    assert!(body.contains("[output truncated]"), "truncation marker");
 }
 
 #[test]
