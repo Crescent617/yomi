@@ -29,8 +29,8 @@ async fn fixture(with_session_store: bool, with_input_bus: bool) -> TestFixture 
         Arc::new(std::sync::Mutex::new(None)),
         with_session_store.then(|| Arc::clone(&session_store)),
         input_bus,
-        // Fixture plays the "global config = safe" scenario: bound sessions
-        // must be floored to caution.
+        // Fixture plays the "global config = safe" scenario: per-run
+        // session templates must be floored to caution.
         crate::permission::Level::Safe,
         std::path::PathBuf::from("/tmp/yomi-cron-test"),
     );
@@ -55,7 +55,7 @@ fn output_text(out: &ToolOutput) -> String {
 }
 
 #[tokio::test]
-async fn create_send_message_without_session_binds_new_session() {
+async fn create_send_message_without_session_is_per_run() {
     let f = fixture(true, false).await;
     let out = exec(
         &f.tool,
@@ -72,40 +72,43 @@ async fn create_send_message_without_session_binds_new_session() {
 
     let v: Value = serde_json::from_str(&output_text(&out)).unwrap();
     let job_id = v["job_id"].as_str().unwrap();
-    let session_id = v["session_id"].as_str().unwrap();
+    // 不绑定固定会话：输出 session_id 为 null，创建时不新建任何 session
+    assert!(v["session_id"].is_null());
     assert!(v["next_run_at"].as_str().is_some());
-
-    // New session exists, titled after the job.
-    let info = f
+    let (sessions, _) = f
         .session_store
-        .get(&SessionId::from(session_id))
+        .list(
+            None,
+            crate::storage::session::SessionListScope::All,
+            None,
+            10,
+        )
         .await
-        .unwrap()
-        .expect("session should exist");
-    assert_eq!(info.title.as_deref(), Some("daily standup"));
-    // Config says safe, but unattended cron sessions floor at caution.
-    assert_eq!(info.auto_approve_level.as_deref(), Some("caution"));
+        .unwrap();
+    assert!(sessions.is_empty());
 
-    // Persisted job references the new session concretely.
+    // 持久化的 job 保持未绑定，并捕获了 per-run 模板（config=safe → 下限 caution）
     let job = f
         .cron_store
         .get(&CronJobId::from(job_id))
         .await
         .unwrap()
         .unwrap();
-    assert!(matches!(
-        job.action,
-        CronAction::SendMessage {
-            session_id: Some(ref sid),
-            ..
-        } if sid == session_id
-    ));
+    let CronAction::SendMessage {
+        session_id: None,
+        session_template: Some(tpl),
+        ..
+    } = job.action
+    else {
+        panic!("expected per-run send_message with template");
+    };
+    assert_eq!(tpl.auto_approve_level.as_deref(), Some("caution"));
     assert_eq!(job.status, CronJobStatus::Active);
     assert!(job.next_run_at.is_some());
 }
 
 #[tokio::test]
-async fn create_send_message_new_session_follows_context_but_not_model() {
+async fn create_send_message_per_run_template_follows_context() {
     let f = fixture(true, false).await;
     // Current session carries a working dir, a project and a custom model.
     f.session_store
@@ -133,22 +136,26 @@ async fn create_send_message_new_session_follows_context_but_not_model() {
     .unwrap();
 
     let v: Value = serde_json::from_str(&output_text(&out)).unwrap();
-    let session_id = v["session_id"].as_str().unwrap();
-    let info = f
-        .session_store
-        .get(&SessionId::from(session_id))
+    let job = f
+        .cron_store
+        .get(&CronJobId::from(v["job_id"].as_str().unwrap()))
         .await
         .unwrap()
         .unwrap();
+    let CronAction::SendMessage {
+        session_template: Some(tpl),
+        ..
+    } = job.action
+    else {
+        panic!("expected template on per-run job");
+    };
 
-    // working_dir / project follow the current session...
-    assert_eq!(info.working_dir.as_deref(), Some("/repo/demo"));
+    // working_dir / project 跟随当前 session…（model 不在模板里，天然不继承）
+    assert_eq!(tpl.working_dir.as_deref(), Some("/repo/demo"));
     assert_eq!(
-        info.project_id.map(|p| p.0.to_string()).as_deref(),
+        tpl.project_id.as_ref().map(|p| p.0.to_string()).as_deref(),
         Some("proj_1")
     );
-    // ...model does not: stays unset so the default model is used.
-    assert_eq!(info.model_key, None);
 }
 
 #[tokio::test]
@@ -250,9 +257,11 @@ async fn create_validates_input() {
 }
 
 #[tokio::test]
-async fn create_send_message_without_session_store_errors() {
+async fn create_send_message_without_session_store_still_works() {
+    // per-run 模板捕获不需要 session store（没有就放弃 follow），
+    // 会话到触发时才真正创建。
     let f = fixture(false, false).await;
-    let err = exec(
+    let out = exec(
         &f.tool,
         json!({
             "action": "create",
@@ -262,8 +271,25 @@ async fn create_send_message_without_session_store_errors() {
             "content": "hi",
         }),
     )
-    .await;
-    assert!(err.is_err());
+    .await
+    .unwrap();
+    let v: Value = serde_json::from_str(&output_text(&out)).unwrap();
+    assert!(v["session_id"].is_null());
+
+    let job = f
+        .cron_store
+        .get(&CronJobId::from(v["job_id"].as_str().unwrap()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        job.action,
+        CronAction::SendMessage {
+            session_id: None,
+            session_template: Some(_),
+            ..
+        }
+    ));
 }
 
 #[tokio::test]
@@ -304,7 +330,7 @@ async fn update_pause_resume_and_schedule() {
     .unwrap();
     let v: Value = serde_json::from_str(&output_text(&out)).unwrap();
     let job_id = v["job_id"].as_str().unwrap().to_string();
-    let session_id = v["session_id"].as_str().unwrap().to_string();
+    assert!(v["session_id"].is_null());
 
     // Pause
     exec(
@@ -321,7 +347,7 @@ async fn update_pause_resume_and_schedule() {
         .unwrap();
     assert_eq!(job.status, CronJobStatus::Paused);
 
-    // Resume + change schedule and content; session binding is preserved.
+    // Resume + change schedule and content; per-run 形态（未绑定 + 模板）保持。
     exec(
         &f.tool,
         json!({"action": "update", "id": job_id, "status": "active", "schedule": "30 8 * * *", "content": "new hi"}),
@@ -340,9 +366,10 @@ async fn update_pause_resume_and_schedule() {
     assert!(matches!(
         job.action,
         CronAction::SendMessage {
-            session_id: Some(ref sid),
+            session_id: None,
             ref content,
-        } if *sid == session_id && content == "new hi"
+            session_template: Some(_),
+        } if content == "new hi"
     ));
 
     // Invalid status
@@ -611,10 +638,96 @@ async fn update_rejects_action_fields_of_wrong_type() {
 }
 
 #[tokio::test]
-async fn update_sessionless_send_message_errors_without_session_store() {
+async fn update_session_id_bind_and_unbind() {
+    let f = fixture(true, false).await;
+    let out = exec(
+        &f.tool,
+        json!({"action": "create", "name": "a", "schedule": "0 9 * * *", "type": "send_message", "content": "hi"}),
+    )
+    .await
+    .unwrap();
+    let v: Value = serde_json::from_str(&output_text(&out)).unwrap();
+    let job_id = v["job_id"].as_str().unwrap().to_string();
+
+    // 绑定到固定会话：session_id 落库，模板清掉
+    exec(
+        &f.tool,
+        json!({"action": "update", "id": job_id, "session_id": "sess-x"}),
+    )
+    .await
+    .unwrap();
+    let job = f
+        .cron_store
+        .get(&CronJobId::from(job_id.as_str()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        job.action,
+        CronAction::SendMessage {
+            session_id: Some(ref sid),
+            session_template: None,
+            ..
+        } if sid == "sess-x"
+    ));
+
+    // 显式 null 解绑：回到 per-run，现场补抓模板
+    exec(
+        &f.tool,
+        json!({"action": "update", "id": job_id, "session_id": null}),
+    )
+    .await
+    .unwrap();
+    let job = f
+        .cron_store
+        .get(&CronJobId::from(job_id.as_str()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        job.action,
+        CronAction::SendMessage {
+            session_id: None,
+            session_template: Some(_),
+            ..
+        }
+    ));
+
+    // 省略 session_id 的 action 编辑不动绑定状态（仍 per-run）
+    exec(
+        &f.tool,
+        json!({"action": "update", "id": job_id, "content": "new"}),
+    )
+    .await
+    .unwrap();
+    let job = f
+        .cron_store
+        .get(&CronJobId::from(job_id.as_str()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        job.action,
+        CronAction::SendMessage {
+            session_id: None,
+            ref content,
+            session_template: Some(_),
+        } if content == "new"
+    ));
+
+    // 非字符串非 null 的 session_id 直接报错
+    assert!(exec(
+        &f.tool,
+        json!({"action": "update", "id": job_id, "session_id": 123}),
+    )
+    .await
+    .is_err());
+}
+
+#[tokio::test]
+async fn update_sessionless_legacy_job_captures_template_without_store() {
     let f = fixture(false, false).await;
-    // A job with no bound session can only come from older or external
-    // writes (both create paths either bind or require an explicit id).
+    // 未绑定且缺模板的 job 只会来自旧版本或外部写入。
     let job = crate::cron::CronJob {
         id: CronJobId::new(),
         name: "legacy".to_string(),
@@ -622,6 +735,7 @@ async fn update_sessionless_send_message_errors_without_session_store() {
         action: CronAction::SendMessage {
             session_id: None,
             content: "hi".to_string(),
+            session_template: None,
         },
         status: CronJobStatus::Active,
         created_at: Utc::now(),
@@ -635,20 +749,61 @@ async fn update_sessionless_send_message_errors_without_session_store() {
     };
     f.cron_store.create(&job).await.unwrap();
 
-    // An action edit would leave the job sessionless and failing every
-    // fire — with no session store available it must error explicitly,
-    // mirroring the create path.
-    let err = exec(
+    // action 编辑保持 per-run，并现场补抓模板（没有 session store 也能
+    // 兜底出 caution 级默认模板，不再报错）
+    exec(
         &f.tool,
         json!({"action": "update", "id": job.id.0.to_string(), "content": "new"}),
     )
     .await
-    .unwrap_err();
-    assert!(
-        err.to_string()
-            .contains("session store not available; pass session_id explicitly"),
-        "unexpected error: {err}"
-    );
+    .unwrap();
+    let job = f.cron_store.get(&job.id).await.unwrap().unwrap();
+    assert!(matches!(
+        job.action,
+        CronAction::SendMessage {
+            session_id: None,
+            session_template: Some(ref tpl),
+            ..
+        } if tpl.auto_approve_level.as_deref() == Some("caution")
+    ));
+}
+
+#[tokio::test]
+async fn trigger_per_run_send_message_spawns_fresh_session_each_time() {
+    let f = fixture(true, true).await;
+    let out = exec(
+        &f.tool,
+        json!({"action": "create", "name": "a", "schedule": "0 9 * * *", "type": "send_message", "content": "wake up"}),
+    )
+    .await
+    .unwrap();
+    let v: Value = serde_json::from_str(&output_text(&out)).unwrap();
+    let job_id = v["job_id"].as_str().unwrap().to_string();
+
+    let mut rx = f.tool.input_bus.as_ref().unwrap().subscribe_all();
+    exec(&f.tool, json!({"action": "trigger", "id": job_id}))
+        .await
+        .unwrap();
+    exec(&f.tool, json!({"action": "trigger", "id": job_id}))
+        .await
+        .unwrap();
+
+    let (sid1, _) = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let (sid2, _) = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+
+    // 两次触发 → 两个不同的新 session，都已落库并以 job 名开头命名
+    assert_ne!(sid1.0, sid2.0);
+    for sid in [&sid1, &sid2] {
+        let info = f.session_store.get(sid).await.unwrap().unwrap();
+        assert!(info.title.as_deref().unwrap().starts_with("a · "));
+        assert_eq!(info.auto_approve_level.as_deref(), Some("caution"));
+    }
 }
 
 #[tokio::test]

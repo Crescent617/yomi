@@ -9,7 +9,8 @@ pub use scheduler::CronScheduler;
 pub use store::{CronStore, SqliteCronStore};
 pub use types::{
     CreateCronJobInput, CreateCronJobOutcome, CronAction, CronError, CronJob, CronJobId,
-    CronJobStatus, CronSchedule, UpdateCronJobInput, NEVER_EXPIRES, UNLIMITED_MAX_RUNS,
+    CronJobStatus, CronSchedule, CronSessionTemplate, UpdateCronJobInput, NEVER_EXPIRES,
+    UNLIMITED_MAX_RUNS,
 };
 pub use worker::CronWorker;
 
@@ -23,10 +24,7 @@ use std::sync::Arc;
 /// - `CronWorker` 只负责调度、超时、结果记录
 #[async_trait]
 pub trait CronExecutor: Send + Sync {
-    async fn execute_cron_action(
-        &self,
-        action: &CronAction,
-    ) -> Result<CronActionOutcome, CronError>;
+    async fn execute_cron_action(&self, job: &CronJob) -> Result<CronActionOutcome, CronError>;
 }
 
 /// Exit code a cron shell job uses to retire itself: the scheduler marks the
@@ -44,54 +42,70 @@ pub enum CronActionOutcome {
     SelfComplete,
 }
 
-/// 确保 `SendMessage` action 绑定了具体 session。
+/// 捕获 per-run session 模板：跟随调用方 session 的 `working_dir` 与
+/// `project_id`（`model_key` 不继承，保持默认模型）；权限以全局 config
+/// 为基线、下限 caution——cron session 无人值守，safe 阈值下 caution 级
+/// 工具调用永远等不到批准，任务会卡死。
 ///
-/// `session_id` 为空时新建一个专用 session（标题取 job 名），并把新 id 回填进
-/// action；之后每次触发都发往同一个 session。新 session 的权限等级 follow
-/// 全局 config（`config_auto_approve`），下限 caution——cron session 无人值守，
-/// safe 阈值下 caution 级工具调用永远等不到批准，任务会卡死。
-///
-/// `follow` 为调用方所在 session 的元信息（tool 场景）：新 session 会继承其
-/// `working_dir` 与 `project_id`；`model_key` 不继承，保持默认模型。
-/// 其他 action 原样返回。
-pub async fn ensure_action_session(
-    action: CronAction,
-    job_name: &str,
-    session_store: &Arc<dyn crate::storage::SessionStore>,
+/// 在创建 job（`session_id` 缺省）或更新 job（显式解绑）时调用。
+pub fn capture_session_template(
     follow: Option<&crate::storage::SessionInfo>,
     config_auto_approve: crate::permission::Level,
-) -> Result<CronAction, CronError> {
-    let CronAction::SendMessage {
-        session_id: None,
-        content,
-    } = action
-    else {
-        return Ok(action);
-    };
+) -> CronSessionTemplate {
+    CronSessionTemplate {
+        working_dir: follow.and_then(|i| i.working_dir.clone()),
+        project_id: follow.and_then(|i| i.project_id.clone()),
+        auto_approve_level: Some(
+            config_auto_approve
+                .max(crate::permission::Level::Caution)
+                .as_str()
+                .to_string(),
+        ),
+    }
+}
 
-    let auto_approve_level = config_auto_approve.max(crate::permission::Level::Caution);
+/// 为 `send_message` 的一次运行新建独立 session（stateless per run）。
+///
+/// 模板缺省时按最小可用配置创建（权限 caution、无 cwd/project 继承）——
+/// 只可能出现在旧数据或外部写入的 job 上。session 标题取
+/// 「job 名 · 本地时间」便于在会话列表区分各次运行；会话运行后保留（keep）。
+pub async fn spawn_run_session(
+    session_store: &Arc<dyn crate::storage::SessionStore>,
+    template: Option<&CronSessionTemplate>,
+    job_name: &str,
+) -> Result<crate::types::SessionId, CronError> {
     let id = crate::types::SessionId::new();
+    // 等级在建无人值守会话的唯一落点强制下限 caution：模板缺省、旧数据
+    // 或外部写入的非法/过低等级一律被钳到 caution 或以上。
+    let auto_approve_level = template
+        .and_then(|t| t.auto_approve_level.as_deref())
+        .and_then(|s| s.parse::<crate::permission::Level>().ok())
+        .unwrap_or(crate::permission::Level::Caution)
+        .max(crate::permission::Level::Caution)
+        .as_str()
+        .to_string();
     session_store
         .create(crate::storage::NewSession {
-            project_id: follow.and_then(|i| i.project_id.clone()),
-            working_dir: follow.and_then(|i| i.working_dir.clone()),
-            auto_approve_level: Some(auto_approve_level.as_str().to_string()),
+            project_id: template.and_then(|t| t.project_id.clone()),
+            working_dir: template.and_then(|t| t.working_dir.clone()),
+            auto_approve_level: Some(auto_approve_level),
             ..crate::storage::NewSession::new(id.clone())
         })
         .await
-        .map_err(|e| CronError::Storage(format!("failed to create session for cron job: {e}")))?;
-    if let Err(e) = session_store.update_title(&id, job_name).await {
+        .map_err(|e| CronError::Storage(format!("failed to create session for cron run: {e}")))?;
+    let title = format!(
+        "{} · {}",
+        job_name,
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+    );
+    if let Err(e) = session_store.update_title(&id, &title).await {
         // Roll back the just-created session instead of orphaning it.
         let _ = session_store.delete(&id).await;
         return Err(CronError::Storage(format!(
             "failed to title cron session: {e}"
         )));
     }
-
-    Ok(CronAction::SendMessage {
-        session_id: Some(id.0.to_string()),
-        content,
-    })
+    Ok(id)
 }
 
 /// 校验 schedule 并计算距离现在最近的触发时间。创建与更新路径共用，
@@ -102,43 +116,19 @@ pub fn next_run_from_schedule(schedule: &str) -> Result<chrono::DateTime<chrono:
         .ok_or_else(|| CronError::InvalidSchedule("schedule has no upcoming fire time".into()))
 }
 
-/// 提取 `SendMessage` action 绑定的 session（如有）。
-pub fn action_session_id(action: &CronAction) -> Option<crate::types::SessionId> {
-    match action {
-        CronAction::SendMessage {
-            session_id: Some(sid),
-            ..
-        } => Some(crate::types::SessionId::from(sid.clone())),
-        _ => None,
-    }
-}
-
-/// 回滚为 cron job 绑定后却未能成功入库的专用 session（尽力而为）。
-/// 只应传入**新绑定**的 session——用户显式提供的 session 绝不可删。
-pub async fn rollback_bound_session(
-    session_store: &Arc<dyn crate::storage::SessionStore>,
-    session: Option<crate::types::SessionId>,
-) {
-    if let Some(sid) = session {
-        let _ = session_store.delete(&sid).await;
-    }
-}
-
 /// 创建并持久化一个 cron job（ensure 语义）：name 是 job 的身份。
 /// 同名 job 已存在时不新建、不改写，直接返回它（`created = false`），
 /// 调用方始终拿到一个稳定 id——agent 跨 session 重复 create 同一个
 /// 名字不会产生重复 job。要调整已有 job 请走 update。
 ///
-/// 新 job 的路径：校验 schedule、按需绑定专用 session、计算
-/// `next_run_at`、入库。若入库失败，回滚刚绑定的 session。
+/// 新 job 的路径：校验 schedule、计算 `next_run_at`、入库。
+/// `SendMessage` 不显式绑定 session 时**不在此创建会话**——只捕获
+/// per-run 模板（见 [`capture_session_template`]），每次触发才新建
+/// 独立 session（见 [`spawn_run_session`]）。
 ///
 /// `Kernel`（RPC 路径）与 cron tool 共用，保证行为一致。
-///
-/// `config_auto_approve` 是全局 config 的自动批准阈值，新建专用 session 时
-/// 以其为基线（下限 caution，见 [`ensure_action_session`]）。
 pub async fn create_cron_job(
     store: &Arc<dyn CronStore>,
-    session_store: Option<&Arc<dyn crate::storage::SessionStore>>,
     follow: Option<&crate::storage::SessionInfo>,
     input: CreateCronJobInput,
     config_auto_approve: crate::permission::Level,
@@ -153,29 +143,30 @@ pub async fn create_cron_job(
 
     let next_run = next_run_from_schedule(&input.schedule)?;
 
-    // `SendMessage` without a session gets a dedicated new session bound now,
-    // so every fire lands in the same conversation.
-    let needs_new_session = matches!(
-        input.action,
+    // SendMessage 不绑定固定 session → per-run：准备模板，触发时才建会话。
+    // 调用方可自带模板（RPC/GUI）：working_dir/project 尊重其值，但权限
+    // 等级一律按当前 config 重算（下限 caution）——不信任调用方给的等级。
+    let action = match input.action {
         CronAction::SendMessage {
             session_id: None,
-            ..
+            content,
+            session_template,
+        } => {
+            let mut tpl = session_template
+                .unwrap_or_else(|| capture_session_template(follow, config_auto_approve));
+            tpl.auto_approve_level = Some(
+                config_auto_approve
+                    .max(crate::permission::Level::Caution)
+                    .as_str()
+                    .to_string(),
+            );
+            CronAction::SendMessage {
+                session_id: None,
+                content,
+                session_template: Some(tpl),
+            }
         }
-    );
-    let action = if needs_new_session {
-        let session_store = session_store.ok_or_else(|| {
-            CronError::Storage("session store not available; pass session_id explicitly".into())
-        })?;
-        ensure_action_session(
-            input.action,
-            &input.name,
-            session_store,
-            follow,
-            config_auto_approve,
-        )
-        .await?
-    } else {
-        input.action
+        other => other,
     };
 
     let now = chrono::Utc::now();
@@ -196,13 +187,6 @@ pub async fn create_cron_job(
     };
 
     if let Err(e) = store.create(&job).await {
-        // Best-effort rollback of the dedicated session bound above (never
-        // a user-supplied session — needs_new_session gates it).
-        if needs_new_session {
-            if let Some(session_store) = session_store {
-                rollback_bound_session(session_store, action_session_id(&job.action)).await;
-            }
-        }
         // 并发 create 撞名（唯一索引兜底）：返回竞态胜者，保持 ensure 语义。
         if matches!(e, CronError::DuplicateName(_)) {
             match store.get_by_name(&job.name).await {

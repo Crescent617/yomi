@@ -41,6 +41,7 @@ fn build_action(
         (Some(content), None) => Some(CronAction::SendMessage {
             session_id: session,
             content,
+            session_template: None,
         }),
         (None, Some(command)) => Some(CronAction::Shell {
             command,
@@ -64,8 +65,9 @@ fn action_summary(action: &CronAction) -> String {
         CronAction::SendMessage {
             session_id,
             content,
+            ..
         } => {
-            let target = session_id.as_deref().unwrap_or("dedicated session");
+            let target = session_id.as_deref().unwrap_or("fresh session per run");
             format!("msg → {} · {}", target, truncate(content, 40))
         }
         CronAction::Shell {

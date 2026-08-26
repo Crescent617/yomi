@@ -18,14 +18,18 @@ pub const NEVER_EXPIRES: DateTime<Utc> = DateTime::UNIX_EPOCH;
 pub enum CronAction {
     /// 向指定 Session 发送消息（触发 Agent 响应）
     SendMessage {
-        /// 目标 session。创建 job 时可为空：kernel 会新建一个专用 session
-        /// 并在持久化前回填，之后每次触发都发往同一个 session。
+        /// 目标 session：有值时每次触发都发往同一个会话；为 None 时
+        /// 每次触发都用 `session_template` 新建一个独立会话（运行后保留）。
         session_id: Option<String>,
         /// 消息内容，支持模板变量：
         /// - {{timestamp}} — ISO8601 时间戳
         /// - {{date}} — YYYY-MM-DD
         /// - {{time}} — HH:MM:SS
         content: String,
+        /// `session_id` 为 None 时，每次触发新建 session 所用的模板——
+        /// 在创建（或解绑）job 时捕获，见 [`crate::cron::capture_session_template`]。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_template: Option<CronSessionTemplate>,
     },
     /// 执行 Shell 命令
     Shell {
@@ -37,6 +41,22 @@ pub enum CronAction {
         endpoint: String,
         payload: serde_json::Value,
     },
+}
+
+/// per-run session 的创建模板：job 创建（或解绑）时从调用方 session 捕获，
+/// 此后每次触发按它新建独立会话。字段为 None 表示无继承来源（如 RPC 路径），
+/// 触发时按最小可用配置创建。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CronSessionTemplate {
+    /// 新建 session 的工作目录（跟随创建方 session）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
+    /// 新建 session 所属项目（跟随创建方 session）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<crate::types::ProjectId>,
+    /// 新建 session 的自动批准阈值（创建时按全局 config 快照，下限 caution）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_approve_level: Option<String>,
 }
 
 /// 定时任务状态

@@ -69,7 +69,7 @@ impl CronWorker {
     ) -> Result<CronActionOutcome, CronError> {
         let timeout = Duration::from_secs(EXECUTION_TIMEOUT_SECS);
 
-        let result = tokio::time::timeout(timeout, executor.execute_cron_action(&job.action)).await;
+        let result = tokio::time::timeout(timeout, executor.execute_cron_action(job)).await;
 
         match result {
             Ok(r) => r,

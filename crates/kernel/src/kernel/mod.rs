@@ -1759,17 +1759,11 @@ impl Kernel {
             .as_ref()
             .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
 
-        // The RPC path has no caller session to follow, so a newly bound
-        // session uses defaults.
-        let session_store = self.session_store().await;
-        let outcome = crate::cron::create_cron_job(
-            store,
-            Some(&session_store),
-            None,
-            input,
-            self.agent_shared.config_auto_approve,
-        )
-        .await?;
+        // The RPC path has no caller session to follow, so a per-run
+        // session template uses defaults.
+        let outcome =
+            crate::cron::create_cron_job(store, None, input, self.agent_shared.config_auto_approve)
+                .await?;
         // 撞名返回既有 job 时没有任何变化，无需唤醒 scheduler。
         if outcome.created {
             self.notify_cron_scheduler();
@@ -1826,54 +1820,56 @@ impl Kernel {
             );
         }
 
-        // A replacement `SendMessage` action without a session gets a
-        // dedicated new session bound, same as on create.
-        let mut bound_session: Option<crate::types::SessionId> = None;
+        // Normalize a replacement `SendMessage` action: bound jobs drop the
+        // per-run template; unbound jobs make sure they carry one。调用方
+        // 自带的模板保留其 working_dir/project，但权限等级一律按当前
+        // config 重算（下限 caution），不信任调用方给的等级。
         if let Some(action) = input.action.take() {
-            // Bail out on unknown ids before binding any session, and reuse
-            // the job's name for the new session title.
-            let Some(existing) = store.get(id).await.map_err(|e| {
-                crate::types::KernelError::storage(format!("Failed to get cron job: {e}"))
-            })?
-            else {
-                return Ok(false);
+            use crate::cron::CronAction;
+            let floor_level = || {
+                self.agent_shared
+                    .config_auto_approve
+                    .max(crate::permission::Level::Caution)
+                    .as_str()
+                    .to_string()
             };
-            let session_store = self.session_store().await;
-            let binds_new_session = matches!(
-                action,
-                crate::cron::CronAction::SendMessage {
-                    session_id: None,
+            let action = match action {
+                CronAction::SendMessage {
+                    session_id: Some(sid),
+                    content,
                     ..
+                } => CronAction::SendMessage {
+                    session_id: Some(sid),
+                    content,
+                    session_template: None,
+                },
+                CronAction::SendMessage {
+                    session_id: None,
+                    content,
+                    session_template,
+                } => {
+                    let mut tpl = session_template.unwrap_or_else(|| {
+                        crate::cron::capture_session_template(
+                            None,
+                            self.agent_shared.config_auto_approve,
+                        )
+                    });
+                    tpl.auto_approve_level = Some(floor_level());
+                    CronAction::SendMessage {
+                        session_id: None,
+                        content,
+                        session_template: Some(tpl),
+                    }
                 }
-            );
-            let action = crate::cron::ensure_action_session(
-                action,
-                &existing.name,
-                &session_store,
-                None,
-                self.agent_shared.config_auto_approve,
-            )
-            .await?;
-            if binds_new_session {
-                bound_session = crate::cron::action_session_id(&action);
-            }
+                other => other,
+            };
             input.action = Some(action);
         }
 
-        let updated = match store.update(id, &input).await {
-            Ok(updated) => updated,
-            Err(e) => {
-                crate::cron::rollback_bound_session(&self.session_store().await, bound_session)
-                    .await;
-                return Err(crate::types::KernelError::storage(format!(
-                    "Failed to update cron job: {e}"
-                )));
-            }
-        };
+        let updated = store.update(id, &input).await.map_err(|e| {
+            crate::types::KernelError::storage(format!("Failed to update cron job: {e}"))
+        })?;
         if !updated {
-            // The job vanished between the get above and this update — the
-            // freshly bound session would orphan; roll it back.
-            crate::cron::rollback_bound_session(&self.session_store().await, bound_session).await;
             return Ok(false);
         }
         self.notify_cron_scheduler();
@@ -1914,7 +1910,7 @@ impl Kernel {
 
         let result = match tokio::time::timeout(
             std::time::Duration::from_secs(crate::cron::worker::EXECUTION_TIMEOUT_SECS),
-            crate::cron::CronExecutor::execute_cron_action(self, &job.action),
+            crate::cron::CronExecutor::execute_cron_action(self, &job),
         )
         .await
         {
@@ -1936,23 +1932,27 @@ impl Kernel {
 impl crate::cron::CronExecutor for Kernel {
     async fn execute_cron_action(
         &self,
-        action: &crate::cron::CronAction,
+        job: &crate::cron::CronJob,
     ) -> std::result::Result<crate::cron::CronActionOutcome, crate::cron::CronError> {
         use crate::cron::types::{render_template, CronAction, CronError};
         use crate::cron::CronActionOutcome;
         use crate::types::{ContentBlock, SessionId};
 
-        match action {
+        match &job.action {
             CronAction::SendMessage {
                 session_id,
                 content,
+                session_template,
             } => {
-                let session_id = session_id.as_deref().ok_or_else(|| {
-                    CronError::Session(crate::types::KernelError::storage(
-                        "cron job has no session bound",
-                    ))
-                })?;
-                let sid = SessionId::from(session_id.to_string());
+                // 绑定的 job 发往固定会话；未绑定的 job 每次运行新建独立会话。
+                let sid = match session_id {
+                    Some(sid) => SessionId::from(sid.clone()),
+                    None => {
+                        let store = self.session_store().await;
+                        crate::cron::spawn_run_session(&store, session_template.as_ref(), &job.name)
+                            .await?
+                    }
+                };
                 let text = render_template(content);
                 let blocks = vec![ContentBlock::Text { text }];
                 self.send_message_inner(&sid, blocks, false)

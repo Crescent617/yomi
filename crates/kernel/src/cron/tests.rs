@@ -197,6 +197,7 @@ mod tests {
         let action = CronAction::SendMessage {
             session_id: Some("test-session".to_string()),
             content: "Hello {{date}}".to_string(),
+            session_template: None,
         };
         let json = serde_json::to_string(&action).unwrap();
         assert!(json.contains("send_message"));
@@ -204,6 +205,30 @@ mod tests {
 
         let decoded: CronAction = serde_json::from_str(&json).unwrap();
         assert_eq!(action, decoded);
+
+        // 旧格式（无 session_template 字段）向后兼容：反序列化为 None
+        let legacy = r#"{"type":"send_message","session_id":"s","content":"c"}"#;
+        let decoded: CronAction = serde_json::from_str(legacy).unwrap();
+        assert!(matches!(
+            decoded,
+            CronAction::SendMessage {
+                session_template: None,
+                ..
+            }
+        ));
+        // per-run 形态：session_id null + 模板，能完整往返
+        let per_run = CronAction::SendMessage {
+            session_id: None,
+            content: "c".to_string(),
+            session_template: Some(super::super::CronSessionTemplate {
+                working_dir: Some("/w".into()),
+                project_id: None,
+                auto_approve_level: Some("caution".into()),
+            }),
+        };
+        let json = serde_json::to_string(&per_run).unwrap();
+        let decoded: CronAction = serde_json::from_str(&json).unwrap();
+        assert_eq!(per_run, decoded);
     }
 
     #[test]
@@ -327,7 +352,6 @@ mod tests {
         let first = super::super::create_cron_job(
             &store,
             None,
-            None,
             shell_input("janitor", "0 9 * * *"),
             crate::permission::Level::Safe,
         )
@@ -338,7 +362,6 @@ mod tests {
         // 同名再 create：返回既有 job（同 id），新 schedule 不生效、不产生新行
         let second = super::super::create_cron_job(
             &store,
-            None,
             None,
             shell_input("janitor", "0 10 * * *"),
             crate::permission::Level::Safe,
@@ -353,7 +376,6 @@ mod tests {
         // 不同名：正常新建
         let third = super::super::create_cron_job(
             &store,
-            None,
             None,
             shell_input("other", "0 9 * * *"),
             crate::permission::Level::Safe,
@@ -454,7 +476,6 @@ mod tests {
         let out = super::super::create_cron_job(
             &store,
             None,
-            None,
             shell_input("janitor", "0 9 * * *"),
             crate::permission::Level::Safe,
         )
@@ -466,7 +487,7 @@ mod tests {
         assert_eq!(store.list(None, 10).await.unwrap().len(), 1);
     }
 
-    // ── ensure_action_session 权限等级：follow config，下限 caution ─────
+    // ── per-run session 模板捕获与现场建会话 ─────────────────────────
 
     async fn test_session_store() -> std::sync::Arc<dyn crate::storage::SessionStore> {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
@@ -480,36 +501,157 @@ mod tests {
         std::sync::Arc::new(crate::storage::SqliteSessionStore::new(pool))
     }
 
-    async fn bound_session_level(config_level: crate::permission::Level) -> String {
-        let session_store = test_session_store().await;
-        let action = super::super::ensure_action_session(
-            CronAction::SendMessage {
-                session_id: None,
-                content: "hi".to_string(),
-            },
-            "nightly",
-            &session_store,
-            None,
-            config_level,
-        )
-        .await
-        .unwrap();
-        let sid = super::super::action_session_id(&action).expect("session bound");
-        session_store
-            .get(&sid)
-            .await
-            .unwrap()
-            .and_then(|i| i.auto_approve_level)
-            .expect("auto_approve_level persisted")
+    fn captured_level(config_level: crate::permission::Level) -> String {
+        super::super::capture_session_template(None, config_level)
+            .auto_approve_level
+            .expect("level captured")
     }
 
     #[tokio::test]
-    async fn cron_session_level_follows_config_floored_at_caution() {
+    async fn session_template_level_follows_config_floored_at_caution() {
         use crate::permission::Level;
         // safe/caution 都被抬到 caution（无人值守，低了会卡在批准上）
-        assert_eq!(bound_session_level(Level::Safe).await, "caution");
-        assert_eq!(bound_session_level(Level::Caution).await, "caution");
+        assert_eq!(captured_level(Level::Safe), "caution");
+        assert_eq!(captured_level(Level::Caution), "caution");
         // 更高的配置原样保留
-        assert_eq!(bound_session_level(Level::Dangerous).await, "dangerous");
+        assert_eq!(captured_level(Level::Dangerous), "dangerous");
+    }
+
+    #[tokio::test]
+    async fn create_send_message_without_session_captures_template_only() {
+        let store = test_cron_store().await;
+        let follow = crate::storage::SessionInfo {
+            id: crate::types::SessionId::from("sess-caller"),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            parent_id: None,
+            title: None,
+            message_count: 0,
+            working_dir: Some("/repo/demo".into()),
+            project_id: Some(crate::types::ProjectId::from("proj_1")),
+            auto_approve_level: None,
+            model_key: Some("custom-model".into()),
+            template: None,
+        };
+
+        let out = super::super::create_cron_job(
+            &store,
+            Some(&follow),
+            super::super::CreateCronJobInput {
+                name: "nightly".to_string(),
+                schedule: "0 9 * * *".to_string(),
+                action: CronAction::SendMessage {
+                    session_id: None,
+                    content: "hi".to_string(),
+                    session_template: None,
+                },
+                max_runs: None,
+                expires_at: None,
+            },
+            crate::permission::Level::Safe,
+        )
+        .await
+        .unwrap();
+
+        // 创建时不建会话、不回填 session_id，只捕获模板：
+        // working_dir/project 跟随调用方，model 不继承，权限下限 caution。
+        let CronAction::SendMessage {
+            session_id,
+            session_template: Some(tpl),
+            ..
+        } = out.job.action
+        else {
+            panic!("expected per-run send_message with template");
+        };
+        assert_eq!(session_id, None);
+        assert_eq!(tpl.working_dir.as_deref(), Some("/repo/demo"));
+        assert_eq!(
+            tpl.project_id.as_ref().map(|p| p.0.to_string()).as_deref(),
+            Some("proj_1")
+        );
+        assert_eq!(tpl.auto_approve_level.as_deref(), Some("caution"));
+    }
+
+    #[tokio::test]
+    async fn spawn_run_session_creates_titled_session_from_template() {
+        let session_store = test_session_store().await;
+        let tpl = super::super::CronSessionTemplate {
+            working_dir: Some("/repo/demo".into()),
+            project_id: Some(crate::types::ProjectId::from("proj_1")),
+            auto_approve_level: Some("caution".into()),
+        };
+
+        let sid = super::super::spawn_run_session(&session_store, Some(&tpl), "nightly")
+            .await
+            .unwrap();
+        let info = session_store.get(&sid).await.unwrap().unwrap();
+        assert!(info.title.as_deref().unwrap().starts_with("nightly · "));
+        assert_eq!(info.working_dir.as_deref(), Some("/repo/demo"));
+        assert_eq!(info.auto_approve_level.as_deref(), Some("caution"));
+        // model 不设——跟随默认模型
+        assert_eq!(info.model_key, None);
+
+        // 两次运行 → 两个不同 session
+        let sid2 = super::super::spawn_run_session(&session_store, Some(&tpl), "nightly")
+            .await
+            .unwrap();
+        assert_ne!(sid.0, sid2.0);
+
+        // 模板缺省时兜底 caution，不继承 cwd/project
+        let sid3 = super::super::spawn_run_session(&session_store, None, "legacy")
+            .await
+            .unwrap();
+        let info3 = session_store.get(&sid3).await.unwrap().unwrap();
+        assert_eq!(info3.auto_approve_level.as_deref(), Some("caution"));
+        assert_eq!(info3.working_dir, None);
+    }
+
+    #[tokio::test]
+    async fn create_clamps_caller_supplied_template_level() {
+        use crate::permission::Level;
+
+        // RPC/GUI 调用方可以自带模板：cwd/project 尊重其值，但权限等级
+        // 一律按 config 重算（下限 caution）——调用方给低给高都不信任
+        let store = test_cron_store().await;
+        for (i, (given, config, want)) in [
+            ("safe", Level::Safe, "caution"),
+            ("dangerous", Level::Safe, "caution"),
+            ("safe", Level::Dangerous, "dangerous"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let out = super::super::create_cron_job(
+                &store,
+                None,
+                super::super::CreateCronJobInput {
+                    name: format!("injected-{i}-{given}"),
+                    schedule: "0 9 * * *".to_string(),
+                    action: CronAction::SendMessage {
+                        session_id: None,
+                        content: "hi".to_string(),
+                        session_template: Some(super::super::CronSessionTemplate {
+                            working_dir: Some("/caller".into()),
+                            project_id: None,
+                            auto_approve_level: Some(given.to_string()),
+                        }),
+                    },
+                    max_runs: None,
+                    expires_at: None,
+                },
+                config,
+            )
+            .await
+            .unwrap();
+            let CronAction::SendMessage {
+                session_template: Some(tpl),
+                ..
+            } = out.job.action
+            else {
+                panic!("expected template");
+            };
+            assert_eq!(tpl.auto_approve_level.as_deref(), Some(want));
+            assert_eq!(tpl.working_dir.as_deref(), Some("/caller"));
+        }
     }
 }

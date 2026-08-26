@@ -297,3 +297,76 @@ async fn mailbox_management_snapshot_remove_clear() {
     assert!(snap.steer.is_empty() && snap.queue.is_empty());
     kernel.stop().await;
 }
+
+/// fire 主路径（scheduler→worker→`Kernel::execute_cron_action`）：未绑定的
+/// `send_message` job 每次执行新建独立会话（权限在建会话落点被钳到
+/// caution、cwd 按模板继承）；绑定的 job 不新建任何会话。
+#[tokio::test]
+async fn cron_fire_per_run_spawns_fresh_session_and_clamps_level() {
+    use crate::cron::{CronAction, CronExecutor, CronJob, CronJobStatus, CronSessionTemplate};
+    use crate::storage::session::SessionListScope;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    config.finalize();
+    let kernel = crate::build_kernel(&config, false).await.unwrap();
+
+    let make_job = |action| CronJob {
+        id: crate::types::CronJobId::new(),
+        name: "fire-test".to_string(),
+        schedule: "0 9 * * *".to_string(),
+        action,
+        status: CronJobStatus::Active,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        next_run_at: None,
+        last_run_at: None,
+        run_count: 0,
+        max_runs: 0,
+        expires_at: crate::cron::NEVER_EXPIRES,
+        last_error: None,
+    };
+
+    // 模板故意带 safe 级 + cwd：fire 时必须被钳到 caution，cwd 继承
+    let per_run = make_job(CronAction::SendMessage {
+        session_id: None,
+        content: "wake {{date}}".to_string(),
+        session_template: Some(CronSessionTemplate {
+            working_dir: Some("/repo/demo".into()),
+            project_id: None,
+            auto_approve_level: Some("safe".into()),
+        }),
+    });
+    kernel.execute_cron_action(&per_run).await.unwrap();
+    kernel.execute_cron_action(&per_run).await.unwrap();
+
+    let store = kernel.session_store().await;
+    let (sessions, _) = store
+        .list(None, SessionListScope::All, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(sessions.len(), 2, "each fire spawns one fresh session");
+    for s in &sessions {
+        assert!(s.title.as_deref().unwrap().starts_with("fire-test · "));
+        assert_eq!(s.auto_approve_level.as_deref(), Some("caution"));
+        assert_eq!(s.working_dir.as_deref(), Some("/repo/demo"));
+    }
+
+    // 绑定的 job：消息直接投递，不新建任何会话
+    let bound = make_job(CronAction::SendMessage {
+        session_id: Some("sess-fixed".to_string()),
+        content: "hi".to_string(),
+        session_template: None,
+    });
+    kernel.execute_cron_action(&bound).await.unwrap();
+    let (sessions, _) = store
+        .list(None, SessionListScope::All, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(sessions.len(), 2, "bound fire spawns nothing");
+
+    kernel.stop().await;
+}

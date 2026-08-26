@@ -29,13 +29,14 @@ pub struct CronTool {
     /// Shared slot with the running scheduler (filled by the daemon). Mutations
     /// notify it so new/updated/deleted jobs are picked up immediately.
     scheduler: Arc<std::sync::Mutex<Option<Arc<CronScheduler>>>>,
-    /// Needed to bind a dedicated session when `send_message` omits `session_id`.
+    /// Needed to spawn per-run sessions for `send_message` jobs that omit
+    /// `session_id` (and for `trigger` of such jobs).
     session_store: Option<Arc<dyn SessionStore>>,
     /// Needed to deliver `trigger` messages.
     input_bus: Option<Arc<InputBus>>,
-    /// Global config's auto-approve threshold — baseline for dedicated
-    /// sessions bound to `send_message` jobs (floored at caution inside
-    /// [`crate::cron::ensure_action_session`]).
+    /// Global config's auto-approve threshold — baseline for per-run session
+    /// templates captured on create/unbind (floored at caution inside
+    /// [`crate::cron::capture_session_template`]).
     config_auto_approve: crate::permission::Level,
     /// Injected into shell-job children as `YOMI_DATA_DIR`.
     data_dir: std::path::PathBuf,
@@ -68,6 +69,21 @@ impl CronTool {
         }
     }
 
+    /// 加载调用方 session 的元信息，供 per-run 模板继承（create/update 共用）。
+    async fn follow_session(&self, ctx: &ToolExecCtx<'_>) -> Option<crate::storage::SessionInfo> {
+        let store = self.session_store.as_ref()?;
+        match store.get(&SessionId::from(ctx.session_id.clone())).await {
+            Ok(info) => info,
+            Err(e) => {
+                tracing::warn!(
+                    "cron: failed to load session {} for follow: {e}",
+                    ctx.session_id
+                );
+                None
+            }
+        }
+    }
+
     async fn handle_list(&self, args: &Value) -> Result<ToolOutput> {
         let status = match args["status"].as_str() {
             Some(s) => Some(
@@ -96,6 +112,7 @@ impl CronTool {
             "send_message" => CronAction::SendMessage {
                 session_id: optional_str(args, "session_id"),
                 content: required_str(args, "content")?.to_string(),
+                session_template: None,
             },
             "shell" => CronAction::Shell {
                 command: required_str(args, "command")?.to_string(),
@@ -116,25 +133,12 @@ impl CronTool {
             expires_at: parse_expires_at(args)?,
         };
 
-        // When a new session needs to be bound, it follows the current
-        // session's working_dir/project; model stays default.
-        let follow = match &self.session_store {
-            Some(store) => match store.get(&SessionId::from(ctx.session_id.clone())).await {
-                Ok(info) => info,
-                Err(e) => {
-                    tracing::warn!(
-                        "cron: failed to load session {} for follow: {e}",
-                        ctx.session_id
-                    );
-                    None
-                }
-            },
-            None => None,
-        };
+        // Per-run job 的 session 模板会跟随当前 session 的
+        // working_dir/project；model 不继承，保持默认。
+        let follow = self.follow_session(ctx).await;
 
         let outcome = crate::cron::create_cron_job(
             &self.store,
-            self.session_store.as_ref(),
             follow.as_ref(),
             input,
             self.config_auto_approve,
@@ -173,7 +177,7 @@ impl CronTool {
         ))
     }
 
-    async fn handle_update(&self, args: &Value) -> Result<ToolOutput> {
+    async fn handle_update(&self, args: &Value, ctx: &ToolExecCtx<'_>) -> Result<ToolOutput> {
         let id = parse_job_id(args)?;
 
         let mut input = crate::cron::UpdateCronJobInput::default();
@@ -220,7 +224,6 @@ impl CronTool {
             || args.get("command").is_some()
             || args.get("working_dir").is_some()
             || args.get("session_id").is_some();
-        let mut bound_session: Option<SessionId> = None;
         if wants_action_edit {
             let job = self
                 .store
@@ -243,14 +246,57 @@ impl CronTool {
                     "{key} does not apply to this job type"
                 )));
             }
-            let mut action = match job.action {
+            // 解绑或存量缺模板时要现场捕获，提前取调用方 session 元信息
+            let follow = self.follow_session(ctx).await;
+            let action = match job.action {
                 CronAction::SendMessage {
                     session_id,
                     content,
-                } => CronAction::SendMessage {
-                    session_id: optional_str(args, "session_id").or(session_id),
-                    content: args["content"].as_str().map_or(content, str::to_string),
-                },
+                    session_template,
+                } => {
+                    // session_id 三态：省略=不动；字符串=绑定固定会话；
+                    // null=解绑，每次运行新建独立会话。
+                    let session_id = match args.get("session_id") {
+                        Some(Value::Null) => None,
+                        Some(v) => Some(
+                            v.as_str()
+                                .ok_or_else(|| {
+                                    KernelError::tool(
+                                        "session_id must be a string or null".to_string(),
+                                    )
+                                })?
+                                .to_string(),
+                        ),
+                        None => session_id,
+                    };
+                    let session_template = if session_id.is_some() {
+                        // 绑定固定会话后模板无意义，清掉保持数据诚实
+                        None
+                    } else {
+                        // 未绑定就必须带模板（存量/外部数据可能缺失，现场补抓）；
+                        // 保留模板的等级也按当前 config 重新钳制（下限 caution）
+                        Some(match session_template {
+                            Some(mut tpl) => {
+                                tpl.auto_approve_level = Some(
+                                    self.config_auto_approve
+                                        .max(crate::permission::Level::Caution)
+                                        .as_str()
+                                        .to_string(),
+                                );
+                                tpl
+                            }
+                            None => crate::cron::capture_session_template(
+                                follow.as_ref(),
+                                self.config_auto_approve,
+                            ),
+                        })
+                    };
+                    CronAction::SendMessage {
+                        session_id,
+                        content: args["content"].as_str().map_or(content, str::to_string),
+                        session_template,
+                    }
+                }
                 CronAction::Shell {
                     command,
                     working_dir,
@@ -260,59 +306,21 @@ impl CronTool {
                 },
                 other @ CronAction::Internal { .. } => other,
             };
-            // A SendMessage left without a session would fail every fire
-            // ("cron job has no session bound"); bind a dedicated session
-            // now, same as the create path and the Kernel RPC update path.
-            if matches!(
-                action,
-                CronAction::SendMessage {
-                    session_id: None,
-                    ..
-                }
-            ) {
-                let Some(session_store) = &self.session_store else {
-                    return Err(KernelError::tool(
-                        "session store not available; pass session_id explicitly".to_string(),
-                    ));
-                };
-                action = crate::cron::ensure_action_session(
-                    action,
-                    &job.name,
-                    session_store,
-                    None,
-                    self.config_auto_approve,
-                )
-                .await
-                .map_err(|e| KernelError::tool(e.to_string()))?;
-                bound_session = crate::cron::action_session_id(&action);
-            }
             input.action = Some(action);
         }
 
-        let updated = match self.store.update(&id, &input).await {
-            Ok(updated) => updated,
-            Err(e) => {
-                self.rollback_bound_session(bound_session).await;
-                return Err(KernelError::tool(format!("failed to update cron job: {e}")));
-            }
-        };
+        let updated = self
+            .store
+            .update(&id, &input)
+            .await
+            .map_err(|e| KernelError::tool(format!("failed to update cron job: {e}")))?;
         if !updated {
-            // The job vanished between the get above and this update — the
-            // freshly bound session would orphan; roll it back.
-            self.rollback_bound_session(bound_session).await;
+            // The job vanished between the get above and this update.
             return Err(KernelError::tool(format!("cron job '{}' not found", id.0)));
         }
         self.notify_scheduler();
 
         Ok(ToolOutput::text(json!({ "updated": true }).to_string()))
-    }
-
-    /// Best-effort rollback of a dedicated session bound during a failed
-    /// update (the update erroring out, or the job having vanished).
-    async fn rollback_bound_session(&self, session: Option<SessionId>) {
-        if let Some(store) = &self.session_store {
-            crate::cron::rollback_bound_session(store, session).await;
-        }
     }
 
     async fn handle_delete(&self, args: &Value) -> Result<ToolOutput> {
@@ -337,7 +345,7 @@ impl CronTool {
             .map_err(|e| KernelError::tool(format!("failed to get cron job: {e}")))?
             .ok_or_else(|| KernelError::tool(format!("cron job '{}' not found", id.0)))?;
 
-        let result = self.execute_action(&job.action).await;
+        let result = self.execute_action(&job).await;
 
         // Manual triggers are not recorded: they don't consume
         // `run_count`/`max_runs` and don't touch `last_run_at`/`last_error`.
@@ -354,22 +362,37 @@ impl CronTool {
     }
 
     /// Execute a job action once (for `trigger`). Returns captured stdout.
-    async fn execute_action(&self, action: &CronAction) -> Result<String> {
-        match action {
+    async fn execute_action(&self, job: &crate::cron::CronJob) -> Result<String> {
+        match &job.action {
             CronAction::SendMessage {
                 session_id,
                 content,
+                session_template,
             } => {
-                let session_id = session_id.as_deref().ok_or_else(|| {
-                    KernelError::tool("cron job has no session bound".to_string())
-                })?;
+                // 先确认能投递，再建会话——否则无 bus 模式下每次 trigger
+                // 都泄漏一个空 session。
                 let input_bus = self.input_bus.as_ref().ok_or_else(|| {
                     KernelError::tool("trigger is not available in this mode".to_string())
                 })?;
+                // 与调度路径一致：绑定的 job 发往固定会话，未绑定的 job
+                // 本次运行新建独立会话。
+                let sid = match session_id {
+                    Some(sid) => SessionId::from(sid.clone()),
+                    None => {
+                        let store = self.session_store.as_ref().ok_or_else(|| {
+                            KernelError::tool(
+                                "trigger of a per-run job requires session store".to_string(),
+                            )
+                        })?;
+                        crate::cron::spawn_run_session(store, session_template.as_ref(), &job.name)
+                            .await
+                            .map_err(crate::types::KernelError::from)?
+                    }
+                };
                 let text = crate::cron::types::render_template(content);
                 input_bus
                     .publish(
-                        SessionId::from(session_id.to_string()),
+                        sid,
                         AgentInput::User {
                             content: vec![ContentBlock::Text { text }],
                         },
@@ -482,8 +505,8 @@ impl Tool for CronTool {
         r"Manage cron jobs: scheduled tasks that send a message to a session (waking its agent) or run a shell command on a cron schedule.
 Actions: list, create, update, delete, trigger (run once immediately, for testing).
 Schedule is a cron expression with 5 fields ('0 9 * * 1-5' = Mon–Fri 09:00) or 6 fields with leading seconds, interpreted in the machine's LOCAL timezone. Day-of-week: 0 or 7=Sunday, 1=Monday … 6=Saturday; English abbreviations (mon/tue/...) are also accepted.
-For send_message jobs: pass session_id to target an existing session (e.g. the current conversation); omit it to create a dedicated new session that every run reuses (the new session inherits the current working directory and project; model stays default).
-Use update with status active/paused to resume/pause a job; pass null (or 0 for max_runs, the zero timestamp for expires_at) to clear those limits. Job type cannot be changed after creation.
+For send_message jobs: pass session_id to deliver every run into that existing session (e.g. the current conversation); omit it so each run starts a fresh independent session (the fresh sessions inherit the creating session's working directory and project; model stays default; sessions are kept after runs).
+Use update with status active/paused to resume/pause a job; pass null (or 0 for max_runs, the zero timestamp for expires_at) to clear those limits. Job type cannot be changed after creation. On update, session_id accepts a string (rebind to a fixed session) or null (switch to fresh-session-per-run).
 Job names are unique: creating with an existing name returns the existing job unchanged (created=false) instead of failing — safe to call create without checking first; use update to modify an existing job.
 Shell jobs self-retire by exiting with code 42: the scheduler marks the job completed (honored on scheduled runs only, not on manual trigger)."
     }
@@ -530,7 +553,7 @@ Shell jobs self-retire by exiting with code 42: the scheduler marks the job comp
                 },
                 "session_id": {
                     "type": "string",
-                    "description": "Target session for send_message. Omit on create to create a dedicated new session (following the current working directory and project) reused by every run; pass the current session id to deliver messages to this conversation"
+                    "description": "Target session for send_message. Omit on create so every run starts a fresh independent session (following the current working directory and project); pass a session id (e.g. the current conversation) to deliver every run there. On update: a string rebinds; null switches to fresh-session-per-run (session template re-captured from the updating session)"
                 },
                 "command": {
                     "type": "string",
@@ -560,7 +583,7 @@ Shell jobs self-retire by exiting with code 42: the scheduler marks the job comp
         match action {
             "list" => self.handle_list(&args).await,
             "create" => self.handle_create(&args, &ctx).await,
-            "update" => self.handle_update(&args).await,
+            "update" => self.handle_update(&args, &ctx).await,
             "delete" => self.handle_delete(&args).await,
             "trigger" => self.handle_trigger(&args).await,
             _ => Err(KernelError::tool(format!("unknown action: {action}"))),

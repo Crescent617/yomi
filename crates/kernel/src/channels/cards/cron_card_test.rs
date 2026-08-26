@@ -13,6 +13,7 @@ fn make_job(name: &str, session_id: Option<&str>, status: CronJobStatus) -> Cron
         action: CronAction::SendMessage {
             session_id: session_id.map(str::to_string),
             content: "日报 {{date}}".to_string(),
+            session_template: None,
         },
         status,
         created_at: Utc::now(),
