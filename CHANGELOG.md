@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.19] - 2026-08-26
+
 ### Added
 
 - 新命令 `/workflow`（别名 `/wkfl`）：管理 `~/.yomi/workflows/` 下的可执行脚本——`/workflow ls` 列出、`/workflow run <name> [args]` 直接执行并回显输出（管理员，5 分钟超时）、`/workflow rm <name>` 删除（管理员）。
