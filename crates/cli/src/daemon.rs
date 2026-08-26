@@ -243,9 +243,45 @@ pub async fn graceful_shutdown() -> Result<()> {
     Ok(())
 }
 
-/// Restart the daemon (graceful stop + spawn).
+/// Restart the daemon.
+///
+/// Prefers the in-band wire restart ([`kernel::client::KernelApi::restart`]):
+/// the daemon then spawns its own replacement, so the new process inherits
+/// the *daemon's* environment and its original `--auto-exit` setting — not
+/// this CLI caller's environment (which for agent shell calls would be a
+/// stripped tool env). Falls back to the signal-based path when the daemon
+/// is unreachable, rejects the request, or the replacement never comes up.
 pub async fn restart_daemon() -> Result<()> {
+    /// Outer cap; the client itself polls for the replacement for up to
+    /// `CONNECT_RETRY_TIMEOUT` (10 s), so this only guards against hangs.
+    const WIRE_RESTART_TIMEOUT: Duration = Duration::from_secs(20);
+
     tracing::info!("Restarting daemon...");
+    let wire_result: Result<()> = match connect_strict().await {
+        Ok(kernel) => {
+            match tokio::time::timeout(
+                WIRE_RESTART_TIMEOUT,
+                kernel::client::KernelApi::restart(&kernel),
+            )
+            .await
+            {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => Err(anyhow::anyhow!("wire restart rejected: {e}")),
+                Err(_) => Err(anyhow::anyhow!("wire restart timed out")),
+            }
+        }
+        Err(e) => Err(e),
+    };
+    match wire_result {
+        Ok(()) => {
+            tracing::info!("Daemon restarted successfully (wire)");
+            return Ok(());
+        }
+        Err(e) => {
+            tracing::warn!("wire restart unavailable ({e}); falling back to signal-based restart");
+        }
+    }
+
     graceful_shutdown().await?;
 
     // graceful_shutdown already waits up to 3s for the PID file to disappear.
@@ -253,7 +289,7 @@ pub async fn restart_daemon() -> Result<()> {
     sleep(Duration::from_millis(200)).await;
 
     spawn_daemon_with_auto_exit(false).await?;
-    tracing::info!("Daemon restarted successfully");
+    tracing::info!("Daemon restarted successfully (signal)");
     Ok(())
 }
 

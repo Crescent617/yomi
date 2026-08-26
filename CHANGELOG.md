@@ -15,10 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- 守护进程由看门狗、launchd 或开机自启等后台方式启动时，会从登录 shell 继承完整 PATH，shell 工具与定时任务子进程不再因找不到 cargo、nix 等工具链而失败。
-
 ### Changed
+- `yomi daemon restart` 改为优先请守护进程自我重启：新进程继承守护进程自身的环境与运行参数，不再继承调用方（如 agent 会话、IDE 终端）的环境；守护进程无响应时才回退到信号式重启。
 - 定时消息任务不传 `session_id` 时，每次运行都会新建独立会话（沿用创建方的目录与项目上下文，权限不低于 caution），运行后的会话保留；不再在创建任务时绑定一个反复复用的固定会话。
 - 更新定时消息任务时，`session_id` 传字符串改为固定投递到该会话、传 `null` 改为每次运行新建会话。
 - 每次运行新建的定时任务会话标题带时间后缀（如「janitor · 2026-08-27 05:55」），便于在会话列表区分各次运行。
