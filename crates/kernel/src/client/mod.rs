@@ -839,19 +839,6 @@ impl RemoteKernel {
         }
     }
 
-    /// 回读单个 cron job（create/update 写入后的 precheck 校验用）。
-    async fn fetch_cron_job(
-        &self,
-        id: &crate::cron::CronJobId,
-    ) -> Result<Option<crate::cron::CronJob>> {
-        let result = self
-            .call(ReqMethod::GetCronJob {
-                job_id: id.0.to_string(),
-            })
-            .await?;
-        Ok(serde_json::from_value(result)?)
-    }
-
     /// Connect immediately and return a ready kernel.
     pub async fn connect(addr: &SocketAddr) -> Result<Self> {
         let stream = crate::transport::connect(addr).await?;
@@ -1995,7 +1982,7 @@ impl KernelApi for RemoteKernel {
             .map_err(|e| crate::types::KernelError::storage(format!("parse job_id: {e}")))?;
         let id = crate::cron::CronJobId::from(resp.job_id);
         if let Some(expected) = expected_precheck {
-            let stored = self.fetch_cron_job(&id).await?.and_then(|j| j.precheck);
+            let stored = self.get_cron_job(&id).await?.and_then(|j| j.precheck);
             if stored.as_deref() != Some(expected.as_str()) {
                 return Err(crate::types::KernelError::storage(format!(
                     "precheck was not stored (got {stored:?}). Either the job name already \
@@ -2058,7 +2045,7 @@ impl KernelApi for RemoteKernel {
         if updated {
             if let Some(v) = precheck_update {
                 let expected = if v.trim().is_empty() { None } else { Some(v) };
-                let stored = self.fetch_cron_job(id).await?.and_then(|j| j.precheck);
+                let stored = self.get_cron_job(id).await?.and_then(|j| j.precheck);
                 if stored != expected {
                     return Err(crate::types::KernelError::storage(format!(
                         "precheck was not stored (got {stored:?}); \
