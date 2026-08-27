@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.21] - 2026-08-27
+
 ### Fixed
 - GUI 定时任务编辑器的会话选项对齐 per-run 语义："New session" 改为 "Fresh session per run"，创建时不再预先创建 safe 权限的固定会话（无人值守任务在该权限下会卡在工具批准），改为每次运行新建独立会话并沿用所选项目目录。
 - GUI 定时任务列表为未绑定会话的任务显示 "Fresh session per run" 标识（此前为空白）。
