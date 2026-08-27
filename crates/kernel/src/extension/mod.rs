@@ -3,7 +3,7 @@
 //! 一个扩展 = 一条 wire 连接 + 一本副作用账本（本模块的 DashMap 表）。
 //! 注册即记账；连接断开 → `sweep` 逆序回收（tool 摘出、pending 全部
 //! 报错）——teardown 只有断开一条路（RAII），状态只存内存，daemon
-//! 重启后扩展重连重注册。设计文档：docs/design/extension-phase1.md。
+//! 重启后扩展重连重注册。设计文档：docs/archive/extension-phase1.md。
 
 pub mod supervisor;
 

@@ -281,7 +281,7 @@ janitor 的记忆分两层，**其他 agent 只消费第二层，不直接访问
 | agent discovery（列举活跃 agent） | 观望 | 跨 session 协作痛点出现 |
 | DAG / workflow 引擎、convoy 式重型编排 | **不做** | 反 Ralph 哲学：确定性外循环 + fresh context，不设计流程图 |
 | 模板 marketplace / 社区资产包 | 观望 | 格式已保持可移植，生态等自然出现 |
-| blackboard（多 agent 共享知识空间） | 观望，纯约定可启动 | 触发：平行 agent 需要看到彼此的**中途发现**（多角度调研 / swarm 调试 / 异步多方共推同一目标）。与现有资产的分工：tickets = 意图（要做什么），blackboard = 进行中发现（战役级、随战役过期），memory = 固化事实。形态草稿：`.yomi/blackboard/` 追加式一条目一文件、可 `superseded_by`、耐久发现晋升 memory。注意：tickets 已不是 blackboard——名字腾出就是为这个概念预留的 |
+| blackboard（多 agent 共享知识空间） | ✅ 已落地（2026-08，`blackboard` skill：`.yomi/boards/<feature>.md`） | 平行 agent 互见 task/progress/findings 的诉求已由纯约定 skill 承载，内核零改动 |
 | skill 市场 / 自有 installer | **不做** | 通用 `npx skills add`（vercel-labs/skills）已是生态事实标准：支持 72+ agent、默认 symlink 进技能目录、私有仓库走本机 git 凭证；yomi 读 `~/.agents/skills` 通用位置天然兼容 |
 
 ## 资产分发：yomi-extensions 独立仓库

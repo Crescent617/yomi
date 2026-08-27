@@ -5,7 +5,7 @@ agent over the wire protocol** (unix-socket IPC). No plugin loader, no
 lifecycle API: connect, register, serve tool calls — everything vanishes
 when you disconnect (RAII).
 
-Design details (optional): `docs/design/extension-phase1.md`.
+Design details (optional): `docs/archive/extension-phase1.md`.
 
 ## Quick start (Python)
 

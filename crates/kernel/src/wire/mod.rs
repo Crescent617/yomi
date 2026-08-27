@@ -278,7 +278,7 @@ pub enum ReqMethod {
         text: String,
     },
 
-    // ── Extension（wire 外部扩展，见 docs/design/extension-phase1.md）───
+    // ── Extension（wire 外部扩展，见 docs/archive/extension-phase1.md）───
     /// 登记一个外部能力（kind=tool）。Result: `{registration}`。
     ExtRegister {
         /// 一期只有 "tool"。
