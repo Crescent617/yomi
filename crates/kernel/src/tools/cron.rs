@@ -258,15 +258,18 @@ impl CronTool {
                     // null=解绑，每次运行新建独立会话。
                     let session_id = match args.get("session_id") {
                         Some(Value::Null) => None,
-                        Some(v) => Some(
-                            v.as_str()
-                                .ok_or_else(|| {
-                                    KernelError::tool(
-                                        "session_id must be a string or null".to_string(),
-                                    )
-                                })?
-                                .to_string(),
-                        ),
+                        Some(v) => {
+                            let s = v.as_str().ok_or_else(|| {
+                                KernelError::tool("session_id must be a string or null".to_string())
+                            })?;
+                            if s.trim().is_empty() {
+                                return Err(KernelError::tool(
+                                    "session_id must be a non-empty session id, or null to switch to fresh-session-per-run"
+                                        .to_string(),
+                                ));
+                            }
+                            Some(s.to_string())
+                        }
                         None => session_id,
                     };
                     let session_template = if session_id.is_some() {
@@ -552,8 +555,8 @@ Shell jobs self-retire by exiting with code 42: the scheduler marks the job comp
                     "description": "Message text for send_message. Supports {{timestamp}}, {{date}}, {{time}} template variables. Required for create with type=send_message"
                 },
                 "session_id": {
-                    "type": "string",
-                    "description": "Target session for send_message. Omit on create so every run starts a fresh independent session (following the current working directory and project); pass a session id (e.g. the current conversation) to deliver every run there. On update: a string rebinds; null switches to fresh-session-per-run (session template re-captured from the updating session)"
+                    "type": ["string", "null"],
+                    "description": "Target session for send_message. Omit on create so every run starts a fresh independent session (kept after the run, titled with job name + run time; inherits the caller's working directory and project; permissions follow the config default) — or pass a session id (e.g. the current conversation) to deliver every run to that same session. On update: a string rebinds; null switches to fresh-session-per-run (session template re-captured from the updating session)"
                 },
                 "command": {
                     "type": "string",
@@ -564,11 +567,11 @@ Shell jobs self-retire by exiting with code 42: the scheduler marks the job comp
                     "description": "Working directory for type=shell (default: current dir)"
                 },
                 "max_runs": {
-                    "type": "integer",
+                    "type": ["integer", "null"],
                     "description": "Stop after N runs (0 or omitted: unlimited; pass null or 0 on update to clear a limit)"
                 },
                 "expires_at": {
-                    "type": "string",
+                    "type": ["string", "null"],
                     "description": "RFC3339 expiry timestamp (default: never expires; pass null or the zero timestamp on update to clear)"
                 }
             }

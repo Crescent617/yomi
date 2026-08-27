@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- cron 工具 update 动作的 `session_id`、`max_runs`、`expires_at` 参数在 schema 中声明为可空，模型现在可以正确传 null（此前 schema 只接受字符串/数字，`"null"` 会被当成字面值绑定到名为 null 的会话）。
+- cron 工具的 `session_id` 参数描述说清了"不传则每次运行新建独立会话（跑完保留，沿用调用方目录与项目，权限跟随 config）"；update 绑定会话改为拒绝空字符串并报错提示。
+
 ## [0.9.20] - 2026-08-27
 
 ### Added

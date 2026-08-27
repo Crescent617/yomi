@@ -846,3 +846,64 @@ async fn create_with_existing_name_returns_existing_job_unchanged() {
     assert_eq!(jobs.len(), 1);
     assert_eq!(jobs[0].schedule, "0 9 * * *");
 }
+
+#[tokio::test]
+async fn schema_marks_three_state_params_nullable() {
+    // update 的三态参数（session_id/max_runs/expires_at）在 handler 里
+    // 都支持 null，但 schema 若只声明 string/integer，模型无从得知可以
+    // 传 null——只会传字符串 "null"（真实踩过：被当成字面会话 id 绑定）。
+    let f = fixture(false, false).await;
+    let schema = f.tool.schema();
+    for key in ["session_id", "max_runs", "expires_at"] {
+        let ty = &schema["properties"][key]["type"];
+        let nullable = ty
+            .as_array()
+            .is_some_and(|arr| arr.iter().any(|t| t == "null"));
+        assert!(nullable, "schema must mark {key} nullable, got {ty}");
+    }
+}
+
+#[tokio::test]
+async fn update_rejects_empty_session_id_string() {
+    // 空串不是合法会话 id，也不是"解绑"——绑定它会得到一个永远投递
+    // 失败的任务。必须报错并指出正解（null = per-run）。
+    let f = fixture(true, false).await;
+    let out = exec(
+        &f.tool,
+        json!({
+            "action": "create",
+            "name": "j",
+            "schedule": "0 9 * * *",
+            "type": "send_message",
+            "content": "hi",
+            "session_id": "sess-real",
+        }),
+    )
+    .await
+    .unwrap();
+    let v: Value = serde_json::from_str(&output_text(&out)).unwrap();
+    let job_id = v["job_id"].as_str().unwrap();
+
+    let err = exec(
+        &f.tool,
+        json!({"action": "update", "id": job_id, "session_id": ""}),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("non-empty"),
+        "error should explain the null option, got: {err}"
+    );
+
+    // 原绑定不被这次失败改写
+    let job = f
+        .cron_store
+        .get(&CronJobId::from(job_id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        job.action,
+        CronAction::SendMessage { session_id: Some(ref sid), .. } if sid == "sess-real"
+    ));
+}
