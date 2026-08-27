@@ -662,6 +662,21 @@ fn extract_arg_text(tool_name: &str, arguments: Option<&str>) -> String {
             .map(str::trim)
             .filter(|s| !s.is_empty())
     };
+    // cron 的参数是"动词 + 目标"结构（action/name/id/schedule），单一 key
+    // 摘要不出信息：组合 action · 目标(name 优先，id 兜底) · schedule。
+    if tool_name == "cron" {
+        let action = pick("action").unwrap_or_default();
+        let target = ["name", "id"]
+            .iter()
+            .find_map(|k| pick(k))
+            .unwrap_or_default();
+        let schedule = pick("schedule").unwrap_or_default();
+        return [action, target, schedule]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" · ");
+    }
     primary_arg_key(tool_name)
         .and_then(pick)
         .or_else(|| FALLBACK_ARG_KEYS.iter().find_map(|key| pick(key)))

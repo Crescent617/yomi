@@ -564,3 +564,26 @@ fn add_usage_folds_only_the_delta_for_repeated_events_of_one_response() {
     buf.add_usage(&crate::types::MessageId::new(), 500, 50);
     assert_eq!(buf.usage(), (10_500, 2_395));
 }
+
+#[test]
+fn cron_tool_summary_combines_action_target_schedule() {
+    // cron 的参数是动词结构：摘要 = action · 目标(name>id) · schedule
+    let summary_of = |args: &str| {
+        let mut buf = RunReplyBuffer::new();
+        buf.record_tool_start("t1", "cron", Some(args));
+        buf.trace_preview_lines(1).join("")
+    };
+
+    let line = summary_of(
+        r#"{"action":"create","name":"daily","schedule":"0 9 * * *","type":"send_message","content":"hi"}"#,
+    );
+    // 渲染层的 md_safe 会把 * 全角化，断言分开写
+    assert!(line.contains("create · daily · 0 9"), "got: {line}");
+
+    let line = summary_of(r#"{"action":"delete","id":"cron_01ABC"}"#);
+    assert!(line.contains("delete · cron_01ABC"), "got: {line}");
+
+    // 无目标时 action 本身也要显示（此前整行空白）
+    let line = summary_of(r#"{"action":"list"}"#);
+    assert!(line.contains("list"), "got: {line}");
+}
