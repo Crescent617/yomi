@@ -1002,10 +1002,17 @@ export async function setSessionModel(
 
 // ─── Cron / Automation ──────────────────────────────────
 
+export interface CronSessionTemplate {
+  working_dir?: string;
+  project_id?: string;
+  auto_approve_level?: string;
+}
+
 export interface CronAction {
   type: string;
-  session_id?: string;
+  session_id?: string | null;
   content?: string;
+  session_template?: CronSessionTemplate | null;
   command?: string;
   working_dir?: string;
 }

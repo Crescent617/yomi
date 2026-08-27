@@ -11,7 +11,6 @@
   } from "lucide-svelte";
   import {
     createCronJob,
-    createSession,
     errorMessage,
     getCwd,
     isNeverExpires,
@@ -21,6 +20,7 @@
     type ProjectInfo,
   } from "../../api";
   import Modal from "../ui/Modal.svelte";
+  import { buildCronAction } from "./cron-action";
 
   interface Props {
     editingJob?: CronJob;
@@ -79,7 +79,7 @@
 
     if (actionType === "send_message") {
       if (!content.trim()) errors.content = "Message content is required";
-      // 编辑模式下留空 session_id 时 kernel 会自动绑定新 session
+      // 编辑模式下留空 session_id = 每次运行新建独立会话（per-run）
       if (!editingJob && !use_new_session && !session_id.trim()) {
         errors.session_id = "Session ID is required";
       }
@@ -135,29 +135,28 @@
     if (Object.keys(validationErrors).length > 0) return;
 
     saving = true;
-    let final_session_id = session_id;
 
     try {
-      if (actionType === "send_message" && use_new_session) {
-        const project = projects.find(
-          (item) => item.id === selected_project_id,
-        );
-        const workingDir = project?.dir ?? (await getCwd());
-        final_session_id = await createSession(
-          workingDir,
-          "safe",
-          selected_project_id || undefined,
-        );
-      }
-
-      const action: Record<string, unknown> = { type: actionType };
-      if (actionType === "send_message") {
-        action.session_id = final_session_id.trim() || undefined;
-        action.content = content.trim();
-      } else {
-        action.command = command.trim();
-        action.working_dir = working_dir.trim() || undefined;
-      }
+      const project = projects.find((item) => item.id === selected_project_id);
+      // cwd 只在 per-run 路径被消费；绑定时懒取，getCwd 失败不阻塞保存
+      const needsCwd =
+        actionType === "send_message" &&
+        (use_new_session || !session_id.trim());
+      const cwd = needsCwd
+        ? await getCwd().catch(() => undefined)
+        : undefined;
+      const action = buildCronAction({
+        actionType,
+        content,
+        command,
+        shellWorkingDir: working_dir,
+        useNewSession: use_new_session,
+        sessionId: session_id,
+        project,
+        selectedProjectId: selected_project_id || undefined,
+        existingTemplate: editingJob?.action.session_template,
+        cwd,
+      });
 
       const payload: Record<string, unknown> = {
         name: name.trim(),
@@ -348,7 +347,7 @@
                     ? 'bg-background font-medium text-foreground shadow-sm'
                     : 'text-muted-foreground hover:text-foreground'}"
                 >
-                  New session
+                  Fresh session per run
                 </button>
                 <button
                   type="button"
@@ -378,7 +377,7 @@
                 type="text"
                 bind:value={session_id}
                 placeholder={editingJob
-                  ? "Leave empty to create a new session"
+                  ? "Leave empty for a fresh session per run"
                   : "Session ID"}
                 aria-invalid={attempted && Boolean(validationErrors.session_id)}
                 class="h-9 w-full rounded-md border border-input bg-background px-3 font-mono text-sm outline-none transition-shadow placeholder:text-muted-foreground focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"

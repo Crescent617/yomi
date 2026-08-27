@@ -65,7 +65,7 @@ export class AutomationStore {
       sendDesktopNotification(
         "Yomi",
         `Task "${job?.name ?? job_id}" triggered`,
-        job?.action?.session_id,
+        job?.action?.session_id ?? undefined,
       );
     } catch (e: unknown) {
       this.error = errorMessage(e);

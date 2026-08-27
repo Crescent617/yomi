@@ -359,6 +359,10 @@
                   >{job.action.session_id}</code
                 >
               </div>
+            {:else if job.action.type === "send_message"}
+              <div class="mt-2 text-xs text-muted-foreground">
+                Fresh session per run
+              </div>
             {/if}
             {#if job.action.working_dir}
               <div class="mt-2 text-xs text-muted-foreground">

@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- GUI 定时任务编辑器的会话选项对齐 per-run 语义："New session" 改为 "Fresh session per run"，创建时不再预先创建 safe 权限的固定会话（无人值守任务在该权限下会卡在工具批准），改为每次运行新建独立会话并沿用所选项目目录。
+- GUI 定时任务列表为未绑定会话的任务显示 "Fresh session per run" 标识（此前为空白）。
 - cron 工具 update 动作的 `session_id`、`max_runs`、`expires_at` 参数在 schema 中声明为可空，模型现在可以正确传 null（此前 schema 只接受字符串/数字，`"null"` 会被当成字面值绑定到名为 null 的会话）。
 - cron 工具的 `session_id` 参数描述说清了"不传则每次运行新建独立会话（跑完保留，沿用调用方目录与项目，权限跟随 config）"；update 绑定会话改为拒绝空字符串并报错提示。
 
