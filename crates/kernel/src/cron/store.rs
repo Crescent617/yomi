@@ -53,8 +53,9 @@ impl CronStore for SqliteCronStore {
         sqlx::query(
             r"INSERT INTO cron_jobs (
                 id, name, schedule, action, status, created_at, updated_at,
-                next_run_at, last_run_at, run_count, max_runs, expires_at, last_error
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                next_run_at, last_run_at, run_count, max_runs, expires_at, last_error,
+                precheck
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&*job.id.0)
         .bind(&job.name)
@@ -69,6 +70,7 @@ impl CronStore for SqliteCronStore {
         .bind(i64::from(job.max_runs))
         .bind(job.expires_at.to_rfc3339())
         .bind(job.last_error.as_ref())
+        .bind(job.precheck.as_ref())
         .execute(&self.pool)
         .await
         .map_err(|e| map_name_conflict(e, &job.name))?;
@@ -122,6 +124,10 @@ impl CronStore for SqliteCronStore {
     async fn update(&self, id: &CronJobId, input: &UpdateCronJobInput) -> Result<bool, CronError> {
         // 使用参数化查询，避免 SQL 注入。
         // max_runs = 0 / expires_at = 零时间戳即“不限制/永不过期”，直接落库。
+        // precheck 三态：None = 不变；空白串 = 清除（落 NULL，归一在 Rust 侧做，
+        // 不用 SQL TRIM——它只剥 U+0020，与 Rust trim() 的 Unicode 语义不一致）；
+        // 其他 = 原样设置。
+        let precheck = input.precheck.as_ref().filter(|s| !s.trim().is_empty());
         let result = sqlx::query(
             r"UPDATE cron_jobs SET
                 name = COALESCE(?, name),
@@ -131,6 +137,7 @@ impl CronStore for SqliteCronStore {
                 max_runs = COALESCE(?, max_runs),
                 expires_at = COALESCE(?, expires_at),
                 next_run_at = COALESCE(?, next_run_at),
+                precheck = CASE WHEN ? THEN ? ELSE precheck END,
                 updated_at = ?
             WHERE id = ?",
         )
@@ -146,6 +153,8 @@ impl CronStore for SqliteCronStore {
         .bind(input.max_runs.map(i64::from))
         .bind(input.expires_at.map(|t| t.to_rfc3339()))
         .bind(input.next_run_at.map(|t| t.to_rfc3339()))
+        .bind(input.precheck.is_some())
+        .bind(precheck)
         .bind(Utc::now().to_rfc3339())
         .bind(&*id.0)
         .execute(&self.pool)
@@ -215,6 +224,7 @@ struct CronJobRow {
     max_runs: Option<i64>,
     expires_at: Option<String>,
     last_error: Option<String>,
+    precheck: Option<String>,
 }
 
 impl From<CronJobRow> for CronJob {
@@ -260,6 +270,7 @@ impl From<CronJobRow> for CronJob {
                 .and_then(|s| parse_datetime(&s))
                 .unwrap_or(NEVER_EXPIRES),
             last_error,
+            precheck: row.precheck,
         }
     }
 }

@@ -54,6 +54,7 @@ pub async fn create_cron_job(
         action,
         max_runs,
         expires_at,
+        precheck: None,
     };
 
     let job_id = state

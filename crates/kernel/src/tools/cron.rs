@@ -131,6 +131,7 @@ impl CronTool {
             action,
             max_runs: parse_max_runs(args)?,
             expires_at: parse_expires_at(args)?,
+            precheck: optional_str(args, "precheck"),
         };
 
         // Per-run job 的 session 模板会跟随当前 session 的
@@ -217,6 +218,14 @@ impl CronTool {
                     KernelError::tool("expires_at must be an RFC3339 timestamp".to_string())
                 })?);
             }
+        }
+        // precheck 三态：省略 = 不变；null 或 "" = 清除闸门；非空字符串 = 设置。
+        if let Some(v) = args.get("precheck") {
+            input.precheck = Some(match v {
+                Value::Null => String::new(),
+                Value::String(s) if s.trim().is_empty() => String::new(),
+                _ => required_str(args, "precheck")?.to_string(),
+            });
         }
 
         // Action edits: rebuild the existing action, preserving its type.
@@ -357,6 +366,9 @@ impl CronTool {
                 let mut out = json!({ "triggered": true });
                 if !stdout.is_empty() {
                     out["stdout"] = json!(stdout);
+                }
+                if job.precheck.is_some() {
+                    out["note"] = json!("this job has a precheck gate; manual trigger bypasses it");
                 }
                 Ok(ToolOutput::text(out.to_string()))
             }
@@ -509,9 +521,10 @@ impl Tool for CronTool {
 Actions: list, create, update, delete, trigger (run once immediately, for testing).
 Schedule is a cron expression with 5 fields ('0 9 * * 1-5' = Mon–Fri 09:00) or 6 fields with leading seconds, interpreted in the machine's LOCAL timezone. Day-of-week: 0 or 7=Sunday, 1=Monday … 6=Saturday; English abbreviations (mon/tue/...) are also accepted.
 For send_message jobs: pass session_id to deliver every run into that existing session (e.g. the current conversation); omit it so each run starts a fresh independent session (the fresh sessions inherit the creating session's working directory and project; model stays default; sessions are kept after runs).
-Use update with status active/paused to resume/pause a job; pass null (or 0 for max_runs, the zero timestamp for expires_at) to clear those limits. Job type cannot be changed after creation. On update, session_id accepts a string (rebind to a fixed session) or null (switch to fresh-session-per-run).
+Use update with status active/paused to resume/pause a job; pass null (or 0 for max_runs, the zero timestamp for expires_at, '' for precheck) to clear those settings. Job type cannot be changed after creation. On update, session_id accepts a string (rebind to a fixed session) or null (switch to fresh-session-per-run).
 Job names are unique: creating with an existing name returns the existing job unchanged (created=false) instead of failing — safe to call create without checking first; use update to modify an existing job.
-Shell jobs self-retire by exiting with code 42: the scheduler marks the job completed (honored on scheduled runs only, not on manual trigger)."
+Shell jobs self-retire by exiting with code 42: the scheduler marks the job completed (honored on scheduled runs only, not on manual trigger).
+Sensor gate: optional `precheck` shell command runs before each scheduled trigger — exit 0 proceeds (stdout is appended to the message for send_message jobs), non-zero skips the run silently (not counted in run_count, no error recorded). Manual trigger bypasses the gate."
     }
 
     fn schema(&self) -> Value {
@@ -573,6 +586,10 @@ Shell jobs self-retire by exiting with code 42: the scheduler marks the job comp
                 "expires_at": {
                     "type": ["string", "null"],
                     "description": "RFC3339 expiry timestamp (default: never expires; pass null or the zero timestamp on update to clear)"
+                },
+                "precheck": {
+                    "type": ["string", "null"],
+                    "description": "Optional sensor gate: shell command run before each scheduled trigger; exit 0 proceeds (stdout appended to the message for send_message jobs), non-zero skips the run silently"
                 }
             }
         })

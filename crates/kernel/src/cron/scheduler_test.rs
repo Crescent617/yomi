@@ -137,6 +137,7 @@ fn make_job(
         max_runs: max_runs.unwrap_or(UNLIMITED_MAX_RUNS),
         last_error: None,
         expires_at: expires_at.unwrap_or(NEVER_EXPIRES),
+        precheck: None,
     }
 }
 

@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 22;
+pub const CURRENT_SCHEMA_VERSION: i64 = 23;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -293,6 +293,11 @@ const MIGRATIONS: &[Migration] = &[
                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (channel_name, chat_id)
             );"],
+    },
+    Migration {
+        version: 23,
+        name: "add_cron_precheck",
+        sqls: &[r"ALTER TABLE cron_jobs ADD COLUMN precheck TEXT;"],
     },
 ];
 

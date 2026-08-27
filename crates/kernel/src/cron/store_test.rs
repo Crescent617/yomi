@@ -15,6 +15,7 @@ fn row(max_runs: Option<i64>, expires_at: Option<&str>) -> CronJobRow {
         max_runs,
         expires_at: expires_at.map(str::to_string),
         last_error: None,
+        precheck: None,
     }
 }
 
@@ -78,6 +79,7 @@ fn shell_job(name: &str) -> CronJob {
         max_runs: UNLIMITED_MAX_RUNS,
         expires_at: NEVER_EXPIRES,
         last_error: None,
+        precheck: None,
     }
 }
 
@@ -115,4 +117,117 @@ async fn duplicate_name_update_is_duplicate_name_error() {
     };
     let err = store.update(&b.id, &input).await.unwrap_err();
     assert!(matches!(err, CronError::DuplicateName(_)));
+}
+
+#[tokio::test]
+async fn precheck_round_trip_and_three_state_update() {
+    let store = test_store().await;
+    let mut job = shell_job("sensor");
+    job.precheck = Some("test -f /tmp/new".to_string());
+    store.create(&job).await.unwrap();
+    assert_eq!(
+        store
+            .get(&job.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .precheck
+            .as_deref(),
+        Some("test -f /tmp/new")
+    );
+
+    // None = 不变
+    store
+        .update(
+            &job.id,
+            &UpdateCronJobInput {
+                name: Some("sensor2".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get(&job.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .precheck
+            .as_deref(),
+        Some("test -f /tmp/new")
+    );
+
+    // Some(cmd) = 设置
+    store
+        .update(
+            &job.id,
+            &UpdateCronJobInput {
+                precheck: Some("exit 0".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get(&job.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .precheck
+            .as_deref(),
+        Some("exit 0")
+    );
+
+    // Some("") = 清除（落 NULL）
+    store
+        .update(
+            &job.id,
+            &UpdateCronJobInput {
+                precheck: Some(String::new()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(store.get(&job.id).await.unwrap().unwrap().precheck, None);
+}
+
+#[tokio::test]
+async fn precheck_update_whitespace_only_clears() {
+    let store = test_store().await;
+    let mut job = shell_job("ws-gate");
+    job.precheck = Some("exit 0".to_string());
+    store.create(&job).await.unwrap();
+
+    // 各种 Unicode 空白（空格/tab/换行）都归一为清除——Rust 侧归一，
+    // 不依赖 SQL TRIM（它只剥 U+0020）
+    for ws in ["", "\t", "  \n\t "] {
+        store
+            .update(
+                &job.id,
+                &UpdateCronJobInput {
+                    precheck: Some("exit 0".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .update(
+                &job.id,
+                &UpdateCronJobInput {
+                    precheck: Some(ws.to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store.get(&job.id).await.unwrap().unwrap().precheck,
+            None,
+            "whitespace {ws:?} must clear the gate"
+        );
+    }
 }

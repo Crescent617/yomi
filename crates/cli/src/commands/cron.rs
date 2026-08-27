@@ -52,15 +52,17 @@ fn build_action(
     }
 }
 
+/// One-line truncation for table cells.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() > max {
+        format!("{}…", s.chars().take(max - 1).collect::<String>())
+    } else {
+        s.to_string()
+    }
+}
+
 /// One-line action summary for the list table.
 fn action_summary(action: &CronAction) -> String {
-    let truncate = |s: &str, max: usize| {
-        if s.chars().count() > max {
-            format!("{}…", s.chars().take(max - 1).collect::<String>())
-        } else {
-            s.to_string()
-        }
-    };
     match action {
         CronAction::SendMessage {
             session_id,
@@ -101,6 +103,7 @@ pub async fn create(
     work_dir: Option<String>,
     max_runs: Option<u32>,
     expires_at: Option<String>,
+    precheck: Option<String>,
 ) -> Result<()> {
     let action = build_action(message, command, session, work_dir)
         .expect("create requires --message or --command");
@@ -114,6 +117,7 @@ pub async fn create(
             action,
             max_runs,
             expires_at,
+            precheck,
         })
         .await
         .context("Failed to create cron job")?;
@@ -166,7 +170,15 @@ pub async fn list(_global: &GlobalArgs, status: Option<String>, limit: usize) ->
             job.status.as_str().to_string(),
             next_run,
             runs,
-            action_summary(&job.action),
+            {
+                let mut summary = action_summary(&job.action);
+                if let Some(ref pre) = job.precheck {
+                    summary.push_str(" [when: ");
+                    summary.push_str(&truncate(pre, 24));
+                    summary.push(']');
+                }
+                summary
+            },
         ]);
     }
     println!("{table}");
@@ -198,6 +210,7 @@ pub async fn update(
     work_dir: Option<String>,
     max_runs: Option<u32>,
     expires_at: Option<String>,
+    precheck: Option<String>,
 ) -> Result<()> {
     let action = build_action(message, command, session, work_dir);
     let expires_at = expires_at.as_deref().map(parse_expires_at).transpose()?;
@@ -213,6 +226,7 @@ pub async fn update(
                 status: None,
                 max_runs,
                 expires_at,
+                precheck,
                 next_run_at: None,
             },
         )

@@ -106,6 +106,7 @@ fn make_job(id: &str) -> CronJob {
         max_runs: UNLIMITED_MAX_RUNS,
         expires_at: NEVER_EXPIRES,
         last_error: None,
+        precheck: None,
     }
 }
 
@@ -181,4 +182,100 @@ async fn finalize_error_records_failure_and_keeps_job_active() {
         store.updates().iter().all(|u| u.status.is_none()),
         "failure must not complete the job"
     );
+}
+
+#[tokio::test]
+async fn finalize_skipped_records_nothing_and_keeps_job_active() {
+    let (store, job, scheduler) = fixture().await;
+
+    CronWorker::finalize(
+        store.clone(),
+        Some(scheduler),
+        &job,
+        Ok(CronActionOutcome::Skipped),
+    )
+    .await;
+
+    assert!(
+        store.records().is_empty(),
+        "a gate-skipped trigger is not an execution: no run_count/last_run_at"
+    );
+    assert!(
+        store.updates().iter().all(|u| u.status.is_none()),
+        "skip must not touch job status"
+    );
+}
+
+// ── precheck 闸门（execute_gated） ─────────────────────────────────────
+
+/// 记录每次被调用的 job，供闸门测试断言"放行/没放行"。
+#[derive(Default)]
+struct MockExecutor {
+    calls: Mutex<Vec<CronJob>>,
+}
+
+#[async_trait::async_trait]
+impl CronExecutor for MockExecutor {
+    async fn execute_cron_action(&self, job: &CronJob) -> Result<CronActionOutcome, CronError> {
+        self.calls.lock().unwrap().push(job.clone());
+        Ok(CronActionOutcome::Done)
+    }
+}
+
+#[tokio::test]
+async fn gate_closed_skips_without_calling_executor() {
+    let executor = MockExecutor::default();
+    let mut job = make_job("j-gate");
+    job.precheck = Some("exit 1".to_string());
+
+    let r = CronWorker::execute_gated(&executor, &job, &std::env::temp_dir())
+        .await
+        .unwrap();
+
+    assert_eq!(r, CronActionOutcome::Skipped);
+    assert!(
+        executor.calls.lock().unwrap().is_empty(),
+        "gate closed must not run the action"
+    );
+}
+
+#[tokio::test]
+async fn gate_open_appends_sensor_stdout_to_message() {
+    let executor = MockExecutor::default();
+    let mut job = make_job("j-gate");
+    job.precheck = Some("echo 3-new-papers".to_string());
+    job.action = CronAction::SendMessage {
+        session_id: Some("sess-1".to_string()),
+        content: "check inbox".to_string(),
+        session_template: None,
+    };
+
+    let r = CronWorker::execute_gated(&executor, &job, &std::env::temp_dir())
+        .await
+        .unwrap();
+
+    assert_eq!(r, CronActionOutcome::Done);
+    let calls = executor.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    let CronAction::SendMessage { content, .. } = &calls[0].action else {
+        panic!("action type must be preserved");
+    };
+    assert!(content.starts_with("check inbox"), "got: {content}");
+    assert!(content.contains("3-new-papers"), "got: {content}");
+    assert!(content.contains("Precheck output"), "got: {content}");
+}
+
+#[tokio::test]
+async fn no_precheck_passes_through_unmodified() {
+    let executor = MockExecutor::default();
+    let job = make_job("j-plain");
+
+    let r = CronWorker::execute_gated(&executor, &job, &std::env::temp_dir())
+        .await
+        .unwrap();
+
+    assert_eq!(r, CronActionOutcome::Done);
+    let calls = executor.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert!(calls[0].precheck.is_none());
 }

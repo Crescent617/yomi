@@ -250,6 +250,7 @@ mod tests {
             max_runs: 10,
             expires_at: NEVER_EXPIRES,
             last_error: None,
+            precheck: None,
         };
 
         let json = serde_json::to_string(&job).unwrap();
@@ -342,6 +343,7 @@ mod tests {
             },
             max_runs: None,
             expires_at: None,
+            precheck: None,
         }
     }
 
@@ -547,6 +549,7 @@ mod tests {
                 },
                 max_runs: None,
                 expires_at: None,
+                precheck: None,
             },
             crate::permission::Level::Safe,
         )
@@ -638,6 +641,7 @@ mod tests {
                     },
                     max_runs: None,
                     expires_at: None,
+                    precheck: None,
                 },
                 config,
             )
@@ -653,5 +657,75 @@ mod tests {
             assert_eq!(tpl.auto_approve_level.as_deref(), Some(want));
             assert_eq!(tpl.working_dir.as_deref(), Some("/caller"));
         }
+    }
+
+    // ── precheck 闸门 ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn precheck_exit_zero_fires_with_stdout() {
+        let dir = std::env::temp_dir();
+        let out = super::super::run_precheck("echo new-arrivals", None, &dir).await;
+        assert_eq!(
+            out,
+            super::super::PrecheckOutcome::Fire("new-arrivals".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn precheck_nonzero_exit_skips() {
+        let dir = std::env::temp_dir();
+        assert_eq!(
+            super::super::run_precheck("exit 1", None, &dir).await,
+            super::super::PrecheckOutcome::Skip
+        );
+    }
+
+    #[tokio::test]
+    async fn precheck_missing_command_skips_fail_closed() {
+        let dir = std::env::temp_dir();
+        assert_eq!(
+            super::super::run_precheck("definitely-not-a-command-xyz", None, &dir).await,
+            super::super::PrecheckOutcome::Skip
+        );
+    }
+
+    #[test]
+    fn append_sensor_output_wraps_and_truncates() {
+        let out = super::super::append_sensor_output("body", "reading-1\nreading-2");
+        assert!(out.starts_with("body"));
+        assert!(out.contains("Precheck output"));
+        assert!(out.contains("reading-1\nreading-2"));
+
+        let big = "x".repeat(super::super::MAX_SENSOR_STDOUT * 2);
+        let out = super::super::append_sensor_output("body", &big);
+        assert!(out.contains("[truncated]"));
+        assert!(out.len() < big.len());
+    }
+
+    #[test]
+    fn append_sensor_output_escapes_template_literals() {
+        // 读数含模板字面量时必须原样保留（转义为空格变体，render_template
+        // 只认无空格形式），否则模型看到的是被替换后的假数据。
+        let out = super::super::append_sensor_output("body", "cron runs at {{date}} {{time}}");
+        assert!(out.contains("{{ date }}"), "got: {out}");
+        assert!(out.contains("{{ time }}"), "got: {out}");
+        assert!(!out.contains("{{date}}"));
+        // 非字面量不动
+        let out = super::super::append_sensor_output("body", "{{other}} {{ date}}");
+        assert!(out.contains("{{other}}"));
+        assert!(out.contains("{{ date}}"));
+    }
+
+    #[tokio::test]
+    async fn precheck_timeout_skips_fail_closed() {
+        let dir = std::env::temp_dir();
+        let out = super::super::run_precheck_with_timeout(
+            "sleep 5",
+            None,
+            &dir,
+            std::time::Duration::from_millis(200),
+        )
+        .await;
+        assert_eq!(out, super::super::PrecheckOutcome::Skip);
     }
 }

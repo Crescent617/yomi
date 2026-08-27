@@ -24,6 +24,7 @@ fn make_job(name: &str, session_id: Option<&str>, status: CronJobStatus) -> Cron
         max_runs: UNLIMITED_MAX_RUNS,
         expires_at: NEVER_EXPIRES,
         last_error: None,
+        precheck: None,
     }
 }
 

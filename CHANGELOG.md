@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- cron 任务支持传感器闸门：创建/更新时可设 `--precheck <命令>`（cron 工具参数 `precheck`，传 `null` 或 `""` 清除）。每次到点先跑这条 shell 命令：退出码 0 才执行（send_message 任务还会把其输出附在唤醒消息里），非 0 则本次静默跳过（不算执行次数）。适合"有新数据才叫 agent"的廉价预检，手动 trigger 会绕过闸门并注明。
+
 ## [0.9.21] - 2026-08-27
 
 ### Fixed

@@ -293,6 +293,11 @@ enum CronCommands {
         /// Expire at this time, RFC 3339 (default: never)
         #[arg(long)]
         expires_at: Option<String>,
+        /// Sensor gate: run this shell command before each scheduled trigger;
+        /// exit 0 lets the run proceed (message jobs also get its stdout),
+        /// non-zero skips the run silently
+        #[arg(long)]
+        precheck: Option<String>,
     },
     /// Update a cron job (only given fields change)
     Update {
@@ -322,6 +327,9 @@ enum CronCommands {
         /// Expire at this time, RFC 3339 ("never" = back to no expiry)
         #[arg(long)]
         expires_at: Option<String>,
+        /// Sensor gate shell command (empty string clears the gate)
+        #[arg(long)]
+        precheck: Option<String>,
     },
     /// Pause a cron job
     Pause {
@@ -461,6 +469,7 @@ async fn run_cron(args: CronArgs) -> Result<()> {
             work_dir,
             max_runs,
             expires_at,
+            precheck,
         } => {
             commands::cron::create(
                 &args.global,
@@ -472,6 +481,7 @@ async fn run_cron(args: CronArgs) -> Result<()> {
                 work_dir,
                 max_runs,
                 expires_at,
+                precheck,
             )
             .await
         }
@@ -485,6 +495,7 @@ async fn run_cron(args: CronArgs) -> Result<()> {
             work_dir,
             max_runs,
             expires_at,
+            precheck,
         } => {
             commands::cron::update(
                 &args.global,
@@ -497,6 +508,7 @@ async fn run_cron(args: CronArgs) -> Result<()> {
                 work_dir,
                 max_runs,
                 expires_at,
+                precheck,
             )
             .await
         }

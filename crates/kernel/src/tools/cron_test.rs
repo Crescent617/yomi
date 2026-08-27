@@ -746,6 +746,7 @@ async fn update_sessionless_legacy_job_captures_template_without_store() {
         max_runs: 0,
         expires_at: crate::cron::NEVER_EXPIRES,
         last_error: None,
+        precheck: None,
     };
     f.cron_store.create(&job).await.unwrap();
 
@@ -906,4 +907,129 @@ async fn update_rejects_empty_session_id_string() {
         job.action,
         CronAction::SendMessage { session_id: Some(ref sid), .. } if sid == "sess-real"
     ));
+}
+
+#[tokio::test]
+async fn create_update_clear_precheck_gate() {
+    let f = fixture(true, false).await;
+    exec(
+        &f.tool,
+        json!({
+            "action": "create",
+            "name": "sensor-job",
+            "schedule": "0 9 * * *",
+            "type": "send_message",
+            "content": "check inbox",
+            "precheck": "test -f /tmp/new",
+        }),
+    )
+    .await
+    .unwrap();
+    let job = f
+        .cron_store
+        .get_by_name("sensor-job")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.precheck.as_deref(), Some("test -f /tmp/new"));
+
+    // 省略 = 不变
+    exec(
+        &f.tool,
+        json!({"action": "update", "id": job.id.0.to_string(), "content": "x"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        f.cron_store
+            .get(&job.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .precheck
+            .as_deref(),
+        Some("test -f /tmp/new")
+    );
+
+    // 字符串 = 设置
+    exec(
+        &f.tool,
+        json!({"action": "update", "id": job.id.0.to_string(), "precheck": "exit 0"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        f.cron_store
+            .get(&job.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .precheck
+            .as_deref(),
+        Some("exit 0")
+    );
+
+    // null = 清除
+    exec(
+        &f.tool,
+        json!({"action": "update", "id": job.id.0.to_string(), "precheck": null}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        f.cron_store.get(&job.id).await.unwrap().unwrap().precheck,
+        None
+    );
+
+    // 重新设置后用 "" 清除（与 null 等价，desc 承诺的契约）
+    exec(
+        &f.tool,
+        json!({"action": "update", "id": job.id.0.to_string(), "precheck": "exit 0"}),
+    )
+    .await
+    .unwrap();
+    exec(
+        &f.tool,
+        json!({"action": "update", "id": job.id.0.to_string(), "precheck": ""}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        f.cron_store.get(&job.id).await.unwrap().unwrap().precheck,
+        None
+    );
+}
+
+#[tokio::test]
+async fn trigger_of_gated_job_bypasses_gate_and_says_so() {
+    let f = fixture(true, true).await;
+    exec(
+        &f.tool,
+        json!({
+            "action": "create",
+            "name": "gated",
+            "schedule": "0 9 * * *",
+            "type": "shell",
+            "command": "echo ran",
+            "precheck": "exit 1",
+        }),
+    )
+    .await
+    .unwrap();
+    let job = f.cron_store.get_by_name("gated").await.unwrap().unwrap();
+
+    // 闸门是 exit 1（永远关闭），手动 trigger 仍应执行并注明绕过
+    let out = exec(
+        &f.tool,
+        json!({"action": "trigger", "id": job.id.0.to_string()}),
+    )
+    .await
+    .unwrap();
+    let v: Value = serde_json::from_str(&output_text(&out)).unwrap();
+    assert_eq!(v["triggered"], json!(true));
+    assert_eq!(v["stdout"], json!("ran"));
+    assert!(
+        v["note"].as_str().unwrap().contains("bypass"),
+        "gated trigger must note the bypass, got {v}"
+    );
 }

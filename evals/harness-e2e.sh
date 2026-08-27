@@ -37,6 +37,19 @@ cmd=$(sqlite3 "$DB" "SELECT action FROM cron_jobs WHERE name='e2e-eval'")
 echo "$cmd" | grep -q "echo a" && ok "cron ensure 原内容未被改写" || bad "cron ensure 原内容未被改写" "$cmd"
 "$YOMI" cron delete "$id1" >/dev/null 2>&1
 
+# ── 1.5 cron precheck 闸门：create 落库、update 清除（调度路径的门控由
+# kernel 单测覆盖，这里只验 CLI→wire→DB 的管道）──
+gid=$("$YOMI" cron create --name e2e-gate --schedule "0 9 * * *" --command "echo a" --precheck "test -f /tmp/x" | grep -o 'cron_[A-Za-z0-9]*')
+pre=$(sqlite3 "$DB" "SELECT precheck FROM cron_jobs WHERE id='$gid'")
+check "cron precheck create 落库" "test -f /tmp/x" "$pre"
+"$YOMI" cron update "$gid" --precheck "exit 0" >/dev/null 2>&1
+pre=$(sqlite3 "$DB" "SELECT precheck FROM cron_jobs WHERE id='$gid'")
+check "cron precheck update 设置" "exit 0" "$pre"
+"$YOMI" cron update "$gid" --precheck "" >/dev/null 2>&1
+pre=$(sqlite3 "$DB" "SELECT precheck IS NULL FROM cron_jobs WHERE id='$gid'")
+check "cron precheck update 空串清除" "1" "$pre"
+"$YOMI" cron delete "$gid" >/dev/null 2>&1
+
 # ── 2. 模板 spawn：verifier 落库 + VERDICT 锚点 ──
 "$YOMI" run --yolo --timeout 180 \
   "用 agent 工具 spawn 子 agent（template=verifier，wait_for_completion=true）：验收 README.md 是否存在。" \

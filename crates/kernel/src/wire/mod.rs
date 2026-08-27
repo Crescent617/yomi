@@ -211,6 +211,9 @@ pub enum ReqMethod {
         action: crate::cron::CronAction,
         max_runs: Option<u32>,
         expires_at: Option<DateTime<Utc>>,
+        /// 传感器闸门命令（可选）：每次调度触发前先执行，exit 0 才放行。
+        /// Option 字段缺失按 None 处理，老客户端兼容，无需升协议版本。
+        precheck: Option<String>,
     },
     ListCronJobs {
         status: Option<String>,
@@ -230,6 +233,8 @@ pub enum ReqMethod {
         max_runs: Option<u32>,
         /// `None` = 不变；`Some(NEVER_EXPIRES)` = 恢复永不过期
         expires_at: Option<DateTime<Utc>>,
+        /// `None` = 不变；`Some("")` = 清除闸门；`Some(cmd)` = 设置闸门
+        precheck: Option<String>,
     },
     /// Trigger a cron job manually (execute immediately, record result).
     TriggerCronJob {

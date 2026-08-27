@@ -328,6 +328,7 @@ async fn cron_fire_per_run_spawns_fresh_session_and_clamps_level() {
         max_runs: 0,
         expires_at: crate::cron::NEVER_EXPIRES,
         last_error: None,
+        precheck: None,
     };
 
     // 模板故意带 safe 级 + cwd：fire 时必须被钳到 caution，cwd 继承

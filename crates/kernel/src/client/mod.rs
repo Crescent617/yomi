@@ -839,6 +839,19 @@ impl RemoteKernel {
         }
     }
 
+    /// 回读单个 cron job（create/update 写入后的 precheck 校验用）。
+    async fn fetch_cron_job(
+        &self,
+        id: &crate::cron::CronJobId,
+    ) -> Result<Option<crate::cron::CronJob>> {
+        let result = self
+            .call(ReqMethod::GetCronJob {
+                job_id: id.0.to_string(),
+            })
+            .await?;
+        Ok(serde_json::from_value(result)?)
+    }
+
     /// Connect immediately and return a ready kernel.
     pub async fn connect(addr: &SocketAddr) -> Result<Self> {
         let stream = crate::transport::connect(addr).await?;
@@ -1961,6 +1974,13 @@ impl KernelApi for RemoteKernel {
         struct JobIdResponse {
             job_id: String,
         }
+        // 老 daemon 会静默忽略不认识的 precheck 字段——写入后回读校验，
+        // 宁可显式报错也不让"以为设上了其实没有"溜过去。
+        let expected_precheck = input
+            .precheck
+            .as_ref()
+            .filter(|s| !s.trim().is_empty())
+            .cloned();
         let result = self
             .call(ReqMethod::CreateCronJob {
                 name: input.name,
@@ -1968,11 +1988,23 @@ impl KernelApi for RemoteKernel {
                 action: input.action,
                 max_runs: input.max_runs,
                 expires_at: input.expires_at,
+                precheck: input.precheck,
             })
             .await?;
         let resp: JobIdResponse = serde_json::from_value(result)
             .map_err(|e| crate::types::KernelError::storage(format!("parse job_id: {e}")))?;
-        Ok(crate::cron::CronJobId::from(resp.job_id))
+        let id = crate::cron::CronJobId::from(resp.job_id);
+        if let Some(expected) = expected_precheck {
+            let stored = self.fetch_cron_job(&id).await?.and_then(|j| j.precheck);
+            if stored.as_deref() != Some(expected.as_str()) {
+                return Err(crate::types::KernelError::storage(format!(
+                    "precheck was not stored (got {stored:?}). Either the job name already \
+                     exists (create is idempotent and does not modify it — use update), or \
+                     the daemon is too old to support precheck (upgrade the daemon)"
+                )));
+            }
+        }
+        Ok(id)
     }
 
     async fn list_cron_jobs(
@@ -2008,6 +2040,8 @@ impl KernelApi for RemoteKernel {
         id: &crate::cron::CronJobId,
         input: crate::cron::UpdateCronJobInput,
     ) -> Result<bool> {
+        // 同 create：老 daemon 静默丢 precheck 字段时显式报错。
+        let precheck_update = input.precheck.clone();
         let result = self
             .call(ReqMethod::UpdateCronJob {
                 job_id: id.0.to_string(),
@@ -2017,9 +2051,22 @@ impl KernelApi for RemoteKernel {
                 status: input.status.map(|s| s.as_str().to_string()),
                 max_runs: input.max_runs,
                 expires_at: input.expires_at,
+                precheck: input.precheck,
             })
             .await?;
         let updated: bool = serde_json::from_value(result)?;
+        if updated {
+            if let Some(v) = precheck_update {
+                let expected = if v.trim().is_empty() { None } else { Some(v) };
+                let stored = self.fetch_cron_job(id).await?.and_then(|j| j.precheck);
+                if stored != expected {
+                    return Err(crate::types::KernelError::storage(format!(
+                        "precheck was not stored (got {stored:?}); \
+                         the daemon is too old to support precheck (upgrade the daemon)"
+                    )));
+                }
+            }
+        }
         Ok(updated)
     }
 

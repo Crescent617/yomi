@@ -118,6 +118,28 @@ pub struct CronJob {
     pub expires_at: DateTime<Utc>,
     /// 最近错误信息
     pub last_error: Option<String>,
+    /// 传感器前置闸门：每次调度触发前先执行的 shell 命令。exit 0 放行
+    /// （stdout 追加进消息体）；非 0 / 超时 / 无法执行一律静默跳过本次
+    /// 触发（不计 `run_count`、不写 `last_error`），按 schedule 等待下次。
+    /// None = 无闸门，总是触发。
+    pub precheck: Option<String>,
+}
+
+impl CronJob {
+    /// precheck 命令的工作目录：跟随 action 的语境（shell 的 `working_dir` /
+    /// `send_message` 的 session 模板 `working_dir`），都没有则 None（由
+    /// 执行侧决定落点）。
+    pub fn precheck_working_dir(&self) -> Option<&str> {
+        match &self.action {
+            CronAction::Shell { working_dir, .. } => working_dir.as_deref(),
+            CronAction::SendMessage {
+                session_template, ..
+            } => session_template
+                .as_ref()
+                .and_then(|t| t.working_dir.as_deref()),
+            CronAction::Internal { .. } => None,
+        }
+    }
 }
 
 impl CronJob {
@@ -142,6 +164,8 @@ pub struct CreateCronJobInput {
     pub max_runs: Option<u32>,
     /// `None` = 永不过期
     pub expires_at: Option<DateTime<Utc>>,
+    /// 传感器闸门命令（见 [`CronJob::precheck`]）；None = 无闸门
+    pub precheck: Option<String>,
 }
 
 /// `create_cron_job` 的结果。
@@ -165,6 +189,8 @@ pub struct UpdateCronJobInput {
     pub max_runs: Option<u32>,
     /// `None` = 不变；`Some(NEVER_EXPIRES)` = 恢复永不过期
     pub expires_at: Option<DateTime<Utc>>,
+    /// `None` = 不变；`Some("")` = 清除闸门；`Some(cmd)` = 设置闸门
+    pub precheck: Option<String>,
     /// 用于 scheduler 内部更新 `next_run_at`
     #[serde(skip)]
     pub next_run_at: Option<DateTime<Utc>>,

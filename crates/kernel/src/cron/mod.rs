@@ -5,7 +5,9 @@ mod tests;
 pub mod types;
 pub mod worker;
 
+use async_trait::async_trait;
 pub use scheduler::CronScheduler;
+use std::sync::Arc;
 pub use store::{CronStore, SqliteCronStore};
 pub use types::{
     CreateCronJobInput, CreateCronJobOutcome, CronAction, CronError, CronJob, CronJobId,
@@ -13,9 +15,6 @@ pub use types::{
     UNLIMITED_MAX_RUNS,
 };
 pub use worker::CronWorker;
-
-use async_trait::async_trait;
-use std::sync::Arc;
 
 /// 执行 cron action 的接口。`CronWorker` 只依赖此 trait，不依赖 `Kernel`。
 ///
@@ -40,6 +39,95 @@ pub enum CronActionOutcome {
     Done,
     /// Shell job 以 `SHELL_COMPLETE_EXIT_CODE` 退出——任务自我完成，不再调度。
     SelfComplete,
+    /// precheck 闸门关闭——本次触发被跳过：不记录执行（`run_count` 不增、
+    /// `last_error` 不动），按 schedule 正常等待下次。
+    Skipped,
+}
+
+/// precheck 闸门命令的固定超时（不设 knob，同 `ext_pull` 的 55s 哲学）。
+pub const PRECHECK_TIMEOUT_SECS: u64 = 60;
+
+/// precheck stdout 追加进消息体的最大字节数。
+pub const MAX_SENSOR_STDOUT: usize = 2048;
+
+/// precheck 闸门的判定结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrecheckOutcome {
+    /// exit 0——放行；附带 stdout（trim 后，可能为空）。
+    Fire(String),
+    /// 非 0 退出 / 超时 / 无法执行——fail closed，本次不触发。
+    Skip,
+}
+
+/// 执行 precheck 闸门命令（与 cron shell job 同款加固环境）。
+///
+/// 契约：exit 0 = 放行（[`PrecheckOutcome::Fire`]，stdout 供调用方注入
+/// 消息体，agent 不必重跑检查）；其他任何情况 = 静默跳过
+/// （[`PrecheckOutcome::Skip`]）。fail closed：传感器故障时不唤醒模型，
+/// 只留 tracing 日志。
+pub async fn run_precheck(
+    command: &str,
+    working_dir: Option<&str>,
+    data_dir: &std::path::Path,
+) -> PrecheckOutcome {
+    run_precheck_with_timeout(
+        command,
+        working_dir,
+        data_dir,
+        std::time::Duration::from_secs(PRECHECK_TIMEOUT_SECS),
+    )
+    .await
+}
+
+/// [`run_precheck`] 的可注入超时版本（测试用短超时覆盖超时分支）。
+async fn run_precheck_with_timeout(
+    command: &str,
+    working_dir: Option<&str>,
+    data_dir: &std::path::Path,
+    timeout: std::time::Duration,
+) -> PrecheckOutcome {
+    let mut cmd = shell_command(command, working_dir, data_dir);
+    let result = tokio::time::timeout(timeout, cmd.output()).await;
+    match result {
+        Ok(Ok(output)) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            PrecheckOutcome::Fire(stdout)
+        }
+        Ok(Ok(output)) => {
+            tracing::info!(
+                "cron precheck gate closed (exit {:?}): {}",
+                output.status.code(),
+                command
+            );
+            PrecheckOutcome::Skip
+        }
+        Ok(Err(e)) => {
+            tracing::warn!("cron precheck failed to execute ({e}): {command}");
+            PrecheckOutcome::Skip
+        }
+        Err(_) => {
+            tracing::warn!(
+                "cron precheck timed out after {}s: {command}",
+                timeout.as_secs()
+            );
+            PrecheckOutcome::Skip
+        }
+    }
+}
+
+/// 把 precheck stdout 作为传感器读数追加进 `send_message` 的消息体
+///（截断到 [`MAX_SENSOR_STDOUT`]）。围栏用四反引号：读数内含三反引号也不会
+/// 顶破代码块。读数中的 `{{date}}` 等模板字面量先转义为空格变体——
+/// 调用方随后会对整段消息做模板替换，读数内容必须原样到达模型。
+pub fn append_sensor_output(content: &str, stdout: &str) -> String {
+    let truncated =
+        crate::utils::strs::truncate_with_suffix(stdout, MAX_SENSOR_STDOUT, "... [truncated]");
+    // 与 `render_template` 的替换表保持同步（仅这三个字面量会被替换）。
+    let escaped = truncated
+        .replace("{{timestamp}}", "{{ timestamp }}")
+        .replace("{{date}}", "{{ date }}")
+        .replace("{{time}}", "{{ time }}");
+    format!("{content}\n\n---\nPrecheck output:\n````\n{escaped}\n````")
 }
 
 /// 捕获 per-run session 模板：跟随调用方 session 的 `working_dir` 与
@@ -184,6 +272,8 @@ pub async fn create_cron_job(
         max_runs: input.max_runs.unwrap_or(UNLIMITED_MAX_RUNS),
         expires_at: input.expires_at.unwrap_or(NEVER_EXPIRES),
         last_error: None,
+        // 空白串归一为"无闸门"（store 边界兜底，各入口不用各自防范）
+        precheck: input.precheck.filter(|s| !s.trim().is_empty()),
     };
 
     if let Err(e) = store.create(&job).await {
@@ -217,17 +307,13 @@ pub struct ShellOutput {
     pub self_complete: bool,
 }
 
-/// 以与 cron worker 一致的加固环境执行 shell 命令。
-/// 退出码 0 与 `SHELL_COMPLETE_EXIT_CODE` 都视为成功返回输出；
-/// 其他非零退出返回 `CronError::ShellFailed`（含 stderr）。
-///
-/// 注入 yomi 标准环境变量（见 [`crate::utils::env::inject_child_env`]；
-/// cron shell job 无会话，只有 `YOMI_DATA_DIR`）。
-pub async fn run_shell_command(
+/// 构造与 cron worker 一致的加固 shell 命令（`run_shell_command` 与
+/// `run_precheck` 共用）。
+fn shell_command(
     command: &str,
     working_dir: Option<&str>,
     data_dir: &std::path::Path,
-) -> Result<ShellOutput, CronError> {
+) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new("sh");
     cmd.arg("-c")
         .arg(command)
@@ -243,7 +329,24 @@ pub async fn run_shell_command(
         .env("PAGER", "cat")
         .env("EDITOR", "true");
     crate::utils::env::inject_child_env(&mut cmd, Some(data_dir), None);
-    let output = cmd.output().await.map_err(CronError::Io)?;
+    cmd
+}
+
+/// 以与 cron worker 一致的加固环境执行 shell 命令。
+/// 退出码 0 与 `SHELL_COMPLETE_EXIT_CODE` 都视为成功返回输出；
+/// 其他非零退出返回 `CronError::ShellFailed`（含 stderr）。
+///
+/// 注入 yomi 标准环境变量（见 [`crate::utils::env::inject_child_env`]；
+/// cron shell job 无会话，只有 `YOMI_DATA_DIR`）。
+pub async fn run_shell_command(
+    command: &str,
+    working_dir: Option<&str>,
+    data_dir: &std::path::Path,
+) -> Result<ShellOutput, CronError> {
+    let output = shell_command(command, working_dir, data_dir)
+        .output()
+        .await
+        .map_err(CronError::Io)?;
 
     let stdout = || String::from_utf8_lossy(&output.stdout).to_string();
     match output.status.code() {

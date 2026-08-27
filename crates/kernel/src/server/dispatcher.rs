@@ -473,6 +473,7 @@ impl KernelServer {
                 action,
                 max_runs,
                 expires_at,
+                precheck,
             } => {
                 let input = crate::cron::CreateCronJobInput {
                     name,
@@ -480,6 +481,7 @@ impl KernelServer {
                     action,
                     max_runs,
                     expires_at,
+                    precheck,
                 };
                 match self.kernel.create_cron_job(input).await {
                     Ok(job_id) => ok_body(JobIdResponse {
@@ -556,6 +558,7 @@ impl KernelServer {
                 status,
                 max_runs,
                 expires_at,
+                precheck,
             } => {
                 let status = status.and_then(|s| s.parse().ok());
                 let input = crate::cron::UpdateCronJobInput {
@@ -565,6 +568,7 @@ impl KernelServer {
                     status,
                     max_runs,
                     expires_at,
+                    precheck,
                     ..Default::default()
                 };
                 match self

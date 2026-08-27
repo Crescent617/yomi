@@ -159,6 +159,7 @@ impl KernelServer {
                 task_rx,
                 Arc::clone(store),
                 Some(Arc::clone(&scheduler)),
+                self.kernel.data_dir().await,
             );
             let worker_token = self.shutdown.child_token();
             tokio::spawn(async move { worker.run(worker_token).await });
