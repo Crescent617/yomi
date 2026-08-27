@@ -142,9 +142,7 @@
       const needsCwd =
         actionType === "send_message" &&
         (use_new_session || !session_id.trim());
-      const cwd = needsCwd
-        ? await getCwd().catch(() => undefined)
-        : undefined;
+      const cwd = needsCwd ? await getCwd().catch(() => undefined) : undefined;
       const action = buildCronAction({
         actionType,
         content,
