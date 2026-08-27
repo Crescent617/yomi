@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- 飞书运行状态卡现在能显示 cron 工具调用的参数摘要（如 `create · daily · 0 9 * * *`）；此前 cron 这类"动词+目标"参数结构的工具只显示工具名。
+- 飞书运行状态卡现在能显示 cron 工具调用的参数摘要（如 `create · daily · 0 9 * * *`）；键表不认识的工具改为直接显示原始参数 JSON（按长度截断），不再整行空白。
 
 ## [0.9.22] - 2026-08-27
 

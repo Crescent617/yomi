@@ -680,7 +680,9 @@ fn extract_arg_text(tool_name: &str, arguments: Option<&str>) -> String {
     primary_arg_key(tool_name)
         .and_then(pick)
         .or_else(|| FALLBACK_ARG_KEYS.iter().find_map(|key| pick(key)))
-        .unwrap_or_default()
+        // 键表全落空的不认识工具：原始 JSON 直接上卡（调用方统一扁平化
+        // 并按 ARG_SUMMARY_MAX_CHARS 截断），好过整行空白。
+        .unwrap_or(raw)
         .to_string()
 }
 

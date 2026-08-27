@@ -454,7 +454,7 @@ fn trace_arg_summary_caps_long_values() {
 }
 
 #[test]
-fn trace_arg_summary_empty_when_no_known_key_or_args() {
+fn trace_arg_summary_unknown_tool_falls_back_to_raw_json() {
     let mut buf = RunReplyBuffer::new();
     buf.record_tool_start("t1", "todo", Some(r#"{"items":[]}"#));
     buf.record_tool_start("t2", "shell", None);
@@ -465,8 +465,18 @@ fn trace_arg_summary_empty_when_no_known_key_or_args() {
     let body = v["body"]["elements"][1]["elements"][0]["content"]
         .as_str()
         .unwrap();
-    // No dangling arg bullets for summary-less tools.
-    assert!(body.lines().all(|l| !l.contains(" · `")), "body: {body}");
+    // 键表全落空的工具：原始 JSON 上卡（md_safe 不影响 JSON 结构字符）
+    let todo_line = body
+        .lines()
+        .find(|l| l.contains("**todo**"))
+        .expect("todo line");
+    assert!(todo_line.contains(r#"{"items":[]}"#), "line: {todo_line}");
+    // 无参数调用仍然空白（没有东西可显示）
+    let shell_line = body
+        .lines()
+        .find(|l| l.contains("**shell**"))
+        .expect("shell line");
+    assert!(!shell_line.contains(" · `"), "line: {shell_line}");
 }
 
 #[test]
