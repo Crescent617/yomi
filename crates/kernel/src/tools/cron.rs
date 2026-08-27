@@ -556,7 +556,7 @@ Shell jobs self-retire by exiting with code 42: the scheduler marks the job comp
                 },
                 "session_id": {
                     "type": ["string", "null"],
-                    "description": "Target session for send_message. Omit on create so every run starts a fresh independent session (kept after the run, titled with job name + run time; inherits the caller's working directory and project; permissions follow the config default) — or pass a session id (e.g. the current conversation) to deliver every run to that same session. On update: a string rebinds; null switches to fresh-session-per-run (session template re-captured from the updating session)"
+                    "description": "Target session for send_message. Omit on create so every run starts a fresh independent session, or pass a session id (e.g. the current conversation) to deliver every run to that same session; fresh sessions follow the caller's working directory and project. On update: a string rebinds; null switches to fresh-session-per-run."
                 },
                 "command": {
                     "type": "string",
