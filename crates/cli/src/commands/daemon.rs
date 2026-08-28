@@ -203,8 +203,10 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
                 println!("Token:   {token}");
                 println!("Hash:    {hash}");
                 println!();
-                println!("Daemon:  export YOMI_SOCKET_AUTH_HASH=\"{hash}\"");
-                println!("Clients: export YOMI_SOCKET_AUTH='{token}'");
+                println!("# config.toml (recommended):");
+                println!("socket_auth_hash = \"{hash}\"");
+                println!("# or env override: export YOMI_SOCKET_AUTH_HASH=\"{hash}\"");
+                println!("Clients:         export YOMI_SOCKET_AUTH='{token}'");
                 return Ok(());
             }
             let password = match password {
@@ -227,8 +229,10 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
             let hash = kernel::transport::hash_password(&password);
             println!("{hash}");
             println!();
-            println!("Daemon:  export YOMI_SOCKET_AUTH_HASH=\"{hash}\"");
-            println!("Clients: export YOMI_SOCKET_AUTH=<password>");
+            println!("# config.toml (recommended):");
+            println!("socket_auth_hash = \"{hash}\"");
+            println!("# or env override: export YOMI_SOCKET_AUTH_HASH=\"{hash}\"");
+            println!("Clients:         export YOMI_SOCKET_AUTH=<password>");
         }
     }
     Ok(())
