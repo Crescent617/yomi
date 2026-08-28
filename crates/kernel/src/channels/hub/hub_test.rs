@@ -8633,3 +8633,129 @@ async fn set_channel_watch_query_and_switch_round_trip() {
 
     cancel.cancel();
 }
+
+/// `/info` 的 watch 行接线：chat 级输出随 watch 状态变化（无 → on →
+/// paused），话题内不出现该行；watch-on 且无对话会话时 "No session yet"
+/// 分支同样带行。
+#[tokio::test]
+async fn info_command_shows_watch_line_at_chat_level() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        models: vec![crate::provider::ModelConfig {
+            name: "blackhole".into(),
+            endpoint: "http://127.0.0.1:1".into(),
+            ..Default::default()
+        }],
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+    kernel.start();
+
+    let mock = Arc::new(CardMockAdapter::new());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "app".into(),
+            app_secret: "secret".into(),
+        },
+        require_mention: true,
+        reply_in_thread: true,
+        admin_users: vec!["ou_admin".to_string()],
+        ..Default::default()
+    };
+    let msg = |text: &str| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: "ou_admin".to_string(),
+        external_message_id: Some("m1".to_string()),
+        is_mention: true,
+        raw_text: Some(text.to_string()),
+        content: vec![ContentBlock::Text {
+            text: text.to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: true,
+        create_time: Some(1000),
+        doc_comment: None,
+    };
+    let handle = |m: ChannelMessage| {
+        handle_incoming_message(
+            "mock",
+            &config,
+            &store,
+            Arc::clone(&kernel),
+            m,
+            &obs,
+            &adapter,
+        )
+    };
+
+    // 从未 watch：无该行。
+    let reply = handle(msg("/i")).await.unwrap().unwrap();
+    assert!(reply.contains("No session yet"), "{reply}");
+    assert!(!reply.contains("- **Watch**:"), "{reply}");
+
+    // watch on：行内带观察者 session id（仍无对话会话，走 No session 分支）。
+    crate::channels::hub::watch::set_channel_watch_by_name(&store, &kernel, "mock", "oc_1", true)
+        .await
+        .unwrap();
+    let reply = handle(msg("/i")).await.unwrap().unwrap();
+    assert!(reply.contains("No session yet"), "{reply}");
+    assert!(
+        reply.contains("- **Watch**: on · observer `sess_"),
+        "{reply}"
+    );
+
+    // watch off：paused，观察者 id 保留。
+    crate::channels::hub::watch::set_channel_watch_by_name(&store, &kernel, "mock", "oc_1", false)
+        .await
+        .unwrap();
+    let reply = handle(msg("/i")).await.unwrap().unwrap();
+    assert!(
+        reply.contains("- **Watch**: paused · observer `sess_"),
+        "{reply}"
+    );
+
+    // 话题内 /i：watch 是 chat 级状态，不出现该行。
+    crate::channels::hub::watch::set_channel_watch_by_name(&store, &kernel, "mock", "oc_1", true)
+        .await
+        .unwrap();
+    let mut m = msg("/i");
+    m.thread_id = Some("omt_1".to_string());
+    m.root_id = Some("omt_1".to_string());
+    let reply = handle(m).await.unwrap().unwrap();
+    assert!(reply.contains("No session yet in this thread"), "{reply}");
+    assert!(!reply.contains("- **Watch**:"), "{reply}");
+
+    // reply_in_thread=false 的 channel：顶层 /i 同样带行（watch 行不受
+    // 会话寻址方式影响）。
+    let config_no_rit = ChannelConfig {
+        reply_in_thread: false,
+        ..config
+    };
+    let handle_no_rit = |m: ChannelMessage| {
+        handle_incoming_message(
+            "mock",
+            &config_no_rit,
+            &store,
+            Arc::clone(&kernel),
+            m,
+            &obs,
+            &adapter,
+        )
+    };
+    let reply = handle_no_rit(msg("/i")).await.unwrap().unwrap();
+    assert!(
+        reply.contains("- **Watch**: on · observer `sess_"),
+        "{reply}"
+    );
+}

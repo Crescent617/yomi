@@ -558,9 +558,12 @@ pub(crate) async fn handle_incoming_message(
             // Chat-level messages show the chat session, in-thread ones
             // the thread's. Read-only: never creates a session or mapping.
             let chat_level = is_chat_level_message(&msg, rit);
-            // Watch is chat-scoped: the line appears on chat-level /info
-            // only; a read failure degrades to no line, never breaks /info.
-            let watch_line = if chat_level {
+            // Watch is chat-scoped: the line appears whenever /info runs
+            // at the chat's top level (any reply_in_thread mode), never
+            // inside a thread; a read failure degrades to no line, never
+            // breaks /info.
+            let top_level = msg.thread_id.is_none() && msg.root_id.is_none();
+            let watch_line = if top_level {
                 crate::channels::hub::watch::get_channel_watch_by_name(&store, channel_name, &chat_id)
                     .await
                     .ok()
