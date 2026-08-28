@@ -46,6 +46,23 @@ fn verifier_fails_closed_on_malformed_hash() {
 }
 
 #[test]
+fn hash_format_validation() {
+    let hex = blake3::hash(b"pw").to_hex().to_string();
+    // Canonical, bare hex, uppercase, surrounding whitespace.
+    assert!(is_valid_hash_format(&format!("blake3:{hex}")));
+    assert!(is_valid_hash_format(&hex));
+    assert!(is_valid_hash_format(&hex.to_uppercase()));
+    assert!(is_valid_hash_format(&format!("  blake3:{hex} \n")));
+    // Malformed: non-hex, wrong length, garbage, empty.
+    assert!(!is_valid_hash_format("not-a-hash"));
+    assert!(!is_valid_hash_format(&format!("blake3:g{}", &hex[1..])));
+    assert!(!is_valid_hash_format(&hex[..63]));
+    assert!(!is_valid_hash_format(&format!("{hex}00")));
+    assert!(!is_valid_hash_format(""));
+    assert!(!is_valid_hash_format("blake3:"));
+}
+
+#[test]
 fn bearer_token_extraction() {
     assert_eq!(bearer_token("Bearer abc"), Some("abc"));
     // RFC 6750: scheme is case-insensitive.

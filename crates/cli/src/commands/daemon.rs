@@ -74,8 +74,20 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
             let addr = crate::daemon::socket_addr();
 
             // Socket auth (ws/wss only): enabled when YOMI_SOCKET_AUTH_HASH is set.
-            let auth =
-                kernel::transport::socket_auth_hash().map(|h| kernel::transport::auth_verifier(&h));
+            // A malformed hash would start fine yet reject every client
+            // (fail-closed verifier) with no diagnosable signal — validate
+            // the format up front and fail fast instead.
+            let auth = match kernel::transport::socket_auth_hash() {
+                Some(hash) => {
+                    anyhow::ensure!(
+                        kernel::transport::is_valid_hash_format(&hash),
+                        "invalid YOMI_SOCKET_AUTH_HASH format: expected `blake3:<64 hex chars>` \
+                         (generate one with `yomi daemon auth-hash`)"
+                    );
+                    Some(kernel::transport::auth_verifier(&hash))
+                }
+                None => None,
+            };
             if auth.is_some()
                 && matches!(
                     addr,

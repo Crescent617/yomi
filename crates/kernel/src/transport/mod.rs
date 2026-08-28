@@ -11,7 +11,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{header, HeaderValue, StatusCode};
 
 mod auth;
-pub use auth::{auth_verifier, generate_token, hash_password, AuthVerifier};
+pub use auth::{auth_verifier, generate_token, hash_password, is_valid_hash_format, AuthVerifier};
 
 /// Convert a tungstenite error into an `io::Error`, preserving
 /// underlying I/O errors (connection refused, DNS failure, TLS …).
@@ -30,7 +30,8 @@ fn map_client_handshake_err(e: tokio_tungstenite::tungstenite::Error) -> io::Err
         if resp.status() == StatusCode::UNAUTHORIZED {
             return io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "socket auth failed: missing or invalid YOMI_SOCKET_AUTH",
+                "socket auth failed: missing or invalid token \
+                 (set YOMI_SOCKET_AUTH or pass an explicit token)",
             );
         }
     }
@@ -355,12 +356,13 @@ pub enum Listener {
     },
 }
 
-/// How long a failed ws handshake is held before the error is returned
-/// when socket auth is enabled. Failed handshakes serialize through the
-/// accept loop, so this caps *global* online brute-force throughput at
-/// ~1/delay regardless of attacker parallelism. Trade-off: under a flood,
-/// legitimate connections queue behind the delay — acceptable for a
-/// personal daemon.
+/// Server-side throttle applied after a failed ws handshake when socket
+/// auth is enabled. The 401 is sent to the client immediately; this
+/// sleep runs afterwards, inside the serialized accept loop, delaying
+/// the *next* accept — so it caps *global* online brute-force throughput
+/// at ~1/delay regardless of attacker parallelism. Trade-off: under a
+/// flood, legitimate connections queue behind the delay — acceptable for
+/// a personal daemon.
 const WS_HANDSHAKE_FAILURE_DELAY: Duration = Duration::from_millis(300);
 
 impl Listener {
@@ -406,7 +408,7 @@ impl Listener {
                                     .status(StatusCode::UNAUTHORIZED)
                                     .body(Some(
                                         "missing or invalid socket auth token \
-                                         (set YOMI_SOCKET_AUTH)"
+                                         (set YOMI_SOCKET_AUTH or pass an explicit token)"
                                             .to_string(),
                                     ))
                                     .expect("static 401 response");

@@ -35,6 +35,14 @@ type EventRouterMap = dashmap::DashMap<String, broadcast::Sender<Envelope>>;
 /// `subscribe_all_events`; session IDs are ULIDs, so "*" never collides).
 const ALL_EVENTS_ROUTER_KEY: &str = "*";
 
+/// Resolve the effective socket auth token for a connect: a non-empty
+/// explicit token wins over the `YOMI_SOCKET_AUTH` env value; a missing
+/// or whitespace-only explicit token falls back to the env value (the
+/// GUI submits the mask field empty when the user leaves it blank).
+fn resolve_auth_token(explicit: Option<String>, env_token: Option<String>) -> Option<String> {
+    explicit.filter(|t| !t.trim().is_empty()).or(env_token)
+}
+
 struct Connection {
     write_half: Arc<Mutex<WriteHalf>>,
     pending: Arc<PendingMap>,
@@ -52,8 +60,8 @@ struct Connection {
 pub struct RemoteKernel {
     addr: SocketAddr,
     /// Socket auth token sent on ws/wss connects (and reconnects).
-    /// Defaults to `YOMI_SOCKET_AUTH`; override via [`Self::with_auth_token`]
-    /// or [`Self::connect_with_auth`].
+    /// Resolved from `YOMI_SOCKET_AUTH` unless an explicit token was
+    /// passed to [`Self::connect_with_auth`].
     auth_token: Option<String>,
     req_id: RequestIdGenerator,
     connection: Arc<Mutex<Option<Connection>>>,
@@ -83,23 +91,20 @@ impl RemoteKernel {
     ///
     /// Uses the socket auth token from `YOMI_SOCKET_AUTH`, if set.
     pub async fn connect(addr: &SocketAddr) -> Result<Self> {
-        Self::connect_with_auth(addr, crate::transport::socket_auth_token()).await
+        Self::connect_with_auth(addr, None).await
     }
 
-    /// Connect immediately with an explicit socket auth token. The token
-    /// overrides `YOMI_SOCKET_AUTH` and is reused on reconnects.
+    /// Connect immediately with an explicit socket auth token. A
+    /// non-empty token overrides `YOMI_SOCKET_AUTH`; when absent or
+    /// blank, the env value is used instead. The resolved token is
+    /// reused on reconnects.
     pub async fn connect_with_auth(addr: &SocketAddr, auth_token: Option<String>) -> Result<Self> {
+        let auth_token = resolve_auth_token(auth_token, crate::transport::socket_auth_token());
         let stream = crate::transport::connect_with_token(addr, auth_token.as_deref()).await?;
         let mut this = Self::from_stream(stream, addr).await?;
         this.auth_token = auth_token;
         this.validate_wire_protocol().await?;
         Ok(this)
-    }
-
-    /// Override the socket auth token used on (re)connects.
-    pub fn with_auth_token(mut self, auth_token: Option<String>) -> Self {
-        self.auth_token = auth_token;
-        self
     }
 
     /// Wrap an already-connected stream.
@@ -316,6 +321,15 @@ impl RemoteKernel {
             match crate::transport::connect_with_token(&self.addr, self.auth_token.as_deref()).await
             {
                 Ok(s) => break s,
+                // Auth rejection (missing/wrong token) is deterministic:
+                // retrying would only delay the user-facing error, and
+                // each failed handshake costs the daemon's serialized
+                // accept loop a throttling delay.
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                    return Err(
+                        SessionError::Other(format!("Failed to connect to daemon: {e}")).into(),
+                    );
+                }
                 Err(_) if start.elapsed() < CONNECT_RETRY_TIMEOUT => {
                     tokio::time::sleep(CONNECT_RETRY_INTERVAL).await;
                 }
@@ -559,3 +573,7 @@ impl RemoteKernel {
         Ok(crate::comms::EventBusSubscriber::from_receiver(mpsc_rx))
     }
 }
+
+#[cfg(test)]
+#[path = "mod_test.rs"]
+mod tests;

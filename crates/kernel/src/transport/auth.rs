@@ -21,6 +21,20 @@ pub fn hash_password(password: &str) -> String {
     format!("blake3:{}", blake3::hash(password.as_bytes()).to_hex())
 }
 
+/// Whether a configured hash string has the expected format: an optional
+/// `blake3:` prefix followed by a 64-char hex digest (either case;
+/// surrounding whitespace tolerated). Daemon startup should reject
+/// anything else up front — [`auth_verifier`] fails closed on malformed
+/// input, which would silently lock every client out.
+pub fn is_valid_hash_format(configured_hash: &str) -> bool {
+    let hex = configured_hash
+        .trim()
+        .strip_prefix("blake3:")
+        .unwrap_or(configured_hash.trim())
+        .trim();
+    hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 /// Generate a random socket auth token (128-bit, CSPRNG via ulid).
 /// Pair it with [`hash_password`] — see `yomi daemon auth-hash --generate`.
 pub fn generate_token() -> String {
