@@ -5898,18 +5898,35 @@ async fn gate_unwatched_command_without_mention_stays_not_addressed() {
 }
 
 /// `/watch on|off`: admin-gated mutations, chat-scoped refusals, eager
-/// create on on, kind flip on off, and resume on re-on.
+/// create on on, kind flip + mailbox drain on off, and resume on re-on.
 #[tokio::test]
 async fn watch_command_query_set_off() {
     let (_pool, store) = create_test_pool().await;
     let store: Arc<dyn ChannelStore> = store;
+    // Blackhole model: the observer run hangs on the model call, so a
+    // steer stays pending in the mailbox until `/watch off` drains it
+    // (deterministic — same trick as the /mailbox test).
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((s, _)) = listener.accept().await {
+            held.push(s);
+        }
+    });
     let tmp = tempfile::TempDir::new().unwrap();
     let mut kconfig = crate::config::Config {
         data_dir: tmp.path().to_path_buf(),
+        models: vec![crate::provider::ModelConfig {
+            name: "blackhole".into(),
+            endpoint: format!("http://{addr}"),
+            ..Default::default()
+        }],
         ..crate::config::Config::default()
     };
     kconfig.finalize();
     let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+    kernel.start();
 
     let mock = Arc::new(MockAdapter::new("mock"));
     let adapter: Arc<dyn PlatformAdapter> = mock.clone();
@@ -5985,6 +6002,47 @@ async fn watch_command_query_set_off() {
         Some(MappingKind::Watch)
     );
 
+    // Occupy the observer with a hung run, then steer a mirrored note
+    // into its mailbox — the pending steer is what `/watch off` must
+    // drain (mirrored messages must not wake the observer after off).
+    let watch_sid = store
+        .find_mapping("mock", "watch:oc_1")
+        .await
+        .unwrap()
+        .expect("watch on created the observer session");
+    let text = |t: &str| {
+        vec![ContentBlock::Text {
+            text: t.to_string(),
+        }]
+    };
+    kernel
+        .send_message(&watch_sid, text("blocker"))
+        .await
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let phase = kernel.get_session(&watch_sid).await.unwrap().phase;
+        if phase == "streaming" {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "observer run never blocked on the model"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    kernel.send_steer(&watch_sid, text("mirrored note")).await;
+    loop {
+        if kernel.mailbox_snapshot(&watch_sid).await.steer.len() == 1 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "steer never landed in the mailbox"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
     // Admin turns it off: the row flips to watch_off, session kept.
     let reply = handle(msg("ou_admin", "/watch off", None, true))
         .await
@@ -5995,6 +6053,16 @@ async fn watch_command_query_set_off() {
         Some(MappingKind::WatchPaused)
     );
     let paused_sid = store.find_mapping("mock", "watch:oc_1").await.unwrap();
+    assert_eq!(
+        paused_sid,
+        Some(watch_sid.clone()),
+        "off keeps the same observer session"
+    );
+    let snap = kernel.mailbox_snapshot(&watch_sid).await;
+    assert!(
+        snap.steer.is_empty() && snap.queue.is_empty(),
+        "watch off must drain the observer mailbox: {snap:?}"
+    );
 
     // Re-on resumes the SAME observer session (kind flips back).
     let reply = handle(msg("ou_admin", "/watch on", None, true))
@@ -6131,8 +6199,10 @@ async fn watch_mirror_integration() {
     // Dangling mapping self-heal: delete the session out from under the
     // mapping; the next mirror must drop the stale row and recreate.
     kernel.delete_session(&sid).await.unwrap();
-    // delete_session cascades mappings — re-dangle manually to exercise
-    // the mirror's self-heal against a truly stale row.
+    // This kernel has no channel hub (no channels configured), so the
+    // delete cascades nothing and the stale row genuinely survives;
+    // re-save to keep the setup explicit either way. The cascade path
+    // itself is covered by `delete_session_cascades_channel_mappings`.
     store
         .save_mapping("mock", "watch:oc_1", &sid, "oc_1", None, MappingKind::Watch)
         .await
@@ -6145,6 +6215,58 @@ async fn watch_mirror_integration() {
         .unwrap()
         .expect("self-heal must recreate the mapping");
     assert_ne!(new_sid, sid, "a fresh observer replaces the dead one");
+}
+
+/// `Kernel::delete_session` cascades the channel routing rows with the
+/// session (治本): a deleted observer leaves no dangling `watch:{chat}`
+/// mapping routing mirrors into the void. Covers the
+/// `delete_by_sessions` store path — `watch_mirror_integration` cannot
+/// (its kernel has no hub, so it re-dangles rows manually).
+#[tokio::test]
+async fn delete_session_cascades_channel_mappings() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    // channels 非空才有 hub（级联的执行者）；禁用态不启动真实通道。
+    kconfig.channels.push(ChannelConfig {
+        name: "mock".to_string(),
+        enabled: false,
+        platform: PlatformConfig::Feishu {
+            app_id: "stub".to_string(),
+            app_secret: "stub".to_string(),
+        },
+        ..ChannelConfig::default()
+    });
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+    let hub = kernel.channel_manager().expect("channels configured → hub");
+    let store = hub.store();
+
+    // A live observer session with its watch mapping.
+    let (sid, _) = get_or_create_session(
+        "mock",
+        &store,
+        &kernel,
+        "oc_1",
+        "watch:oc_1",
+        None,
+        MappingKind::Watch,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        store.find_mapping("mock", "watch:oc_1").await.unwrap(),
+        Some(sid.clone())
+    );
+
+    kernel.delete_session(&sid).await.unwrap();
+    assert_eq!(
+        store.find_mapping("mock", "watch:oc_1").await.unwrap(),
+        None,
+        "the mapping must go with the session"
+    );
 }
 
 /// `/bind <sid>` refuses to retarget a watch observer session.

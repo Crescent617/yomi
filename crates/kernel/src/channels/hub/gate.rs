@@ -74,11 +74,24 @@ pub(crate) async fn gate_message(
     // another bot's).
     let cmd = parse_channel_command(msg.raw_text.as_deref());
     if msg.is_group {
-        let watch_on = store
+        // A store read failure falls back to normal gating — a transient
+        // sqlite error must not crash message intake, but the degradation
+        // (watch-on group answered like a normal one) must be visible.
+        let watch_on = match store
             .get_watch_state(&config.name, &msg.external_chat_id)
             .await
-            .unwrap_or(None)
-            == Some(crate::channels::MappingKind::Watch);
+        {
+            Ok(state) => state == Some(crate::channels::MappingKind::Watch),
+            Err(e) => {
+                warn!(
+                    channel = %config.name,
+                    chat_id = %msg.external_chat_id,
+                    error = %e,
+                    "watch state read failed; falling back to normal gating"
+                );
+                false
+            }
+        };
         if watch_on {
             return match cmd {
                 ChannelCommand::None | ChannelCommand::Unknown(_) => {
