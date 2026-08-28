@@ -1,10 +1,11 @@
 //! Socket auth for network transports (ws/wss).
 //!
-//! Model: the daemon is configured with a password *hash* via the
-//! `YOMI_SOCKET_AUTH_HASH` env var; clients present the plaintext
-//! password as `Authorization: Bearer <password>` during the WebSocket
-//! upgrade handshake. Unix sockets never use this — they rely on
-//! filesystem permissions instead.
+//! Model: the daemon is configured with a password *hash* — the
+//! `socket_auth_hash` field in config.toml (`YOMI_SOCKET_AUTH_HASH` env
+//! overrides); clients present the plaintext password as
+//! `Authorization: Bearer <password>` during the WebSocket upgrade
+//! handshake. Unix sockets never use this — they rely on filesystem
+//! permissions instead.
 //!
 //! blake3 is appropriate here because the password is expected to be a
 //! high-entropy machine token, not a human passphrase. Generate one with
@@ -16,7 +17,8 @@ use std::sync::Arc;
 /// Returns `true` if the presented password may proceed.
 pub type AuthVerifier = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
-/// `blake3:<hex>` of a password — the value put in `YOMI_SOCKET_AUTH_HASH`.
+/// `blake3:<hex>` of a password — the value for `socket_auth_hash` in
+/// config.toml (or `YOMI_SOCKET_AUTH_HASH`).
 pub fn hash_password(password: &str) -> String {
     format!("blake3:{}", blake3::hash(password.as_bytes()).to_hex())
 }

@@ -703,9 +703,16 @@ impl Config {
             self.gc.auto = auto;
         }
 
-        // Socket auth password hash (ws/wss transports)
+        // Socket auth password hash (ws/wss transports). An empty value
+        // (common in launchd/container env templates) must not clobber a
+        // valid file value — degrade to the file, loudly.
         if let Some(hash) = env_var(env_names::SOCKET_AUTH_HASH) {
-            self.socket_auth_hash = Some(hash);
+            let hash = hash.trim();
+            if hash.is_empty() {
+                tracing::warn!("{} is set but empty; ignoring", env_names::SOCKET_AUTH_HASH);
+            } else {
+                self.socket_auth_hash = Some(hash.to_string());
+            }
         }
 
         // Tool blocklist (comma-separated regex patterns)
