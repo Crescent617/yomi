@@ -6170,19 +6170,32 @@ async fn watch_mirror_integration() {
         doc_comment: None,
     };
 
-    // First mirror: creates the observer session lazily.
+    // No mapping row: the tee must NOT create one — a missing row means
+    // watch is off (or gc already ended it); mirroring would resurrect
+    // it (or steer into a normal session, answering publicly).
+    crate::channels::hub_watch::mirror_message("mock", &store, &kernel, &msg("零", "om_0")).await;
+    assert_eq!(
+        store.find_mapping("mock", "oc_1").await.unwrap(),
+        None,
+        "mirror never creates a mapping from nothing"
+    );
+
+    // Watch on (the switch eager-creates the session), then mirrors flow.
+    crate::channels::hub::watch::set_channel_watch_by_name(&store, &kernel, "mock", "oc_1", true)
+        .await
+        .unwrap();
     crate::channels::hub_watch::mirror_message("mock", &store, &kernel, &msg("第一条", "om_1"))
         .await;
     let sid = store
         .find_mapping("mock", "oc_1")
         .await
         .unwrap()
-        .expect("mirror must create the observer mapping");
+        .expect("watch on created the session");
     let routing = store.find_routing_by_session(&sid).await.unwrap().unwrap();
     assert!(routing.is_watch());
     assert_eq!(
         routing.reply_msg_id, None,
-        "no delivery anchor for observers"
+        "no delivery anchor while watched"
     );
 
     // Second mirror: same session, both messages present.
@@ -6191,7 +6204,7 @@ async fn watch_mirror_integration() {
     assert_eq!(
         store.find_mapping("mock", "oc_1").await.unwrap(),
         Some(sid.clone()),
-        "no duplicate observer"
+        "no duplicate session"
     );
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
@@ -6206,6 +6219,23 @@ async fn watch_mirror_integration() {
         );
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
+
+    // `/watch off` between gate and tee (simulated: flip, then mirror):
+    // the message is dropped, NOT answered by the now-normal session.
+    crate::channels::hub::watch::set_channel_watch_by_name(&store, &kernel, "mock", "oc_1", false)
+        .await
+        .unwrap();
+    crate::channels::hub_watch::mirror_message("mock", &store, &kernel, &msg("off 后", "om_2b"))
+        .await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let blob = format!("{:?}", kernel.list_messages(&sid).await.unwrap_or_default());
+    assert!(
+        !blob.contains("off 后"),
+        "post-off mirror must drop: {blob}"
+    );
+    crate::channels::hub::watch::set_channel_watch_by_name(&store, &kernel, "mock", "oc_1", true)
+        .await
+        .unwrap();
 
     // Dangling mapping self-heal: delete the session out from under the
     // mapping; the next mirror must drop the stale row and recreate.
@@ -6224,8 +6254,8 @@ async fn watch_mirror_integration() {
         .find_mapping("mock", "oc_1")
         .await
         .unwrap()
-        .expect("self-heal must recreate the mapping");
-    assert_ne!(new_sid, sid, "a fresh observer replaces the dead one");
+        .expect("self-heal must recreate the session");
+    assert_ne!(new_sid, sid, "a fresh session replaces the dead one");
 }
 
 /// `Kernel::delete_session` cascades the channel routing rows with the

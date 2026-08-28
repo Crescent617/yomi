@@ -89,9 +89,11 @@ receipt），bot 对群里的讨论完全无感。想要的是 bot 作为群的*
   列；遗留 `watch_off` 由 `from_str_lossy` 归入 normal，无数据迁移）；
   store trait：`is_chat_watched`（chat 行 kind 查询）、`update_mapping`
   （anchor 刷新 / kind flip 的显式通道）、`list_watch_sessions`（👁）。
-- `channels/hub/watch.rs`：`mirror_message`（tee 本体：chat key 快速路
-  find_mapping + 存活校验直接 steer，零写；悬空行走加锁的
-  get_or_create 自愈重建）；`{get,set}_channel_watch_by_name`（查询/开关
+- `channels/hub/watch.rs`：`mirror_message`（tee 本体：先重读实时
+  watch 状态——gate 快照之后落地 off/gc 不得把消息送进已翻回 normal
+  的会话或复活已终结的 watch；随后 chat key 快速路 find_mapping +
+  存活校验直接 steer，免锁；仅悬空行走加锁的 get_or_create 自愈
+  重建，行不在则丢弃）；`{get,set}_channel_watch_by_name`（查询/开关
   核心，slash 命令与 RPC 共用）；hub 薄封装 + `rpc_set_channel_watch`
   （`on` 缺省 = 查询，Vim `:set` 风格）。wire `SetChannelWatch`（proto
   维持 28）。

@@ -36,11 +36,15 @@ use crate::channels::hub_routing::get_or_create_session;
 /// Failures are logged, never propagated — the tee must not break the
 /// serial dispatch of the conversation path it shadows.
 ///
-/// Fast path: an existing, alive mapping steers without any store write
-/// (one sqlite read + one existence read per message — the naive
-/// get-or-create's ON-CONFLICT rewrite would churn a write per message
-/// for zero state change). A dangling mapping (session gc'd/deleted)
-/// is dropped and recreated by the locked get-or-create below.
+/// The tee fires on the gate-time snapshot, so it re-reads the live
+/// watch state first (one indexed read): a `/watch off` or gc landing
+/// in between must not steer into a session that is `normal` again —
+/// it would answer publicly — nor resurrect a watch gc already ended.
+///
+/// Fast path: an existing, alive mapping steers without taking the
+/// route lock (one sqlite read + one existence read per message). Only
+/// a dangling mapping (row alive, session gone) goes through the locked
+/// get-or-create below; a missing row means watch is off — drop.
 pub(crate) async fn mirror_message(
     channel_name: &str,
     store: &Arc<dyn ChannelStore>,
@@ -48,43 +52,50 @@ pub(crate) async fn mirror_message(
     msg: &ChannelMessage,
 ) {
     let chat_id = &msg.external_chat_id;
+    match store.is_chat_watched(channel_name, chat_id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            info!(channel = %channel_name, chat_id = %chat_id, "watch ended between gate and tee; mirror dropped");
+            return;
+        }
+        Err(e) => {
+            warn!(channel = %channel_name, chat_id = %chat_id, error = %e, "watch state re-read failed; mirror dropped");
+            return;
+        }
+    }
     let sid = match store.find_mapping(channel_name, chat_id).await {
         Ok(Some(sid)) => match kernel.session_store().await.get(&sid).await {
-            Ok(Some(_)) => Some(sid),
+            Ok(Some(_)) => sid,
             _ => {
                 warn!(channel = %channel_name, chat_id = %chat_id, "watch mapping dangles to a deleted session; recreating");
                 if let Err(e) = store.delete_mapping(channel_name, chat_id).await {
                     warn!(channel = %channel_name, error = %e, "stale watch mapping delete failed");
                 }
-                None
-            }
-        },
-        Ok(None) => None,
-        Err(e) => {
-            warn!(channel = %channel_name, chat_id = %chat_id, error = %e, "watch mapping lookup failed");
-            None
-        }
-    };
-    let sid = match sid {
-        Some(sid) => sid,
-        None => {
-            match get_or_create_session(
-                channel_name,
-                store,
-                kernel,
-                chat_id,
-                chat_id,
-                None,
-                MappingKind::Watch,
-            )
-            .await
-            {
-                Ok((sid, _reused)) => sid,
-                Err(e) => {
-                    warn!(channel = %channel_name, chat_id = %chat_id, error = %e, "watch session resolution failed");
-                    return;
+                match get_or_create_session(
+                    channel_name,
+                    store,
+                    kernel,
+                    chat_id,
+                    chat_id,
+                    None,
+                    MappingKind::Watch,
+                )
+                .await
+                {
+                    Ok((sid, _reused)) => sid,
+                    Err(e) => {
+                        warn!(channel = %channel_name, chat_id = %chat_id, error = %e, "watch session resolution failed");
+                        return;
+                    }
                 }
             }
+        },
+        // The re-read above says watched ⇒ the row exists; a missing row
+        // here means a concurrent delete — drop, don't resurrect.
+        Ok(None) => return,
+        Err(e) => {
+            warn!(channel = %channel_name, chat_id = %chat_id, error = %e, "watch mapping lookup failed");
+            return;
         }
     };
     kernel.send_steer(&sid, mirror_content(msg)).await;
@@ -145,9 +156,9 @@ pub(crate) async fn set_channel_watch_by_name(
 ) -> crate::types::Result<crate::channels::ChannelWatchStatus> {
     let sid = if on {
         // Ensure a live row (heals dangling ones), then flip explicitly —
-        // get_or_create only writes `kind` on create, so this is also
-        // the flip of an existing Normal row.
-        let (sid, _reused) = get_or_create_session(
+        // get_or_create only writes `kind` on create, so the flip below
+        // is needed exactly when an existing row was reused.
+        let (sid, reused) = get_or_create_session(
             channel_name,
             store,
             kernel,
@@ -157,9 +168,11 @@ pub(crate) async fn set_channel_watch_by_name(
             MappingKind::Watch,
         )
         .await?;
-        store
-            .update_mapping(channel_name, chat_id, None, Some(MappingKind::Watch))
-            .await?;
+        if reused {
+            store
+                .update_mapping(channel_name, chat_id, None, Some(MappingKind::Watch))
+                .await?;
+        }
         sid
     } else {
         // Off never creates a session: no row, nothing to flip.
