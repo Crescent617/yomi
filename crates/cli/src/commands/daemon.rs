@@ -73,29 +73,27 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
 
             let addr = crate::daemon::socket_addr();
 
-            // Socket auth (ws/wss only): enabled when YOMI_SOCKET_AUTH_HASH is set.
-            // A malformed hash would start fine yet reject every client
-            // (fail-closed verifier) with no diagnosable signal — validate
-            // the format up front and fail fast instead.
-            let auth = match kernel::transport::socket_auth_hash() {
-                Some(hash) => {
+            // Socket auth only applies to ws/wss listeners; unix sockets
+            // rely on filesystem permissions, so skip the env entirely
+            // there. A malformed hash would start fine yet reject every
+            // client (fail-closed verifier) with no diagnosable signal —
+            // validate the format up front and fail fast instead.
+            let network = matches!(
+                addr,
+                kernel::transport::SocketAddr::Ws(_) | kernel::transport::SocketAddr::Wss(_)
+            );
+            let auth = match (network, kernel::transport::socket_auth_hash()) {
+                (true, Some(hash)) => {
                     anyhow::ensure!(
                         kernel::transport::is_valid_hash_format(&hash),
                         "invalid YOMI_SOCKET_AUTH_HASH format: expected `blake3:<64 hex chars>` \
                          (generate one with `yomi daemon auth-hash`)"
                     );
+                    tracing::info!("Socket auth enabled for ws/wss transports");
                     Some(kernel::transport::auth_verifier(&hash))
                 }
-                None => None,
+                _ => None,
             };
-            if auth.is_some()
-                && matches!(
-                    addr,
-                    kernel::transport::SocketAddr::Ws(_) | kernel::transport::SocketAddr::Wss(_)
-                )
-            {
-                tracing::info!("Socket auth enabled for ws/wss transports");
-            }
 
             // Bind listener FIRST so clients can connect while we initialize.
             let listener = kernel::transport::bind(&addr, auth).await?;

@@ -11,6 +11,16 @@ fn explicit_token_wins_over_env() {
 }
 
 #[test]
+fn explicit_token_is_trimmed() {
+    // GUI paste often carries a trailing newline; env values are trimmed
+    // too, so both paths agree on the same wire token.
+    assert_eq!(
+        resolve_auth_token(Some("  abc\r\n".to_string()), None),
+        Some("abc".to_string())
+    );
+}
+
+#[test]
 fn missing_explicit_falls_back_to_env() {
     assert_eq!(
         resolve_auth_token(None, Some("env".to_string())),

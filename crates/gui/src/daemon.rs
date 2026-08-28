@@ -158,21 +158,30 @@ async fn spawn_daemon_inner() -> Result<kernel::config::Config> {
     let config_file = config_file.or_else(|| Some(kernel::config::Config::write_path()));
 
     let addr = socket_addr();
-    let auth = kernel::transport::socket_auth_hash().and_then(|hash| {
-        if kernel::transport::is_valid_hash_format(&hash) {
-            Some(kernel::transport::auth_verifier(&hash))
-        } else {
-            // In-process daemon: we can't exit the app over a bad env
-            // var, and a malformed hash would fail closed — rejecting
-            // every client with no diagnosable signal. Log loudly and
-            // run without socket auth (same as not configuring it).
-            tracing::error!(
-                "invalid YOMI_SOCKET_AUTH_HASH format (expected `blake3:<64 hex chars>`); \
-                 starting daemon WITHOUT socket auth"
-            );
-            None
-        }
-    });
+    // Socket auth only applies to ws/wss listeners; unix sockets rely on
+    // filesystem permissions, so skip the env entirely there.
+    let auth = if matches!(
+        addr,
+        kernel::transport::SocketAddr::Ws(_) | kernel::transport::SocketAddr::Wss(_)
+    ) {
+        kernel::transport::socket_auth_hash().and_then(|hash| {
+            if kernel::transport::is_valid_hash_format(&hash) {
+                Some(kernel::transport::auth_verifier(&hash))
+            } else {
+                // In-process daemon: we can't exit the app over a bad env
+                // var, and a malformed hash would fail closed — rejecting
+                // every client with no diagnosable signal. Log loudly and
+                // run without socket auth (same as not configuring it).
+                tracing::error!(
+                    "invalid YOMI_SOCKET_AUTH_HASH format (expected `blake3:<64 hex chars>`); \
+                     starting daemon WITHOUT socket auth"
+                );
+                None
+            }
+        })
+    } else {
+        None
+    };
     let listener = kernel::transport::bind(&addr, auth)
         .await
         .with_context(|| format!("Failed to bind daemon listener on {addr}"))?;

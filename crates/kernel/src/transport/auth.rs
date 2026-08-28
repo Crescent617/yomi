@@ -27,12 +27,20 @@ pub fn hash_password(password: &str) -> String {
 /// anything else up front — [`auth_verifier`] fails closed on malformed
 /// input, which would silently lock every client out.
 pub fn is_valid_hash_format(configured_hash: &str) -> bool {
-    let hex = configured_hash
-        .trim()
-        .strip_prefix("blake3:")
-        .unwrap_or(configured_hash.trim())
-        .trim();
+    let hex = parse_configured_hash(configured_hash);
     hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Parse a configured hash string: trim, drop the optional `blake3:`
+/// prefix, lowercase. Shared by the verifier and the startup format
+/// check so the two can never drift apart.
+fn parse_configured_hash(configured_hash: &str) -> String {
+    let trimmed = configured_hash.trim();
+    trimmed
+        .strip_prefix("blake3:")
+        .unwrap_or(trimmed)
+        .trim()
+        .to_ascii_lowercase()
 }
 
 /// Generate a random socket auth token (128-bit, CSPRNG via ulid).
@@ -56,12 +64,7 @@ pub(crate) fn bearer_token(value: &str) -> Option<&str> {
 /// hex case are tolerated. An unrecognized (non-hex, wrong-length) value
 /// yields a verifier that rejects everything — fail closed.
 pub fn auth_verifier(configured_hash: &str) -> AuthVerifier {
-    let expected = configured_hash
-        .trim()
-        .strip_prefix("blake3:")
-        .unwrap_or(configured_hash.trim())
-        .trim()
-        .to_ascii_lowercase();
+    let expected = parse_configured_hash(configured_hash);
     Arc::new(move |presented: &str| {
         let actual = blake3::hash(presented.as_bytes()).to_hex();
         constant_time_eq(expected.as_bytes(), actual.as_str().as_bytes())

@@ -40,7 +40,10 @@ const ALL_EVENTS_ROUTER_KEY: &str = "*";
 /// or whitespace-only explicit token falls back to the env value (the
 /// GUI submits the mask field empty when the user leaves it blank).
 fn resolve_auth_token(explicit: Option<String>, env_token: Option<String>) -> Option<String> {
-    explicit.filter(|t| !t.trim().is_empty()).or(env_token)
+    explicit
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty())
+        .or(env_token)
 }
 
 struct Connection {
