@@ -6,6 +6,11 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::task::Poll;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::{header, HeaderValue, StatusCode};
+
+mod auth;
+pub use auth::{auth_verifier, hash_password, AuthVerifier};
 
 /// Convert a tungstenite error into an `io::Error`, preserving
 /// underlying I/O errors (connection refused, DNS failure, TLS …).
@@ -16,19 +21,33 @@ fn map_tungstenite_err(e: tokio_tungstenite::tungstenite::Error) -> io::Error {
     }
 }
 
-/// IPC address: either a Unix domain socket path, a TCP endpoint, or a WebSocket endpoint.
+/// Convert a client-side handshake failure into an `io::Error`, with a
+/// clear actionable message when the daemon rejected the socket auth
+/// credential (HTTP 401).
+fn map_client_handshake_err(e: tokio_tungstenite::tungstenite::Error) -> io::Error {
+    if let tokio_tungstenite::tungstenite::Error::Http(ref resp) = e {
+        if resp.status() == StatusCode::UNAUTHORIZED {
+            return io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "socket auth failed: missing or invalid YOMI_SOCKET_AUTH",
+            );
+        }
+    }
+    map_tungstenite_err(e)
+}
+
+/// IPC address: either a Unix domain socket path or a WebSocket endpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SocketAddr {
     Unix(PathBuf),
-    Tcp(String),
     Ws(String),
     Wss(String),
 }
 
 impl SocketAddr {
-    /// Default TCP endpoint used on Windows (or when explicitly requested).
+    /// Default WebSocket endpoint used on Windows (or when explicitly requested).
     pub fn localhost(port: u16) -> Self {
-        Self::Tcp(format!("127.0.0.1:{port}"))
+        Self::Ws(format!("127.0.0.1:{port}"))
     }
 }
 
@@ -37,8 +56,6 @@ impl FromStr for SocketAddr {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Some(path) = s.strip_prefix("unix://") {
             Ok(Self::Unix(path.into()))
-        } else if let Some(addr) = s.strip_prefix("tcp://") {
-            Ok(Self::Tcp(addr.to_string()))
         } else if let Some(addr) = s.strip_prefix("ws://") {
             Ok(Self::Ws(addr.to_string()))
         } else if let Some(addr) = s.strip_prefix("wss://") {
@@ -50,7 +67,8 @@ impl FromStr for SocketAddr {
         {
             Ok(Self::Unix(s.into()))
         } else {
-            Ok(Self::Tcp(s.to_string()))
+            // Bare host:port — the network endpoint form, WebSocket transport.
+            Ok(Self::Ws(s.to_string()))
         }
     }
 }
@@ -59,7 +77,6 @@ impl std::fmt::Display for SocketAddr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unix(p) => write!(f, "unix://{}", p.display()),
-            Self::Tcp(s) => write!(f, "tcp://{s}"),
             Self::Ws(s) => write!(f, "ws://{s}"),
             Self::Wss(s) => write!(f, "wss://{s}"),
         }
@@ -73,7 +90,7 @@ impl std::fmt::Display for SocketAddr {
 /// 2. Unix: `$XDG_RUNTIME_DIR/yomi/daemon.sock`
 /// 3. Unix fallback: `directories::BaseDirs::data_dir()/yomi/daemon.sock` (macOS: `~/Library/Application Support/`)
 /// 4. Final fallback: `/tmp/yomi-daemon.sock`
-/// 5. Windows: `Tcp("127.0.0.1:57231")`
+/// 5. Windows: `Ws("127.0.0.1:57231")`
 pub fn socket_addr() -> SocketAddr {
     let socket_env = format!("{}SOCKET", crate::ENV_PREFIX);
     if let Ok(val) = std::env::var(&socket_env) {
@@ -93,15 +110,43 @@ pub fn socket_addr() -> SocketAddr {
     }
     #[cfg(not(unix))]
     {
-        SocketAddr::Tcp("127.0.0.1:57231".to_string())
+        SocketAddr::Ws("127.0.0.1:57231".to_string())
     }
+}
+
+/// Socket auth token presented by clients on ws/wss transports
+/// (`Authorization: Bearer <token>`), from `YOMI_SOCKET_AUTH`.
+pub fn socket_auth_token() -> Option<String> {
+    trimmed_env_non_empty(&format!("{}SOCKET_AUTH", crate::ENV_PREFIX))
+}
+
+/// Daemon-side socket auth password hash (`blake3:<hex>`), from
+/// `YOMI_SOCKET_AUTH_HASH`. When set, ws/wss listeners require clients
+/// to authenticate; unix sockets always rely on filesystem permissions.
+pub fn socket_auth_hash() -> Option<String> {
+    let var = format!("{}SOCKET_AUTH_HASH", crate::ENV_PREFIX);
+    let raw = std::env::var(&var).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        // Fail-open would silently disable auth — make it loud.
+        tracing::warn!("{var} is set but empty; socket auth disabled");
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn trimmed_env_non_empty(var: &str) -> Option<String> {
+    std::env::var(var)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 /// PID file used for daemon process tracking.
 ///
 /// Derived from [`socket_addr()`]:
 /// - Unix socket: sibling `.pid` file next to the socket
-/// - TCP: `data_dir()/yomi-daemon-{port}.pid`
+/// - WebSocket: `data_dir()/yomi-daemon-{port}.pid`
 pub fn pid_file_path() -> PathBuf {
     match socket_addr() {
         SocketAddr::Unix(path) => {
@@ -109,10 +154,8 @@ pub fn pid_file_path() -> PathBuf {
             p.set_extension("pid");
             p
         }
-        SocketAddr::Tcp(ref addr_str)
-        | SocketAddr::Ws(ref addr_str)
-        | SocketAddr::Wss(ref addr_str) => {
-            let port = addr_str.rsplit_once(':').map_or("tcp", |(_, p)| p);
+        SocketAddr::Ws(ref addr_str) | SocketAddr::Wss(ref addr_str) => {
+            let port = addr_str.rsplit_once(':').map_or("ws", |(_, p)| p);
             directories::BaseDirs::new().map_or_else(
                 || std::env::temp_dir().join(format!("yomi-daemon-{port}.pid")),
                 |b| b.data_dir().join(format!("yomi-daemon-{port}.pid")),
@@ -130,7 +173,6 @@ pub type WssStream =
 pub enum Stream {
     #[cfg(unix)]
     Unix(tokio::net::UnixStream),
-    Tcp(tokio::net::TcpStream),
     Ws(WsStream),
     Wss(WssStream),
 }
@@ -294,10 +336,6 @@ impl Stream {
                 let (r, w) = s.into_split();
                 (Box::new(r), Box::new(w))
             }
-            Self::Tcp(s) => {
-                let (r, w) = s.into_split();
-                (Box::new(r), Box::new(w))
-            }
             Self::Ws(ws_stream) => spawn_ws_bridge(ws_stream),
             Self::Wss(ws_stream) => spawn_ws_bridge(ws_stream),
         }
@@ -308,11 +346,28 @@ impl Stream {
 pub enum Listener {
     #[cfg(unix)]
     Unix(tokio::net::UnixListener),
-    Tcp(tokio::net::TcpListener),
-    Ws(tokio::net::TcpListener),
+    Ws {
+        listener: tokio::net::TcpListener,
+        /// Socket auth credential check applied during the WebSocket
+        /// upgrade handshake; `None` accepts every client (status quo).
+        auth: Option<AuthVerifier>,
+    },
 }
 
 impl Listener {
+    /// Actual bound address of a network (ws) listener — mainly for
+    /// tests that bind port 0. Unix listeners return `None`.
+    pub fn local_addr(&self) -> Option<std::net::SocketAddr> {
+        match self {
+            #[cfg(unix)]
+            Self::Unix(_) => None,
+            Self::Ws { listener, .. } => listener.local_addr().ok(),
+        }
+    }
+
+    // result_large_err: tungstenite's handshake callback dictates the
+    // `ErrorResponse` type; the large Err variant is not ours to shrink.
+    #[allow(clippy::result_large_err)]
     pub async fn accept(&self) -> io::Result<(Stream, Option<std::net::SocketAddr>)> {
         match self {
             #[cfg(unix)]
@@ -320,16 +375,43 @@ impl Listener {
                 let (stream, _) = l.accept().await?;
                 Ok((Stream::Unix(stream), None))
             }
-            Self::Tcp(l) => {
-                let (stream, addr) = l.accept().await?;
-                stream.set_nodelay(true)?;
-                Ok((Stream::Tcp(stream), Some(addr)))
-            }
-            Self::Ws(l) => {
-                let (stream, addr) = l.accept().await?;
-                let ws_stream = tokio_tungstenite::accept_async(stream)
-                    .await
-                    .map_err(map_tungstenite_err)?;
+            Self::Ws { listener, auth } => {
+                use tokio_tungstenite::tungstenite::handshake::server::{
+                    ErrorResponse, Request, Response,
+                };
+
+                let (stream, addr) = listener.accept().await?;
+                let auth = auth.clone();
+                let ws_stream = tokio_tungstenite::accept_hdr_async(
+                    stream,
+                    move |req: &Request, resp: Response| {
+                        if let Some(verify) = &auth {
+                            let presented = req
+                                .headers()
+                                .get(header::AUTHORIZATION)
+                                .and_then(|v| v.to_str().ok())
+                                .and_then(auth::bearer_token);
+                            if !presented.is_some_and(|token| verify(token)) {
+                                let mut err: ErrorResponse = Response::builder()
+                                    .status(StatusCode::UNAUTHORIZED)
+                                    .body(Some(
+                                        "missing or invalid socket auth token \
+                                         (set YOMI_SOCKET_AUTH)"
+                                            .to_string(),
+                                    ))
+                                    .expect("static 401 response");
+                                err.headers_mut().insert(
+                                    header::WWW_AUTHENTICATE,
+                                    HeaderValue::from_static("Bearer"),
+                                );
+                                return Err(err);
+                            }
+                        }
+                        Ok(resp)
+                    },
+                )
+                .await
+                .map_err(map_tungstenite_err)?;
                 Ok((Stream::Ws(ws_stream), Some(addr)))
             }
         }
@@ -356,7 +438,10 @@ fn bind_tcp(addr_str: &str) -> io::Result<tokio::net::TcpListener> {
 }
 
 /// Bind a listener at the given address.
-pub async fn bind(addr: &SocketAddr) -> io::Result<Listener> {
+///
+/// `auth` applies to ws listeners only (socket auth check during the
+/// upgrade handshake); unix listeners ignore it.
+pub async fn bind(addr: &SocketAddr, auth: Option<AuthVerifier>) -> io::Result<Listener> {
     match addr {
         SocketAddr::Unix(path) => {
             #[cfg(unix)]
@@ -398,23 +483,27 @@ pub async fn bind(addr: &SocketAddr) -> io::Result<Listener> {
                 ))
             }
         }
-        SocketAddr::Tcp(addr_str) => {
-            let listener = bind_tcp(addr_str)?;
-            Ok(Listener::Tcp(listener))
-        }
         SocketAddr::Ws(addr_str) => {
             let listener = bind_tcp(addr_str)?;
-            Ok(Listener::Ws(listener))
+            Ok(Listener::Ws { listener, auth })
         }
         SocketAddr::Wss(_) => Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "WebSocket Secure (wss://) listener is not supported; use ws:// or tcp://",
+            "WebSocket Secure (wss://) listener is not supported; use ws:// behind a TLS-terminating reverse proxy",
         )),
     }
 }
 
-/// Connect to a remote address.
+/// Connect to a remote address, attaching the socket auth token from
+/// `YOMI_SOCKET_AUTH` on ws/wss transports.
 pub async fn connect(addr: &SocketAddr) -> io::Result<Stream> {
+    connect_with_token(addr, socket_auth_token().as_deref()).await
+}
+
+/// Connect to a remote address with an explicit socket auth token
+/// (`None` = no `Authorization` header). The token only applies to
+/// ws/wss transports; unix connections ignore it.
+pub async fn connect_with_token(addr: &SocketAddr, token: Option<&str>) -> io::Result<Stream> {
     match addr {
         SocketAddr::Unix(path) => {
             #[cfg(unix)]
@@ -430,28 +519,42 @@ pub async fn connect(addr: &SocketAddr) -> io::Result<Stream> {
                 ))
             }
         }
-        SocketAddr::Tcp(addr_str) => {
-            let stream = tokio::net::TcpStream::connect(addr_str).await?;
-            stream.set_nodelay(true)?;
-            Ok(Stream::Tcp(stream))
-        }
         SocketAddr::Ws(addr_str) => {
             let stream = tokio::net::TcpStream::connect(addr_str).await?;
             stream.set_nodelay(true)?;
-            let url = format!("ws://{addr_str}");
-            let (ws_stream, _) = tokio_tungstenite::client_async(url, stream)
+            let request = ws_client_request(&format!("ws://{addr_str}"), token)?;
+            let (ws_stream, _) = tokio_tungstenite::client_async(request, stream)
                 .await
-                .map_err(map_tungstenite_err)?;
+                .map_err(map_client_handshake_err)?;
             Ok(Stream::Ws(ws_stream))
         }
         SocketAddr::Wss(addr_str) => {
-            let url = format!("wss://{addr_str}");
-            let (ws_stream, _) = tokio_tungstenite::connect_async(url)
+            let request = ws_client_request(&format!("wss://{addr_str}"), token)?;
+            let (ws_stream, _) = tokio_tungstenite::connect_async(request)
                 .await
-                .map_err(map_tungstenite_err)?;
+                .map_err(map_client_handshake_err)?;
             Ok(Stream::Wss(ws_stream))
         }
     }
+}
+
+/// Build a WebSocket upgrade request, attaching
+/// `Authorization: Bearer <token>` when a socket auth token is present.
+fn ws_client_request(
+    url: &str,
+    token: Option<&str>,
+) -> io::Result<tokio_tungstenite::tungstenite::http::Request<()>> {
+    let mut request = url.into_client_request().map_err(map_tungstenite_err)?;
+    if let Some(token) = token {
+        let value = HeaderValue::from_str(&format!("Bearer {token}")).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid socket auth token: {e}"),
+            )
+        })?;
+        request.headers_mut().insert(header::AUTHORIZATION, value);
+    }
+    Ok(request)
 }
 
 /// Maximum frame size: 8 MiB.

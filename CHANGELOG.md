@@ -15,9 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- daemon socket 支持密码鉴权（仅 ws/wss 传输）：daemon 侧设置环境变量 `YOMI_SOCKET_AUTH_HASH`（blake3 哈希，可用新命令 `yomi daemon auth-hash` 生成），客户端设置 `YOMI_SOCKET_AUTH` 为明文密码即可自动完成握手鉴权；未携带或密码错误的连接在 WebSocket 握手阶段即被拒绝（HTTP 401）。unix socket 不受影响，仍由文件权限保护。
+- 新增 `yomi daemon auth-hash [密码]` 命令：计算密码的 blake3 哈希；不带参数时从 stdin 读取（避免进入 shell 历史）。
+
 ### Removed
 
 - 移除内置 `web_fetch` 工具：网页抓取改用 shell 自行 `curl` 落盘转换（决策见 `docs/design/webfetch-removal.md`）。依赖该工具的技能/习惯请改用 curl；默认审批配置下抓取需审批（原为免审批）。
+- 移除 `tcp://` 传输：网络连接请改用 `ws://`（ws 即 tcp+HTTP，且支持鉴权）；Windows 平台默认 IPC 地址相应改为 `ws://127.0.0.1:57231`。
 
 ## [0.9.23] - 2026-08-28
 

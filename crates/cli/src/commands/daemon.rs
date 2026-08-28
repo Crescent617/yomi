@@ -17,6 +17,12 @@ pub enum DaemonCommands {
     Restart,
     /// Check daemon status
     Status,
+    /// Compute the blake3 hash of a socket auth password
+    AuthHash {
+        /// Password to hash; omit to read from stdin (keeps it out of
+        /// shell history)
+        password: Option<String>,
+    },
 }
 
 pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
@@ -63,8 +69,20 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
 
             let addr = crate::daemon::socket_addr();
 
+            // Socket auth (ws/wss only): enabled when YOMI_SOCKET_AUTH_HASH is set.
+            let auth =
+                kernel::transport::socket_auth_hash().map(|h| kernel::transport::auth_verifier(&h));
+            if auth.is_some()
+                && matches!(
+                    addr,
+                    kernel::transport::SocketAddr::Ws(_) | kernel::transport::SocketAddr::Wss(_)
+                )
+            {
+                tracing::info!("Socket auth enabled for ws/wss transports");
+            }
+
             // Bind listener FIRST so clients can connect while we initialize.
-            let listener = kernel::transport::bind(&addr).await?;
+            let listener = kernel::transport::bind(&addr, auth).await?;
             tracing::info!("Daemon listening on {addr}");
 
             // Write PID file so external tools can find and signal us.
@@ -163,6 +181,23 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
         DaemonCommands::Status => {
             let status = crate::daemon::daemon_status().await?;
             println!("{status}");
+        }
+        DaemonCommands::AuthHash { password } => {
+            let password = match password {
+                Some(p) => p,
+                None => {
+                    use std::io::Read;
+                    let mut buf = String::new();
+                    std::io::stdin().read_to_string(&mut buf)?;
+                    buf.trim_end_matches(['\r', '\n']).to_string()
+                }
+            };
+            anyhow::ensure!(!password.is_empty(), "password must not be empty");
+            let hash = kernel::transport::hash_password(&password);
+            println!("{hash}");
+            println!();
+            println!("Daemon:  export YOMI_SOCKET_AUTH_HASH=\"{hash}\"");
+            println!("Clients: export YOMI_SOCKET_AUTH=<password>");
         }
     }
     Ok(())

@@ -113,8 +113,8 @@
 
   async function submitConnect() {
     const addr = connInput.trim();
-    if (!/^(wss?|tcp|unix):\/\//.test(addr)) {
-      connError = "Address must start with ws://, wss://, tcp:// or unix://";
+    if (!/^(wss?|unix):\/\//.test(addr)) {
+      connError = "Address must start with ws://, wss:// or unix://";
       return;
     }
     connBusy = true;

@@ -158,7 +158,8 @@ async fn spawn_daemon_inner() -> Result<kernel::config::Config> {
     let config_file = config_file.or_else(|| Some(kernel::config::Config::write_path()));
 
     let addr = socket_addr();
-    let listener = kernel::transport::bind(&addr)
+    let auth = kernel::transport::socket_auth_hash().map(|h| kernel::transport::auth_verifier(&h));
+    let listener = kernel::transport::bind(&addr, auth)
         .await
         .with_context(|| format!("Failed to bind daemon listener on {addr}"))?;
     tracing::info!("Daemon listening on {addr}");
