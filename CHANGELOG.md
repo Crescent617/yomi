@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- 回退 `YOMI_SOCKET_AUTH_HASH` 空白值忽略逻辑（0.10.1 曾短暂引入）：env 存在即覆盖（空值亦然），与其余字符串类环境变量行为一致。
+
 ## [0.10.1] - 2026-08-29
 
 ### Added

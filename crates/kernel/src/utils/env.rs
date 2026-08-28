@@ -45,19 +45,6 @@ pub fn env_var(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
-/// Get environment variable, treating set-but-empty (or whitespace-only)
-/// as unset. Env templates (launchd plists, docker env-files, `export
-/// FOO=`) routinely define variables without values — a raw `env_var`
-/// read would let such placeholders clobber a real config-file value.
-/// Returns the trimmed value.
-#[inline]
-pub fn env_var_non_empty(name: &str) -> Option<String> {
-    env_var(name).and_then(|v| {
-        let v = v.trim();
-        (!v.is_empty()).then(|| v.to_string())
-    })
-}
-
 /// Try multiple env vars in order, return first set value
 #[inline]
 pub fn env_first(names: &[&str]) -> Option<String> {

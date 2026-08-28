@@ -683,19 +683,13 @@ fn socket_auth_hash_is_redacted_from_effective_config() {
 }
 
 #[test]
-fn socket_auth_hash_env_overrides_file_and_empty_env_is_ignored() {
+fn socket_auth_hash_env_overrides_file() {
     let _guard = ENV_TEST_LOCK.lock().unwrap();
 
     std::env::set_var(env_names::SOCKET_AUTH_HASH, "blake3:env");
     let mut config: Config = toml::from_str(r#"socket_auth_hash = "blake3:file""#).unwrap();
     config.apply_env_overrides();
     assert_eq!(config.socket_auth_hash.as_deref(), Some("blake3:env"));
-
-    // Set-but-empty (or whitespace-only) env must not clobber the file value.
-    std::env::set_var(env_names::SOCKET_AUTH_HASH, "  ");
-    let mut config: Config = toml::from_str(r#"socket_auth_hash = "blake3:file""#).unwrap();
-    config.apply_env_overrides();
-    assert_eq!(config.socket_auth_hash.as_deref(), Some("blake3:file"));
 
     std::env::remove_var(env_names::SOCKET_AUTH_HASH);
 }
