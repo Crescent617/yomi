@@ -97,7 +97,7 @@ describe("kernel event frame buffer", () => {
     ]);
   });
 
-  test("uses key changes and non-deltas as synchronous ordering barriers", () => {
+  test("key changes split merge lanes without flushing; non-deltas stay synchronous barriers", () => {
     const ids: Array<string | undefined> = [];
     const buffer = new EventFrameBuffer((event) => ids.push(event.event_id));
 
@@ -134,11 +134,30 @@ describe("kernel event frame buffer", () => {
       afterMessageChange,
       final: ids,
     }).toEqual({
-      afterSessionChange: ["first"],
+      // A session switch no longer flushes: "first" waits for the next
+      // frame tick (or the barrier below) instead of jumping the queue.
+      afterSessionChange: [],
       afterBarrier: ["first", "second", "barrier"],
-      afterMessageChange: ["first", "second", "barrier", "third"],
+      afterMessageChange: ["first", "second", "barrier"],
       final: ["first", "second", "barrier", "third", "fourth", "tool-delta"],
     });
+  });
+
+  test("interleaved sessions drain in arrival order, throttled (no per-event flush)", () => {
+    const ids: Array<string | undefined> = [];
+    const buffer = new EventFrameBuffer((event) => ids.push(event.event_id));
+
+    buffer.enqueue(textDelta("session-a", "message-a", "a1"));
+    buffer.enqueue(textDelta("session-b", "message-a", "b1"));
+    buffer.enqueue(textDelta("session-a", "message-a", "a2"));
+    buffer.enqueue(textDelta("session-b", "message-a", "b2"));
+    // Alternating keys must not force one dispatch per event.
+    expect(ids).toEqual([]);
+
+    buffer.flush();
+    // Interleaved deltas don't merge across lanes, but arrival order is
+    // preserved and a single flush drains everything.
+    expect(ids).toEqual(["a1", "b1", "a2", "b2"]);
   });
 
   test("clones buffered input and retains the latest event_id", () => {

@@ -22,8 +22,6 @@ type BufferedEvent = {
   envelope: KernelEventEnvelope;
   kind: DeltaKind;
   message_id: string;
-  chars: number;
-  items: number;
 };
 
 type Dispatch = (envelope: KernelEventEnvelope) => void;
@@ -78,8 +76,6 @@ function appendDelta(
   if (event_id !== undefined) {
     buffered.envelope.event_id = event_id;
   }
-  buffered.chars += value.length;
-  buffered.items += 1;
 }
 
 export class EventFrameBuffer {
@@ -107,25 +103,23 @@ export class EventFrameBuffer {
     }
 
     const last = this.queue[this.queue.length - 1];
+    // Merge only into a same-lane tail (same session + message + kind);
+    // otherwise append a new entry. A key change deliberately does NOT
+    // flush: the queue drains in arrival order on the next frame tick, so
+    // interleaved streams from concurrent sessions stay throttled at the
+    // frame interval instead of forcing one dispatch per event.
     if (
       last &&
-      (last.envelope.session_id !== envelope.session_id ||
-        last.message_id !== delta.message_id ||
-        last.kind !== delta.kind)
+      last.envelope.session_id === envelope.session_id &&
+      last.message_id === delta.message_id &&
+      last.kind === delta.kind
     ) {
-      this.flush();
-    }
-
-    const mergeTarget = this.queue[this.queue.length - 1];
-    if (mergeTarget) {
-      appendDelta(mergeTarget, delta.value, envelope.event_id);
+      appendDelta(last, delta.value, envelope.event_id);
     } else {
       this.queue.push({
         envelope: cloneEnvelope(envelope),
         kind: delta.kind,
         message_id: delta.message_id,
-        chars: delta.value.length,
-        items: 1,
       });
     }
 
