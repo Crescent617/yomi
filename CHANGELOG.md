@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - daemon socket 支持密码鉴权（仅 ws/wss 传输）：daemon 侧设置环境变量 `YOMI_SOCKET_AUTH_HASH`（blake3 哈希，可用新命令 `yomi daemon auth-hash` 生成），客户端设置 `YOMI_SOCKET_AUTH` 为明文密码即可自动完成握手鉴权；未携带或密码错误的连接在 WebSocket 握手阶段即被拒绝（HTTP 401）。unix socket 不受影响，仍由文件权限保护。
-- 新增 `yomi daemon auth-hash [密码]` 命令：计算密码的 blake3 哈希；不带参数时从 stdin 读取（避免进入 shell 历史）。
+- ws 握手鉴权失败固定延迟 300ms 再返回失败：在线爆破速率被封顶在每秒约 3 次（与攻击并行度无关）。
+- 新增 `yomi daemon auth-hash [密码]` 命令：计算密码的 blake3 哈希；不带参数时从 stdin 读取（避免进入 shell 历史）；`--generate` 一键生成随机 token 及其哈希（推荐用法）；密码短于 16 字符时打印告警。
 
 ### Removed
 

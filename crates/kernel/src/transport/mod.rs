@@ -5,12 +5,13 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::task::Poll;
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{header, HeaderValue, StatusCode};
 
 mod auth;
-pub use auth::{auth_verifier, hash_password, AuthVerifier};
+pub use auth::{auth_verifier, generate_token, hash_password, AuthVerifier};
 
 /// Convert a tungstenite error into an `io::Error`, preserving
 /// underlying I/O errors (connection refused, DNS failure, TLS …).
@@ -354,6 +355,14 @@ pub enum Listener {
     },
 }
 
+/// How long a failed ws handshake is held before the error is returned
+/// when socket auth is enabled. Failed handshakes serialize through the
+/// accept loop, so this caps *global* online brute-force throughput at
+/// ~1/delay regardless of attacker parallelism. Trade-off: under a flood,
+/// legitimate connections queue behind the delay — acceptable for a
+/// personal daemon.
+const WS_HANDSHAKE_FAILURE_DELAY: Duration = Duration::from_millis(300);
+
 impl Listener {
     /// Actual bound address of a network (ws) listener — mainly for
     /// tests that bind port 0. Unix listeners return `None`.
@@ -381,6 +390,7 @@ impl Listener {
                 };
 
                 let (stream, addr) = listener.accept().await?;
+                let auth_enabled = auth.is_some();
                 let auth = auth.clone();
                 let ws_stream = tokio_tungstenite::accept_hdr_async(
                     stream,
@@ -410,9 +420,16 @@ impl Listener {
                         Ok(resp)
                     },
                 )
-                .await
-                .map_err(map_tungstenite_err)?;
-                Ok((Stream::Ws(ws_stream), Some(addr)))
+                .await;
+                match ws_stream {
+                    Ok(ws_stream) => Ok((Stream::Ws(ws_stream), Some(addr))),
+                    Err(e) => {
+                        if auth_enabled {
+                            tokio::time::sleep(WS_HANDSHAKE_FAILURE_DELAY).await;
+                        }
+                        Err(map_tungstenite_err(e))
+                    }
+                }
             }
         }
     }

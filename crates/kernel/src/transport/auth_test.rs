@@ -57,6 +57,15 @@ fn bearer_token_extraction() {
     assert_eq!(bearer_token(""), None);
 }
 
+#[test]
+fn generate_token_is_random_and_ulid_sized() {
+    let a = generate_token();
+    let b = generate_token();
+    assert_eq!(a.len(), 26);
+    assert_ne!(a, b);
+    assert!(a.chars().all(|c| c.is_ascii_alphanumeric()));
+}
+
 // ── ws handshake gate ───────────────────────────────────────────────────
 
 /// Bind a ws listener on an ephemeral port; return its `host:port`.
@@ -103,9 +112,12 @@ async fn ws_with_auth_rejects_missing_token() {
         // producing a stream.
         assert!(listener.accept().await.is_err());
     });
+    let start = std::time::Instant::now();
     let err = client_ping(&addr, None).await.unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
     server.await.unwrap();
+    // Failed handshakes are held back to throttle online brute force.
+    assert!(start.elapsed() >= super::super::WS_HANDSHAKE_FAILURE_DELAY);
 }
 
 #[tokio::test]

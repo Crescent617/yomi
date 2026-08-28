@@ -21,6 +21,12 @@ pub fn hash_password(password: &str) -> String {
     format!("blake3:{}", blake3::hash(password.as_bytes()).to_hex())
 }
 
+/// Generate a random socket auth token (128-bit, CSPRNG via ulid).
+/// Pair it with [`hash_password`] — see `yomi daemon auth-hash --generate`.
+pub fn generate_token() -> String {
+    ulid::Ulid::new().to_string()
+}
+
 /// Extract the token from an `Authorization: Bearer <token>` header
 /// value. The scheme is case-insensitive per RFC 6750.
 pub(crate) fn bearer_token(value: &str) -> Option<&str> {

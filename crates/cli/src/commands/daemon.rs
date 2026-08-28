@@ -19,6 +19,10 @@ pub enum DaemonCommands {
     Status,
     /// Compute the blake3 hash of a socket auth password
     AuthHash {
+        /// Generate a random high-entropy token and hash it (recommended:
+        /// brute-force resistance rests entirely on token entropy)
+        #[arg(long, conflicts_with = "password")]
+        generate: bool,
         /// Password to hash; omit to read from stdin (keeps it out of
         /// shell history)
         password: Option<String>,
@@ -182,7 +186,17 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
             let status = crate::daemon::daemon_status().await?;
             println!("{status}");
         }
-        DaemonCommands::AuthHash { password } => {
+        DaemonCommands::AuthHash { generate, password } => {
+            if generate {
+                let token = kernel::transport::generate_token();
+                let hash = kernel::transport::hash_password(&token);
+                println!("Token:   {token}");
+                println!("Hash:    {hash}");
+                println!();
+                println!("Daemon:  export YOMI_SOCKET_AUTH_HASH=\"{hash}\"");
+                println!("Clients: export YOMI_SOCKET_AUTH='{token}'");
+                return Ok(());
+            }
             let password = match password {
                 Some(p) => p,
                 None => {
@@ -193,6 +207,13 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
                 }
             };
             anyhow::ensure!(!password.is_empty(), "password must not be empty");
+            if password.len() < 16 {
+                eprintln!(
+                    "warning: password is short ({} chars); brute-force resistance rests \
+                     entirely on entropy — consider --generate for a random token",
+                    password.len()
+                );
+            }
             let hash = kernel::transport::hash_password(&password);
             println!("{hash}");
             println!();

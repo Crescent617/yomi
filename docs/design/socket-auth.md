@@ -24,14 +24,14 @@ daemon 的 IPC socket 此前完全无鉴权：任何能连上 socket 的进程�
 - daemon：`YOMI_SOCKET_AUTH_HASH=blake3:<hex>` 启用鉴权（仅对 ws listener 生效；unix 忽略）。未设置 = 现状，完全向后兼容。
 - 客户端：`YOMI_SOCKET_AUTH=<明文密码>`，`transport::connect` 在 ws/wss 握手自动附加 `Authorization: Bearer` 头；失败报 `socket auth failed: missing or invalid YOMI_SOCKET_AUTH`（`PermissionDenied`）。
 - 校验：`blake3(password)` hex 与配置哈希常量时间比较。定位为高熵机器 token（非人类口令），故不需要慢哈希/盐。
-- 哈希生成：`yomi daemon auth-hash [密码]`（无参从 stdin 读）。
+- 爆破防护：失败的握手固定延迟 300ms 再返回失败——失败握手在 accept 循环中串行，在线爆破速率全局封顶 ~3 次/秒（与攻击并行度无关；代价是洪泛时正常连接排队，个人 daemon 可接受）。离线防护依赖密码熵：`yomi daemon auth-hash --generate` 生成 128-bit 随机 token（推荐路径），短密码会触发告警。
+- 哈希生成：`yomi daemon auth-hash [密码]`（无参从 stdin 读；`--generate` 打印随机 token + 哈希）。
 - wire 协议**零改动**（proto 仍为 28）：旧客户端连未启用鉴权的 daemon 完全不受影响。
 - 部署形态：跨机器时 yomi 仍只 bind `ws://`，TLS 由反代（caddy/nginx）终结，客户端走 `wss://`；`Authorization` 头标准透传。明文密码只在 ws 裸传时可被嗅探——跨机器请套 TLS。
 
 ## 注意点
 
 - supervised 扩展进程继承 daemon 环境：ws 鉴权部署下，本机扩展/工具链（watchdog、doctor、`yomi rpc`）也需导出 `YOMI_SOCKET_AUTH`。
-- 在线爆破防护依赖"每次连接只能试一次"+ 密码高熵；如需更硬可在反代层加限流。
 
 ## 实现
 
