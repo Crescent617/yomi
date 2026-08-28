@@ -108,7 +108,6 @@ impl ChannelStore for SqliteChannelStore {
                session_id = excluded.session_id,
                actual_chat_id = excluded.actual_chat_id,
                reply_msg_id = excluded.reply_msg_id,
-               kind = excluded.kind,
                created_at = CURRENT_TIMESTAMP",
         )
         .bind(channel_name)
@@ -371,18 +370,22 @@ impl ChannelStore for SqliteChannelStore {
         Ok(())
     }
 
-    async fn is_chat_watched(&self, channel_name: &str, chat_id: &str) -> Result<bool> {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT kind FROM channel_session_mappings
+    async fn find_mapping_kind(
+        &self,
+        channel_name: &str,
+        mapping_key: &str,
+    ) -> Result<Option<(SessionId, MappingKind)>> {
+        let row: Option<(String, String)> = sqlx::query_as(
+            "SELECT session_id, kind FROM channel_session_mappings
              WHERE channel_name = ? AND external_chat_id = ?",
         )
         .bind(channel_name)
-        .bind(chat_id)
+        .bind(mapping_key)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| storage_err(format!("Failed to get watch state: {e}")))?;
+        .map_err(|e| storage_err(format!("Failed to find channel mapping: {e}")))?;
 
-        Ok(row.is_some_and(|r| MappingKind::from_str_lossy(&r.0) == MappingKind::Watch))
+        Ok(row.map(|(sid, kind)| (SessionId::from(sid), MappingKind::from_str_lossy(&kind))))
     }
 
     async fn update_mapping(
@@ -392,53 +395,32 @@ impl ChannelStore for SqliteChannelStore {
         reply_msg_id: Option<&str>,
         kind: Option<MappingKind>,
     ) -> Result<()> {
-        let sql = match (reply_msg_id.is_some(), kind) {
-            (true, Some(kind)) => {
-                sqlx::query(
-                    "UPDATE channel_session_mappings SET reply_msg_id = ?, kind = ?
-                     WHERE channel_name = ? AND external_chat_id = ?",
-                )
-                .bind(reply_msg_id)
-                .bind(kind.as_str())
-                .bind(channel_name)
-                .bind(mapping_key)
-                .execute(&self.pool)
-                .await
-            }
-            (true, None) => {
-                sqlx::query(
-                    "UPDATE channel_session_mappings SET reply_msg_id = ?
-                     WHERE channel_name = ? AND external_chat_id = ?",
-                )
-                .bind(reply_msg_id)
-                .bind(channel_name)
-                .bind(mapping_key)
-                .execute(&self.pool)
-                .await
-            }
-            (false, Some(kind)) => {
-                sqlx::query(
-                    "UPDATE channel_session_mappings SET kind = ?
-                     WHERE channel_name = ? AND external_chat_id = ?",
-                )
-                .bind(kind.as_str())
-                .bind(channel_name)
-                .bind(mapping_key)
-                .execute(&self.pool)
-                .await
-            }
-            (false, None) => return Ok(()),
-        };
-        sql.map_err(|e| storage_err(format!("Failed to update channel mapping: {e}")))?;
+        if reply_msg_id.is_none() && kind.is_none() {
+            return Ok(());
+        }
+        sqlx::query(
+            "UPDATE channel_session_mappings
+             SET reply_msg_id = COALESCE(?, reply_msg_id),
+                 kind = COALESCE(?, kind)
+             WHERE channel_name = ? AND external_chat_id = ?",
+        )
+        .bind(reply_msg_id)
+        .bind(kind.map(MappingKind::as_str))
+        .bind(channel_name)
+        .bind(mapping_key)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("Failed to update channel mapping: {e}")))?;
         Ok(())
     }
 
     async fn list_watch_sessions(&self, channel_name: &str) -> Result<Vec<SessionId>> {
         let rows: Vec<(String,)> = sqlx::query_as(
             "SELECT session_id FROM channel_session_mappings
-             WHERE channel_name = ? AND kind = 'watch'",
+             WHERE channel_name = ? AND kind = ?",
         )
         .bind(channel_name)
+        .bind(MappingKind::Watch.as_str())
         .fetch_all(&self.pool)
         .await
         .map_err(|e| storage_err(format!("Failed to list watch sessions: {e}")))?;

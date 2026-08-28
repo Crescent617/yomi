@@ -704,13 +704,13 @@ pub trait ChannelStore: Send + Sync {
         Ok(())
     }
 
-    /// Whether the chat is watch-on (its mapping's kind is `Watch`).
-    /// `false` when the row is `Normal` or absent. Default: never watched
-    /// (stores without watch support, e.g. mocks).
-    async fn is_chat_watched(&self, channel_name: &str, chat_id: &str) -> KernelResult<bool> {
-        let _ = (channel_name, chat_id);
-        Ok(false)
-    }
+    /// The mapping row's session and kind in one read (watch queries and
+    /// the tee's state re-read; `None` when no row exists).
+    async fn find_mapping_kind(
+        &self,
+        channel_name: &str,
+        mapping_key: &str,
+    ) -> KernelResult<Option<(SessionId, MappingKind)>>;
 
     /// Targeted update of an existing mapping row: refresh the reply
     /// anchor and/or flip the kind. No-op when both are `None` (or the

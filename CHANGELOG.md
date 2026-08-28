@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `/watch` 重构为一个群一个会话：开启后该群会话本人成为观察者（消息全部镜像给它、投递抑制），关闭后同一会话恢复应答 @ 且保留 watch 期间记忆；不再有独立的观察者会话与"暂停"状态。
+- 观察模式对私聊同样生效（仅 RPC 可开关）：watch-on 的私聊静默读取不自动回复，不会形成消息黑洞。
 - 回退 `YOMI_SOCKET_AUTH_HASH` 空白值忽略逻辑（0.10.1 曾短暂引入）：env 存在即覆盖（空值亦然），与其余字符串类环境变量行为一致。
 
 ### Added

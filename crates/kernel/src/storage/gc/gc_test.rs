@@ -169,31 +169,34 @@ async fn test_gc_full_pipeline() {
 }
 
 /// The documented gc edge of watch: collecting a watched chat's session
-/// deletes its mapping, and with it the watch state (`is_chat_watched`
-/// flips to false) — a long-silent chat's watch silently turns off.
+/// deletes its mapping, and with it the watch state (the row's kind is
+/// gone) — a long-silent chat's watch silently turns off.
 #[tokio::test]
 async fn test_gc_watch_mapping_deletion_ends_watch_state() {
     let (_tmp, storage) = setup().await;
     let old_id = create_full_session(&storage, true).await;
     let chat_key = format!("chat-{}", old_id.0);
 
+    // create_full_session 已建 kind=normal 的 chat 行；flip 成 watch
+    // 必须走显式 update_mapping（save_mapping 只在建行时写 kind）。
     storage
         .channel_store()
-        .save_mapping(
+        .update_mapping(
             "telegram",
             &chat_key,
-            &old_id,
-            "chat",
             None,
-            crate::channels::MappingKind::Watch,
+            Some(crate::channels::MappingKind::Watch),
         )
         .await
         .unwrap();
-    assert!(storage
-        .channel_store()
-        .is_chat_watched("telegram", &chat_key)
-        .await
-        .unwrap());
+    assert!(matches!(
+        storage
+            .channel_store()
+            .find_mapping_kind("telegram", &chat_key)
+            .await
+            .unwrap(),
+        Some((_, crate::channels::MappingKind::Watch))
+    ));
 
     let report = storage
         .gc()
@@ -206,11 +209,12 @@ async fn test_gc_watch_mapping_deletion_ends_watch_state() {
         .unwrap();
     assert!(report.channel_mappings_deleted >= 1);
     assert!(
-        !storage
+        storage
             .channel_store()
-            .is_chat_watched("telegram", &chat_key)
+            .find_mapping_kind("telegram", &chat_key)
             .await
-            .unwrap(),
+            .unwrap()
+            .is_none(),
         "gc of the watched chat's session silently ends the watch"
     );
 }

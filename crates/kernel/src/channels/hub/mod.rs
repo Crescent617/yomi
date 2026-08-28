@@ -480,12 +480,11 @@ impl ChannelHub {
                         };
                         // Watch tee: in a watch-on chat every plain
                         // message (mention or not) is mirrored to the
-                        // chat's own session — the group's only consumer
-                        // on this path (the gate suspended conversation
-                        // triggers). Commands are control-plane — the hub
-                        // is their only consumer; they are never mirrored.
-                        // `watch_on` is the gate-time snapshot, so a queued
-                        // `/watch` toggle can't split this message's fate.
+                        // chat's own session. `watch_on` is the gate-time
+                        // snapshot (whether to tee at all); the tee then
+                        // re-reads the live row under the route lock
+                        // before steering (see watch::mirror_message).
+                        // Commands are control-plane — never mirrored.
                         if watch_on
                             && matches!(
                                 parse_channel_command(msg.raw_text.as_deref()),

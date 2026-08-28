@@ -611,7 +611,10 @@ async fn test_watch_state_via_mapping_kind() {
     let store = SqliteChannelStore::new(pool);
 
     // Never watched: no mapping row → false.
-    assert!(!store.is_chat_watched("feishu", "oc_1").await.unwrap());
+    assert!(!matches!(
+        store.find_mapping_kind("feishu", "oc_1").await.unwrap(),
+        Some((_, crate::channels::MappingKind::Watch))
+    ));
 
     // On: a kind=watch mapping on the chat key means watching.
     let sid = SessionId::new();
@@ -619,17 +622,29 @@ async fn test_watch_state_via_mapping_kind() {
         .save_mapping("feishu", "oc_1", &sid, "oc_1", None, MappingKind::Watch)
         .await
         .unwrap();
-    assert!(store.is_chat_watched("feishu", "oc_1").await.unwrap());
+    assert!(matches!(
+        store.find_mapping_kind("feishu", "oc_1").await.unwrap(),
+        Some((_, crate::channels::MappingKind::Watch))
+    ));
     // Scoped per (channel, chat).
-    assert!(!store.is_chat_watched("feishu", "oc_2").await.unwrap());
-    assert!(!store.is_chat_watched("telegram", "oc_1").await.unwrap());
+    assert!(!matches!(
+        store.find_mapping_kind("feishu", "oc_2").await.unwrap(),
+        Some((_, crate::channels::MappingKind::Watch))
+    ));
+    assert!(!matches!(
+        store.find_mapping_kind("telegram", "oc_1").await.unwrap(),
+        Some((_, crate::channels::MappingKind::Watch))
+    ));
 
     // Off: kind flips to normal; the row (and session) survives.
     store
         .update_mapping("feishu", "oc_1", None, Some(MappingKind::Normal))
         .await
         .unwrap();
-    assert!(!store.is_chat_watched("feishu", "oc_1").await.unwrap());
+    assert!(!matches!(
+        store.find_mapping_kind("feishu", "oc_1").await.unwrap(),
+        Some((_, crate::channels::MappingKind::Watch))
+    ));
     assert_eq!(
         store.find_mapping("feishu", "oc_1").await.unwrap(),
         Some(sid.clone())
@@ -640,7 +655,10 @@ async fn test_watch_state_via_mapping_kind() {
         .update_mapping("feishu", "oc_1", None, Some(MappingKind::Watch))
         .await
         .unwrap();
-    assert!(store.is_chat_watched("feishu", "oc_1").await.unwrap());
+    assert!(matches!(
+        store.find_mapping_kind("feishu", "oc_1").await.unwrap(),
+        Some((_, crate::channels::MappingKind::Watch))
+    ));
     assert_eq!(
         store.find_mapping("feishu", "oc_1").await.unwrap(),
         Some(sid.clone())
@@ -651,9 +669,55 @@ async fn test_watch_state_via_mapping_kind() {
         .update_mapping("feishu", "oc_1", Some("om_1"), None)
         .await
         .unwrap();
-    assert!(store.is_chat_watched("feishu", "oc_1").await.unwrap());
+    assert!(matches!(
+        store.find_mapping_kind("feishu", "oc_1").await.unwrap(),
+        Some((_, crate::channels::MappingKind::Watch))
+    ));
     let routing = store.find_routing_by_session(&sid).await.unwrap().unwrap();
     assert_eq!(routing.reply_msg_id.as_deref(), Some("om_1"));
+}
+
+#[tokio::test]
+async fn test_save_mapping_upsert_preserves_kind() {
+    let pool = create_test_pool().await;
+    let store = SqliteChannelStore::new(pool);
+
+    // kind 只在建行时写入：/bind 类 upsert 更新他列但不动 kind——
+    // watch 跟行不跟 session，重绑的 session 接任观察者。
+    let s1 = SessionId::new();
+    store
+        .save_mapping("feishu", "oc_1", &s1, "oc_1", None, MappingKind::Watch)
+        .await
+        .unwrap();
+    let s2 = SessionId::new();
+    store
+        .save_mapping(
+            "feishu",
+            "oc_1",
+            &s2,
+            "oc_1",
+            Some("om_9"),
+            MappingKind::Normal,
+        )
+        .await
+        .unwrap();
+    let (sid, kind) = store
+        .find_mapping_kind("feishu", "oc_1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(sid, s2, "upsert retargets the row");
+    assert_eq!(
+        kind,
+        MappingKind::Watch,
+        "upsert must not silently clear watch"
+    );
+    let routing = store.find_routing_by_session(&s2).await.unwrap().unwrap();
+    assert_eq!(
+        routing.reply_msg_id.as_deref(),
+        Some("om_9"),
+        "other columns still update"
+    );
 }
 
 #[tokio::test]

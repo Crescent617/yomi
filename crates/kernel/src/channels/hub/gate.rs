@@ -73,33 +73,31 @@ pub(crate) async fn gate_message(
     // and execute as usual; unknown slash-words stay silent (they may be
     // another bot's).
     let cmd = parse_channel_command(msg.raw_text.as_deref());
-    if msg.is_group {
-        // A store read failure falls back to normal gating — a transient
-        // sqlite error must not crash message intake, but the degradation
-        // (watch-on group answered like a normal one) must be visible.
-        let watch_on = match store
-            .is_chat_watched(&config.name, &msg.external_chat_id)
-            .await
-        {
-            Ok(on) => on,
-            Err(e) => {
-                warn!(
-                    channel = %config.name,
-                    chat_id = %msg.external_chat_id,
-                    error = %e,
-                    "watch state read failed; falling back to normal gating"
-                );
-                false
-            }
-        };
-        if watch_on {
-            return match cmd {
-                ChannelCommand::None | ChannelCommand::Unknown(_) => {
-                    (Gate::NotAddressed, None, true)
-                }
-                _ => (Gate::Allow, Some(ack_reaction_for(config, msg)), true),
-            };
+    // Watch-on chats (DM included — a watched DM is a silent observer):
+    // every plain message is mirrored, conversation triggers suspended.
+    // A store read failure falls back to normal gating — a transient
+    // sqlite error must not crash message intake, but the degradation
+    // (watch-on chat answered like a normal one) must be visible.
+    let watch_on = match store
+        .find_mapping_kind(&config.name, &msg.external_chat_id)
+        .await
+    {
+        Ok(row) => row.is_some_and(|(_, kind)| kind == crate::channels::MappingKind::Watch),
+        Err(e) => {
+            warn!(
+                channel = %config.name,
+                chat_id = %msg.external_chat_id,
+                error = %e,
+                "watch state read failed; falling back to normal gating"
+            );
+            false
         }
+    };
+    if watch_on {
+        return match cmd {
+            ChannelCommand::None | ChannelCommand::Unknown(_) => (Gate::NotAddressed, None, true),
+            _ => (Gate::Allow, Some(ack_reaction_for(config, msg)), true),
+        };
     }
     let (require_mention, _) = resolve_require_mention(store, config, msg).await;
     let addressed = !require_mention || msg.is_mention;

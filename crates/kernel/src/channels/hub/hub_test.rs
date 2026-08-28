@@ -5890,6 +5890,13 @@ async fn gate_watch_on_routes_everything_to_observer() {
     }
     assert_eq!(mock.reactions.lock().await.len(), 3);
 
+    // DM 同样遵守 watch：watch-on 的私聊静默镜像，不成黑洞。
+    let mut dm = channel_message(None, false, true);
+    dm.raw_text = Some("悄悄话".to_string());
+    let (gate, watch_on) = gate_with_snapshot(&adapter, &feishu_gate_config(), &store, &dm).await;
+    assert_eq!(gate, Gate::NotAddressed, "watched DM stays silent");
+    assert!(watch_on, "snapshot marks the watched DM too");
+
     // Unwatched chat: the same message is NotAddressed with snapshot off.
     let (gate, watch_on) = gate_with_snapshot(
         &adapter,
@@ -5999,7 +6006,10 @@ async fn watch_command_query_set_off() {
         reply.as_deref(),
         Some("Permission denied: not in admin_users.")
     );
-    assert!(!store.is_chat_watched("mock", "oc_1").await.unwrap());
+    assert!(!matches!(
+        store.find_mapping_kind("mock", "oc_1").await.unwrap(),
+        Some((_, crate::channels::MappingKind::Watch))
+    ));
 
     // DMs and threads refuse: watch is chat-scoped.
     let reply = handle(msg("ou_admin", "/watch on", None, false))
@@ -6010,14 +6020,20 @@ async fn watch_command_query_set_off() {
         .await
         .unwrap();
     assert!(reply.unwrap().contains("whole chat"));
-    assert!(!store.is_chat_watched("mock", "oc_1").await.unwrap());
+    assert!(!matches!(
+        store.find_mapping_kind("mock", "oc_1").await.unwrap(),
+        Some((_, crate::channels::MappingKind::Watch))
+    ));
 
     // Admin turns it on: the observer session is created eagerly.
     let reply = handle(msg("ou_admin", "/watch on", None, true))
         .await
         .unwrap();
     assert!(reply.unwrap().contains("Watch on"));
-    assert!(store.is_chat_watched("mock", "oc_1").await.unwrap());
+    assert!(matches!(
+        store.find_mapping_kind("mock", "oc_1").await.unwrap(),
+        Some((_, crate::channels::MappingKind::Watch))
+    ));
 
     // Occupy the observer with a hung run, then steer a mirrored note
     // into its mailbox — the pending steer is what `/watch off` must
@@ -6065,10 +6081,13 @@ async fn watch_command_query_set_off() {
         .await
         .unwrap();
     assert!(reply.unwrap().contains("Watch off"));
-    assert!(!store.is_chat_watched("mock", "oc_1").await.unwrap());
-    let paused_sid = store.find_mapping("mock", "oc_1").await.unwrap();
+    assert!(!matches!(
+        store.find_mapping_kind("mock", "oc_1").await.unwrap(),
+        Some((_, crate::channels::MappingKind::Watch))
+    ));
+    let off_sid = store.find_mapping("mock", "oc_1").await.unwrap();
     assert_eq!(
-        paused_sid,
+        off_sid,
         Some(watch_sid.clone()),
         "off keeps the same observer session"
     );
@@ -6083,11 +6102,57 @@ async fn watch_command_query_set_off() {
         .await
         .unwrap();
     assert!(reply.is_some());
-    assert!(store.is_chat_watched("mock", "oc_1").await.unwrap());
+    assert!(matches!(
+        store.find_mapping_kind("mock", "oc_1").await.unwrap(),
+        Some((_, crate::channels::MappingKind::Watch))
+    ));
     assert_eq!(
         store.find_mapping("mock", "oc_1").await.unwrap(),
-        paused_sid,
-        "the same observer resumes with its context"
+        off_sid,
+        "the same session resumes with its context"
+    );
+
+    // Idempotent `/watch on`（已开启时再开）是纯 no-op：不 cancel 进行
+    // 中的 run、不动 mailbox。
+    kernel
+        .send_message(&watch_sid, text("blocker-2"))
+        .await
+        .unwrap();
+    loop {
+        let phase = kernel.get_session(&watch_sid).await.unwrap().phase;
+        if phase == "streaming" {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "observer run never blocked on the model"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    kernel.send_steer(&watch_sid, text("note-2")).await;
+    loop {
+        if kernel.mailbox_snapshot(&watch_sid).await.steer.len() == 1 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "steer never landed in the mailbox"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let reply = handle(msg("ou_admin", "/watch on", None, true))
+        .await
+        .unwrap();
+    assert!(reply.unwrap().contains("Watch on"));
+    assert_eq!(
+        kernel.get_session(&watch_sid).await.unwrap().phase,
+        "streaming",
+        "idempotent on must not cancel the in-flight run"
+    );
+    assert_eq!(
+        kernel.mailbox_snapshot(&watch_sid).await.steer.len(),
+        1,
+        "idempotent on must not drain the mailbox"
     );
 
     // Bare `/watch` reports the state via an info reply (text fallback
@@ -6117,6 +6182,103 @@ async fn watch_command_query_set_off() {
     .await
     .unwrap();
     assert_eq!(reply.as_deref(), Some("Watch is not on for this chat."));
+}
+
+/// `/watch off`（RPC off 同）对未开启 watch、但有普通会话在跑的群是
+/// 纯 no-op：不 cancel、不清 mailbox、不动 kind——绝不能误杀普通会话
+/// 的进行中工作（一行制回归防护）。
+#[tokio::test]
+async fn watch_off_without_watch_is_noop() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((s, _)) = listener.accept().await {
+            held.push(s);
+        }
+    });
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        models: vec![crate::provider::ModelConfig {
+            name: "blackhole".into(),
+            endpoint: format!("http://{addr}"),
+            ..Default::default()
+        }],
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+    kernel.start();
+
+    // 普通会话 + 占用 run + mailbox 里一条待办 steer。
+    let (sid, _) = get_or_create_session(
+        "mock",
+        &store,
+        &kernel,
+        "oc_1",
+        "oc_1",
+        None,
+        MappingKind::Normal,
+    )
+    .await
+    .unwrap();
+    let text = |t: &str| {
+        vec![ContentBlock::Text {
+            text: t.to_string(),
+        }]
+    };
+    kernel.send_message(&sid, text("blocker")).await.unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let phase = kernel.get_session(&sid).await.unwrap().phase;
+        if phase == "streaming" {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "run never blocked");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    kernel.send_steer(&sid, text("queued")).await;
+    loop {
+        if kernel.mailbox_snapshot(&sid).await.steer.len() == 1 {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "steer never landed");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    let status = crate::channels::hub::watch::set_channel_watch_by_name(
+        &store, &kernel, "mock", "oc_1", false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        status,
+        crate::channels::ChannelWatchStatus {
+            on: false,
+            session_id: None
+        },
+        "off on an unwatched chat reports nothing-to-do"
+    );
+    assert!(
+        matches!(
+            store.find_mapping_kind("mock", "oc_1").await.unwrap(),
+            Some((_, MappingKind::Normal))
+        ),
+        "kind untouched"
+    );
+    assert_eq!(
+        kernel.get_session(&sid).await.unwrap().phase,
+        "streaming",
+        "off must not cancel an ordinary session's run"
+    );
+    assert_eq!(
+        kernel.mailbox_snapshot(&sid).await.steer.len(),
+        1,
+        "off must not drain an ordinary session's mailbox"
+    );
 }
 
 /// The tee itself: mirrored messages land in the observer session
@@ -8626,7 +8788,7 @@ async fn set_channel_watch_query_and_switch_round_trip() {
         .unwrap();
     assert_eq!(status.session_id.as_deref(), Some(sid.as_str()));
 
-    // Off: paused — the row (and session) stays, and query still names it.
+    // Off: the row (and session) stays, and query still names it.
     let status = hub
         .set_channel_watch(&kernel, None, "telegram", "oc_rt", false)
         .await

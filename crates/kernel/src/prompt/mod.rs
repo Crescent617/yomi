@@ -41,7 +41,7 @@ pub(crate) const MENTIONS_SECTION: &str = "# Mentions\nTo mention a user in your
 pub(crate) fn watch_section(channel_name: &str, chat_id: &str) -> String {
     format!(
         "# Watch mode\n\
-         You are the sole listener of group chat `{chat_id}` on channel `{channel_name}`: \
+         You are the sole listener of chat `{chat_id}` on channel `{channel_name}`: \
          every non-command message of the chat — including threads and @-mentions of you — \
          is delivered to you alone.\n\
          - The channel delivers NOTHING for you: your reply text is never posted, and no cards \

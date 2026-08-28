@@ -675,8 +675,8 @@ pub(crate) fn format_session_info(
 
 /// The `/info` watch line (chat-level only): `Some` only while the chat
 /// is actively watched — line present = being listened to, absent = not
-/// (paused observers stay invisible, zero noise). Terse by design:
-/// state + observer session id, nothing else.
+/// (off chats stay invisible, zero noise). Terse by design: state +
+/// observer session id, nothing else.
 pub(crate) fn format_watch_line(status: &crate::channels::ChannelWatchStatus) -> Option<String> {
     if !status.on {
         return None;

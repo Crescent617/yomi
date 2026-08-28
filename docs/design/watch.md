@@ -62,6 +62,11 @@ receipt），bot 对群里的讨论完全无感。想要的是 bot 作为群的*
 - `/sessions` 中 kind=watch 的会话标 👁（off 即消失）；`/bind` 在本群
   bind 它被 "Already bound" 短路，跨群重绑 kind=watch 会话被拒绝；
   `/info`（chat 级）watch-on 时附一行状态（观察者 session id）。
+- 私聊同样遵守 watch（仅 RPC 可开关；`/watch` 命令仍只在群聊提供）：
+  watch-on 的私聊静默镜像、不自动回复，不会形成消息黑洞。
+- `/bind` 重绑 watched chat 的会话时 kind 保留（`save_mapping` 只在
+  建行时写 kind）：watch 跟行不跟 session，新绑定的 session 接任
+  观察者。
 - 镜像内容：消息原始 content（adapter 头含 ts/from/chat/**msg_id**/thread/root）
   + 图片 image_key 文本引用（不下载，要用经 skill 自取）。
 - daemon 重启：mapping 行在 sqlite，状态自恢复。
@@ -78,6 +83,10 @@ receipt），bot 对群里的讨论完全无感。想要的是 bot 作为群的*
   防线；「channel 不代发」是硬边界，「只用 skill」是 prompt 级约束。
 - **gc 边界**：watch 会话被 gc（默认 90 天静默）后 mapping 行随之删除，
   watch 静默关闭，需要重新 `/watch on`。
+- **投递路由缓存 ≤2s**：事件转发器按 session 缓存 routing（含
+  kind）。flip 后 2s 内新 run 的输出可能沿旧 kind 被抑制（或放行）
+  ——flip 的 cancel+drain 已清在途，影响仅限 2s 内的新 run，记为
+  已知边界。
 - **`/watch on` 时若有进行中的对话 run**：flip 即 cancel（对称 off），已
   发出的状态卡可能停在半更新态——cosmetic 边界，flip 是低频管理操作。
 - **观察者看不到自己经 skill 说的话之外 bot 的消息**：bot 消息不回推本
@@ -87,16 +96,18 @@ receipt），bot 对群里的讨论完全无感。想要的是 bot 作为群的*
 
 - `channels/mod.rs`：`MappingKind` 两态（`'normal'|'watch'`，迁移 v24 加
   列；遗留 `watch_off` 由 `from_str_lossy` 归入 normal，无数据迁移）；
-  store trait：`is_chat_watched`（chat 行 kind 查询）、`update_mapping`
-  （anchor 刷新 / kind flip 的显式通道）、`list_watch_sessions`（👁）。
-- `channels/hub/watch.rs`：`mirror_message`（tee 本体：先重读实时
-  watch 状态——gate 快照之后落地 off/gc 不得把消息送进已翻回 normal
-  的会话或复活已终结的 watch；随后 chat key 快速路 find_mapping +
-  存活校验直接 steer，免锁；仅悬空行走加锁的 get_or_create 自愈
-  重建，行不在则丢弃）；`{get,set}_channel_watch_by_name`（查询/开关
-  核心，slash 命令与 RPC 共用）；hub 薄封装 + `rpc_set_channel_watch`
-  （`on` 缺省 = 查询，Vim `:set` 风格）。wire `SetChannelWatch`（proto
-  维持 28）。
+  store trait：`find_mapping_kind`（一次读回 session+kind）、
+  `update_mapping`（anchor 刷新 / kind flip 的显式通道）、
+  `list_watch_sessions`（👁）；`save_mapping` 的 upsert 不写 kind
+  （insert-only，不变量由构造保证）。
+- `channels/hub/watch.rs`：`mirror_message`（tee 本体：route 锁内重读
+  实时行（与 flip 的 update+cancel+drain 互斥——off/gc 不得插队到
+  重读与 steer 之间），行在且存活即 steer，仅悬空行走锁外
+  get_or_create 自愈，行不在=watch 已结束、丢弃不重建）；
+  `{get,set}_channel_watch_by_name`（查询/开关核心，slash 命令与 RPC
+  共用；无状态变化=纯 no-op，off 绝不误杀普通会话）；hub 薄封装 +
+  `rpc_set_channel_watch`（`on` 缺省 = 查询，Vim `:set` 风格）。wire
+  `SetChannelWatch`（proto 维持 28）。
 - `channels/hub/gate.rs`：watch-on 群普通消息与 @ 全 `NotAddressed`（静默），
   已知命令放行；watch 快照随消息进 dispatch（单一读取，无 toggle 竞态）。
 - `channels/hub/mod.rs`：dispatch 循环 tee（gate 快照 && `Command::None`

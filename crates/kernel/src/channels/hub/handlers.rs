@@ -888,6 +888,9 @@ pub(crate) async fn handle_bind(
             crate::channels::MappingKind::Normal,
         )
         .await?;
+    // save_mapping writes `kind` only on row insert: rebinding a watched
+    // chat preserves `watch` — the newly bound session becomes the
+    // observer (watch follows the chat row, not a session).
     let title = session
         .title
         .map(|t| format!(" 「{t}」"))
@@ -1074,7 +1077,10 @@ pub(crate) async fn handle_watch_command(
     }
     let chat_id = &msg.external_chat_id;
     let Some(on) = on else {
-        let watched = store.is_chat_watched(&config.name, chat_id).await?;
+        let watched = matches!(
+            store.find_mapping_kind(&config.name, chat_id).await?,
+            Some((_, crate::channels::MappingKind::Watch))
+        );
         let body = if watched {
             "This chat: `on`.".to_string()
         } else {
