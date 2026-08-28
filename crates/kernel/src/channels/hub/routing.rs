@@ -347,6 +347,9 @@ pub(crate) async fn subscription_scope_key(
 /// The bool reports whether an existing mapping was reused — context-
 /// injecting callers read it as "the thread's root is already consumed"
 /// (thread mappings are conversation-only, see [`prepare_trigger`]).
+/// `kind` is written on the create path and refreshed on reuse (a reused
+/// mapping keeps its established kind in practice — callers never mix
+/// kinds on one key).
 pub(crate) async fn get_or_create_session(
     channel_name: &str,
     store: &Arc<dyn ChannelStore>,
@@ -354,6 +357,7 @@ pub(crate) async fn get_or_create_session(
     chat_id: &str,
     mapping_key: &str,
     reply_msg_id: Option<&str>,
+    kind: crate::channels::MappingKind,
 ) -> Result<(SessionId, bool)> {
     // check-then-act（find→create→save）的全局键锁：dispatch 循环是串行
     // 的，但卡片回调（cfg_model 等，spawned 任务）与 ChannelNewThread RPC
@@ -362,11 +366,21 @@ pub(crate) async fn get_or_create_session(
     let _guard =
         crate::utils::g_lock::g_lock(format!("channel_route:{channel_name}:{mapping_key}")).await;
     if let Some(sid) = store.find_mapping(channel_name, mapping_key).await? {
-        info!(channel = %channel_name, mapping_key, session_id = %sid.0, "reusing session");
-        store
-            .save_mapping(channel_name, mapping_key, &sid, chat_id, reply_msg_id)
-            .await?;
-        return Ok((sid, true));
+        // Dangling-mapping guard: the session may be gone (manual
+        // delete_session, a gc purge interrupted between the session and
+        // mapping deletes). Reusing a dead id would steer messages into
+        // the void — for a watch mapping that silently blackholes the
+        // whole chat (mentions suspended, mirror undeliverable). Drop
+        // the stale row and fall through to create fresh.
+        if kernel.session_store().await.get(&sid).await?.is_some() {
+            info!(channel = %channel_name, mapping_key, session_id = %sid.0, "reusing session");
+            store
+                .save_mapping(channel_name, mapping_key, &sid, chat_id, reply_msg_id, kind)
+                .await?;
+            return Ok((sid, true));
+        }
+        warn!(channel = %channel_name, mapping_key, session_id = %sid.0, "mapping points at a deleted session; recreating");
+        store.delete_mapping(channel_name, mapping_key).await?;
     }
 
     let model_key = model_key_for_new_channel_session(
@@ -392,7 +406,7 @@ pub(crate) async fn get_or_create_session(
         })
         .await?;
     store
-        .save_mapping(channel_name, mapping_key, &sid, chat_id, reply_msg_id)
+        .save_mapping(channel_name, mapping_key, &sid, chat_id, reply_msg_id, kind)
         .await?;
     info!(channel = %channel_name, mapping_key, session_id = %sid.0, "created session");
     Ok((sid, false))

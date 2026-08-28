@@ -148,6 +148,21 @@ async fn migration_19_dedupes_cron_job_names() {
     .execute(&pool)
     .await
     .unwrap();
+    // channel_session_mappings（v9 建立，后续 v24 要 ALTER 它）
+    sqlx::query(
+        r"CREATE TABLE channel_session_mappings (
+            channel_name TEXT NOT NULL,
+            external_chat_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            actual_chat_id TEXT,
+            reply_msg_id TEXT,
+            PRIMARY KEY (channel_name, external_chat_id)
+        );",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query(
         r"CREATE TABLE cron_jobs (
             id TEXT PRIMARY KEY,

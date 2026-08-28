@@ -511,6 +511,53 @@ pub struct ChannelInfo {
     pub status: ChannelStatus,
 }
 
+/// The kind of a channel session mapping (the `kind` column).
+///
+/// `Watch`/`WatchPaused` mark a chat's observer session (see `/watch`
+/// and `hub/watch.rs`): it receives a mirror of every message while on,
+/// but the channel delivers NOTHING for it — the flag is checked at
+/// every exit where the channel would speak for a session (event-
+/// forwarder dispatch, and thereby cards/typing/settle/notify).
+/// `/watch off` flips `Watch` → `WatchPaused`: the row, the session and
+/// its context stay put (a later `/watch on` resumes the same observer);
+/// only the mirror tap closes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MappingKind {
+    Normal,
+    Watch,
+    WatchPaused,
+}
+
+impl MappingKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Watch => "watch",
+            Self::WatchPaused => "watch_off",
+        }
+    }
+
+    /// DB parse: unknown/absent values degrade to `Normal` (rows written
+    /// before the column existed carry the `'normal'` default anyway).
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s {
+            "watch" => Self::Watch,
+            "watch_off" => Self::WatchPaused,
+            _ => Self::Normal,
+        }
+    }
+}
+
+/// Mapping-key prefix of a chat's watch-observer session
+/// (`watch:{chat_id}`) — a private namespace that can never collide with
+/// platform ids (`om_…`/`oc_…`).
+pub const WATCH_KEY_PREFIX: &str = "watch:";
+
+/// The observer session's mapping key for a watched chat.
+pub fn watch_mapping_key(chat_id: &str) -> String {
+    format!("{WATCH_KEY_PREFIX}{chat_id}")
+}
+
 /// Runtime routing info for a session that belongs to an external channel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionRouting {
@@ -525,6 +572,15 @@ pub struct SessionRouting {
     /// Delivery target for doc-comment sessions (parsed from
     /// `mapping_key`); `None` for ordinary chat-routed sessions.
     pub doc_comment: Option<DocCommentRef>,
+    /// Normal conversation session or watch observer (see [`MappingKind`]).
+    pub kind: MappingKind,
+}
+
+impl SessionRouting {
+    /// Watch observers (on or paused) get no channel delivery of any kind.
+    pub fn is_watch(&self) -> bool {
+        matches!(self.kind, MappingKind::Watch | MappingKind::WatchPaused)
+    }
 }
 
 // ── Store trait ──────────────────────────────────────────────────────
@@ -538,6 +594,7 @@ pub trait ChannelStore: Send + Sync {
         session_id: &SessionId,
         actual_chat_id: &str,
         reply_msg_id: Option<&str>,
+        kind: MappingKind,
     ) -> KernelResult<()>;
 
     async fn find_mapping(
@@ -647,6 +704,19 @@ pub trait ChannelStore: Send + Sync {
     async fn clear_rit_override(&self, channel_name: &str, chat_id: &str) -> KernelResult<()> {
         let _ = (channel_name, chat_id);
         Ok(())
+    }
+
+    /// The watch state of a chat: the `kind` of its `watch:{chat_id}`
+    /// mapping — `Some(Watch)` while on, `Some(WatchPaused)` after
+    /// `/watch off` (row and session kept for resume), `None` when the
+    /// chat has never been watched (or the observer was gc'd).
+    async fn get_watch_state(
+        &self,
+        channel_name: &str,
+        chat_id: &str,
+    ) -> KernelResult<Option<MappingKind>> {
+        let _ = (channel_name, chat_id);
+        Ok(None)
     }
 
     /// Persist a doc-permission application as a pending approval row.
@@ -1166,7 +1236,7 @@ pub mod store;
 
 pub(crate) use hub::{
     command as hub_command, context as hub_context, deliver as hub_deliver, delivery_pool,
-    gate as hub_gate, handlers as hub_handlers, routing as hub_routing,
+    gate as hub_gate, handlers as hub_handlers, routing as hub_routing, watch as hub_watch,
 };
 
 #[cfg(test)]

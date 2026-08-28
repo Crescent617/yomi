@@ -651,6 +651,20 @@ impl Conductor {
         // mention prompt section) — resolve it once. Subagent sessions
         // carry no mapping of their own; the parent chain is walked.
         let channel_routed = self.is_channel_routed(sid, session_info.as_ref()).await;
+        // Watch observers (a watched chat's mirror session, `/watch`)
+        // learn their contract from the routing row — direct routing
+        // only: a sub-agent of an observer is the observer's tool, not
+        // an observer itself.
+        let watch_routing = match &self.agent_shared.channel_hub {
+            Some(hub) if !is_sub_agent => hub
+                .store()
+                .find_routing_by_session(sid)
+                .await
+                .ok()
+                .flatten()
+                .filter(|routing| routing.is_watch()),
+            _ => None,
+        };
         let ask_card_capable = match &self.agent_shared.channel_hub {
             Some(hub) if !is_sub_agent => hub.session_channel_supports_cards(sid).await,
             _ => false,
@@ -694,33 +708,29 @@ impl Conductor {
             None
         };
 
-        // Every non-sub-agent session learns the platform contracts: the
-        // attachment syntax when the feature is on (declared files reach
-        // the user alongside the message), the mention syntax only where a
-        // platform can render it (channel-routed sessions). Sub-agents get
-        // neither — their output never leaves the parent. Note the narrower
-        // predicate than the ask_user blocklist above, which covers every
-        // sub-agent outright.
-        let mut base_prompt = match &template {
-            Some(t) => t.body.clone(),
-            None if !is_sub_agent => format!(
-                "{}{}",
-                self.base_prompt,
-                crate::prompt::contract_sections(
-                    self.agent_config.enable_attachments,
-                    channel_routed,
+        // Prompt assembly (capability contracts, watch-observer section,
+        // per-session RULE.md) lives in one testable function — the
+        // conductor only gathers the inputs. Sub-agents get no contract
+        // sections: their output never leaves the parent. Note the
+        // narrower predicate than the ask_user blocklist above, which
+        // covers every sub-agent outright.
+        let base_prompt = crate::prompt::compose_system_prompt(crate::prompt::SystemPromptParts {
+            base_prompt: self.base_prompt.clone(),
+            template_body: template.as_ref().map(|t| t.body.clone()),
+            is_sub_agent,
+            enable_attachments: self.agent_config.enable_attachments,
+            channel_routed,
+            watch: watch_routing.as_ref().map(|routing| {
+                (
+                    routing.channel_name.as_str(),
+                    routing.external_chat_id.as_str(),
+                    routing.kind == crate::channels::MappingKind::WatchPaused,
                 )
-            ),
-            None => self.base_prompt.clone(),
-        };
-
-        // Per-session RULE.md (`<data_dir>/sessions/rules/<sid>.md`):
-        // the session's own persistent rules, appended verbatim at spawn
-        // — compaction-immune, edits take effect next run. Applies to
-        // every session type (file existence is the only gate).
-        if let Some(rules) = crate::prompt::session_rules_section(&self.data_dir, &sid.0).await {
-            base_prompt = format!("{base_prompt}\n\n{rules}");
-        }
+            }),
+            data_dir: &self.data_dir,
+            session_id: &sid.0,
+        })
+        .await;
 
         // Resolve tool flags here — session-level policy lives in the
         // conductor, not the agent: sub-agent sessions must not spawn

@@ -218,6 +218,7 @@ async fn flood_91_sessions_all_delivered() {
                 &sid,
                 &format!("chat-{i}"),
                 None,
+                crate::channels::MappingKind::Normal,
             )
             .await
             .unwrap();
@@ -332,3 +333,132 @@ async fn flood_91_sessions_all_delivered() {
 /// 确保 `InputBus` 引用不被 dead_code 误报（压测路径经 kernel 内部使用）。
 #[allow(dead_code)]
 fn _type_pin(_: &Arc<InputBus>) {}
+
+/// watch 会话的事件永不进投递池：同跑一个普通会话（对照）与一个
+/// watch 会话——前者正常投递，后者 adapter 零流量（无卡、无回复、
+/// 无 typing）。这是「channel 不为观察者说一个字」的单点闸断言。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn watch_session_events_never_reach_delivery() {
+    let addr = mock_llm_server().await;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    config.models.clear();
+    config.models.push(ModelConfig {
+        name: "stub".to_string(),
+        model_id: "stub".to_string(),
+        endpoint: format!("http://{addr}"),
+        api_key: "stub".to_string(),
+        context_window: 128_000,
+        ..ModelConfig::default()
+    });
+    config.agent.default_model = "stub".to_string();
+    config.channels.push(ChannelConfig {
+        name: "feishu".to_string(),
+        enabled: false,
+        platform: PlatformConfig::Feishu {
+            app_id: "stub".to_string(),
+            app_secret: "stub".to_string(),
+        },
+        ..ChannelConfig::default()
+    });
+    config.finalize();
+
+    let kernel = crate::build_kernel(&config, false).await.unwrap();
+    kernel.start();
+    let hub = kernel.channel_manager().expect("channel hub must exist");
+    let token = CancellationToken::new();
+    hub.start_all(token.clone(), Vec::new(), Arc::downgrade(&kernel))
+        .await
+        .unwrap();
+
+    let adapter = Arc::new(StressAdapter {
+        sent: tokio::sync::Mutex::new(Vec::new()),
+        counter: std::sync::atomic::AtomicU64::new(0),
+    });
+    let ch_config = ChannelConfig {
+        name: "feishu".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "stub".to_string(),
+            app_secret: "stub".to_string(),
+        },
+        ..ChannelConfig::default()
+    };
+    hub.instances.insert(
+        "feishu".to_string(),
+        ChannelInstance::test_instance(ch_config, adapter.clone()),
+    );
+
+    let store = hub.store();
+    let normal_sid = SessionId::from("sess_normal_watchgate".to_string());
+    let watch_sid = SessionId::from("sess_watch_watchgate".to_string());
+    store
+        .save_mapping(
+            "feishu",
+            "chat-normal",
+            &normal_sid,
+            "chat-normal",
+            None,
+            crate::channels::MappingKind::Normal,
+        )
+        .await
+        .unwrap();
+    store
+        .save_mapping(
+            "feishu",
+            "watch:chat-w",
+            &watch_sid,
+            "chat-w",
+            None,
+            crate::channels::MappingKind::Watch,
+        )
+        .await
+        .unwrap();
+
+    // 两个会话同刻开跑。
+    kernel
+        .send_message(
+            &normal_sid,
+            vec![ContentBlock::Text {
+                text: "ping".to_string(),
+            }],
+        )
+        .await
+        .unwrap();
+    kernel
+        .send_message(
+            &watch_sid,
+            vec![ContentBlock::Text {
+                text: "ping".to_string(),
+            }],
+        )
+        .await
+        .unwrap();
+
+    // 对照组先投递到位。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        if !adapter.sent.lock().await.is_empty() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "control session's reply never delivered"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    // 宽限窗口：watch 会话的 run 有充足时间产出事件。
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let sent = adapter.sent.lock().await;
+    assert_eq!(
+        sent.len(),
+        1,
+        "the watch session must produce ZERO platform traffic, got: {sent:?}"
+    );
+    assert!(sent[0].contains("已送达"));
+    token.cancel();
+}

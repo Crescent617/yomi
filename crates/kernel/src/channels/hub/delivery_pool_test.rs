@@ -1,7 +1,7 @@
 use super::*;
 use crate::channels::hub::ChannelInstance;
 use crate::channels::store::SqliteChannelStore;
-use crate::channels::{ChannelConfig, ChannelError, ChannelEvent, PlatformAdapter};
+use crate::channels::{ChannelConfig, ChannelError, ChannelEvent, MappingKind, PlatformAdapter};
 use crate::event::StopReason;
 use crate::storage::migrations::run_migrations;
 use crate::types::ContentBlock;
@@ -50,6 +50,7 @@ fn test_routing() -> Arc<SessionRouting> {
         reply_msg_id: None,
         mapping_key: "chat-1".to_string(),
         doc_comment: None,
+        kind: MappingKind::Normal,
     })
 }
 
@@ -66,7 +67,14 @@ async fn actor_delivers_reply_on_stopped() {
     let store: Arc<dyn ChannelStore> = Arc::new(SqliteChannelStore::new(db));
     let sid = SessionId::from("sess_actor_e2e");
     store
-        .save_mapping("feishu", "chat-1", &sid, "chat-1", None)
+        .save_mapping(
+            "feishu",
+            "chat-1",
+            &sid,
+            "chat-1",
+            None,
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
 
@@ -158,7 +166,14 @@ async fn actor_settles_reply_when_stopped_lost() {
     let store: Arc<dyn ChannelStore> = Arc::new(SqliteChannelStore::new(db));
     let sid = SessionId::from("sess_actor_settle");
     store
-        .save_mapping("feishu", "chat-1", &sid, "chat-1", None)
+        .save_mapping(
+            "feishu",
+            "chat-1",
+            &sid,
+            "chat-1",
+            None,
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
 
@@ -274,7 +289,14 @@ async fn setup_pool(
     let store: Arc<dyn ChannelStore> = Arc::new(SqliteChannelStore::new(db));
     let sid = SessionId::from("sess_pool_test");
     store
-        .save_mapping("feishu", "chat-1", &sid, "chat-1", None)
+        .save_mapping(
+            "feishu",
+            "chat-1",
+            &sid,
+            "chat-1",
+            None,
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
 
@@ -624,7 +646,14 @@ async fn concurrent_sessions_all_deliver_under_io_cap() {
         let sid = SessionId::from(format!("sess_concurrent_{i}"));
         pool.ctx
             .store
-            .save_mapping("feishu", &format!("chat-{i}"), &sid, "chat-1", None)
+            .save_mapping(
+                "feishu",
+                &format!("chat-{i}"),
+                &sid,
+                "chat-1",
+                None,
+                MappingKind::Normal,
+            )
             .await
             .unwrap();
         for event in run_events(&format!("并发回复{i}")) {

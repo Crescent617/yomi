@@ -62,6 +62,7 @@ fn routing() -> SessionRouting {
         reply_msg_id: None,
         mapping_key: "chat1".to_string(),
         doc_comment: None,
+        kind: crate::channels::MappingKind::Normal,
     }
 }
 

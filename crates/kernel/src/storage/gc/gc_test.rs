@@ -68,7 +68,14 @@ async fn create_full_session_with_id(storage: &StorageSet, id: &SessionId, old: 
     // channel mapping
     storage
         .channel_store()
-        .save_mapping("telegram", &format!("chat-{}", id.0), id, "chat", None)
+        .save_mapping(
+            "telegram",
+            &format!("chat-{}", id.0),
+            id,
+            "chat",
+            None,
+            crate::channels::MappingKind::Normal,
+        )
         .await
         .unwrap();
 }
@@ -159,6 +166,56 @@ async fn test_gc_full_pipeline() {
         .await
         .unwrap();
     assert_eq!(usage_count, 1, "token_usage must never be deleted by gc");
+}
+
+/// The documented gc edge of watch: collecting an observer session
+/// deletes its mapping, and with it the watch state (`get_watch_state`
+/// flips to None) — a long-silent chat's watch silently turns off.
+#[tokio::test]
+async fn test_gc_watch_mapping_deletion_ends_watch_state() {
+    let (_tmp, storage) = setup().await;
+    let old_id = create_full_session(&storage, true).await;
+
+    storage
+        .channel_store()
+        .save_mapping(
+            "telegram",
+            &format!("watch:chat-{}", old_id.0),
+            &old_id,
+            "chat",
+            None,
+            crate::channels::MappingKind::Watch,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .channel_store()
+            .get_watch_state("telegram", &format!("chat-{}", old_id.0))
+            .await
+            .unwrap(),
+        Some(crate::channels::MappingKind::Watch)
+    );
+
+    let report = storage
+        .gc()
+        .run(&GcOptions {
+            retention_days: 90,
+            dry_run: false,
+            ..GcOptions::default()
+        })
+        .await
+        .unwrap();
+    assert!(report.channel_mappings_deleted >= 1);
+    assert_eq!(
+        storage
+            .channel_store()
+            .get_watch_state("telegram", &format!("chat-{}", old_id.0))
+            .await
+            .unwrap(),
+        None,
+        "gc of the observer silently ends the watch"
+    );
 }
 
 #[tokio::test]

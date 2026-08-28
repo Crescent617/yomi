@@ -1,5 +1,6 @@
 use crate::channels::{
-    ChannelStore, DocPermissionRequest, PermRequestRow, RunSubscriptionRow, SessionRouting,
+    ChannelStore, DocPermissionRequest, MappingKind, PermRequestRow, RunSubscriptionRow,
+    SessionRouting,
 };
 use crate::storage::storage_err;
 use crate::types::{Result, SessionId};
@@ -97,15 +98,17 @@ impl ChannelStore for SqliteChannelStore {
         session_id: &SessionId,
         actual_chat_id: &str,
         reply_msg_id: Option<&str>,
+        kind: MappingKind,
     ) -> Result<()> {
         sqlx::query(
             r"INSERT INTO channel_session_mappings
-               (channel_name, external_chat_id, session_id, actual_chat_id, reply_msg_id, created_at)
-               VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+               (channel_name, external_chat_id, session_id, actual_chat_id, reply_msg_id, kind, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                ON CONFLICT(channel_name, external_chat_id) DO UPDATE SET
                session_id = excluded.session_id,
                actual_chat_id = excluded.actual_chat_id,
                reply_msg_id = excluded.reply_msg_id,
+               kind = excluded.kind,
                created_at = CURRENT_TIMESTAMP",
         )
         .bind(channel_name)
@@ -113,6 +116,7 @@ impl ChannelStore for SqliteChannelStore {
         .bind(session_id.as_str())
         .bind(actual_chat_id)
         .bind(reply_msg_id)
+        .bind(kind.as_str())
         .execute(&self.pool)
         .await
         .map_err(|e| storage_err(format!("Failed to save channel mapping: {e}")))?;
@@ -158,18 +162,19 @@ impl ChannelStore for SqliteChannelStore {
         &self,
         session_id: &SessionId,
     ) -> Result<Option<SessionRouting>> {
-        let row: Option<(String, Option<String>, Option<String>, String)> = sqlx::query_as(
-            "SELECT channel_name, COALESCE(actual_chat_id, external_chat_id) AS actual_chat_id, reply_msg_id, external_chat_id
+        let row: Option<(String, Option<String>, Option<String>, String, String)> =
+            sqlx::query_as(
+                "SELECT channel_name, COALESCE(actual_chat_id, external_chat_id) AS actual_chat_id, reply_msg_id, external_chat_id, kind
              FROM channel_session_mappings
              WHERE session_id = ?",
-        )
-        .bind(session_id.as_str())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| storage_err(format!("Failed to find routing by session: {e}")))?;
+            )
+            .bind(session_id.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| storage_err(format!("Failed to find routing by session: {e}")))?;
 
         Ok(row.map(
-            |(channel_name, actual_chat_id, reply_msg_id, mapping_key)| SessionRouting {
+            |(channel_name, actual_chat_id, reply_msg_id, mapping_key, kind)| SessionRouting {
                 channel_name,
                 external_chat_id: actual_chat_id.unwrap_or_default(),
                 reply_msg_id,
@@ -178,6 +183,7 @@ impl ChannelStore for SqliteChannelStore {
                 // an ordinary chat/thread routing.
                 doc_comment: super::parse_doc_comment_mapping_key(&mapping_key),
                 mapping_key,
+                kind: super::MappingKind::from_str_lossy(&kind),
             },
         ))
     }
@@ -363,6 +369,24 @@ impl ChannelStore for SqliteChannelStore {
         .map_err(|e| storage_err(format!("Failed to clear rit override: {e}")))?;
 
         Ok(())
+    }
+
+    async fn get_watch_state(
+        &self,
+        channel_name: &str,
+        chat_id: &str,
+    ) -> Result<Option<MappingKind>> {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT kind FROM channel_session_mappings
+             WHERE channel_name = ? AND external_chat_id = ?",
+        )
+        .bind(channel_name)
+        .bind(crate::channels::watch_mapping_key(chat_id))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("Failed to get watch state: {e}")))?;
+
+        Ok(row.map(|r| MappingKind::from_str_lossy(&r.0)))
     }
 
     async fn save_perm_request(

@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 23;
+pub const CURRENT_SCHEMA_VERSION: i64 = 24;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -298,6 +298,17 @@ const MIGRATIONS: &[Migration] = &[
         version: 23,
         name: "add_cron_precheck",
         sqls: &[r"ALTER TABLE cron_jobs ADD COLUMN precheck TEXT;"],
+    },
+    Migration {
+        version: 24,
+        // channel watch（/watch）：mappings 增 kind 列
+        // （'normal'|'watch'|'watch_off'）——观察者 session 的投递抑制
+        // 判据，同时承载开关状态（off=watch_off，行保留供续任，无需
+        // 独立开关表）。
+        name: "add_channel_watch",
+        sqls: &[
+            r"ALTER TABLE channel_session_mappings ADD COLUMN kind TEXT NOT NULL DEFAULT 'normal';",
+        ],
     },
 ];
 

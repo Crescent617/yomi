@@ -287,6 +287,7 @@ pub(crate) async fn prepare_trigger(
         &chat_id,
         &mapping_key,
         reply_msg_id.as_deref(),
+        crate::channels::MappingKind::Normal,
     )
     .await?;
     record_receipt(config, obs, kernel, &sid, msg);

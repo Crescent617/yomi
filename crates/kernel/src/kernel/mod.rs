@@ -314,7 +314,13 @@ impl Kernel {
         if let Some(hub) = &self.channel_manager {
             let store = hub.store();
             let (sid, reused) = crate::channels::hub_routing::get_or_create_session(
-                &channel, &store, self, key, key, None,
+                &channel,
+                &store,
+                self,
+                key,
+                key,
+                None,
+                crate::channels::MappingKind::Normal,
             )
             .await?;
             return Ok((sid, !reused));
@@ -1651,6 +1657,15 @@ impl Kernel {
 
     /// Delete a session from storage
     pub async fn delete_session(&self, session_id: &SessionId) -> Result<()> {
+        // Cascade the channel routing rows with the session — a dangling
+        // mapping would keep routing (and watch state) alive for a dead
+        // session. (`get_or_create_session` also self-heals at the point
+        // of use; this keeps the store clean in the first place.)
+        if let Some(hub) = &self.channel_manager {
+            hub.store()
+                .delete_by_sessions(std::slice::from_ref(session_id))
+                .await?;
+        }
         self.session_store().await.delete(session_id).await
     }
 

@@ -4,7 +4,7 @@ use crate::channels::reply;
 use crate::channels::{
     hub_command::*, hub_context::*, hub_deliver::*, hub_gate::*, hub_handlers::*, hub_routing::*,
 };
-use crate::channels::{HistoryContainer, HistoryMessage, PlatformAdapter};
+use crate::channels::{HistoryContainer, HistoryMessage, MappingKind, PlatformAdapter};
 use crate::types::ContentBlock;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -270,7 +270,14 @@ async fn test_thread_session_inherits_parent_chat_model_key() {
     let (channel_store, session_store) = create_model_key_test_stores().await;
     let parent_id = create_session_with_model(&session_store, Some("parent-model")).await;
     channel_store
-        .save_mapping("feishu", "chat-1", &parent_id, "chat-1", None)
+        .save_mapping(
+            "feishu",
+            "chat-1",
+            &parent_id,
+            "chat-1",
+            None,
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
 
@@ -292,7 +299,14 @@ async fn test_thread_session_leaves_model_key_unset_without_explicit_parent_mode
     let (channel_store, session_store) = create_model_key_test_stores().await;
     let parent_id = create_session_with_model(&session_store, None).await;
     channel_store
-        .save_mapping("feishu", "chat-1", &parent_id, "chat-1", None)
+        .save_mapping(
+            "feishu",
+            "chat-1",
+            &parent_id,
+            "chat-1",
+            None,
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
 
@@ -317,7 +331,14 @@ async fn test_thread_session_leaves_model_key_unset_without_explicit_parent_mode
 
     let missing_parent_id = SessionId::new();
     channel_store
-        .save_mapping("feishu", "chat-3", &missing_parent_id, "chat-3", None)
+        .save_mapping(
+            "feishu",
+            "chat-3",
+            &missing_parent_id,
+            "chat-3",
+            None,
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
     let without_parent_session = model_key_for_new_channel_session(
@@ -340,7 +361,14 @@ async fn test_non_thread_session_does_not_inherit_model_key() {
     let (channel_store, session_store) = create_model_key_test_stores().await;
     let parent_id = create_session_with_model(&session_store, Some("parent-model")).await;
     channel_store
-        .save_mapping("feishu", "chat-1", &parent_id, "chat-1", None)
+        .save_mapping(
+            "feishu",
+            "chat-1",
+            &parent_id,
+            "chat-1",
+            None,
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
 
@@ -604,6 +632,7 @@ fn test_routing() -> SessionRouting {
         reply_msg_id: None,
         mapping_key: "chat-1".to_string(),
         doc_comment: None,
+        kind: MappingKind::Normal,
     }
 }
 
@@ -1390,7 +1419,7 @@ async fn clear_at_chat_level_addresses_the_chat_session() {
 
     let sid = rig.new_session().await;
     rig.store
-        .save_mapping("mock", "chat-1", &sid, "chat-1", None)
+        .save_mapping("mock", "chat-1", &sid, "chat-1", None, MappingKind::Normal)
         .await
         .unwrap();
     let reply = rig.call(chat_level_cmd("/clear")).await.unwrap();
@@ -1407,7 +1436,7 @@ async fn stop_at_chat_level_addresses_the_chat_session() {
 
     let sid = rig.new_session().await;
     rig.store
-        .save_mapping("mock", "chat-1", &sid, "chat-1", None)
+        .save_mapping("mock", "chat-1", &sid, "chat-1", None, MappingKind::Normal)
         .await
         .unwrap();
     let reply = rig.call(chat_level_cmd("/stop")).await.unwrap();
@@ -1428,7 +1457,7 @@ async fn compact_at_chat_level_addresses_the_chat_session() {
     // answer (locks the key switch).
     let sid = rig.new_session().await;
     rig.store
-        .save_mapping("mock", "chat-1", &sid, "chat-1", None)
+        .save_mapping("mock", "chat-1", &sid, "chat-1", None, MappingKind::Normal)
         .await
         .unwrap();
     let reply = rig.call(chat_level_cmd("/compact")).await.unwrap();
@@ -2908,7 +2937,14 @@ async fn test_is_channel_session() {
     assert!(!hub.is_channel_session(&sid).await);
 
     store
-        .save_mapping("tg_bot", "12345", &sid, "chat123", None)
+        .save_mapping(
+            "tg_bot",
+            "12345",
+            &sid,
+            "chat123",
+            None,
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
     assert!(hub.is_channel_session(&sid).await);
@@ -3064,6 +3100,7 @@ async fn deliver_reply_doc_comment_goes_to_comment_thread() {
         reply_msg_id: None,
         mapping_key: "doc:docx:tok123:c_1".to_string(),
         doc_comment: crate::channels::parse_doc_comment_mapping_key("doc:docx:tok123:c_1"),
+        kind: MappingKind::Normal,
     };
 
     let delivered = deliver_reply(
@@ -3101,6 +3138,7 @@ async fn deliver_reply_doc_comment_chunks_long_text() {
         reply_msg_id: None,
         mapping_key: "doc:docx:tok123:c_1".to_string(),
         doc_comment: crate::channels::parse_doc_comment_mapping_key("doc:docx:tok123:c_1"),
+        kind: MappingKind::Normal,
     };
     let mut buf = reply::RunReplyBuffer::new();
     buf.record_model_end(&"字".repeat(4500));
@@ -5390,9 +5428,19 @@ async fn gate_with_reaction(
     store: &Arc<dyn ChannelStore>,
     msg: &ChannelMessage,
 ) -> Gate {
-    let (gate, reaction) = gate_message(config, store, msg).await;
+    gate_with_snapshot(adapter, config, store, msg).await.0
+}
+
+/// Same, also returning the gate-time watch snapshot.
+async fn gate_with_snapshot(
+    adapter: &Arc<dyn PlatformAdapter>,
+    config: &ChannelConfig,
+    store: &Arc<dyn ChannelStore>,
+    msg: &ChannelMessage,
+) -> (Gate, bool) {
+    let (gate, reaction, watch_on) = gate_message(config, store, msg).await;
     send_gate_reaction(adapter, config, msg, reaction).await;
-    gate
+    (gate, watch_on)
 }
 
 #[tokio::test]
@@ -5729,6 +5777,442 @@ fn threads_command_parse() {
     assert!(HELP_TEXT.contains("/threads"));
 }
 
+#[test]
+fn watch_command_parse() {
+    assert!(matches!(
+        parse_channel_command(Some("/watch")),
+        ChannelCommand::Watch(None)
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/watch on")),
+        ChannelCommand::Watch(Some(true))
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/watch off")),
+        ChannelCommand::Watch(Some(false))
+    ));
+    // No `reset`: the watched set is the whole state.
+    assert!(matches!(
+        parse_channel_command(Some("/watch reset")),
+        ChannelCommand::InvalidWatchCommand
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/watch on now")),
+        ChannelCommand::InvalidWatchCommand
+    ));
+    assert!(HELP_TEXT.contains("/watch"));
+}
+
+/// In a watch-on chat every plain message — @-mention or not — is
+/// `NotAddressed` (no conversation trigger, no ack reaction): the
+/// observer agent decides when to reply. Known commands execute without
+/// an @; unknown slash-words stay silent.
+#[tokio::test]
+async fn gate_watch_on_routes_everything_to_observer() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let sid = SessionId::new();
+    store
+        .save_mapping(
+            "gate",
+            "watch:chat-1",
+            &sid,
+            "chat-1",
+            None,
+            MappingKind::Watch,
+        )
+        .await
+        .unwrap();
+
+    let mock = Arc::new(MockAdapter::new("gate"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+
+    let msg_with = |raw: Option<&str>, mention: bool| {
+        let mut msg = channel_message(None, true, true);
+        msg.is_mention = mention;
+        msg.raw_text = raw.map(str::to_string);
+        msg
+    };
+
+    // Plain chatter AND @-mention alike: NotAddressed, silent, snapshot on.
+    for (raw, mention) in [
+        (Some("随便聊聊"), false),
+        (Some("@bot 直接问你个问题"), true),
+        (None, true),
+        (Some("/infp"), false), // unknown slash-word: may be another bot's
+    ] {
+        let (gate, watch_on) = gate_with_snapshot(
+            &adapter,
+            &feishu_gate_config(),
+            &store,
+            &msg_with(raw, mention),
+        )
+        .await;
+        assert_eq!(gate, Gate::NotAddressed, "raw: {raw:?} mention: {mention}");
+        assert!(watch_on, "snapshot must mark the watch-on chat");
+    }
+    assert!(
+        mock.reactions.lock().await.is_empty(),
+        "no ack may promise a reply"
+    );
+
+    // Known commands execute without an @ (and get the usual ack).
+    for raw in ["/help", "/watch off", "/model k3"] {
+        let (gate, watch_on) = gate_with_snapshot(
+            &adapter,
+            &feishu_gate_config(),
+            &store,
+            &msg_with(Some(raw), false),
+        )
+        .await;
+        assert_eq!(gate, Gate::Allow, "raw: {raw}");
+        assert!(watch_on);
+    }
+    assert_eq!(mock.reactions.lock().await.len(), 3);
+
+    // Unwatched chat: the same message is NotAddressed with snapshot off.
+    let (gate, watch_on) = gate_with_snapshot(
+        &adapter,
+        &feishu_gate_config(),
+        &gate_store().await,
+        &msg_with(Some("随便聊聊"), false),
+    )
+    .await;
+    assert_eq!(gate, Gate::NotAddressed);
+    assert!(!watch_on);
+}
+
+/// Without watch the same non-mention command is not addressed.
+#[tokio::test]
+async fn gate_unwatched_command_without_mention_stays_not_addressed() {
+    let mock = Arc::new(MockAdapter::new("fs"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let mut msg = channel_message(None, true, true);
+    msg.is_mention = false;
+    msg.raw_text = Some("/help".to_string());
+
+    assert_eq!(
+        gate_with_reaction(&adapter, &feishu_gate_config(), &gate_store().await, &msg).await,
+        Gate::NotAddressed
+    );
+}
+
+/// `/watch on|off`: admin-gated mutations, chat-scoped refusals, eager
+/// create on on, kind flip on off, and resume on re-on.
+#[tokio::test]
+async fn watch_command_query_set_off() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "app".to_string(),
+            app_secret: "secret".to_string(),
+        },
+        require_mention: true,
+        admin_users: vec!["ou_admin".to_string()],
+        ..Default::default()
+    };
+    let msg = |user: &str, text: &str, thread: Option<&str>, group: bool| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: user.to_string(),
+        external_message_id: Some("m1".to_string()),
+        is_mention: true,
+        raw_text: Some(text.to_string()),
+        content: vec![ContentBlock::Text {
+            text: text.to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: thread.map(str::to_string),
+        root_id: None,
+        parent_id: None,
+        is_group: group,
+        create_time: Some(1000),
+        doc_comment: None,
+    };
+    let handle = |m: ChannelMessage| {
+        handle_incoming_message(
+            "mock",
+            &config,
+            &store,
+            Arc::clone(&kernel),
+            m,
+            &obs,
+            &adapter,
+        )
+    };
+
+    // Non-admin mutation: denied, nothing persisted.
+    let reply = handle(msg("ou_random", "/watch on", None, true))
+        .await
+        .unwrap();
+    assert_eq!(
+        reply.as_deref(),
+        Some("Permission denied: not in admin_users.")
+    );
+    assert_eq!(store.get_watch_state("mock", "oc_1").await.unwrap(), None);
+
+    // DMs and threads refuse: watch is chat-scoped.
+    let reply = handle(msg("ou_admin", "/watch on", None, false))
+        .await
+        .unwrap();
+    assert!(reply.unwrap().contains("No need for this in DMs"));
+    let reply = handle(msg("ou_admin", "/watch on", Some("omt_1"), true))
+        .await
+        .unwrap();
+    assert!(reply.unwrap().contains("whole chat"));
+    assert_eq!(store.get_watch_state("mock", "oc_1").await.unwrap(), None);
+
+    // Admin turns it on: the observer session is created eagerly.
+    let reply = handle(msg("ou_admin", "/watch on", None, true))
+        .await
+        .unwrap();
+    assert!(reply.unwrap().contains("Watch on"));
+    assert_eq!(
+        store.get_watch_state("mock", "oc_1").await.unwrap(),
+        Some(MappingKind::Watch)
+    );
+
+    // Admin turns it off: the row flips to watch_off, session kept.
+    let reply = handle(msg("ou_admin", "/watch off", None, true))
+        .await
+        .unwrap();
+    assert!(reply.unwrap().contains("Watch off"));
+    assert_eq!(
+        store.get_watch_state("mock", "oc_1").await.unwrap(),
+        Some(MappingKind::WatchPaused)
+    );
+    let paused_sid = store.find_mapping("mock", "watch:oc_1").await.unwrap();
+
+    // Re-on resumes the SAME observer session (kind flips back).
+    let reply = handle(msg("ou_admin", "/watch on", None, true))
+        .await
+        .unwrap();
+    assert!(reply.is_some());
+    assert_eq!(
+        store.get_watch_state("mock", "oc_1").await.unwrap(),
+        Some(MappingKind::Watch)
+    );
+    assert_eq!(
+        store.find_mapping("mock", "watch:oc_1").await.unwrap(),
+        paused_sid,
+        "the same observer resumes with its context"
+    );
+
+    // Bare `/watch` reports the state via an info reply (text fallback
+    // on card-less platforms).
+    let before = mock.outgoing.lock().await.len();
+    let reply = handle(msg("ou_random", "/watch", None, true))
+        .await
+        .unwrap();
+    assert!(reply.is_none(), "info replies go straight to the adapter");
+    let out = mock.outgoing.lock().await;
+    assert!(out.len() > before, "the query must produce an info reply");
+    let ContentBlock::Text { text } = &out.last().unwrap().1[0] else {
+        panic!("expected text info reply");
+    };
+    assert!(text.contains("👁 Watch") && text.contains("`on`"), "{text}");
+
+    // `/watch off` on a never-watched chat says so instead of pretending.
+    let reply = handle(msg("ou_admin", "/watch off", None, true))
+        .await
+        .unwrap();
+    assert!(reply.unwrap().contains("Watch off"));
+    let reply = handle({
+        let mut m = msg("ou_admin", "/watch off", None, true);
+        m.external_chat_id = "oc_never".to_string();
+        m
+    })
+    .await
+    .unwrap();
+    assert_eq!(reply.as_deref(), Some("Watch is not on for this chat."));
+}
+
+/// The tee itself: mirrored messages land in the observer session
+/// (created lazily on first mirror), with no per-message mapping writes
+/// and no duplicate session.
+#[tokio::test]
+async fn watch_mirror_integration() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    // Blackhole model: the run hangs on the model call, but the steered
+    // user message is consumed and persisted regardless.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((s, _)) = listener.accept().await {
+            held.push(s);
+        }
+    });
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        models: vec![crate::provider::ModelConfig {
+            name: "blackhole".into(),
+            endpoint: format!("http://{addr}"),
+            ..Default::default()
+        }],
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+    kernel.start();
+
+    let msg = |text: &str, mid: &str| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: "ou_1".to_string(),
+        external_message_id: Some(mid.to_string()),
+        is_mention: false,
+        raw_text: Some(text.to_string()),
+        content: vec![ContentBlock::Text {
+            text: format!(
+                "[ts][from_user_id: ou_1][chat_id: oc_1][msg_id: {mid}][platform: feishu]\n{text}"
+            ),
+        }],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: true,
+        create_time: Some(1000),
+        doc_comment: None,
+    };
+
+    // First mirror: creates the observer session lazily.
+    crate::channels::hub_watch::mirror_message("mock", &store, &kernel, &msg("第一条", "om_1"))
+        .await;
+    let sid = store
+        .find_mapping("mock", "watch:oc_1")
+        .await
+        .unwrap()
+        .expect("mirror must create the observer mapping");
+    let routing = store.find_routing_by_session(&sid).await.unwrap().unwrap();
+    assert!(routing.is_watch());
+    assert_eq!(
+        routing.reply_msg_id, None,
+        "no delivery anchor for observers"
+    );
+
+    // Second mirror: same session, both messages present.
+    crate::channels::hub_watch::mirror_message("mock", &store, &kernel, &msg("第二条", "om_2"))
+        .await;
+    assert_eq!(
+        store.find_mapping("mock", "watch:oc_1").await.unwrap(),
+        Some(sid.clone()),
+        "no duplicate observer"
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let msgs = kernel.list_messages(&sid).await.unwrap_or_default();
+        let blob = format!("{msgs:?}");
+        if blob.contains("第一条") && blob.contains("第二条") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "mirrors never landed: {blob}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    // Dangling mapping self-heal: delete the session out from under the
+    // mapping; the next mirror must drop the stale row and recreate.
+    kernel.delete_session(&sid).await.unwrap();
+    // delete_session cascades mappings — re-dangle manually to exercise
+    // the mirror's self-heal against a truly stale row.
+    store
+        .save_mapping("mock", "watch:oc_1", &sid, "oc_1", None, MappingKind::Watch)
+        .await
+        .unwrap();
+    crate::channels::hub_watch::mirror_message("mock", &store, &kernel, &msg("第三条", "om_3"))
+        .await;
+    let new_sid = store
+        .find_mapping("mock", "watch:oc_1")
+        .await
+        .unwrap()
+        .expect("self-heal must recreate the mapping");
+    assert_ne!(new_sid, sid, "a fresh observer replaces the dead one");
+}
+
+/// `/bind <sid>` refuses to retarget a watch observer session.
+#[tokio::test]
+async fn bind_refuses_watch_session() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "app".to_string(),
+            app_secret: "secret".to_string(),
+        },
+        require_mention: true,
+        admin_users: vec!["ou_admin".to_string()],
+        ..Default::default()
+    };
+
+    // A live watch observer session.
+    let (watch_sid, _) = get_or_create_session(
+        "mock",
+        &store,
+        &kernel,
+        "oc_1",
+        "watch:oc_1",
+        None,
+        MappingKind::Watch,
+    )
+    .await
+    .unwrap();
+
+    let msg = ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: "ou_admin".to_string(),
+        external_message_id: Some("m1".to_string()),
+        is_mention: true,
+        raw_text: Some(format!("/bind {watch_sid}", watch_sid = watch_sid.0)),
+        content: vec![ContentBlock::Text {
+            text: "/bind".to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: true,
+        create_time: Some(1000),
+        doc_comment: None,
+    };
+    let reply = handle_incoming_message("mock", &config, &store, kernel, msg, &obs, &adapter)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(reply.contains("watch observer session"), "{reply}");
+    assert!(reply.contains("cannot be rebound"), "{reply}");
+}
+
 /// The chat override wins over the channel config; other chats and a
 /// cleared override fall back to it.
 #[tokio::test]
@@ -6010,7 +6494,14 @@ async fn passive_receipt_records_for_running_session() {
     let config = feishu_gate_config();
     let sid = SessionId::new();
     store
-        .save_mapping(&config.name, "chat-1", &sid, "chat-1", None)
+        .save_mapping(
+            &config.name,
+            "chat-1",
+            &sid,
+            "chat-1",
+            None,
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
 
@@ -6030,7 +6521,14 @@ async fn passive_receipt_skips_idle_session() {
     let config = feishu_gate_config();
     let sid = SessionId::new();
     store
-        .save_mapping(&config.name, "chat-1", &sid, "chat-1", None)
+        .save_mapping(
+            &config.name,
+            "chat-1",
+            &sid,
+            "chat-1",
+            None,
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
 
@@ -6066,7 +6564,14 @@ async fn passive_receipt_skips_commands() {
     let config = feishu_gate_config();
     let sid = SessionId::new();
     store
-        .save_mapping(&config.name, "chat-1", &sid, "chat-1", None)
+        .save_mapping(
+            &config.name,
+            "chat-1",
+            &sid,
+            "chat-1",
+            None,
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
 
@@ -6091,7 +6596,14 @@ async fn passive_receipt_records_in_thread() {
     };
     let sid = SessionId::new();
     store
-        .save_mapping(&config.name, "root-1", &sid, "chat-1", Some("root-1"))
+        .save_mapping(
+            &config.name,
+            "root-1",
+            &sid,
+            "chat-1",
+            Some("root-1"),
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
 
@@ -6115,7 +6627,14 @@ async fn passive_receipt_skips_when_observability_off() {
     };
     let sid = SessionId::new();
     store
-        .save_mapping(&config.name, "chat-1", &sid, "chat-1", None)
+        .save_mapping(
+            &config.name,
+            "chat-1",
+            &sid,
+            "chat-1",
+            None,
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
 
@@ -6736,6 +7255,7 @@ async fn test_notify_run_subscribers() {
         reply_msg_id: None,
         mapping_key: "omt_1".to_string(),
         doc_comment: None,
+        kind: MappingKind::Normal,
     };
 
     // No delivered reply → nothing to link to, no notification.
@@ -6842,6 +7362,7 @@ async fn notify_quote_setup() -> (
         reply_msg_id: None,
         mapping_key: "omt_1".to_string(),
         doc_comment: None,
+        kind: MappingKind::Normal,
     };
     (store, mock, routing)
 }
@@ -7503,9 +8024,17 @@ async fn mailbox_command_show_retract_clear_and_card_actions() {
     assert!(reply.unwrap().contains("No session yet"));
 
     // 建会话并占住 agent（首个模型请求挂起）。
-    let (sid, _) = get_or_create_session("mock", &store, &kernel, "oc_1", "oc_1", None)
-        .await
-        .unwrap();
+    let (sid, _) = get_or_create_session(
+        "mock",
+        &store,
+        &kernel,
+        "oc_1",
+        "oc_1",
+        None,
+        MappingKind::Normal,
+    )
+    .await
+    .unwrap();
     let text = |t: &str| {
         vec![ContentBlock::Text {
             text: t.to_string(),
@@ -7686,9 +8215,17 @@ async fn queue_command_carries_images() {
         require_mention: true,
         ..Default::default()
     };
-    let (sid, _) = get_or_create_session("mock", &store, &kernel, "oc_1", "oc_1", None)
-        .await
-        .unwrap();
+    let (sid, _) = get_or_create_session(
+        "mock",
+        &store,
+        &kernel,
+        "oc_1",
+        "oc_1",
+        None,
+        MappingKind::Normal,
+    )
+    .await
+    .unwrap();
     let text = |t: &str| {
         vec![ContentBlock::Text {
             text: t.to_string(),
@@ -7809,7 +8346,13 @@ async fn get_or_create_session_concurrent_same_key_single_creator() {
         let kernel = Arc::clone(&kernel);
         async move {
             crate::channels::hub_routing::get_or_create_session(
-                "feishu", &store, &kernel, "oc_x", "omt_1", None,
+                "feishu",
+                &store,
+                &kernel,
+                "oc_x",
+                "omt_1",
+                None,
+                MappingKind::Normal,
             )
             .await
             .unwrap()

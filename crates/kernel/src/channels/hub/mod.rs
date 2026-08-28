@@ -16,13 +16,14 @@ pub(crate) mod delivery_pool;
 pub(crate) mod gate;
 pub(crate) mod handlers;
 pub(crate) mod routing;
+pub(crate) mod watch;
 
 #[cfg(test)]
 #[path = "stress_test.rs"]
 mod stress_tests;
 
 use crate::channels::delivery_pool::{DeliveryJob, DeliveryPool};
-use crate::channels::hub_command::parse_channel_command;
+use crate::channels::hub_command::{parse_channel_command, ChannelCommand};
 use crate::channels::hub_context::{
     advance_history_cursor, prepare_trigger, record_passive_receipt, TriggerKind,
 };
@@ -219,7 +220,7 @@ impl ChannelHub {
 
         // Gated messages awaiting serial dispatch (session routing,
         // history backfill, receipts) — bounded like the incoming queue.
-        let (dispatch_tx, dispatch_rx) = mpsc::channel::<(ChannelMessage, Gate)>(256);
+        let (dispatch_tx, dispatch_rx) = mpsc::channel::<(ChannelMessage, Gate, bool)>(256);
         let adapter_dispatch = Arc::clone(&adapter);
         let name_dispatch = name.clone();
         let config_dispatch = config.clone();
@@ -386,7 +387,7 @@ impl ChannelHub {
                             warn!("kernel gone, stopping gate loop");
                             break;
                         }
-                        let (gate, reaction) = gate_message(&config_gate, &store, &msg).await;
+                        let (gate, reaction, watch_on) = gate_message(&config_gate, &store, &msg).await;
                         // Fire-and-forget: a slow reactions API must not
                         // stall the gate. Silent messages (no reaction
                         // decided) skip the spawn entirely.
@@ -402,8 +403,10 @@ impl ChannelHub {
                             continue;
                         }
                         // Allow / NotAddressed: stateful handling stays
-                        // serial, in arrival order, behind the gate.
-                        if dispatch_tx.send((msg, gate)).await.is_err() {
+                        // serial, in arrival order, behind the gate. The
+                        // gate-time watch snapshot travels along so the
+                        // tee below never races a queued `/watch` toggle.
+                        if dispatch_tx.send((msg, gate, watch_on)).await.is_err() {
                             break;
                         }
                     }
@@ -428,11 +431,33 @@ impl ChannelHub {
                         info!(channel = %name_dispatch, "dispatch loop cancelled");
                         break;
                     }
-                    Some((msg, gate)) = dispatch_rx.recv() => {
+                    Some((msg, gate, watch_on)) = dispatch_rx.recv() => {
                         let Some(coord) = kernel_dispatch.upgrade() else {
                             warn!("kernel gone, stopping dispatch loop");
                             break;
                         };
+                        // Watch tee: in a watch-on chat every plain
+                        // message (mention or not) is mirrored to the
+                        // observer session — the group's only consumer on
+                        // this path (the gate suspended conversation
+                        // triggers). Commands are control-plane — the hub
+                        // is their only consumer; they are never mirrored.
+                        // `watch_on` is the gate-time snapshot, so a queued
+                        // `/watch` toggle can't split this message's fate.
+                        if watch_on
+                            && matches!(
+                                parse_channel_command(msg.raw_text.as_deref()),
+                                ChannelCommand::None
+                            )
+                        {
+                            crate::channels::hub_watch::mirror_message(
+                                &name_dispatch,
+                                &store_dispatch,
+                                &coord,
+                                &msg,
+                            )
+                            .await;
+                        }
                         // Non-addressed chatter still counts as a mid-run
                         // post when it lands in a running session's
                         // conversation.
@@ -673,6 +698,14 @@ impl ChannelHub {
                         else {
                             continue;
                         };
+                        // Watch observers get no channel voice at all:
+                        // withholding their events from the delivery pool
+                        // is the single chokepoint that suppresses status
+                        // cards, typing, ask cards, reply delivery and
+                        // subscriber notify in one place.
+                        if routing.is_watch() {
+                            continue;
+                        }
                         pool.dispatch(
                             &session_id,
                             DeliveryJob {

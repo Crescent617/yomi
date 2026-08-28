@@ -275,6 +275,7 @@ pub(crate) async fn handle_incoming_message(
                 &chat_id,
                 &mapping_key,
                 reply_msg_id.as_deref(),
+                crate::channels::MappingKind::Normal,
             )
             .await?;
             kernel.set_session_model(&sid, &key).await?;
@@ -297,6 +298,13 @@ pub(crate) async fn handle_incoming_message(
         }
         ChannelCommand::InvalidThreadsCommand => Ok(Some(
             "Usage: `/threads` to show the current setting; `/threads on|off|reset` to change it (admin)."
+                .to_string(),
+        )),
+        ChannelCommand::Watch(on) => {
+            handle_watch_command(config, store, &kernel, &msg, adapter, reply_msg_id, on).await
+        }
+        ChannelCommand::InvalidWatchCommand => Ok(Some(
+            "Usage: `/watch` to show the current setting; `/watch on|off` to change it (admin)."
                 .to_string(),
         )),
         ChannelCommand::Sessions(offset) => {
@@ -810,6 +818,14 @@ pub(crate) async fn handle_bind(
     // previous conversation.
     let mut moved = false;
     if let Some(routing) = store.find_routing_by_session(&sid).await? {
+        // A watch observer is bound to its chat's mirror stream by
+        // construction; rebinding it would break the skill-only contract
+        // (its delivery suppression follows the mapping's kind).
+        if routing.is_watch() {
+            return Ok(format!(
+                "⚠️ `{target}` is a watch observer session; it cannot be rebound."
+            ));
+        }
         let compatible = if msg.doc_comment.is_some() {
             routing.mapping_key == scope_key
         } else {
@@ -849,6 +865,7 @@ pub(crate) async fn handle_bind(
             &sid,
             chat_id,
             reply_msg_id.as_deref(),
+            crate::channels::MappingKind::Normal,
         )
         .await?;
     let title = session
@@ -1000,6 +1017,103 @@ pub(crate) async fn handle_threads_command(
                 on_off(config.reply_in_thread),
             )))
         }
+    }
+}
+
+/// `/watch`: query or switch this chat's watch mode (mutations are
+/// admin-only). Chat-scoped. While on, every message of the chat is
+/// mirrored to the observer session (`watch:{chat_id}`, see
+/// `hub/watch.rs`) — the group's only message consumer: conversation
+/// triggers are suspended, and the agent itself decides when a reply is
+/// warranted, speaking only via the platform skill from its own skill
+/// list (a pure observer when none covers the platform).
+///
+/// The mapping row IS the state: `/watch on` creates the observer
+/// eagerly (`kind=watch`); `/watch off` flips it to `watch_off` and
+/// cancels the in-flight run — row, session and context stay put, so a
+/// later `/watch on` resumes the same observer with its memory intact.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn handle_watch_command(
+    config: &ChannelConfig,
+    store: &Arc<dyn ChannelStore>,
+    kernel: &Arc<Kernel>,
+    msg: &ChannelMessage,
+    adapter: &Arc<dyn PlatformAdapter>,
+    reply_msg_id: Option<String>,
+    on: Option<bool>,
+) -> Result<Option<String>> {
+    if !msg.is_group {
+        return Ok(Some(
+            "No need for this in DMs — every message is answered.".to_string(),
+        ));
+    }
+    if msg.thread_id.is_some() {
+        return Ok(Some(
+            "Watch applies to the whole chat — use `/watch` at top level.".to_string(),
+        ));
+    }
+    let chat_id = &msg.external_chat_id;
+    let watch_key = crate::channels::watch_mapping_key(chat_id);
+    let Some(on) = on else {
+        let state = store.get_watch_state(&config.name, chat_id).await?;
+        let body = match state {
+            Some(crate::channels::MappingKind::Watch) => "This chat: `on`.".to_string(),
+            _ => "This chat: `off`.".to_string(),
+        };
+        send_info_reply(adapter, msg, reply_msg_id, "👁 Watch", body).await?;
+        return Ok(None);
+    };
+    if let Some(deny) = crate::channels::approval::check_admin(config, &msg.external_user_id) {
+        return Ok(Some(deny));
+    }
+    if on {
+        // Eager create — or flip `watch_off` back to `watch`, resuming
+        // the same observer session (the reuse path refreshes the kind).
+        get_or_create_session(
+            &config.name,
+            store,
+            kernel,
+            chat_id,
+            &watch_key,
+            None,
+            crate::channels::MappingKind::Watch,
+        )
+        .await?;
+        Ok(Some(
+            "👁 Watch on — every message here goes to the observer session. \
+             It decides for itself when to speak (via skill) or stay silent; \
+             @-mentions no longer open separate conversation sessions while watch is on. \
+             `/watch off` to pause."
+                .to_string(),
+        ))
+    } else {
+        // Flip to `watch_off` (row kept), stop the in-flight run, and
+        // drain the mailbox: steers already mirrored must not wake the
+        // observer after the explicit off — its skill voice is not
+        // kind-gated, only channel delivery is.
+        if let Some(sid) = store.find_mapping(&config.name, &watch_key).await? {
+            store
+                .save_mapping(
+                    &config.name,
+                    &watch_key,
+                    &sid,
+                    chat_id,
+                    None,
+                    crate::channels::MappingKind::WatchPaused,
+                )
+                .await?;
+            kernel.cancel(&sid);
+            kernel
+                .clear_mailbox(&sid, crate::comms::MailboxScope::All)
+                .await;
+        } else {
+            return Ok(Some("Watch is not on for this chat.".to_string()));
+        }
+        Ok(Some(
+            "⏹ Watch off — the observer keeps its context; `/watch on` resumes it. \
+             @-mentions are answered by conversation sessions again."
+                .to_string(),
+        ))
     }
 }
 
@@ -1226,8 +1340,16 @@ pub(crate) async fn set_chat_model(
     chat_id: &str,
     key: Option<&str>,
 ) -> Result<()> {
-    let (chat_sid, _) =
-        get_or_create_session(channel_name, store, kernel, chat_id, chat_id, None).await?;
+    let (chat_sid, _) = get_or_create_session(
+        channel_name,
+        store,
+        kernel,
+        chat_id,
+        chat_id,
+        None,
+        crate::channels::MappingKind::Normal,
+    )
+    .await?;
     match key {
         Some(k) => kernel.set_session_model(&chat_sid, k).await?,
         None => kernel.clear_session_model(&chat_sid).await?,
@@ -1258,12 +1380,16 @@ async fn collect_session_entries(
     offset: usize,
 ) -> Result<(Vec<SessionEntry>, bool)> {
     // Channel-routed sessions only — a jump needs a delivery target.
-    let routed: std::collections::HashSet<String> = store
-        .list_mappings(channel_name)
-        .await?
-        .into_iter()
-        .map(|(_, sid)| sid.0.to_string())
-        .collect();
+    // Watch observers (mapping key prefix `watch:`) get the 👁 marker.
+    let mappings = store.list_mappings(channel_name).await?;
+    let mut routed = std::collections::HashSet::with_capacity(mappings.len());
+    let mut watchers = std::collections::HashSet::new();
+    for (key, sid) in mappings {
+        if key.starts_with(crate::channels::WATCH_KEY_PREFIX) {
+            watchers.insert(sid.0.to_string());
+        }
+        routed.insert(sid.0.to_string());
+    }
 
     // Sessions paginate by cursor (updated_at desc); offset pages over
     // the *routed* matches.
@@ -1328,6 +1454,8 @@ async fn collect_session_entries(
         let active = running.contains(info.id.0.as_str());
         let marker = if active {
             "⚡"
+        } else if watchers.contains(info.id.0.as_str()) {
+            "👁"
         } else if link.as_ref().is_some_and(|(_, is_thread)| *is_thread) {
             "🧵"
         } else {

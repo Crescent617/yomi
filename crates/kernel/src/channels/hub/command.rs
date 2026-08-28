@@ -43,6 +43,8 @@ pub(crate) const CMD_MENTION: &str = "/mention";
 
 pub(crate) const CMD_THREADS: &str = "/threads";
 
+pub(crate) const CMD_WATCH: &str = "/watch";
+
 pub(crate) const CMD_MAILBOX: &str = "/mailbox";
 
 pub(crate) const CMD_SHELL: &str = "/bg";
@@ -77,6 +79,7 @@ pub(crate) const COMMANDS: &[(&str, &[&str])] = &[
     (CMD_UNSUBSCRIBE, &["/unsub"]),
     (CMD_MENTION, &[]),
     (CMD_THREADS, &[]),
+    (CMD_WATCH, &[]),
     (CMD_MAILBOX, &["/mb"]),
     (CMD_SHELL, &["/shell"]),
     (CMD_SETTINGS, &[]),
@@ -119,6 +122,7 @@ pub(crate) const HELP_TEXT: &str = "\
 **Chat admin**
 `/mention` — show the @-requirement here; `/mention on|off|reset` to override it
 `/threads` — show reply-in-thread mode for this chat; `/threads on|off|reset` to override it
+`/watch` — show watch mode for this chat; `/watch on|off` to route every message to a single agent session that decides when to reply (admin)
 `/settings` — settings panel card: mention / reply-in-thread / model overrides as dropdowns
 `/cron` — cron panel card: pause / resume / delete scheduled jobs (admin; **all** jobs, any chat)
 `/bind` — show this conversation's session id; `/bind <session_id>` to retarget it
@@ -199,6 +203,11 @@ pub(crate) enum ChannelCommand {
     Threads(Option<OverrideMode>),
     /// A malformed `/threads` command.
     InvalidThreadsCommand,
+    /// Query (`None`) or switch this chat's watch mode (`Some(on)` —
+    /// admin only). No `reset`: the watched set is the whole state.
+    Watch(Option<bool>),
+    /// A malformed `/watch` command.
+    InvalidWatchCommand,
     /// Show or manage the session's pending mailbox (admin).
     Mailbox(crate::channels::mailbox::MailboxSub),
     /// A malformed `/mailbox` command.
@@ -408,6 +417,12 @@ pub(crate) fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
             (Some("off"), None) => ChannelCommand::Threads(Some(OverrideMode::Off)),
             (Some("reset"), None) => ChannelCommand::Threads(Some(OverrideMode::Reset)),
             _ => ChannelCommand::InvalidThreadsCommand,
+        },
+        CMD_WATCH => match (parts.next(), parts.next()) {
+            (None, None) => ChannelCommand::Watch(None),
+            (Some("on"), None) => ChannelCommand::Watch(Some(true)),
+            (Some("off"), None) => ChannelCommand::Watch(Some(false)),
+            _ => ChannelCommand::InvalidWatchCommand,
         },
         CMD_SETTINGS => ChannelCommand::Settings,
         CMD_CRON => ChannelCommand::Cron,

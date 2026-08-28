@@ -21,7 +21,14 @@ async fn test_save_and_find_mapping() {
 
     let sid = SessionId::new();
     store
-        .save_mapping("tg_bot", "12345", &sid, "chat123", None)
+        .save_mapping(
+            "tg_bot",
+            "12345",
+            &sid,
+            "chat123",
+            None,
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
 
@@ -40,11 +47,25 @@ async fn test_update_mapping() {
     let sid1 = SessionId::new();
     let sid2 = SessionId::new();
     store
-        .save_mapping("tg_bot", "12345", &sid1, "chat123", None)
+        .save_mapping(
+            "tg_bot",
+            "12345",
+            &sid1,
+            "chat123",
+            None,
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
     store
-        .save_mapping("tg_bot", "12345", &sid2, "chat123", None)
+        .save_mapping(
+            "tg_bot",
+            "12345",
+            &sid2,
+            "chat123",
+            None,
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
 
@@ -60,15 +81,22 @@ async fn test_list_mappings() {
     let sid1 = SessionId::new();
     let sid2 = SessionId::new();
     store
-        .save_mapping("tg_bot", "111", &sid1, "chat1", None)
+        .save_mapping("tg_bot", "111", &sid1, "chat1", None, MappingKind::Normal)
         .await
         .unwrap();
     store
-        .save_mapping("tg_bot", "222", &sid2, "chat2", None)
+        .save_mapping("tg_bot", "222", &sid2, "chat2", None, MappingKind::Normal)
         .await
         .unwrap();
     store
-        .save_mapping("other", "333", &SessionId::new(), "chat3", None)
+        .save_mapping(
+            "other",
+            "333",
+            &SessionId::new(),
+            "chat3",
+            None,
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
 
@@ -83,7 +111,14 @@ async fn test_find_routing_by_session_id() {
 
     let sid = SessionId::new();
     store
-        .save_mapping("tg_bot", "12345", &sid, "chat123", Some("root_msg"))
+        .save_mapping(
+            "tg_bot",
+            "12345",
+            &sid,
+            "chat123",
+            Some("root_msg"),
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
 
@@ -96,6 +131,7 @@ async fn test_find_routing_by_session_id() {
             reply_msg_id: Some("root_msg".to_string()),
             mapping_key: "12345".to_string(),
             doc_comment: None,
+            kind: MappingKind::Normal,
         })
     );
 
@@ -115,7 +151,14 @@ async fn test_find_routing_parses_doc_comment_mapping_key() {
     // Doc-comment sessions store an empty actual chat id; the delivery
     // target rides the mapping key (see `doc_comment_mapping_key`).
     store
-        .save_mapping("feishu", "doc:docx:tok123:c_1", &sid, "", None)
+        .save_mapping(
+            "feishu",
+            "doc:docx:tok123:c_1",
+            &sid,
+            "",
+            None,
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
 
@@ -132,6 +175,7 @@ async fn test_find_routing_parses_doc_comment_mapping_key() {
                 file_type: "docx".to_string(),
                 comment_id: "c_1".to_string(),
             }),
+            kind: MappingKind::Normal,
         })
     );
 }
@@ -143,11 +187,25 @@ async fn test_update_routing() {
 
     let sid = SessionId::new();
     store
-        .save_mapping("tg_bot", "thread1", &sid, "chat1", None)
+        .save_mapping(
+            "tg_bot",
+            "thread1",
+            &sid,
+            "chat1",
+            None,
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
     store
-        .save_mapping("tg_bot", "thread1", &sid, "chat1", Some("msg2"))
+        .save_mapping(
+            "tg_bot",
+            "thread1",
+            &sid,
+            "chat1",
+            Some("msg2"),
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
 
@@ -545,4 +603,145 @@ async fn test_run_subscription_round_trip_and_matching() {
         .await
         .unwrap();
     assert_eq!(removed, 0);
+}
+
+#[tokio::test]
+async fn test_watch_state_via_mapping_kind() {
+    let pool = create_test_pool().await;
+    let store = SqliteChannelStore::new(pool);
+
+    // Never watched: no mapping row → None.
+    assert_eq!(store.get_watch_state("feishu", "oc_1").await.unwrap(), None);
+
+    // On: a kind=watch mapping means watching.
+    let sid = SessionId::new();
+    store
+        .save_mapping(
+            "feishu",
+            "watch:oc_1",
+            &sid,
+            "oc_1",
+            None,
+            MappingKind::Watch,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_watch_state("feishu", "oc_1").await.unwrap(),
+        Some(MappingKind::Watch)
+    );
+    // Scoped per (channel, chat).
+    assert_eq!(store.get_watch_state("feishu", "oc_2").await.unwrap(), None);
+    assert_eq!(
+        store.get_watch_state("telegram", "oc_1").await.unwrap(),
+        None
+    );
+
+    // Off: kind flips to watch_off; the row (and session) survives.
+    store
+        .save_mapping(
+            "feishu",
+            "watch:oc_1",
+            &sid,
+            "oc_1",
+            None,
+            MappingKind::WatchPaused,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_watch_state("feishu", "oc_1").await.unwrap(),
+        Some(MappingKind::WatchPaused)
+    );
+
+    // Re-on: same row flips back — the same session resumes.
+    store
+        .save_mapping(
+            "feishu",
+            "watch:oc_1",
+            &sid,
+            "oc_1",
+            None,
+            MappingKind::Watch,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_watch_state("feishu", "oc_1").await.unwrap(),
+        Some(MappingKind::Watch)
+    );
+    assert_eq!(
+        store.find_mapping("feishu", "watch:oc_1").await.unwrap(),
+        Some(sid)
+    );
+}
+
+#[tokio::test]
+async fn test_mapping_kind_roundtrip() {
+    let pool = create_test_pool().await;
+    let store = SqliteChannelStore::new(pool);
+
+    // A watch mapping reads back with kind = Watch and is_watch().
+    let watch_sid = SessionId::new();
+    store
+        .save_mapping(
+            "feishu",
+            "watch:oc_1",
+            &watch_sid,
+            "oc_1",
+            None,
+            MappingKind::Watch,
+        )
+        .await
+        .unwrap();
+    let routing = store
+        .find_routing_by_session(&watch_sid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(routing.kind, MappingKind::Watch);
+    assert!(routing.is_watch());
+    assert_eq!(routing.mapping_key, "watch:oc_1");
+
+    // A normal mapping stays Normal; the two kinds coexist on one chat.
+    let chat_sid = SessionId::new();
+    store
+        .save_mapping(
+            "feishu",
+            "oc_1",
+            &chat_sid,
+            "oc_1",
+            None,
+            MappingKind::Normal,
+        )
+        .await
+        .unwrap();
+    let routing = store
+        .find_routing_by_session(&chat_sid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(routing.kind, MappingKind::Normal);
+    assert!(!routing.is_watch());
+
+    // A paused observer still counts as watch (delivery stays
+    // suppressed; only the mirror tap is off).
+    store
+        .save_mapping(
+            "feishu",
+            "watch:oc_1",
+            &watch_sid,
+            "oc_1",
+            None,
+            MappingKind::WatchPaused,
+        )
+        .await
+        .unwrap();
+    let routing = store
+        .find_routing_by_session(&watch_sid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(routing.kind, MappingKind::WatchPaused);
+    assert!(routing.is_watch());
 }

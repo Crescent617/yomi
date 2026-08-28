@@ -107,6 +107,35 @@ async fn skill_section_indexes_only_top_level_skills() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+#[test]
+fn watch_section_states_the_contract() {
+    let section = crate::prompt::watch_section("feishu", "oc_1", false);
+    // Sole-listener identity + the chat it watches.
+    assert!(section.contains("sole listener"));
+    assert!(section.contains("oc_1"));
+    assert!(section.contains("feishu"));
+    // The channel delivers nothing; the skill is the only voice.
+    assert!(section.contains("delivers NOTHING"));
+    assert!(section.contains("skill"));
+    // Mentions are the agent's own to answer (or not); silence default otherwise.
+    assert!(section.contains("usually respond"));
+    assert!(section.contains("silence is the default"));
+    assert!(section.contains("no separate conversation session"));
+    // Commands are never mirrored — the intake clause must not overpromise.
+    assert!(section.contains("non-command message"));
+    assert!(!section.contains("PAUSED"));
+}
+
+#[test]
+fn watch_section_paused_variant_drops_intake_promise() {
+    let paused = crate::prompt::watch_section("feishu", "oc_1", true);
+    assert!(paused.contains("PAUSED"));
+    assert!(!paused.contains("non-command message"));
+    // Delivery suppression still stated — a paused observer must not
+    // believe its text gets posted either.
+    assert!(paused.contains("delivers NOTHING"));
+}
+
 #[tokio::test]
 async fn session_rules_section_reads_verbatim_or_nothing() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -143,4 +172,93 @@ async fn session_rules_section_reads_verbatim_or_nothing() {
         .unwrap();
     assert!(out.ends_with("(truncated)"));
     assert!(out.len() <= crate::prompt::SESSION_RULES_MAX_BYTES + 20);
+}
+
+#[tokio::test]
+async fn compose_system_prompt_sub_agent_gets_rules_only() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path().join("sessions").join("rules");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("sub_1.md"), "别跟用户抢话。").unwrap();
+
+    let prompt = compose_system_prompt(SystemPromptParts {
+        base_prompt: "BASE".into(),
+        template_body: None,
+        is_sub_agent: true,
+        enable_attachments: true,
+        channel_routed: false,
+        watch: None,
+        data_dir: tmp.path(),
+        session_id: "sub_1",
+    })
+    .await;
+
+    // 无契约段（输出不出 parent），RULE.md 原文照注。
+    assert_eq!(prompt, "BASE\n\n别跟用户抢话。");
+}
+
+#[tokio::test]
+async fn compose_system_prompt_main_session_full_stack() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path().join("sessions").join("rules");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("watch:oc_1.md"), "群里少说话。").unwrap();
+
+    let prompt = compose_system_prompt(SystemPromptParts {
+        base_prompt: "BASE".into(),
+        template_body: None,
+        is_sub_agent: false,
+        enable_attachments: true,
+        channel_routed: true,
+        watch: Some(("feishu", "oc_1", false)),
+        data_dir: tmp.path(),
+        session_id: "watch:oc_1",
+    })
+    .await;
+
+    assert!(prompt.starts_with("BASE\n\n# Attachments"));
+    assert!(prompt.contains("\n\n# Mentions"));
+    assert!(prompt.contains("\n\n# Watch mode"));
+    assert!(prompt.ends_with("\n\n群里少说话。"));
+}
+
+#[tokio::test]
+async fn compose_system_prompt_template_wins_rules_still_appended() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path().join("sessions").join("rules");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("sub_t.md"), "模板也有规矩。").unwrap();
+
+    let prompt = compose_system_prompt(SystemPromptParts {
+        base_prompt: "BASE".into(),
+        template_body: Some("TEMPLATE".into()),
+        is_sub_agent: true,
+        enable_attachments: true,
+        channel_routed: false,
+        watch: None,
+        data_dir: tmp.path(),
+        session_id: "sub_t",
+    })
+    .await;
+
+    assert_eq!(prompt, "TEMPLATE\n\n模板也有规矩。");
+}
+
+#[tokio::test]
+async fn compose_system_prompt_without_rules_file_leaves_prompt_untouched() {
+    let tmp = tempfile::TempDir::new().unwrap();
+
+    let prompt = compose_system_prompt(SystemPromptParts {
+        base_prompt: "BASE".into(),
+        template_body: None,
+        is_sub_agent: true,
+        enable_attachments: false,
+        channel_routed: false,
+        watch: None,
+        data_dir: tmp.path(),
+        session_id: "ghost",
+    })
+    .await;
+
+    assert_eq!(prompt, "BASE");
 }

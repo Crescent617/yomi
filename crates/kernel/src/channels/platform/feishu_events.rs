@@ -297,7 +297,7 @@ impl FeishuAdapter {
             .as_ref()
             .map_or(String::new(), |rid| format!("[root: {rid}]"));
         let header = format!(
-            "[{ts}][from_user_id: {user_id}][chat_id: {chat_id}]{thread_part}{root_part}[platform: feishu]"
+            "[{ts}][from_user_id: {user_id}][chat_id: {chat_id}][msg_id: {msg_id}]{thread_part}{root_part}[platform: feishu]"
         );
         let formatted = if text.is_empty() {
             header

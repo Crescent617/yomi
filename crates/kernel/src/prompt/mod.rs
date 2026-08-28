@@ -29,6 +29,41 @@ pub(crate) const ATTACHMENTS_SECTION: &str = "# Attachments\nTo attach files to 
 /// never get it — no platform is there to render it.
 pub(crate) const MENTIONS_SECTION: &str = "# Mentions\nTo mention a user in your reply, write `<@USER_ID>` — the platform renders it as a real mention with notification. Use it only when warranted: the user asked you to @ someone, or you are addressing a bot — in that case the mention is required (it won't receive your message otherwise). Never @ any human gratuitously.";
 
+/// Watch-observer contract for a watched chat's observer session
+/// (`/watch`, mapping kind `watch`): every non-command message of the
+/// chat is mirrored to it and it is the chat's ONLY message consumer
+/// (mention triggers are suspended while watch is on) — but the channel
+/// delivers NOTHING for it: its final text is never posted, no status
+/// card, no reactions. Its only voice is the platform skill from its own
+/// skill list; without one it is a pure read-only observer. Appended to
+/// the base prompt by the conductor at spawn (derived from the session's
+/// routing row), so the contract survives context compaction. `paused`
+/// = the mirror tap is currently closed (`/watch off`): the delivery
+/// suppression still holds, but the "sole listener" clause is dropped —
+/// no new messages are arriving.
+pub(crate) fn watch_section(channel_name: &str, chat_id: &str, paused: bool) -> String {
+    let intake = if paused {
+        "watch is currently PAUSED: no new messages are being mirrored to you."
+    } else {
+        "every non-command message of the chat — including threads and @-mentions of you — \
+         is delivered to you alone."
+    };
+    format!(
+        "# Watch mode\n\
+         You are the sole listener of group chat `{chat_id}` on channel `{channel_name}`: {intake}\n\
+         - The channel delivers NOTHING for you: your reply text is never posted, and no cards \
+         or reactions mark your runs. To speak, use the skill covering this platform from your \
+         own skill list (e.g. the `lark` skill for feishu) via shell — target messages or \
+         threads by the `[msg_id: …]` / `[thread: …]` ids in each message's header. If no \
+         installed skill covers this platform, you cannot speak at all: stay a pure observer.\n\
+         - Messages that @-mention you are direct addresses: usually respond to those (via \
+         skill). Everything else, silence is the default — speak only when you have something \
+         worth interrupting the chat for.\n\
+         - There is no separate conversation session while watch is on: nobody else answers \
+         mentions. If you stay silent, a mention goes unanswered."
+    )
+}
+
 /// Contract sections appended after the base prompt for non-sub-agent
 /// sessions (the caller owns that gate): attachment syntax when the
 /// feature is on, mention syntax when a platform is there to render it
@@ -78,6 +113,48 @@ pub(crate) async fn session_rules_section(
         return Some(format!("{}\n\n(truncated)", &content[..end]));
     }
     Some(content.to_string())
+}
+
+/// Everything needed to assemble a session's spawn-time system prompt.
+pub(crate) struct SystemPromptParts<'a> {
+    pub base_prompt: String,
+    pub template_body: Option<String>,
+    pub is_sub_agent: bool,
+    pub enable_attachments: bool,
+    pub channel_routed: bool,
+    /// `(channel_name, chat_id, paused)` — set when the session is a watch
+    /// observer (derived from its routing row; see [`watch_section`]).
+    pub watch: Option<(&'a str, &'a str, bool)>,
+    pub data_dir: &'a std::path::Path,
+    pub session_id: &'a str,
+}
+
+/// Assemble the system prompt for one spawn. Template body wins outright;
+/// otherwise a main session gets base + capability contract sections
+/// (attachments, mentions) + the watch-observer section when it observes
+/// a chat, while sub-agents keep the bare base. Either way the session's
+/// RULE.md is appended verbatim when present (see
+/// [`session_rules_section`]).
+pub(crate) async fn compose_system_prompt(parts: SystemPromptParts<'_>) -> String {
+    let mut prompt = match &parts.template_body {
+        Some(t) => t.clone(),
+        None if !parts.is_sub_agent => {
+            let mut p = parts.base_prompt;
+            p.push_str(&contract_sections(
+                parts.enable_attachments,
+                parts.channel_routed,
+            ));
+            if let Some((channel, chat_id, paused)) = parts.watch {
+                p = format!("{p}\n\n{}", watch_section(channel, chat_id, paused));
+            }
+            p
+        }
+        None => parts.base_prompt,
+    };
+    if let Some(rules) = session_rules_section(parts.data_dir, parts.session_id).await {
+        prompt = format!("{prompt}\n\n{rules}");
+    }
+    prompt
 }
 
 /// Memory library pointer, injected only when a memory index actually exists

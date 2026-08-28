@@ -27,6 +27,13 @@ pub(crate) enum Gate {
 /// Gate one incoming message: enforce access control and the mention
 /// requirement, deciding the outcome and the reaction to fire.
 ///
+/// Returns the outcome, the reaction to fire (if any), and the **watch
+/// snapshot**: whether the chat was watch-on at gate time. The snapshot
+/// travels with the message through the dispatch queue so the tee and
+/// the conversation path decide from ONE read — re-reading at dispatch
+/// time would race `/watch on|off` toggles queued in between (a message
+/// gated before `/watch on` must not be both mirrored and triggered).
+///
 /// Reaction policy: an accepted, addressed message gets the platform's ack
 /// reaction; an allowlist miss gets the access-denied reaction — but only
 /// when the message addresses the bot, so random group chatter stays
@@ -37,7 +44,7 @@ pub(crate) async fn gate_message(
     config: &ChannelConfig,
     store: &Arc<dyn ChannelStore>,
     msg: &ChannelMessage,
-) -> (Gate, Option<&'static str>) {
+) -> (Gate, Option<&'static str>, bool) {
     // Access control first: denied messages (blocked users, disabled
     // channels) never cost a store read. The mention requirement only
     // decides the denied reaction for an allowlist miss — resolved
@@ -47,18 +54,47 @@ pub(crate) async fn gate_message(
         if e.is_allowlist_miss() {
             let (require_mention, _) = resolve_require_mention(store, config, msg).await;
             if !require_mention || msg.is_mention {
-                return (Gate::Denied, Some(config.platform.access_denied_reaction()));
+                return (
+                    Gate::Denied,
+                    Some(config.platform.access_denied_reaction()),
+                    false,
+                );
             }
         }
-        return (Gate::Denied, None);
+        return (Gate::Denied, None, false);
+    }
+    // Watch-on chats (`/watch on`): the observer session is the ONLY
+    // consumer of plain messages — the agent itself decides when a reply
+    // is warranted (via its platform skill), so the mention requirement
+    // and the conversation-trigger path are suspended wholesale: plain
+    // chatter AND @-mentions alike are `NotAddressed` (silent — no ack
+    // reaction may promise a reply the agent never promised), and the
+    // dispatch loop's tee mirrors them. Known commands stay control-plane
+    // and execute as usual; unknown slash-words stay silent (they may be
+    // another bot's).
+    let cmd = parse_channel_command(msg.raw_text.as_deref());
+    if msg.is_group {
+        let watch_on = store
+            .get_watch_state(&config.name, &msg.external_chat_id)
+            .await
+            .unwrap_or(None)
+            == Some(crate::channels::MappingKind::Watch);
+        if watch_on {
+            return match cmd {
+                ChannelCommand::None | ChannelCommand::Unknown(_) => {
+                    (Gate::NotAddressed, None, true)
+                }
+                _ => (Gate::Allow, Some(ack_reaction_for(config, msg)), true),
+            };
+        }
     }
     let (require_mention, _) = resolve_require_mention(store, config, msg).await;
     let addressed = !require_mention || msg.is_mention;
     if !addressed {
         info!(channel = %config.name, chat_id = %msg.external_chat_id, "ignoring non-mention message");
-        return (Gate::NotAddressed, None);
+        return (Gate::NotAddressed, None, false);
     }
-    (Gate::Allow, Some(ack_reaction_for(config, &msg)))
+    (Gate::Allow, Some(ack_reaction_for(config, &msg)), false)
 }
 
 /// Pick the gate ack reaction: `/queue` messages get their own ("noted,

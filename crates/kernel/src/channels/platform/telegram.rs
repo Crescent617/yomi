@@ -114,8 +114,9 @@ impl TelegramAdapter {
             return None;
         }
         let ts = msg.date.format("%Y-%m-%d %H:%M:%S");
+        let msg_id = msg.id.0;
         Some(format!(
-            "[{ts}][from_user_id: {user_id}][chat_id: {chat_id}][platform: telegram]\n{text}"
+            "[{ts}][from_user_id: {user_id}][chat_id: {chat_id}][msg_id: {msg_id}][platform: telegram]\n{text}"
         ))
     }
 

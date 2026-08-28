@@ -36,7 +36,7 @@ pub(super) async fn handle_doc_comment_added(
     config: &ChannelConfig,
     store: &Arc<dyn ChannelStore>,
     adapter: &Arc<dyn PlatformAdapter>,
-    dispatch_tx: &mpsc::Sender<(ChannelMessage, super::hub_gate::Gate)>,
+    dispatch_tx: &mpsc::Sender<(ChannelMessage, super::hub_gate::Gate, bool)>,
     notice: DocCommentNotice,
 ) {
     // Feature toggle first: disabled means zero platform API calls and no
@@ -185,7 +185,7 @@ pub(super) async fn handle_doc_comment_added(
         }),
     };
     if dispatch_tx
-        .send((msg, super::hub_gate::Gate::Allow))
+        .send((msg, super::hub_gate::Gate::Allow, false))
         .await
         .is_err()
     {

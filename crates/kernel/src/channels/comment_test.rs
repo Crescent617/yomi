@@ -165,7 +165,7 @@ async fn handle_with_store(
     store: &Arc<dyn crate::channels::ChannelStore>,
     adapter: &Arc<CommentMockAdapter>,
     notice: DocCommentNotice,
-) -> mpsc::Receiver<(ChannelMessage, super::super::hub_gate::Gate)> {
+) -> mpsc::Receiver<(ChannelMessage, super::super::hub_gate::Gate, bool)> {
     let (tx, rx) = mpsc::channel(1);
     let adapter: Arc<dyn PlatformAdapter> = adapter.clone();
     handle_doc_comment_added("feishu", config, store, &adapter, &tx, notice).await;
@@ -176,7 +176,7 @@ async fn handle(
     config: &ChannelConfig,
     adapter: &Arc<CommentMockAdapter>,
     notice: DocCommentNotice,
-) -> mpsc::Receiver<(ChannelMessage, super::super::hub_gate::Gate)> {
+) -> mpsc::Receiver<(ChannelMessage, super::super::hub_gate::Gate, bool)> {
     handle_with_store(config, &test_store().await, adapter, notice).await
 }
 
@@ -282,7 +282,7 @@ async fn retries_fetch_until_triggering_reply_is_visible() {
         q.push_back(Some(fresh));
     }
     let mut rx = handle(&config, &adapter, notice()).await;
-    let (msg, _gate) = rx.try_recv().expect("trigger dispatched");
+    let (msg, _gate, _watch) = rx.try_recv().expect("trigger dispatched");
 
     let ContentBlock::Text { text } = msg.content.last().expect("meta block") else {
         panic!("expected text block");
@@ -307,7 +307,7 @@ async fn retries_fetch_until_is_whole_is_visible() {
         q.push_back(Some(fresh));
     }
     let mut rx = handle(&config, &adapter, notice()).await;
-    let (msg, _gate) = rx.try_recv().expect("trigger dispatched");
+    let (msg, _gate, _watch) = rx.try_recv().expect("trigger dispatched");
 
     assert_eq!(*adapter.fetch_calls.lock().await, 2, "one retry for meta");
     assert_eq!(
@@ -331,7 +331,7 @@ async fn is_whole_staying_unknown_degrades_to_per_thread_key() {
     detail.is_whole = None;
     let adapter = Arc::new(CommentMockAdapter::new(Some(detail)));
     let mut rx = handle(&config, &adapter, notice()).await;
-    let (msg, _gate) = rx.try_recv().expect("trigger dispatched");
+    let (msg, _gate, _watch) = rx.try_recv().expect("trigger dispatched");
 
     assert_eq!(
         msg.doc_comment
@@ -356,7 +356,7 @@ async fn whole_comment_keys_session_by_document() {
     detail.quote = None;
     let adapter = Arc::new(CommentMockAdapter::new(Some(detail)));
     let mut rx = handle(&config, &adapter, notice()).await;
-    let (msg, _gate) = rx.try_recv().expect("trigger dispatched");
+    let (msg, _gate, _watch) = rx.try_recv().expect("trigger dispatched");
 
     // Routing carries the sentinel — one session per document for whole
     // comments — while the meta header keeps the real comment id.
@@ -415,7 +415,7 @@ async fn thread_history_excludes_bot_and_triggering_reply() {
     };
     let adapter = Arc::new(CommentMockAdapter::new(Some(detail)));
     let mut rx = handle(&config, &adapter, notice()).await;
-    let (msg, _gate) = rx.try_recv().expect("trigger dispatched");
+    let (msg, _gate, _watch) = rx.try_recv().expect("trigger dispatched");
 
     assert_eq!(msg.content.len(), 2, "history block + meta block");
     let ContentBlock::Text { text: history } = &msg.content[0] else {
@@ -446,13 +446,13 @@ async fn thread_history_cursor_dedups_across_triggers() {
     };
     let adapter = Arc::new(CommentMockAdapter::new(Some(detail())));
     let mut rx = handle_with_store(&config, &store, &adapter, notice()).await;
-    let (msg, _) = rx.try_recv().unwrap();
+    let (msg, _, _) = rx.try_recv().unwrap();
     assert_eq!(msg.content.len(), 2, "first trigger injects history");
 
     // Second trigger (same thread, nothing new): cursor covers r_0.
     *adapter.detail.lock().await = Some(detail());
     let mut rx = handle_with_store(&config, &store, &adapter, notice()).await;
-    let (msg, _) = rx.try_recv().unwrap();
+    let (msg, _, _) = rx.try_recv().unwrap();
     assert_eq!(msg.content.len(), 1, "second trigger injects no history");
 }
 
@@ -484,7 +484,7 @@ async fn command_trigger_skips_history_and_leaves_cursor_alone() {
         }));
     }
     let mut rx = handle_with_store(&config, &store, &adapter, notice()).await;
-    let (msg, _) = rx.try_recv().unwrap();
+    let (msg, _, _) = rx.try_recv().unwrap();
     assert_eq!(msg.content.len(), 1, "command trigger injects no history");
 
     // The cursor was not advanced by the command: a following normal
@@ -493,7 +493,7 @@ async fn command_trigger_skips_history_and_leaves_cursor_alone() {
     let mut n = notice();
     n.reply_id = Some("r_3".to_string());
     let mut rx = handle_with_store(&config, &store, &adapter, n).await;
-    let (msg, _) = rx.try_recv().unwrap();
+    let (msg, _, _) = rx.try_recv().unwrap();
     assert_eq!(msg.content.len(), 2, "history injected again");
     let ContentBlock::Text { text: history } = &msg.content[0] else {
         panic!("expected history block");
@@ -515,7 +515,7 @@ async fn accepted_comment_builds_meta_message() {
         ("r_2", "@bot 这段改写一下"),
     ]))));
     let mut rx = handle(&config, &adapter, notice()).await;
-    let (msg, _gate) = rx.try_recv().expect("trigger dispatched");
+    let (msg, _gate, _watch) = rx.try_recv().expect("trigger dispatched");
 
     assert!(msg.is_mention);
     assert_eq!(msg.external_user_id, "ou_commenter");
@@ -548,7 +548,7 @@ async fn fetch_failure_injects_bare_meta_with_note() {
     let adapter = Arc::new(CommentMockAdapter::new(None));
     *adapter.fetch_error.lock().await = true;
     let mut rx = handle(&config, &adapter, notice()).await;
-    let (msg, _gate) = rx.try_recv().expect("bare trigger dispatched");
+    let (msg, _gate, _watch) = rx.try_recv().expect("bare trigger dispatched");
 
     assert!(msg.raw_text.is_none(), "no text → no title input");
     let ContentBlock::Text { text } = &msg.content[0] else {
