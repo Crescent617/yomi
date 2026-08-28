@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-08-29
+
+### Added
+
+- `socket_auth_hash` 现在也可写入 config.toml（推荐方式；`YOMI_SOCKET_AUTH_HASH` 环境变量仍可覆盖）；`yomi daemon auth-hash` 的输出同步改为首选 config 写法。
+- 新增 `set_channel_watch` RPC：`on` 缺省时查询指定群的 watch 观察模式（Vim `:set` 风格），传 `true`/`false` 开关；开启会自动创建（或带记忆复任）该群的观察者会话并返回其 session_id。
+
+### Fixed
+
+- 多个会话同时流式输出时 GUI 渲染事件退化为逐条派发（换 session 强制 flush 击穿了帧节流）；现按到达顺序在帧节拍统一 drain，交错流式下渲染开销恢复上限。
+- `YOMI_SOCKET_AUTH_HASH` 设了但为空白时不再覆盖 config 文件里的有效哈希（告警并忽略）。
+
 ## [0.10.0] - 2026-08-28
 
 ### Added
