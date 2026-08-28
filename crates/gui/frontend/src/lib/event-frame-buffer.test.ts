@@ -217,6 +217,27 @@ describe("kernel event frame buffer", () => {
     expect(count).toBe(2);
   });
 
+  test("an empty flush does not restart the throttle clock", async () => {
+    let count = 0;
+    const buffer = new EventFrameBuffer(() => count++);
+
+    buffer.enqueue(textDelta("session-a", "message-a", "first"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(count).toBe(1);
+
+    // Wait out the 66ms window, then flush an empty queue — this is what a
+    // barrier event arriving between text bursts does. It dispatches
+    // nothing, so it must not move the clock.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    buffer.flush();
+
+    buffer.enqueue(textDelta("session-a", "message-a", "second"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // The buffer has been idle past the interval: lands on the next frame,
+    // not held back by the empty flush.
+    expect(count).toBe(2);
+  });
+
   test("flushes pending events on disposal", () => {
     const ids: Array<string | undefined> = [];
     const buffer = new EventFrameBuffer((event) => ids.push(event.event_id));

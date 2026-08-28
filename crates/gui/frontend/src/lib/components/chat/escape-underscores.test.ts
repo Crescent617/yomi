@@ -151,6 +151,36 @@ describe("IncrementalUnderscoreEscape", () => {
     expect(escaper.update("a_b")).toBe("a\\_b");
   });
 
+  it("passes an over-long uncommitted tail through verbatim", () => {
+    const escaper = new IncrementalUnderscoreEscape();
+    // Below the cap the tail is escaped as usual.
+    const small = "a_".repeat(100);
+    expect(escaper.update(small)).toBe(escapeIntrawordUnderscores(small));
+    // Past the 8 KiB cap the single-line tail is copied verbatim instead of
+    // being re-escaped on every append — that re-escape is the O(n²) path
+    // this cap exists to avoid, and the verbatim output is its behavioral
+    // signature (the oracle would insert backslashes).
+    const longTail = "a_".repeat(5000);
+    expect(escaper.update(longTail)).toBe(longTail);
+    // Once the line completes it is committed through the normal path, so
+    // the output returns to the one-shot oracle.
+    const completed = longTail + "\nnext_y";
+    expect(escaper.update(completed)).toBe(
+      escapeIntrawordUnderscores(completed),
+    );
+  });
+
+  it("never re-escapes an over-long single-line tail on appends", () => {
+    const escaper = new IncrementalUnderscoreEscape();
+    const line = "a_".repeat(6000); // 12 000 chars, no newline
+    // Grow the line past the cap in appends: every intermediate output is
+    // the verbatim input. Any per-append re-escape would show up as
+    // backslashes here.
+    for (let end = 9000; end <= line.length; end += 1000) {
+      expect(escaper.update(line.slice(0, end))).toBe(line.slice(0, end));
+    }
+  });
+
   it("returns identical output for repeated identical input", () => {
     const escaper = new IncrementalUnderscoreEscape();
     const first = escaper.update("some_text\nmore_text");

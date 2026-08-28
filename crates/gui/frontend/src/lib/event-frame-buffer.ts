@@ -141,8 +141,12 @@ export class EventFrameBuffer {
 
   flush() {
     this.cancelScheduledFlush();
-    this.lastFlushAt = performance.now();
     const queue = this.queue;
+    // An empty flush dispatches nothing, so it must not restart the
+    // throttle clock — otherwise text arriving just after a barrier event
+    // is held back for a full extra interval.
+    if (queue.length === 0) return;
+    this.lastFlushAt = performance.now();
     this.queue = [];
     this.queuedItems = 0;
     this.queuedChars = 0;

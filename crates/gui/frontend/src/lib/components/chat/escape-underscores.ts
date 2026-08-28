@@ -25,6 +25,12 @@ interface FenceState {
 }
 
 /**
+ * Cap on the uncommitted tail line re-escaped on every update (~8 KiB).
+ * Above it the tail passes through verbatim — see the class doc.
+ */
+const MAX_UNCOMMITTED_TAIL_CHARS = 8 * 1024;
+
+/**
  * Incremental variant for streaming: caches the escaped output of every
  * newline-terminated line and only reprocesses the trailing partial line
  * (plus newly completed lines) on each update. Escaping is line-local —
@@ -32,6 +38,13 @@ interface FenceState {
  * newline — so a line reprocessed with the fence state of its start yields
  * exactly the one-shot result. Falls back to a full pass when the input is
  * not an append (message switch, rewrite, retroactive details split).
+ *
+ * One exception to the per-update tail reprocessing: an uncommitted tail
+ * longer than `MAX_UNCOMMITTED_TAIL_CHARS` is passed through verbatim.
+ * Re-escaping a giant single-line stream (base64 data URL, huge link) in
+ * full on every append degenerates to O(n²); the underscores in such a
+ * tail stay unescaped until the line completes and is committed through
+ * the normal path.
  */
 export class IncrementalUnderscoreEscape {
   private source = "";
@@ -41,7 +54,9 @@ export class IncrementalUnderscoreEscape {
   private fenceChar = "";
 
   update(md: string): string {
-    if (!md.startsWith(this.source) || this.consumed > md.length) {
+    // When startsWith holds, md.length >= this.source.length >=
+    // this.consumed, so the reset below is the only guard needed.
+    if (!md.startsWith(this.source)) {
       this.consumed = 0;
       this.escaped = "";
       this.inFence = false;
@@ -64,6 +79,15 @@ export class IncrementalUnderscoreEscape {
       this.inFence = state.inFence;
       this.fenceChar = state.fenceChar;
       this.consumed = lastNewline + 1;
+    }
+
+    // An over-long uncommitted tail (base64 data URL, huge link) would be
+    // re-escaped in full on every append — O(n²) for the stream. Past the
+    // cap, copy it verbatim; its fence status is already decided by its
+    // fixed prefix, and it is escaped once when the line completes and is
+    // committed above.
+    if (md.length - this.consumed > MAX_UNCOMMITTED_TAIL_CHARS) {
+      return this.escaped + md.slice(this.consumed);
     }
 
     // The trailing partial line is reprocessed on every update without
