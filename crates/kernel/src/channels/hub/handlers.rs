@@ -1053,7 +1053,6 @@ pub(crate) async fn handle_watch_command(
         ));
     }
     let chat_id = &msg.external_chat_id;
-    let watch_key = crate::channels::watch_mapping_key(chat_id);
     let Some(on) = on else {
         let state = store.get_watch_state(&config.name, chat_id).await?;
         let body = match state {
@@ -1069,14 +1068,12 @@ pub(crate) async fn handle_watch_command(
     if on {
         // Eager create — or flip `watch_off` back to `watch`, resuming
         // the same observer session (the reuse path refreshes the kind).
-        get_or_create_session(
-            &config.name,
+        crate::channels::hub::watch::set_channel_watch_by_name(
             store,
-            kernel,
+            &kernel,
+            &config.name,
             chat_id,
-            &watch_key,
-            None,
-            crate::channels::MappingKind::Watch,
+            true,
         )
         .await?;
         Ok(Some(
@@ -1091,22 +1088,15 @@ pub(crate) async fn handle_watch_command(
         // drain the mailbox: steers already mirrored must not wake the
         // observer after the explicit off — its skill voice is not
         // kind-gated, only channel delivery is.
-        if let Some(sid) = store.find_mapping(&config.name, &watch_key).await? {
-            store
-                .save_mapping(
-                    &config.name,
-                    &watch_key,
-                    &sid,
-                    chat_id,
-                    None,
-                    crate::channels::MappingKind::WatchPaused,
-                )
-                .await?;
-            kernel.cancel(&sid);
-            kernel
-                .clear_mailbox(&sid, crate::comms::MailboxScope::All)
-                .await;
-        } else {
+        let status = crate::channels::hub::watch::set_channel_watch_by_name(
+            store,
+            &kernel,
+            &config.name,
+            chat_id,
+            false,
+        )
+        .await?;
+        if status.session_id.is_none() {
             return Ok(Some("Watch is not on for this chat.".to_string()));
         }
         Ok(Some(

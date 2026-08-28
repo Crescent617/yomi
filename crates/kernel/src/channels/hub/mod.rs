@@ -115,6 +115,48 @@ impl ChannelHub {
         Arc::clone(&self.store)
     }
 
+    /// Resolve a channel instance: explicit name, or the sole running
+    /// channel of the requested platform.
+    pub(crate) fn resolve_channel(
+        &self,
+        channel: Option<&str>,
+        platform: &str,
+    ) -> Result<(
+        String,
+        crate::channels::ChannelConfig,
+        Arc<dyn crate::channels::PlatformAdapter>,
+    )> {
+        match channel {
+            Some(name) => {
+                let entry = self.instances.get(name).ok_or_else(|| {
+                    crate::types::KernelError::Config(format!("no such channel: `{name}`"))
+                })?;
+                Ok((
+                    name.to_string(),
+                    entry.config.clone(),
+                    Arc::clone(&entry.adapter),
+                ))
+            }
+            None => {
+                let matches: Vec<_> = self
+                    .instances
+                    .iter()
+                    .filter(|e| e.config.platform.name_is(platform))
+                    .map(|e| (e.key().clone(), e.config.clone(), Arc::clone(&e.adapter)))
+                    .collect();
+                match matches.as_slice() {
+                    [] => Err(crate::types::KernelError::Config(format!(
+                        "no {platform} channel is running"
+                    ))),
+                    [one] => Ok(one.clone()),
+                    _ => Err(crate::types::KernelError::Config(format!(
+                        "multiple {platform} channels are running — pass --channel"
+                    ))),
+                }
+            }
+        }
+    }
+
     /// Start all enabled channels from the given configurations.
     /// If a channel with the same name already exists, it is skipped.
     pub async fn start_all(
@@ -754,41 +796,7 @@ impl ChannelHub {
         title: Option<&str>,
         text: &str,
     ) -> Result<serde_json::Value> {
-        // Resolve the channel instance: explicit name, or the sole
-        // channel of the requested platform.
-        let (name, config, adapter) = match channel {
-            Some(name) => {
-                let entry = self.instances.get(name).ok_or_else(|| {
-                    crate::types::KernelError::Config(format!("no such channel: `{name}`"))
-                })?;
-                (
-                    name.to_string(),
-                    entry.config.clone(),
-                    Arc::clone(&entry.adapter),
-                )
-            }
-            None => {
-                let matches: Vec<_> = self
-                    .instances
-                    .iter()
-                    .filter(|e| e.config.platform.name_is(platform))
-                    .map(|e| (e.key().clone(), e.config.clone(), Arc::clone(&e.adapter)))
-                    .collect();
-                match matches.as_slice() {
-                    [] => {
-                        return Err(crate::types::KernelError::Config(format!(
-                            "no {platform} channel is running"
-                        )));
-                    }
-                    [one] => one.clone(),
-                    _ => {
-                        return Err(crate::types::KernelError::Config(format!(
-                            "multiple {platform} channels are running — pass --channel"
-                        )));
-                    }
-                }
-            }
-        };
+        let (name, config, adapter) = self.resolve_channel(channel, platform)?;
         // Threads are a Feishu capability for now.
         if !matches!(
             config.platform,

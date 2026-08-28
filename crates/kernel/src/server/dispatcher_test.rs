@@ -252,3 +252,18 @@ async fn test_remote_kernel_connect_with_auth() {
 
     shutdown.cancel();
 }
+
+#[tokio::test]
+async fn test_set_channel_watch_without_channels() {
+    let (client, _tmp, shutdown) = setup().await;
+    let err = client
+        .set_channel_watch(None, None, "oc_x".to_string(), None)
+        .await
+        .err()
+        .expect("no channels configured must error");
+    assert!(
+        err.to_string().contains("no channels are running"),
+        "unexpected error: {err}"
+    );
+    shutdown.cancel();
+}

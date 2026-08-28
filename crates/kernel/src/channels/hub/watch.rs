@@ -112,3 +112,121 @@ fn mirror_content(msg: &ChannelMessage) -> Vec<ContentBlock> {
 #[cfg(test)]
 #[path = "watch_test.rs"]
 mod tests;
+
+// ── Query / switch (shared by the `/watch` command and the RPC) ─────────
+
+/// Query a chat's watch mode by channel name.
+pub(crate) async fn get_channel_watch_by_name(
+    store: &Arc<dyn ChannelStore>,
+    channel_name: &str,
+    chat_id: &str,
+) -> crate::types::Result<crate::channels::ChannelWatchStatus> {
+    let kind = store.get_watch_state(channel_name, chat_id).await?;
+    let session_id = store
+        .find_mapping(channel_name, &crate::channels::watch_mapping_key(chat_id))
+        .await?
+        .map(|sid| sid.0.to_string());
+    Ok(crate::channels::ChannelWatchStatus {
+        on: matches!(kind, Some(MappingKind::Watch)),
+        session_id,
+    })
+}
+
+/// Switch a chat's watch mode by channel name. Same core as `/watch
+/// on|off`: on eagerly creates or resumes the observer session; off
+/// flips the row to `watch_off` (kept), cancels the in-flight run, and
+/// drains the mailbox.
+pub(crate) async fn set_channel_watch_by_name(
+    store: &Arc<dyn ChannelStore>,
+    kernel: &Kernel,
+    channel_name: &str,
+    chat_id: &str,
+    on: bool,
+) -> crate::types::Result<crate::channels::ChannelWatchStatus> {
+    let watch_key = crate::channels::watch_mapping_key(chat_id);
+    if on {
+        let (sid, _reused) = get_or_create_session(
+            channel_name,
+            store,
+            kernel,
+            chat_id,
+            &watch_key,
+            None,
+            MappingKind::Watch,
+        )
+        .await?;
+        Ok(crate::channels::ChannelWatchStatus {
+            on: true,
+            session_id: Some(sid.0.to_string()),
+        })
+    } else {
+        let Some(sid) = store.find_mapping(channel_name, &watch_key).await? else {
+            return Ok(crate::channels::ChannelWatchStatus {
+                on: false,
+                session_id: None,
+            });
+        };
+        store
+            .save_mapping(
+                channel_name,
+                &watch_key,
+                &sid,
+                chat_id,
+                None,
+                MappingKind::WatchPaused,
+            )
+            .await?;
+        kernel.cancel(&sid);
+        kernel
+            .clear_mailbox(&sid, crate::comms::MailboxScope::All)
+            .await;
+        Ok(crate::channels::ChannelWatchStatus {
+            on: false,
+            session_id: Some(sid.0.to_string()),
+        })
+    }
+}
+
+impl crate::channels::hub::ChannelHub {
+    /// Query a chat's watch mode (channel resolved by name or platform).
+    pub async fn get_channel_watch(
+        &self,
+        channel: Option<&str>,
+        platform: &str,
+        chat_id: &str,
+    ) -> crate::types::Result<crate::channels::ChannelWatchStatus> {
+        let (name, ..) = self.resolve_channel(channel, platform)?;
+        get_channel_watch_by_name(&self.store(), &name, chat_id).await
+    }
+
+    /// Switch a chat's watch mode (channel resolved by name or platform).
+    pub async fn set_channel_watch(
+        &self,
+        kernel: &Kernel,
+        channel: Option<&str>,
+        platform: &str,
+        chat_id: &str,
+        on: bool,
+    ) -> crate::types::Result<crate::channels::ChannelWatchStatus> {
+        let (name, ..) = self.resolve_channel(channel, platform)?;
+        set_channel_watch_by_name(&self.store(), kernel, &name, chat_id, on).await
+    }
+
+    /// The `set_channel_watch` RPC: `on` absent = query (Vim `:set` style).
+    pub async fn rpc_set_channel_watch(
+        &self,
+        kernel: &Kernel,
+        channel: Option<&str>,
+        platform: &str,
+        chat_id: &str,
+        on: Option<bool>,
+    ) -> crate::types::Result<crate::channels::ChannelWatchStatus> {
+        match on {
+            Some(on) => {
+                self.set_channel_watch(kernel, channel, platform, chat_id, on)
+                    .await
+            }
+            None => self.get_channel_watch(channel, platform, chat_id).await,
+        }
+    }
+}

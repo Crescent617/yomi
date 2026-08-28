@@ -734,6 +734,22 @@ impl KernelApi for RemoteKernel {
         .await
     }
 
+    async fn set_channel_watch(
+        &self,
+        channel: Option<String>,
+        platform: Option<String>,
+        chat_id: String,
+        on: Option<bool>,
+    ) -> Result<serde_json::Value> {
+        self.call(ReqMethod::SetChannelWatch {
+            channel,
+            platform,
+            chat_id,
+            on,
+        })
+        .await
+    }
+
     async fn list_models(&self) -> Result<Vec<crate::kernel::ModelInfo>> {
         self.call_json(ReqMethod::ListModels).await
     }

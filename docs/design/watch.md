@@ -110,6 +110,10 @@ receipt），bot 对群里的讨论完全无感。想要的是 bot 作为群的*
 - `kernel/mod.rs`：`delete_session` 级联删除 channel mappings。
 - `channels/hub/command.rs` + `handlers.rs`：`/watch`（admin、chat 级；on
   eager 建、off 翻 kind + cancel + 清 mailbox）；`/bind` 拒绝、`/sessions` 👁。
+- `channels/hub/watch.rs`：`{get,set}_channel_watch_by_name` 自由函数 ——
+  查询/开关核心（slash 命令与 RPC 共用）；hub 薄封装 + `rpc_set_channel_watch`
+  （`on` 缺省 = 查询，Vim `:set` 风格）。wire 增 `SetChannelWatch`（proto 维
+  持 28：老客户端不调新方法不受影响）。
 - `kernel/conductor.rs` + `prompt/mod.rs`：spawn 按 routing kind 追加
   `watch_section` 契约（paused 变体）。
 - `platform/feishu_events.rs` / `telegram.rs`：消息头增 `[msg_id: …]`。

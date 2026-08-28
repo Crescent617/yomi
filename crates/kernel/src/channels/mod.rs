@@ -576,6 +576,16 @@ pub struct SessionRouting {
     pub kind: MappingKind,
 }
 
+/// Result of a `set_channel_watch` query or switch (shared by the RPC and
+/// the `/watch` command). `session_id` names the chat's observer session
+/// whenever its mapping row exists — on or paused.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ChannelWatchStatus {
+    pub on: bool,
+    pub session_id: Option<String>,
+}
+
 impl SessionRouting {
     /// Watch observers (on or paused) get no channel delivery of any kind.
     pub fn is_watch(&self) -> bool {

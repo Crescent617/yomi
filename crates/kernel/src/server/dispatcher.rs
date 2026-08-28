@@ -714,6 +714,32 @@ impl KernelServer {
                 },
             ),
 
+            ReqMethod::SetChannelWatch {
+                channel,
+                platform,
+                chat_id,
+                on,
+            } => rpc_body(
+                "set_channel_watch_failed",
+                match self.kernel.channel_manager() {
+                    Some(hub) => {
+                        hub.rpc_set_channel_watch(
+                            &self.kernel,
+                            channel.as_deref(),
+                            platform
+                                .as_deref()
+                                .unwrap_or(crate::channels::DEFAULT_PLATFORM),
+                            &chat_id,
+                            on,
+                        )
+                        .await
+                    }
+                    None => Err(crate::types::KernelError::Config(
+                        "no channels are running".to_string(),
+                    )),
+                },
+            ),
+
             // ── Model ──────────────────────────────────────────────────────
             ReqMethod::ListModels => {
                 rpc_body("list_models_failed", self.kernel.list_models().await)

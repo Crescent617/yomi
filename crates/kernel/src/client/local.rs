@@ -423,6 +423,30 @@ impl KernelApi for Kernel {
         .await
     }
 
+    async fn set_channel_watch(
+        &self,
+        channel: Option<String>,
+        platform: Option<String>,
+        chat_id: String,
+        on: Option<bool>,
+    ) -> Result<serde_json::Value> {
+        let hub = self.channel_manager().ok_or_else(|| {
+            crate::types::KernelError::Config("no channels are running".to_string())
+        })?;
+        let status = hub
+            .rpc_set_channel_watch(
+                self,
+                channel.as_deref(),
+                platform
+                    .as_deref()
+                    .unwrap_or(crate::channels::DEFAULT_PLATFORM),
+                &chat_id,
+                on,
+            )
+            .await?;
+        Ok(serde_json::to_value(status)?)
+    }
+
     async fn list_models(&self) -> Result<Vec<crate::kernel::ModelInfo>> {
         Self::list_models(self).await
     }

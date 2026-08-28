@@ -308,6 +308,16 @@ pub trait KernelApi: Send + Sync {
         text: String,
     ) -> Result<serde_json::Value>;
 
+    /// Query (`on` absent) or switch a chat's watch mode. Result:
+    /// `{on, session_id}`.
+    async fn set_channel_watch(
+        &self,
+        channel: Option<String>,
+        platform: Option<String>,
+        chat_id: String,
+        on: Option<bool>,
+    ) -> Result<serde_json::Value>;
+
     // ── Model ──────────────────────────────────────────────────────────────
     async fn list_models(&self) -> Result<Vec<crate::kernel::ModelInfo>>;
     async fn get_session_model(&self, session_id: &SessionId) -> Result<String>;

@@ -8486,3 +8486,103 @@ async fn get_or_create_session_concurrent_same_key_single_creator() {
     let fresh = [r1.1, r2.1, r3.1].iter().filter(|reused| !**reused).count();
     assert_eq!(fresh, 1, "exactly one caller must be the creator");
 }
+
+/// `set_channel_watch` query/switch round trip (the RPC's hub core):
+/// on eagerly creates the observer, repeated on reuses it, off pauses
+/// (row kept), re-on resumes the same session.
+#[tokio::test]
+async fn set_channel_watch_query_and_switch_round_trip() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let cancel = CancellationToken::new();
+    let hub = ChannelHub::new(store);
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram {
+            token: "fake".into(),
+        },
+        ..Default::default()
+    };
+    hub.start_all(cancel.clone(), vec![config], std::sync::Weak::new())
+        .await
+        .unwrap();
+
+    // Query: never watched → off, no observer session.
+    let status = hub
+        .get_channel_watch(None, "telegram", "oc_rt")
+        .await
+        .unwrap();
+    assert_eq!(
+        status,
+        crate::channels::ChannelWatchStatus {
+            on: false,
+            session_id: None
+        }
+    );
+
+    // On: observer eagerly created.
+    let status = hub
+        .set_channel_watch(&kernel, None, "telegram", "oc_rt", true)
+        .await
+        .unwrap();
+    let sid = status.session_id.clone().expect("observer session id");
+    assert!(status.on);
+
+    // Query: on, same session; repeated on reuses it in place.
+    let status = hub
+        .get_channel_watch(None, "telegram", "oc_rt")
+        .await
+        .unwrap();
+    assert!(status.on);
+    assert_eq!(status.session_id.as_deref(), Some(sid.as_str()));
+    let status = hub
+        .set_channel_watch(&kernel, None, "telegram", "oc_rt", true)
+        .await
+        .unwrap();
+    assert_eq!(status.session_id.as_deref(), Some(sid.as_str()));
+
+    // Off: paused — the row (and session) stays, and query still names it.
+    let status = hub
+        .set_channel_watch(&kernel, None, "telegram", "oc_rt", false)
+        .await
+        .unwrap();
+    assert!(!status.on);
+    assert_eq!(status.session_id.as_deref(), Some(sid.as_str()));
+    let status = hub
+        .get_channel_watch(None, "telegram", "oc_rt")
+        .await
+        .unwrap();
+    assert!(!status.on);
+    assert_eq!(status.session_id.as_deref(), Some(sid.as_str()));
+
+    // Re-on: the same observer resumes with its memory intact.
+    let status = hub
+        .set_channel_watch(&kernel, None, "telegram", "oc_rt", true)
+        .await
+        .unwrap();
+    assert!(status.on);
+    assert_eq!(status.session_id.as_deref(), Some(sid.as_str()));
+
+    // RPC wrapper: `on` absent = query, present = switch.
+    let status = hub
+        .rpc_set_channel_watch(&kernel, None, "telegram", "oc_rt", None)
+        .await
+        .unwrap();
+    assert!(status.on);
+    let status = hub
+        .rpc_set_channel_watch(&kernel, None, "telegram", "oc_rt", Some(false))
+        .await
+        .unwrap();
+    assert!(!status.on);
+
+    cancel.cancel();
+}

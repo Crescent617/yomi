@@ -34,6 +34,7 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 - `session send` 往会话注消息，时机语义不同：不加 flag = **执行完才收到**（排队成新用户消息，起新任务用它）；`--steer` = **执行中即收到**（注入当前 run，回合间生效）——补充信息、中途纠偏用 steer，不打断也不另起回合。
 - pending 队列管理：`session mailbox` 查看，`session mailbox-remove <mbx_>` 撤回单条，`session mailbox-clear [--steer|--queue]` 按队列清空——只动 pending、不杀 run（区别于 cancel）。前端经 rpc（mailbox_snapshot / remove / clear）管理，`mailbox_changed` 事件（附双队列计数）触发刷新。
 - 新话题起新会话干活：`channel new-thread --chat <oc_> --text <任务>`——话题里的后续发言进同一会话；返回 session_id/thread_url，可接 `send --steer` / `session-wait`。`--channel` 选填，仅同平台多通道时消歧用。
+- 群聊观察模式：`rpc set_channel_watch '{"chat_id":"oc_…"}'` 查询、加 `"on":true/false` 开关（Vim `:set` 风格）；on 后该群消息只进常驻观察者会话（返回其 session_id），它自己经平台 skill 决定何时说话——设计见 docs/design/watch.md。
 - 新建 session：`rpc create_session '{}'` 返回新 session_id（可选 `working_dir`/`model_key`/`auto_approve_level`，缺省继承配置）。
 - `session cancel` 停 agent loop，会话保留。
 - 观察运行态（都走 `yomi rpc`）：

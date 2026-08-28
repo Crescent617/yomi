@@ -283,6 +283,15 @@ pub enum ReqMethod {
         text: String,
     },
 
+    /// Query or switch a chat's watch mode (`/watch` over RPC):
+    /// `on` absent = query (Vim `:set` style). Result: `{on, session_id}`.
+    SetChannelWatch {
+        channel: Option<String>,
+        platform: Option<String>,
+        chat_id: String,
+        on: Option<bool>,
+    },
+
     // ── Extension（wire 外部扩展，见 docs/archive/extension-phase1.md）───
     /// 登记一个外部能力（kind=tool）。Result: `{registration}`。
     ExtRegister {
