@@ -673,16 +673,16 @@ pub(crate) fn format_session_info(
     .join("\n")
 }
 
-/// The `/info` watch line (chat-level only): `Some` when the chat is
-/// watched or paused, `None` when never watched (zero noise). Terse by
-/// design — state + observer session id, nothing else.
+/// The `/info` watch line (chat-level only): `Some` only while the chat
+/// is actively watched — line present = being listened to, absent = not
+/// (paused observers stay invisible, zero noise). Terse by design:
+/// state + observer session id, nothing else.
 pub(crate) fn format_watch_line(status: &crate::channels::ChannelWatchStatus) -> Option<String> {
+    if !status.on {
+        return None;
+    }
     let sid = status.session_id.as_deref()?;
-    Some(if status.on {
-        format!("- **Watch**: on · observer `{sid}`")
-    } else {
-        format!("- **Watch**: paused · observer `{sid}`")
-    })
+    Some(format!("- **Watch**: on · observer `{sid}`"))
 }
 
 pub(crate) fn format_unknown_model(key: &str, models: &[crate::kernel::ModelInfo]) -> String {

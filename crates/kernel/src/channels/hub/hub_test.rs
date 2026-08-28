@@ -3316,21 +3316,20 @@ fn test_format_watch_line() {
         "- **Watch**: on · observer `sess_1`"
     );
 
-    let paused = crate::channels::ChannelWatchStatus {
-        on: false,
-        session_id: Some("sess_1".to_string()),
-    };
-    assert_eq!(
-        format_watch_line(&paused).unwrap(),
-        "- **Watch**: paused · observer `sess_1`"
-    );
-
-    // Never watched (or the observer row is gone): no line at all.
-    let never = crate::channels::ChannelWatchStatus {
-        on: false,
-        session_id: None,
-    };
-    assert!(format_watch_line(&never).is_none());
+    // Paused or never watched: no line at all — the line exists only
+    // while the chat is actively watched.
+    for status in [
+        crate::channels::ChannelWatchStatus {
+            on: false,
+            session_id: Some("sess_1".to_string()),
+        },
+        crate::channels::ChannelWatchStatus {
+            on: false,
+            session_id: None,
+        },
+    ] {
+        assert!(format_watch_line(&status).is_none());
+    }
 }
 
 #[tokio::test]
@@ -8634,8 +8633,8 @@ async fn set_channel_watch_query_and_switch_round_trip() {
     cancel.cancel();
 }
 
-/// `/info` 的 watch 行接线：chat 级输出随 watch 状态变化（无 → on →
-/// paused），话题内不出现该行；watch-on 且无对话会话时 "No session yet"
+/// `/info` 的 watch 行接线：仅 watch-on 时 chat 级输出带行（从未开启 /
+/// paused / 话题内均无行）；watch-on 且无对话会话时 "No session yet"
 /// 分支同样带行。
 #[tokio::test]
 async fn info_command_shows_watch_line_at_chat_level() {
@@ -8715,15 +8714,12 @@ async fn info_command_shows_watch_line_at_chat_level() {
         "{reply}"
     );
 
-    // watch off：paused，观察者 id 保留。
+    // watch off（paused）：行消失——行只在 actively watched 时存在。
     crate::channels::hub::watch::set_channel_watch_by_name(&store, &kernel, "mock", "oc_1", false)
         .await
         .unwrap();
     let reply = handle(msg("/i")).await.unwrap().unwrap();
-    assert!(
-        reply.contains("- **Watch**: paused · observer `sess_"),
-        "{reply}"
-    );
+    assert!(!reply.contains("- **Watch**:"), "{reply}");
 
     // 话题内 /i：watch 是 chat 级状态，不出现该行。
     crate::channels::hub::watch::set_channel_watch_by_name(&store, &kernel, "mock", "oc_1", true)

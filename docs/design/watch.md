@@ -50,8 +50,8 @@ receipt），bot 对群里的讨论完全无感。想要的是 bot 作为群的*
 - watch-on 群里：普通消息与 @ 一律无 ack、无状态卡、无对话会话，全部
   只进观察者；它说话的唯一形式是 skill 发出的普通消息。命令不受此限。
 - `/sessions` 观察者标 👁（含 paused）；`/bind` 拒绝重绑观察者（on/off 同）；
-  `/info`（chat 级）末尾附一行 watch 状态（`on`/`paused` + 观察者 session id，
-  未开启时不显示）。
+  `/info`（chat 级）在 watch-on 时末尾附一行状态（观察者 session id）——
+  行在 = 正在被监听，paused 与未开启均不显示。
 - 镜像内容：消息原始 content（adapter 头含 ts/from/chat/**msg_id**/thread/root）
   + 图片 image_key 文本引用（不下载，要用经 skill 自取）。
 - daemon 重启：mapping 行在 sqlite，状态自恢复。

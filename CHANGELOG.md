@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- 群聊顶层发送 `/info`（`/i`）时，输出末尾附带 watch 状态行（开/暂停 + 观察者会话 ID）；未开启 watch 的群不显示该行。
+- 群聊顶层发送 `/info`（`/i`）时，若该群 watch 已开启，输出末尾附带一行状态（含观察者会话 ID）；未开启时不显示。
 
 ### Changed
 
