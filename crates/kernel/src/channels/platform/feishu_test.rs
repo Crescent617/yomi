@@ -808,7 +808,7 @@ fn extract_history_content_hides_midrun_trace_panel() {
             "body":{"elements":[
             {"tag":"collapsible_panel","expanded":true,
              "header":{"title":{"tag":"markdown","content":"<font color='grey'>🐾 5s · k3-hs · out ~241</font>"}},
-             "elements":[{"tag":"markdown","text_size":"notation","content":"<font color='grey'>💬 写作中…</font>\n✅ **web_fetch** · wttr.in · 1s"}]}
+             "elements":[{"tag":"markdown","text_size":"notation","content":"<font color='grey'>💬 写作中…</font>\n✅ **web_search** · wttr.in · 1s"}]}
         ]}}"# }
     });
 
@@ -821,7 +821,7 @@ fn extract_history_content_hides_midrun_trace_panel() {
         "🐾 5s",
         "k3-hs",
         "out ~241",
-        "web_fetch",
+        "web_search",
         "wttr.in",
     ] {
         assert!(

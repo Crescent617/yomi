@@ -38,7 +38,6 @@ fn primary_arg_key(tool_name: &str) -> Option<&'static str> {
         "read" | "edit" => "path",
         "write" => "file_path",
         "glob" | "grep" => "pattern",
-        "web_fetch" => "url",
         "web_search" => "query",
         "agent" => "description",
         _ => return None,

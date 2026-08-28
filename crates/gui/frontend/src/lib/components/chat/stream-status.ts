@@ -26,7 +26,6 @@ export function toolVerb(toolName: string, rawArgs = ""): string {
     write: "Writing",
     glob: "Finding",
     grep: "Finding",
-    webfetch: "Fetching",
     websearch: "Searching",
     agent: "Delegating",
     sleep: "Waiting",
@@ -106,7 +105,6 @@ const TARGET_KEYS: Record<string, string[]> = {
   shell: ["command"],
   glob: ["pattern"],
   grep: ["pattern"],
-  webfetch: ["url"],
   websearch: ["query"],
   agent: ["description", "prompt"],
 };

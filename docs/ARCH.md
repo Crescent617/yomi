@@ -22,7 +22,7 @@
 | 模块 | 文件路径 | 职责 |
 |------|---------|------|
 | `agent` | `src/agent/` | Agent 生命周期、状态机（`AgentState`）、消息缓冲（`MessageBuffer`）、流收集（`StreamCollector`）、Turn 跟踪、compaction、拦截器、取消逻辑 |
-| `tools` | `src/tools/` | 20+ 工具实现：`shell`、`read`、`write`、`edit`、`grep`、`glob`、`webfetch`、`websearch`、`subagent`、`todo`、`reminder`、`sleep` 等（`ask_user` 已下线不注册，实现保留于 `ask_user.rs`）；含 `ToolRegistry` 注册管理 |
+| `tools` | `src/tools/` | 20+ 工具实现：`shell`、`read`、`write`、`edit`、`grep`、`glob`、`websearch`、`subagent`、`todo`、`reminder`、`sleep` 等（`ask_user` 已下线不注册，实现保留于 `ask_user.rs`；`web_fetch` 已移除，网页抓取走 shell curl，见 `docs/design/webfetch-removal.md`）；含 `ToolRegistry` 注册管理 |
 | `providers` | `src/providers/` | LLM Provider 抽象：`OpenAIProvider`、`AnthropicProvider`；支持 SSE streaming、thinking、fallback、重试（`RetryingProvider`） |
 | `storage` | `src/storage/` | 统一存储层：`StorageSet` 初始化所有后端；SQLite（session/usage/cron/project/channel）+ JSONL（message/todo/file_state/checkpoint） |
 | `comms` | `src/comms/` | `PubSub` 事件总线（支持按 key 过滤订阅）、`InputBus`/`Mailbox` 输入通道、`EventSink` 事件接收器 |

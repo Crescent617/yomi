@@ -84,7 +84,6 @@ export function toolLabel(toolName: string, isSubagent = false): string {
     command: "Shell",
     glob: "Glob",
     grep: "Grep",
-    webfetch: "WebFetch",
     websearch: "WebSearch",
     skill: "Skill",
     postmessage: "PostMessage",
@@ -133,8 +132,6 @@ export function extractTarget(tool_name: string, args: string): string {
     case "glob":
     case "grep":
       return firstText(name === "shell" ? parsed.command : parsed.pattern);
-    case "webfetch":
-      return firstText(parsed.url);
     case "websearch":
       return firstText(parsed.query);
     case "skill":

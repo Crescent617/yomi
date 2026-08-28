@@ -25,7 +25,6 @@ describe("toolVerb", () => {
     expect(toolVerb("write")).toBe("Writing");
     expect(toolVerb("shell")).toBe("Running");
     expect(toolVerb("grep")).toBe("Finding");
-    expect(toolVerb("web_fetch")).toBe("Fetching");
     expect(toolVerb("agent")).toBe("Delegating");
     expect(toolVerb("todo")).toBe("Planning");
     expect(toolVerb("ask_user")).toBe("Asking");

@@ -15,7 +15,6 @@ const SEARCH_READ_TOOLS = new Set([
   "glob",
   "globsearch",
   "websearch",
-  "webfetch",
 ]);
 
 export type ToolCategory =

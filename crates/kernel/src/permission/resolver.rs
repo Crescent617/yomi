@@ -2,7 +2,7 @@ use super::level::Level;
 use crate::tools::task::{TASK_GET_TOOL_NAME, TASK_LIST_TOOL_NAME};
 use crate::tools::{
     GLOB_TOOL_NAME, GREP_TOOL_NAME, READ_TOOL_NAME, REMINDER_TOOL_NAME, SHELL_TOOL_NAME,
-    SKILL_TOOL_NAME, TODO_TOOL_NAME, WEBFETCH_TOOL_NAME, WEBSEARCH_TOOL_NAME,
+    SKILL_TOOL_NAME, TODO_TOOL_NAME, WEBSEARCH_TOOL_NAME,
 };
 use serde_json::Value;
 
@@ -19,8 +19,8 @@ pub fn resolve_level(
     match tool_name {
         // 只读工具 - Safe
         READ_TOOL_NAME | GLOB_TOOL_NAME | GREP_TOOL_NAME | TASK_LIST_TOOL_NAME
-        | TASK_GET_TOOL_NAME | TODO_TOOL_NAME | REMINDER_TOOL_NAME | WEBFETCH_TOOL_NAME
-        | WEBSEARCH_TOOL_NAME | SKILL_TOOL_NAME => Level::Safe,
+        | TASK_GET_TOOL_NAME | TODO_TOOL_NAME | REMINDER_TOOL_NAME | WEBSEARCH_TOOL_NAME
+        | SKILL_TOOL_NAME => Level::Safe,
         SHELL_TOOL_NAME => ToolLevelResolver::resolve_bash_level(args),
         _ => Level::Caution,
     }

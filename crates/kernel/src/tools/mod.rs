@@ -21,7 +21,6 @@ pub mod sleep;
 pub mod subagent;
 pub mod task;
 pub mod todo;
-pub mod webfetch;
 pub mod websearch;
 pub mod write;
 
@@ -44,7 +43,6 @@ pub use skill_load::{SkillTool, SKILL_FILENAME, SKILL_TOOL_NAME};
 pub use sleep::{SleepTool, SLEEP_TOOL_NAME};
 pub use subagent::{SubagentTool, SUBAGENT_TOOL_NAME};
 pub use todo::{TodoTool, TODO_TOOL_NAME};
-pub use webfetch::{WebFetchTool, WEBFETCH_TOOL_NAME};
 pub use websearch::{WebSearchTool, WEBSEARCH_TOOL_NAME};
 pub use write::{WriteTool, WRITE_TOOL_NAME};
 
@@ -293,9 +291,6 @@ impl ToolRegistry {
         // Register Grep tool with file state store
         let grep_tool = GrepTool::new(Arc::clone(&file_state_store));
         self.register(grep_tool);
-
-        // Register WebFetch tool
-        self.register(WebFetchTool::new());
 
         // Register WebSearch tool
         self.register(WebSearchTool::new());

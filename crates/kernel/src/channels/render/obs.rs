@@ -1393,7 +1393,7 @@ pub(crate) fn fmt_tokens(tokens: u64) -> String {
     }
 }
 
-/// Humanize a `snake_case` tool name for the card title: `web_fetch` → `WebFetch`.
+/// Humanize a `snake_case` tool name for the card title: `post_message` → `PostMessage`.
 fn humanize_tool_name(name: &str) -> String {
     name.split('_')
         .filter(|seg| !seg.is_empty())

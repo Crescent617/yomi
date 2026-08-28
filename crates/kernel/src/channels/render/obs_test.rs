@@ -1249,7 +1249,7 @@ fn fmt_elapsed_human_readable() {
 
 #[test]
 fn humanize_tool_name_camelizes() {
-    assert_eq!(humanize_tool_name("web_fetch"), "WebFetch");
+    assert_eq!(humanize_tool_name("post_message"), "PostMessage");
     assert_eq!(humanize_tool_name("bash"), "Bash");
     assert_eq!(humanize_tool_name("send_message"), "SendMessage");
     assert_eq!(humanize_tool_name("_multi__seg_"), "MultiSeg");

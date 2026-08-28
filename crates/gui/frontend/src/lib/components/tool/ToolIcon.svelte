@@ -50,8 +50,6 @@
   <Moon class={cls} />
 {:else if name === "reminder"}
   <Bell class={cls} />
-{:else if name === "webfetch" || name === "web_fetch"}
-  <Globe class={cls} />
 {:else if name === "websearch" || name === "web_search"}
   <Globe class={cls} />
 {:else if name === "agent" || name === "subagent" || name === "sub_agent"}

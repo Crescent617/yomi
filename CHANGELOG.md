@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- 移除内置 `web_fetch` 工具：网页抓取改用 shell 自行 `curl` 落盘转换（决策见 `docs/design/webfetch-removal.md`）。依赖该工具的技能/习惯请改用 curl；默认审批配置下抓取需审批（原为免审批）。
+
 ## [0.9.23] - 2026-08-28
 
 ### Fixed

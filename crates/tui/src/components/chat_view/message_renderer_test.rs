@@ -225,7 +225,6 @@ fn tool_verb_maps_known_tools() {
     assert_eq!(tool_verb("write"), "Writing");
     assert_eq!(tool_verb("shell"), "Running");
     assert_eq!(tool_verb("grep"), "Searching");
-    assert_eq!(tool_verb("web_fetch"), "Fetching");
     assert_eq!(tool_verb("agent"), "Delegating");
     assert_eq!(tool_verb("sleep"), "Sleeping");
 }
@@ -239,7 +238,6 @@ fn tool_verb_falls_back_to_calling() {
 #[test]
 fn tool_label_uses_camel_case_for_multi_word_tools() {
     assert_eq!(tool_label("web_search"), "WebSearch");
-    assert_eq!(tool_label("web_fetch"), "WebFetch");
     assert_eq!(tool_label("post_message"), "PostMessage");
     assert_eq!(tool_label("ask_user"), "AskUser");
     assert_eq!(tool_label("task_create"), "TaskCreate");
