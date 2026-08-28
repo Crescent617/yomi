@@ -200,6 +200,23 @@ describe("kernel event frame buffer", () => {
     });
   });
 
+  test("throttles consecutive frame flushes to the minimum interval", async () => {
+    let count = 0;
+    const buffer = new EventFrameBuffer(() => count++);
+
+    buffer.enqueue(textDelta("session-a", "message-a", "first"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // First flush lands on the next frame — no throttle on an idle buffer.
+    expect(count).toBe(1);
+
+    buffer.enqueue(textDelta("session-a", "message-a", "second"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Within the 66ms window: held back.
+    expect(count).toBe(1);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(count).toBe(2);
+  });
+
   test("flushes pending events on disposal", () => {
     const ids: Array<string | undefined> = [];
     const buffer = new EventFrameBuffer((event) => ids.push(event.event_id));

@@ -17,6 +17,7 @@ Yomi is a focused agent workspace: calm, dense, and direct. The interface should
 - **Use familiar interaction patterns.** Master–detail panes, segmented controls, inline status, toolbars, radio rows, and checkbox rows are preferred over novel menus.
 - **Feedback stays local.** Show loading, success, validation, and failure at the control or content that caused it. Use global notifications only when no local surface exists.
 - **Motion is functional.** Keep transitions short and subtle; use them to explain appearance, state changes, or progress. Respect `prefers-reduced-motion`.
+- **Streaming costs O(delta).** Per stream flush, work must scale with the new bytes, not the accumulated document: incremental preprocessing (cached escaped prefix, gated details split), event dispatch throttled below display rate, and DOM scans only on proven state changes (closed code fence, new details marker) — never a full-document or full-DOM pass per frame.
 - **Accessible by default.** Every icon-only control needs a label and tooltip. Support keyboard focus, disabled/loading states, touch devices, and sufficient semantic contrast.
 
 ## Visual Language

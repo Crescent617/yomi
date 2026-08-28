@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { escapeIntrawordUnderscores } from "./escape-underscores";
+import {
+  escapeIntrawordUnderscores,
+  IncrementalUnderscoreEscape,
+} from "./escape-underscores";
 
 describe("escapeIntrawordUnderscores", () => {
   it("escapes snake_case identifiers", () => {
@@ -83,5 +86,74 @@ describe("escapeIntrawordUnderscores", () => {
   it("escapes underscores inside CJK words too", () => {
     expect(escapeIntrawordUnderscores("变量_名 测试")).toBe("变量\\_名 测试");
     expect(escapeIntrawordUnderscores("hello_世界")).toBe("hello\\_世界");
+  });
+});
+
+describe("IncrementalUnderscoreEscape", () => {
+  /** Feed `md` to the escaper in `step`-sized appends, collecting outputs. */
+  function streamOutputs(md: string, step: number): string[] {
+    const escaper = new IncrementalUnderscoreEscape();
+    const outputs: string[] = [];
+    for (let end = step; end < md.length; end += step) {
+      outputs.push(escaper.update(md.slice(0, end)));
+    }
+    outputs.push(escaper.update(md));
+    return outputs;
+  }
+
+  const samples = [
+    "plain text without markers",
+    "unknown finish_reason repeat",
+    "snake_case and `code_span_x` and _real_emphasis_",
+    "```py\ndef foo_bar():\n    return baz_qux\n```\nafter_fence_x",
+    "~~~\nx_y\n~~~",
+    "partial fence\n `` \n ```js\ncode_x\n ``` \nout_x",
+    "[t](https://a.com/b_c) d_e and https://a.com/f_g then h_i",
+    "多行\n变量_名 测试\nhello_世界\n最后一行 partial_x",
+    "trailing newline kept\nnext_line_下划线",
+  ];
+
+  it("matches the one-shot result at every append step", () => {
+    for (const md of samples) {
+      for (const step of [1, 3, 7]) {
+        const outputs = streamOutputs(md, step);
+        for (let i = 0; i < outputs.length; i++) {
+          const prefix =
+            i === outputs.length - 1
+              ? md
+              : md.slice(
+                  0,
+                  (i + 1) * step < md.length ? (i + 1) * step : md.length,
+                );
+          expect(outputs[i]).toBe(escapeIntrawordUnderscores(prefix));
+        }
+      }
+    }
+  });
+
+  it("handles a fence marker arriving character by character", () => {
+    const escaper = new IncrementalUnderscoreEscape();
+    const md = "before_x\n```\nin_fence_y\n```\nafter_z";
+    let last = "";
+    for (let end = 1; end <= md.length; end++) {
+      last = escaper.update(md.slice(0, end));
+      expect(last).toBe(escapeIntrawordUnderscores(md.slice(0, end)));
+    }
+    expect(last).toBe("before\\_x\n```\nin_fence_y\n```\nafter\\_z");
+  });
+
+  it("falls back to a full pass when the input is not an append", () => {
+    const escaper = new IncrementalUnderscoreEscape();
+    escaper.update("aaa_bbb\nccc_ddd\neee_");
+    expect(escaper.update("%%MARKER%%\nfff_ggg")).toBe(
+      escapeIntrawordUnderscores("%%MARKER%%\nfff_ggg"),
+    );
+    expect(escaper.update("a_b")).toBe("a\\_b");
+  });
+
+  it("returns identical output for repeated identical input", () => {
+    const escaper = new IncrementalUnderscoreEscape();
+    const first = escaper.update("some_text\nmore_text");
+    expect(escaper.update("some_text\nmore_text")).toBe(first);
   });
 });

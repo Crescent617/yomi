@@ -12,25 +12,87 @@
  * copied verbatim so escaping can't corrupt code or URLs.
  */
 export function escapeIntrawordUnderscores(md: string): string {
-  let inFence = false;
-  let fenceChar = "";
+  const state: FenceState = { inFence: false, fenceChar: "" };
   return md
     .split("\n")
-    .map((line) => {
-      const fence = /^ {0,3}(```+|~~~+)/.exec(line);
-      if (fence) {
-        const marker = fence[1][0];
-        if (!inFence) {
-          inFence = true;
-          fenceChar = marker;
-        } else if (marker === fenceChar) {
-          inFence = false;
-        }
-        return line;
-      }
-      return inFence ? line : escapeLine(line);
-    })
+    .map((line) => escapeLineStateful(line, state))
     .join("\n");
+}
+
+interface FenceState {
+  inFence: boolean;
+  fenceChar: string;
+}
+
+/**
+ * Incremental variant for streaming: caches the escaped output of every
+ * newline-terminated line and only reprocesses the trailing partial line
+ * (plus newly completed lines) on each update. Escaping is line-local —
+ * inline code spans, link destinations, and bare URLs never extend past a
+ * newline — so a line reprocessed with the fence state of its start yields
+ * exactly the one-shot result. Falls back to a full pass when the input is
+ * not an append (message switch, rewrite, retroactive details split).
+ */
+export class IncrementalUnderscoreEscape {
+  private source = "";
+  private consumed = 0;
+  private escaped = "";
+  private inFence = false;
+  private fenceChar = "";
+
+  update(md: string): string {
+    if (!md.startsWith(this.source) || this.consumed > md.length) {
+      this.consumed = 0;
+      this.escaped = "";
+      this.inFence = false;
+      this.fenceChar = "";
+    }
+    this.source = md;
+
+    // Commit newly completed lines; their fence state is final.
+    const lastNewline = md.lastIndexOf("\n");
+    if (lastNewline + 1 > this.consumed) {
+      const lines = md.slice(this.consumed, lastNewline + 1).split("\n");
+      lines.pop(); // trailing "" after the final newline
+      const state: FenceState = {
+        inFence: this.inFence,
+        fenceChar: this.fenceChar,
+      };
+      const out: string[] = [];
+      for (const line of lines) out.push(escapeLineStateful(line, state));
+      this.escaped += out.join("\n") + "\n";
+      this.inFence = state.inFence;
+      this.fenceChar = state.fenceChar;
+      this.consumed = lastNewline + 1;
+    }
+
+    // The trailing partial line is reprocessed on every update without
+    // committing its fence state — it may still grow into a fence marker.
+    const tailState: FenceState = {
+      inFence: this.inFence,
+      fenceChar: this.fenceChar,
+    };
+    return (
+      this.escaped + escapeLineStateful(md.slice(this.consumed), tailState)
+    );
+  }
+}
+
+function escapeLineStateful(line: string, state: FenceState): string {
+  const fence = /^ {0,3}(```+|~~~+)/.exec(line);
+  if (fence) {
+    const marker = fence[1][0];
+    if (!state.inFence) {
+      state.inFence = true;
+      state.fenceChar = marker;
+    } else if (marker === state.fenceChar) {
+      state.inFence = false;
+    }
+    return line;
+  }
+  // escapeLine only rewrites underscore runs — skip lines without any.
+  if (state.inFence || !line.includes("_")) return line;
+  return escapeLine(line);
 }
 
 function escapeLine(line: string): string {

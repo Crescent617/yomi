@@ -236,6 +236,17 @@ test("caps the compact strip at 30 ticks and auto-scrolls to the active query", 
         "main .h-full.overflow-y-auto",
       );
       if (!container) throw new Error("Missing scroll container");
+      // Scrolling up is user intent only when it arrives through an input
+      // channel: a bare programmatic scrollTop inside the geometry settle
+      // window reads as a clamp echo and the pin re-glues to the bottom.
+      // Real users wheel first — do the same so the pin releases.
+      container.dispatchEvent(
+        new WheelEvent("wheel", {
+          deltaY: -120,
+          bubbles: true,
+          composed: true,
+        }),
+      );
       container.scrollTop = scrollTop;
       container.dispatchEvent(new Event("scroll"));
     }, top);

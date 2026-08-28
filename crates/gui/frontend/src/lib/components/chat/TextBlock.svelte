@@ -11,7 +11,7 @@
     splitDetailsBlocks,
   } from "./markdown-details";
   import { endsWithClosedBacktickFence } from "./markdown-fences";
-  import { escapeIntrawordUnderscores } from "./escape-underscores";
+  import { IncrementalUnderscoreEscape } from "./escape-underscores";
 
   let { content, isStreaming }: { content: string; isStreaming?: boolean } =
     $props();
@@ -24,6 +24,13 @@
   let mountedCodeBlocks: ReturnType<typeof mount>[] = [];
   let mountedDetailsBlocks: ReturnType<typeof mount>[] = [];
   let detailsBlocks: { summary: string; body: string }[] = [];
+  // Incremental preprocessing: escaping cost is O(new chars) per stream
+  // flush instead of O(document). Enhancement is lazy — the DOM walk only
+  // runs when the parser actually closed a code block or a new details
+  // marker appeared, not on every animation frame.
+  const escaper = new IncrementalUnderscoreEscape();
+  let pendingClosedCodeBlock = false;
+  let mountedDetailsCount = 0;
 
   function clearMountedCodeBlocks() {
     for (const component of mountedCodeBlocks) void unmount(component);
@@ -42,6 +49,7 @@
       endToken(data);
       if (closedToken?.parentElement?.tagName === "PRE") {
         closedToken.parentElement.dataset.closedCodeBlock = "true";
+        pendingClosedCodeBlock = true;
       }
     };
     return renderer;
@@ -49,64 +57,78 @@
 
   function enhanceCodeBlocks() {
     if (!el) return;
-    const blocks = [
-      ...el.querySelectorAll<HTMLElement>(
-        "pre[data-closed-code-block='true'] > code",
-      ),
-    ];
+    const needCode = pendingClosedCodeBlock;
+    const needDetails = detailsBlocks.length > mountedDetailsCount;
+    if (!needCode && !needDetails) return;
 
-    for (const codeElement of blocks) {
-      const pre = codeElement.parentElement;
-      if (!pre) continue;
-      const languageClass = [...codeElement.classList].find((name) =>
-        name.startsWith("language-"),
-      );
-      // streaming-markdown emits the fence info as a direct class, while other
-      // renderers commonly emit "language-*".
-      const rawLanguage = (
-        languageClass?.slice("language-".length) ||
-        codeElement.classList[0] ||
-        "text"
-      ).toLowerCase();
-      const code = codeElement.textContent ?? "";
-      const target = document.createElement("div");
-      pre.replaceWith(target);
+    if (needCode) {
+      pendingClosedCodeBlock = false;
+      const blocks = [
+        ...el.querySelectorAll<HTMLElement>(
+          "pre[data-closed-code-block='true'] > code",
+        ),
+      ];
 
-      if (rawLanguage === "mermaid") {
-        mountedCodeBlocks.push(
-          mount(MermaidBlock, {
-            target,
-            props: { source: code },
-          }),
+      for (const codeElement of blocks) {
+        const pre = codeElement.parentElement;
+        if (!pre) continue;
+        const languageClass = [...codeElement.classList].find((name) =>
+          name.startsWith("language-"),
         );
-      } else {
-        mountedCodeBlocks.push(
-          mount(CodeBlock, {
-            target,
-            props: {
-              code,
-              language: rawLanguage === "text" ? "Code" : rawLanguage,
-            },
-          }),
-        );
+        // streaming-markdown emits the fence info as a direct class, while other
+        // renderers commonly emit "language-*".
+        const rawLanguage = (
+          languageClass?.slice("language-".length) ||
+          codeElement.classList[0] ||
+          "text"
+        ).toLowerCase();
+        const code = codeElement.textContent ?? "";
+        const target = document.createElement("div");
+        pre.replaceWith(target);
+
+        if (rawLanguage === "mermaid") {
+          mountedCodeBlocks.push(
+            mount(MermaidBlock, {
+              target,
+              props: { source: code },
+            }),
+          );
+        } else {
+          mountedCodeBlocks.push(
+            mount(CodeBlock, {
+              target,
+              props: {
+                code,
+                language: rawLanguage === "text" ? "Code" : rawLanguage,
+              },
+            }),
+          );
+        }
       }
     }
 
-    // details/summary 折叠块：占位段落替换成挂载组件（索引与切分时一致）
-    const markerRe = new RegExp(`^${DETAILS_MARKER_PREFIX}(\\d+)%%$`);
-    for (const p of [...el.querySelectorAll("p")]) {
-      const match = p.textContent?.trim().match(markerRe);
-      if (!match) continue;
-      const block = detailsBlocks[Number(match[1])];
-      if (!block) continue;
-      const target = document.createElement("div");
-      p.replaceWith(target);
-      mountedDetailsBlocks.push(
-        mount(DetailsBlock, {
-          target,
-          props: { summary: block.summary, body: block.body },
-        }),
-      );
+    // details/summary 折叠块：占位段落替换成挂载组件（索引与切分时一致）。
+    // The marker line may lag the split by a frame (paragraph not emitted
+    // yet); the count gate re-arms the scan until every block is mounted.
+    if (needDetails) {
+      const markerRe = new RegExp(`^${DETAILS_MARKER_PREFIX}(\\d+)%%$`);
+      let found = 0;
+      for (const p of [...el.querySelectorAll("p")]) {
+        const match = p.textContent?.trim().match(markerRe);
+        if (!match) continue;
+        const block = detailsBlocks[Number(match[1])];
+        if (!block) continue;
+        const target = document.createElement("div");
+        p.replaceWith(target);
+        found += 1;
+        mountedDetailsBlocks.push(
+          mount(DetailsBlock, {
+            target,
+            props: { summary: block.summary, body: block.body },
+          }),
+        );
+      }
+      if (found > 0) mountedDetailsCount += found;
     }
   }
 
@@ -140,6 +162,8 @@
   function resetParser(content: string) {
     cancelCodeBlockEnhancement();
     clearMountedCodeBlocks();
+    pendingClosedCodeBlock = false;
+    mountedDetailsCount = 0;
     if (!el) return;
     el.innerHTML = "";
     parser = smd.parser(createRenderer());
@@ -163,10 +187,13 @@
     // escape intra-word underscores up front: streaming-markdown doesn't
     // implement CommonMark flanking rules and would italicize snake_case
     // identifiers (and everything after them). All parser bookkeeping below
-    // happens in the escaped space.
-    const split = splitDetailsBlocks(content);
+    // happens in the escaped space. Both passes are gated/incremental so a
+    // stream flush costs O(new chars), not O(document).
+    const split = content.includes("<details>")
+      ? splitDetailsBlocks(content)
+      : { text: content, blocks: [] };
     detailsBlocks = split.blocks;
-    const curr = escapeIntrawordUnderscores(split.text);
+    const curr = escaper.update(split.text);
     const streaming = isStreaming;
 
     if (parser === undefined) {

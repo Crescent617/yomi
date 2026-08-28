@@ -3,6 +3,12 @@ import type { KernelEvent } from "./state.svelte";
 const MAX_QUEUED_ITEMS = 1024;
 const MAX_QUEUED_CHARS = 256 * 1024;
 const TIMEOUT_MS = 100;
+/**
+ * Minimum interval between streamed-text dispatches. Rendering markdown at
+ * the display refresh rate costs a full reactive pass per frame; ~15fps is
+ * indistinguishable for text while cutting the per-second render cost 4x.
+ */
+const MIN_FLUSH_INTERVAL_MS = 66;
 
 export interface KernelEventEnvelope {
   session_id: string;
@@ -81,8 +87,12 @@ export class EventFrameBuffer {
   private frameId: number | null = null;
   private timeoutId: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
+  private lastFlushAt = Number.NEGATIVE_INFINITY;
 
-  constructor(private readonly dispatch: Dispatch) {}
+  constructor(
+    private readonly dispatch: Dispatch,
+    private readonly minFlushIntervalMs = MIN_FLUSH_INTERVAL_MS,
+  ) {}
 
   enqueue(envelope: KernelEventEnvelope) {
     if (this.disposed) return;
@@ -131,6 +141,7 @@ export class EventFrameBuffer {
 
   flush() {
     this.cancelScheduledFlush();
+    this.lastFlushAt = performance.now();
     const queue = this.queue;
     this.queue = [];
     this.queuedItems = 0;
@@ -148,7 +159,21 @@ export class EventFrameBuffer {
 
   private scheduleFlush() {
     if (this.frameId !== null || this.timeoutId !== null) return;
-    this.frameId = requestAnimationFrame(() => this.flush());
+    this.frameId = requestAnimationFrame(() => {
+      this.frameId = null;
+      const elapsed = performance.now() - this.lastFlushAt;
+      if (elapsed >= this.minFlushIntervalMs) {
+        this.flush();
+        return;
+      }
+      // Flushed too recently: land the pending text when the interval
+      // completes instead of paying a render for every display frame.
+      if (this.timeoutId !== null) clearTimeout(this.timeoutId);
+      this.timeoutId = setTimeout(
+        () => this.flush(),
+        this.minFlushIntervalMs - elapsed,
+      );
+    });
     this.timeoutId = setTimeout(() => this.flush(), TIMEOUT_MS);
   }
 
