@@ -286,7 +286,11 @@ pub enum ReqMethod {
     /// Query or switch a chat's watch mode (`/watch` over RPC):
     /// `on` absent = query (Vim `:set` style). Result: `{on, session_id}`.
     SetChannelWatch {
+        /// Channel name from the config; default: the sole channel of
+        /// `platform`.
         channel: Option<String>,
+        /// Platform selector (default: feishu) used to resolve the
+        /// channel when `channel` is absent.
         platform: Option<String>,
         chat_id: String,
         on: Option<bool>,

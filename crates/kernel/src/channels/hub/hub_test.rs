@@ -8584,5 +8584,24 @@ async fn set_channel_watch_query_and_switch_round_trip() {
         .unwrap();
     assert!(!status.on);
 
+    // Off when never watched: a clean no-op, not an error.
+    let status = hub
+        .rpc_set_channel_watch(&kernel, None, "telegram", "oc_never", Some(false))
+        .await
+        .unwrap();
+    assert_eq!(
+        status,
+        crate::channels::ChannelWatchStatus {
+            on: false,
+            session_id: None
+        }
+    );
+
+    // Unknown channel name is a config error.
+    assert!(hub
+        .get_channel_watch(Some("nope"), "telegram", "oc_rt")
+        .await
+        .is_err());
+
     cancel.cancel();
 }

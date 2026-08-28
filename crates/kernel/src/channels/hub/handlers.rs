@@ -1070,7 +1070,7 @@ pub(crate) async fn handle_watch_command(
         // the same observer session (the reuse path refreshes the kind).
         crate::channels::hub::watch::set_channel_watch_by_name(
             store,
-            &kernel,
+            kernel,
             &config.name,
             chat_id,
             true,
@@ -1090,7 +1090,7 @@ pub(crate) async fn handle_watch_command(
         // kind-gated, only channel delivery is.
         let status = crate::channels::hub::watch::set_channel_watch_by_name(
             store,
-            &kernel,
+            kernel,
             &config.name,
             chat_id,
             false,
