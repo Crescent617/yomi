@@ -367,7 +367,7 @@
             autocapitalize="off"
             autocorrect="off"
             spellcheck="false"
-            class="w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs placeholder:text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
+            class="w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
             onkeydown={(e: KeyboardEvent) => {
               if (e.key === "Enter" && !connBusy) void submitConnect();
             }}

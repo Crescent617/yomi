@@ -75,7 +75,9 @@ function appendDelta(
   } else if (content.thinking) {
     content.thinking.thinking = (content.thinking.thinking ?? "") + value;
   }
-  buffered.envelope.event_id = event_id;
+  if (event_id !== undefined) {
+    buffered.envelope.event_id = event_id;
+  }
   buffered.chars += value.length;
   buffered.items += 1;
 }

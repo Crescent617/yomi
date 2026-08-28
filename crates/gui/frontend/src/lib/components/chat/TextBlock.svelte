@@ -11,7 +11,10 @@
     splitDetailsBlocks,
   } from "./markdown-details";
   import { endsWithClosedBacktickFence } from "./markdown-fences";
-  import { IncrementalUnderscoreEscape } from "./escape-underscores";
+  import {
+    IncrementalUnderscoreEscape,
+    escapeIntrawordUnderscores,
+  } from "./escape-underscores";
 
   let { content, isStreaming }: { content: string; isStreaming?: boolean } =
     $props();
@@ -193,8 +196,15 @@
       ? splitDetailsBlocks(content)
       : { text: content, blocks: [] };
     detailsBlocks = split.blocks;
-    const curr = escaper.update(split.text);
     const streaming = isStreaming;
+    // Streaming uses the incremental escaper (O(delta) per flush); final
+    // and static renders use the one-shot full escape. The incremental
+    // escaper passes an over-8KiB unterminated tail through verbatim,
+    // and a message's last line usually has no trailing newline — nothing
+    // would ever re-escape it, permanently misrendering italics.
+    const curr = streaming
+      ? escaper.update(split.text)
+      : escapeIntrawordUnderscores(split.text);
 
     if (parser === undefined) {
       resetParser(curr);
