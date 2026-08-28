@@ -56,6 +56,8 @@ pub async fn get_connection_info(
 }
 
 /// Switch the GUI to a remote daemon at `addr` (e.g. `wss://host:port`).
+/// `auth_token` is the socket auth password for daemons that require it;
+/// when absent, `YOMI_SOCKET_AUTH` from the process env is used instead.
 /// Validates connectivity before swapping; the previous connection stays
 /// untouched on failure. The local daemon (if any) is deliberately left
 /// running so switching back is instant and its cron jobs keep firing.
@@ -63,13 +65,14 @@ pub async fn get_connection_info(
 pub async fn connect_remote(
     state: State<'_, AppState>,
     addr: String,
+    auth_token: Option<String>,
 ) -> Result<serde_json::Value, GuiError> {
     let _switch_guard = state.connection_switch.lock().await;
     let addr: kernel::transport::SocketAddr = addr
         .trim()
         .parse()
         .map_err(|e: String| GuiError::unknown(format!("Invalid socket address: {e}")))?;
-    let remote = kernel::client::RemoteKernel::connect(&addr)
+    let remote = kernel::client::RemoteKernel::connect_with_auth(&addr, auth_token)
         .await
         .map_err(|e| GuiError::unknown(format!("Failed to connect to {addr}: {e}")))?;
     remote

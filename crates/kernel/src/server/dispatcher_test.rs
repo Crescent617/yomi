@@ -190,3 +190,65 @@ async fn test_agent_templates_wire_round_trip() {
 
     shutdown.cancel();
 }
+
+// ── Socket auth over ws (RemoteKernel token propagation) ────────────────
+
+async fn setup_ws_auth(
+    password: &str,
+) -> (
+    crate::transport::SocketAddr,
+    TempDir,
+    tokio_util::sync::CancellationToken,
+) {
+    let tmp = TempDir::new().unwrap();
+    let mut config = Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..Config::default()
+    };
+    config.finalize();
+    let kernel = crate::build_kernel(&config, false).await.unwrap();
+    let server = crate::server::KernelServer::with_lifecycle(kernel, None, None);
+    server.start(&config).await;
+    let auth = Some(crate::transport::auth_verifier(
+        &crate::transport::hash_password(password),
+    ));
+    let listener = crate::transport::bind(
+        &crate::transport::SocketAddr::Ws("127.0.0.1:0".into()),
+        auth,
+    )
+    .await
+    .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let addr = crate::transport::SocketAddr::Ws(format!("127.0.0.1:{port}"));
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let serve_shutdown = shutdown.clone();
+    tokio::spawn(async move {
+        let _ = server.serve(listener, serve_shutdown).await;
+    });
+    (addr, tmp, shutdown)
+}
+
+#[tokio::test]
+async fn test_remote_kernel_connect_with_auth() {
+    let (addr, _tmp, shutdown) = setup_ws_auth("pw-123").await;
+
+    // Correct token: handshake + Hello succeed, kernel is usable.
+    let client = RemoteKernel::connect_with_auth(&addr, Some("pw-123".to_string()))
+        .await
+        .unwrap();
+    client.check_ready().await.unwrap();
+
+    // Wrong / missing tokens are rejected during the ws handshake.
+    for token in [Some("nope".to_string()), None] {
+        let err = RemoteKernel::connect_with_auth(&addr, token)
+            .await
+            .err()
+            .expect("connection should have been rejected");
+        assert!(
+            err.to_string().contains("socket auth failed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    shutdown.cancel();
+}

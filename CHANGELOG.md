@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - daemon socket 支持密码鉴权（仅 ws/wss 传输）：daemon 侧设置环境变量 `YOMI_SOCKET_AUTH_HASH`（blake3 哈希，可用新命令 `yomi daemon auth-hash` 生成），客户端设置 `YOMI_SOCKET_AUTH` 为明文密码即可自动完成握手鉴权；未携带或密码错误的连接在 WebSocket 握手阶段即被拒绝（HTTP 401）。unix socket 不受影响，仍由文件权限保护。
 - ws 握手鉴权失败固定延迟 300ms 再返回失败：在线爆破速率被封顶在每秒约 3 次（与攻击并行度无关）。
 - 新增 `yomi daemon auth-hash [密码]` 命令：计算密码的 blake3 哈希；不带参数时从 stdin 读取（避免进入 shell 历史）；`--generate` 一键生成随机 token 及其哈希（推荐用法）；密码短于 16 字符时打印告警。
+- GUI 远程连接新增鉴权密码输入框（掩码输入，随地址一起保存，下次自动预填；留空则回退到环境变量 `YOMI_SOCKET_AUTH`）。
 - 群聊新增 `/watch` 命令（admin）：`/watch on` 后该群所有消息（含 @、含话题内）都进入唯一一个常驻 agent 会话，mention 不再触发独立对话会话，由它自己判断何时回复。
 - watch 会话说话只能用自己技能列表里对应平台的 skill（如飞书的 lark skill）：channel 不为它发任何字（无状态卡、无回复投递、无表情回执），没有匹配 skill 时即纯只读。
 - `/watch off` 暂停观察并保留会话全部上下文，再次 `/watch on` 由同一会话带记忆续任；watch 开着时已知命令无需 @ 即可执行。

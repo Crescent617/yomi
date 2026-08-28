@@ -89,6 +89,7 @@
   let connInfo = $derived(connectionState.info);
   let connOpen = $state(false);
   let connInput = $state("");
+  let connToken = $state("");
   let connBusy = $state(false);
   let connError = $state<string | null>(null);
   let connRef = $state<HTMLDivElement>();
@@ -108,6 +109,7 @@
       connInfo?.mode === "remote"
         ? connInfo.addr
         : (guiPreferences.connection.remote_addr ?? "");
+    connToken = guiPreferences.connection.remote_auth_token ?? "";
     connOpen = true;
   }
 
@@ -120,8 +122,10 @@
     connBusy = true;
     connError = null;
     try {
-      await api.connectRemote(addr);
+      const token = connToken.trim() || undefined;
+      await api.connectRemote(addr, token);
       guiPreferences.connection.remote_addr = addr;
+      guiPreferences.connection.remote_auth_token = token ?? null;
       try {
         await saveGuiPreferences(snapshotGuiPreferences());
       } catch (error) {
@@ -339,6 +343,26 @@
             type="text"
             bind:value={connInput}
             placeholder="wss://host:port"
+            disabled={connBusy}
+            autocapitalize="off"
+            autocorrect="off"
+            spellcheck="false"
+            class="w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs placeholder:text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
+            onkeydown={(e: KeyboardEvent) => {
+              if (e.key === "Enter" && !connBusy) void submitConnect();
+            }}
+          />
+          <label
+            for="remote-token-input"
+            class="micro-label block text-muted-foreground"
+          >
+            Auth token (optional)
+          </label>
+          <input
+            id="remote-token-input"
+            type="password"
+            bind:value={connToken}
+            placeholder="defaults to YOMI_SOCKET_AUTH"
             disabled={connBusy}
             autocapitalize="off"
             autocorrect="off"

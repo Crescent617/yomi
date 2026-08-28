@@ -722,8 +722,11 @@ export async function getConnectionInfo(): Promise<ConnectionInfo> {
   return invokeCmd("get_connection_info");
 }
 
-export async function connectRemote(addr: string): Promise<ConnectionInfo> {
-  return invokeCmd("connect_remote", { addr });
+export async function connectRemote(
+  addr: string,
+  auth_token?: string,
+): Promise<ConnectionInfo> {
+  return invokeCmd("connect_remote", { addr, auth_token: auth_token ?? null });
 }
 
 export async function disconnectRemote(): Promise<ConnectionInfo> {

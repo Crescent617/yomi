@@ -50,6 +50,8 @@ export interface GuiPreferences {
   };
   connection: {
     remote_addr: string | null;
+    /** Socket auth token for the remote daemon (plaintext, like API keys in config). */
+    remote_auth_token: string | null;
   };
   power: {
     /** Hold an OS power assertion so the machine does not sleep while Yomi runs. */
@@ -101,6 +103,7 @@ export const defaultGuiPreferences: GuiPreferences = {
   },
   connection: {
     remote_addr: null,
+    remote_auth_token: null,
   },
   power: {
     keep_awake: false,
@@ -228,6 +231,10 @@ function normalizeGuiPreferences(
         typeof value?.connection?.remote_addr === "string"
           ? value.connection.remote_addr
           : null,
+      remote_auth_token:
+        typeof value?.connection?.remote_auth_token === "string"
+          ? value.connection.remote_auth_token
+          : null,
     },
     power: {
       keep_awake:
@@ -293,6 +300,7 @@ async function loadLegacyPreferences(s: Store): Promise<GuiPreferences> {
     },
     connection: {
       remote_addr: defaultGuiPreferences.connection.remote_addr,
+      remote_auth_token: defaultGuiPreferences.connection.remote_auth_token,
     },
     power: {
       keep_awake: defaultGuiPreferences.power.keep_awake,

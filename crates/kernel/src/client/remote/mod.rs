@@ -51,6 +51,10 @@ struct Connection {
 /// Uses lazy connect: the connection is established on the first API call.
 pub struct RemoteKernel {
     addr: SocketAddr,
+    /// Socket auth token sent on ws/wss connects (and reconnects).
+    /// Defaults to `YOMI_SOCKET_AUTH`; override via [`Self::with_auth_token`]
+    /// or [`Self::connect_with_auth`].
+    auth_token: Option<String>,
     req_id: RequestIdGenerator,
     connection: Arc<Mutex<Option<Connection>>>,
     /// Persistent local event routers: `session_id` -> broadcast sender.
@@ -67,6 +71,7 @@ impl RemoteKernel {
         let (notification_tx, _) = broadcast::channel(256);
         Self {
             addr,
+            auth_token: crate::transport::socket_auth_token(),
             req_id: RequestIdGenerator::new(),
             connection: Arc::new(Mutex::new(None)),
             event_routers: Arc::new(EventRouterMap::new()),
@@ -75,11 +80,26 @@ impl RemoteKernel {
     }
 
     /// Connect immediately and return a ready kernel.
+    ///
+    /// Uses the socket auth token from `YOMI_SOCKET_AUTH`, if set.
     pub async fn connect(addr: &SocketAddr) -> Result<Self> {
-        let stream = crate::transport::connect(addr).await?;
-        let this = Self::from_stream(stream, addr).await?;
+        Self::connect_with_auth(addr, crate::transport::socket_auth_token()).await
+    }
+
+    /// Connect immediately with an explicit socket auth token. The token
+    /// overrides `YOMI_SOCKET_AUTH` and is reused on reconnects.
+    pub async fn connect_with_auth(addr: &SocketAddr, auth_token: Option<String>) -> Result<Self> {
+        let stream = crate::transport::connect_with_token(addr, auth_token.as_deref()).await?;
+        let mut this = Self::from_stream(stream, addr).await?;
+        this.auth_token = auth_token;
         this.validate_wire_protocol().await?;
         Ok(this)
+    }
+
+    /// Override the socket auth token used on (re)connects.
+    pub fn with_auth_token(mut self, auth_token: Option<String>) -> Self {
+        self.auth_token = auth_token;
+        self
     }
 
     /// Wrap an already-connected stream.
@@ -105,6 +125,7 @@ impl RemoteKernel {
 
         let this = Self {
             addr: addr.clone(),
+            auth_token: crate::transport::socket_auth_token(),
             req_id: RequestIdGenerator::new(),
             connection: Arc::new(Mutex::new(None)),
             event_routers,
@@ -292,7 +313,8 @@ impl RemoteKernel {
         }
         let start = tokio::time::Instant::now();
         let stream = loop {
-            match crate::transport::connect(&self.addr).await {
+            match crate::transport::connect_with_token(&self.addr, self.auth_token.as_deref()).await
+            {
                 Ok(s) => break s,
                 Err(_) if start.elapsed() < CONNECT_RETRY_TIMEOUT => {
                     tokio::time::sleep(CONNECT_RETRY_INTERVAL).await;

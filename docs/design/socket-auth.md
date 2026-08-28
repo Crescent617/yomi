@@ -22,7 +22,7 @@ daemon 的 IPC socket 此前完全无鉴权：任何能连上 socket 的进程�
 ## 行为
 
 - daemon：`YOMI_SOCKET_AUTH_HASH=blake3:<hex>` 启用鉴权（仅对 ws listener 生效；unix 忽略）。未设置 = 现状，完全向后兼容。
-- 客户端：`YOMI_SOCKET_AUTH=<明文密码>`，`transport::connect` 在 ws/wss 握手自动附加 `Authorization: Bearer` 头；失败报 `socket auth failed: missing or invalid YOMI_SOCKET_AUTH`（`PermissionDenied`）。
+- 客户端：`YOMI_SOCKET_AUTH=<明文密码>`，`transport::connect` 在 ws/wss 握手自动附加 `Authorization: Bearer` 头；失败报 `socket auth failed: missing or invalid YOMI_SOCKET_AUTH`（`PermissionDenied`）。也可显式传 token（`RemoteKernel::connect_with_auth` / `with_auth_token`），token 存于客户端实例、重连复用；GUI 远程连接弹窗即走此路径（掩码输入，随地址存入 GUI 偏好，明文字段与 config 里的 API key 同级敏感）。
 - 校验：`blake3(password)` hex 与配置哈希常量时间比较。定位为高熵机器 token（非人类口令），故不需要慢哈希/盐。
 - 爆破防护：失败的握手固定延迟 300ms 再返回失败——失败握手在 accept 循环中串行，在线爆破速率全局封顶 ~3 次/秒（与攻击并行度无关；代价是洪泛时正常连接排队，个人 daemon 可接受）。离线防护依赖密码熵：`yomi daemon auth-hash --generate` 生成 128-bit 随机 token（推荐路径），短密码会触发告警。
 - 哈希生成：`yomi daemon auth-hash [密码]`（无参从 stdin 读；`--generate` 打印随机 token + 哈希）。
