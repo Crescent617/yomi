@@ -10,9 +10,9 @@ use tracing::warn;
 
 use crate::channels::hub_command::{
     format_current_model, format_model_list, format_runtime_status, format_session_info,
-    format_unknown_model, format_usage, format_workflow_list, format_workflow_result,
-    parse_channel_command, suggest_command, ChannelCommand, OverrideMode, HELP_TEXT,
-    WORKFLOW_USAGE,
+    format_unknown_model, format_usage, format_watch_line, format_workflow_list,
+    format_workflow_result, parse_channel_command, suggest_command, ChannelCommand, OverrideMode,
+    HELP_TEXT, WORKFLOW_USAGE,
 };
 use crate::channels::hub_context::{append_message_images, prepare_trigger, TriggerKind};
 use crate::channels::hub_deliver::send_info_reply;
@@ -558,17 +558,31 @@ pub(crate) async fn handle_incoming_message(
             // Chat-level messages show the chat session, in-thread ones
             // the thread's. Read-only: never creates a session or mapping.
             let chat_level = is_chat_level_message(&msg, rit);
+            // Watch is chat-scoped: the line appears on chat-level /info
+            // only; a read failure degrades to no line, never breaks /info.
+            let watch_line = if chat_level {
+                crate::channels::hub::watch::get_channel_watch_by_name(&store, channel_name, &chat_id)
+                    .await
+                    .ok()
+                    .and_then(|st| format_watch_line(&st))
+            } else {
+                None
+            };
             let key = command_session_key(&msg, rit, &chat_id, &mapping_key);
             let Some(sid) = store.find_mapping(channel_name, key).await? else {
                 let model_key =
                     session_model_key(channel_name, store, &kernel, &chat_id, key).await?;
-                return Ok(Some(format!(
+                let mut text = format!(
                     "No session yet in this {}. First message will use `{model_key}`.\n\
                      - **Daemon**: yomi v{} · wire v{}",
                     if chat_level { "chat" } else { "thread" },
                     env!("CARGO_PKG_VERSION"),
                     crate::wire::WIRE_PROTOCOL_VERSION,
-                )));
+                );
+                if let Some(line) = watch_line {
+                    text = format!("{text}\n{line}");
+                }
+                return Ok(Some(text));
             };
             let session = kernel.get_session(&sid).await?;
             let model_key = kernel.get_session_model(&sid).await;
@@ -581,7 +595,7 @@ pub(crate) async fn handle_incoming_message(
                 .count();
             let shells = kernel.list_background_shells(&sid);
             let context_tokens = kernel.get_session_context_tokens(&sid).await;
-            let body = format_session_info(
+            let mut body = format_session_info(
                 &session,
                 &model_key,
                 &models,
@@ -589,6 +603,9 @@ pub(crate) async fn handle_incoming_message(
                 &shells,
                 context_tokens,
             );
+            if let Some(line) = watch_line {
+                body = format!("{body}\n{line}");
+            }
             send_info_reply(adapter, &msg, reply_msg_id, "ℹ️ Session info", body).await?;
             Ok(None)
         }

@@ -3305,6 +3305,34 @@ fn test_format_session_info() {
     assert!(out.contains("- **Background shells**: 1\n  - `cargo test` · pid 42 · 9m ago"));
 }
 
+#[test]
+fn test_format_watch_line() {
+    let on = crate::channels::ChannelWatchStatus {
+        on: true,
+        session_id: Some("sess_1".to_string()),
+    };
+    assert_eq!(
+        format_watch_line(&on).unwrap(),
+        "- **Watch**: on · observer `sess_1`"
+    );
+
+    let paused = crate::channels::ChannelWatchStatus {
+        on: false,
+        session_id: Some("sess_1".to_string()),
+    };
+    assert_eq!(
+        format_watch_line(&paused).unwrap(),
+        "- **Watch**: paused · observer `sess_1`"
+    );
+
+    // Never watched (or the observer row is gone): no line at all.
+    let never = crate::channels::ChannelWatchStatus {
+        on: false,
+        session_id: None,
+    };
+    assert!(format_watch_line(&never).is_none());
+}
+
 #[tokio::test]
 async fn session_context_tokens_picks_latest_usage() {
     let tmp = tempfile::TempDir::new().unwrap();
