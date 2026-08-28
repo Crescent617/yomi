@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-28
+
 ### Added
 
 - daemon socket 支持密码鉴权（仅 ws/wss 传输）：daemon 侧设置环境变量 `YOMI_SOCKET_AUTH_HASH`（blake3 哈希，可用新命令 `yomi daemon auth-hash` 生成），客户端设置 `YOMI_SOCKET_AUTH` 为明文密码即可自动完成握手鉴权；未携带或密码错误的连接在 WebSocket 握手阶段即被拒绝（HTTP 401）。unix socket 不受影响，仍由文件权限保护。
@@ -27,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - watch 会话在 `/sessions` 列表以 👁 标记，且不可被 `/bind` 重绑。
 - 每个会话现在可以有专属规则文件 `<数据目录>/sessions/rules/<session_id>.md`：内容在 spawn 时原样注入该会话的 system prompt（不加任何包装），天然免疫上下文压缩，改动在下次 spawn 生效（agent 空闲约 2 分钟卸载后）；适合记录这段对话的持久偏好（agent 可经 write 工具自行维护，契约见 yomi-self skill）。文件上限 4KB，fork 会话时一并复制，随会话被 gc 一并清理。
 - 频道消息的元信息头新增 `[msg_id: …]` 字段：agent（尤其观察者）可按消息 id 自行锚定回复位置。
+
+### Changed
+
+- 长对话的流式输出更流畅：流式渲染每帧开销不再随已生成内容的长度增长，高频流式事件合并派发。
 
 ### Removed
 
