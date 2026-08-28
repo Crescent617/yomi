@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-08-29
+
 ### Changed
 
 - `/watch` 重构为一个群一个会话：开启后该群会话本人成为观察者（消息全部镜像给它、投递抑制），关闭后同一会话恢复应答 @ 且保留 watch 期间记忆；不再有独立的观察者会话与"暂停"状态。
