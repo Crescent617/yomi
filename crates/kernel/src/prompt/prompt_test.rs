@@ -175,6 +175,59 @@ async fn session_rules_section_reads_verbatim_or_nothing() {
 }
 
 #[tokio::test]
+async fn session_rules_section_rejects_unsafe_session_ids() {
+    // Session ids may come from client RPC strings: anything outside
+    // [A-Za-z0-9_-] must never be used to build a path.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path().join("sessions").join("rules");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // 路径穿越：即便目标文件真实存在，也绝不能被读进 prompt。
+    // （rules 目录上两级即 tmp 根：`sessions/rules/../../secret.md`。）
+    std::fs::write(tmp.path().join("secret.md"), "TOP SECRET").unwrap();
+    for evil in [
+        "../../secret",
+        "../rules/sess_a",
+        "../../etc/passwd",
+        "..",
+        "a/b",
+        "a\\b",
+        "a:b",
+        "a.b",
+        "a b",
+        "",
+    ] {
+        assert!(
+            crate::prompt::session_rules_section(tmp.path(), evil)
+                .await
+                .is_none(),
+            "id {evil:?} must be rejected"
+        );
+    }
+
+    // 正常 ULID 风格 id（sess_/sub_ 前缀 + Crockford base32）不受影响。
+    std::fs::write(dir.join("sess_01J8QK7V3X.md"), "规则").unwrap();
+    assert_eq!(
+        crate::prompt::session_rules_section(tmp.path(), "sess_01J8QK7V3X")
+            .await
+            .as_deref(),
+        Some("规则")
+    );
+}
+
+#[tokio::test]
+async fn session_rules_section_treats_non_utf8_as_absent() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path().join("sessions").join("rules");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("sess_bin.md"), [0x66, 0x80, 0x81, 0xfe]).unwrap();
+
+    assert!(crate::prompt::session_rules_section(tmp.path(), "sess_bin")
+        .await
+        .is_none());
+}
+
+#[tokio::test]
 async fn compose_system_prompt_sub_agent_gets_rules_only() {
     let tmp = tempfile::TempDir::new().unwrap();
     let dir = tmp.path().join("sessions").join("rules");
@@ -202,7 +255,7 @@ async fn compose_system_prompt_main_session_full_stack() {
     let tmp = tempfile::TempDir::new().unwrap();
     let dir = tmp.path().join("sessions").join("rules");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("watch:oc_1.md"), "群里少说话。").unwrap();
+    std::fs::write(dir.join("watch_oc_1.md"), "群里少说话。").unwrap();
 
     let prompt = compose_system_prompt(SystemPromptParts {
         base_prompt: "BASE".into(),
@@ -212,7 +265,7 @@ async fn compose_system_prompt_main_session_full_stack() {
         channel_routed: true,
         watch: Some(("feishu", "oc_1", false)),
         data_dir: tmp.path(),
-        session_id: "watch:oc_1",
+        session_id: "watch_oc_1",
     })
     .await;
 

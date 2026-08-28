@@ -89,28 +89,74 @@ pub(crate) fn contract_sections(enable_attachments: bool, channel_routed: bool) 
 /// truncation marker so an oversized file can't bloat every prompt.
 pub(crate) const SESSION_RULES_MAX_BYTES: usize = 4096;
 
+/// Path of a session's RULE.md, or `None` when the id can't safely name
+/// a file: session ids may originate from client RPC strings
+/// ([`crate::types::SessionId`] is serde-transparent), so an unvalidated
+/// id like `../../etc/x` would make the daemon read an arbitrary `.md`
+/// file into the system prompt (exfiltrated via the agent's reply).
+/// Only `[A-Za-z0-9_-]` ids (ULID-style) may name a rules file.
+pub(crate) fn session_rules_path(
+    data_dir: &std::path::Path,
+    session_id: &str,
+) -> Option<std::path::PathBuf> {
+    if session_id.is_empty()
+        || !session_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return None;
+    }
+    Some(
+        data_dir
+            .join("sessions")
+            .join("rules")
+            .join(format!("{session_id}.md")),
+    )
+}
+
 /// Read the session's RULE.md for prompt injection (see above).
 pub(crate) async fn session_rules_section(
     data_dir: &std::path::Path,
     session_id: &str,
 ) -> Option<String> {
-    let path = data_dir
-        .join("sessions")
-        .join("rules")
-        .join(format!("{session_id}.md"));
-    let content = tokio::fs::read_to_string(&path).await.ok()?;
-    let content = content.trim();
+    use tokio::io::AsyncReadExt;
+
+    let path = session_rules_path(data_dir, session_id)?;
+    // Bounded read: at most MAX+1 bytes are loaded — the extra byte is
+    // enough to know the file is oversized without reading it whole.
+    let file = match tokio::fs::File::open(&path).await {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            // 权限等错误降级为"无规则"，但留下可诊断的日志。
+            tracing::warn!(path = %path.display(), "cannot open session rules: {e}");
+            return None;
+        }
+    };
+    let mut buf = Vec::new();
+    if let Err(e) = file
+        .take(SESSION_RULES_MAX_BYTES as u64 + 1)
+        .read_to_end(&mut buf)
+        .await
+    {
+        tracing::warn!(path = %path.display(), "cannot read session rules: {e}");
+        return None;
+    }
+
+    let truncated = buf.len() > SESSION_RULES_MAX_BYTES;
+    // UTF-8 安全截断：逐字节回退到 char 边界（截断点可能落在多字节字符
+    // 中间；未截断时 end == buf.len() 即全文末尾，天然是边界）。
+    let mut end = buf.len().min(SESSION_RULES_MAX_BYTES);
+    while end > 0 && end < buf.len() && (buf[end] & 0xC0) == 0x80 {
+        end -= 1;
+    }
+    // 非 UTF-8 文件按"无规则"处理（与 read_to_string 失败的旧语义一致）。
+    let content = std::str::from_utf8(&buf[..end]).ok()?.trim();
     if content.is_empty() {
         return None;
     }
-    if content.len() > SESSION_RULES_MAX_BYTES {
-        // UTF-8 安全截断：floor_char_boundary（夜间 MSRV 可用 stable 替代：
-        // 逐字节回退到 char 边界）。
-        let mut end = SESSION_RULES_MAX_BYTES;
-        while !content.is_char_boundary(end) {
-            end -= 1;
-        }
-        return Some(format!("{}\n\n(truncated)", &content[..end]));
+    if truncated {
+        return Some(format!("{content}\n\n(truncated)"));
     }
     Some(content.to_string())
 }

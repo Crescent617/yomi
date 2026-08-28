@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - watch 会话说话只能用自己技能列表里对应平台的 skill（如飞书的 lark skill）：channel 不为它发任何字（无状态卡、无回复投递、无表情回执），没有匹配 skill 时即纯只读。
 - `/watch off` 暂停观察并保留会话全部上下文，再次 `/watch on` 由同一会话带记忆续任；watch 开着时已知命令无需 @ 即可执行。
 - watch 会话在 `/sessions` 列表以 👁 标记，且不可被 `/bind` 重绑。
-- 每个会话现在可以有专属规则文件 `<数据目录>/sessions/rules/<session_id>.md`：内容在 spawn 时原样注入该会话的 system prompt（不加任何包装），天然免疫上下文压缩，改动下一轮 run 生效；适合记录这段对话的持久偏好（agent 可经 write 工具自行维护，契约见 yomi-self skill）。文件上限 4KB，随会话被 gc 一并清理。
+- 每个会话现在可以有专属规则文件 `<数据目录>/sessions/rules/<session_id>.md`：内容在 spawn 时原样注入该会话的 system prompt（不加任何包装），天然免疫上下文压缩，改动在下次 spawn 生效（agent 空闲约 2 分钟卸载后）；适合记录这段对话的持久偏好（agent 可经 write 工具自行维护，契约见 yomi-self skill）。文件上限 4KB，fork 会话时一并复制，随会话被 gc 一并清理。
 - 频道消息的元信息头新增 `[msg_id: …]` 字段：agent（尤其观察者）可按消息 id 自行锚定回复位置。
 
 ### Removed

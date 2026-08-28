@@ -990,6 +990,21 @@ impl Kernel {
             }
         }
 
+        // Copy per-session RULE.md from parent to child: rules are part of
+        // the session's spawn-time prompt, so dropping them on fork would
+        // silently change the forked session's behavior. Copy failures
+        // degrade to "no rules" — never fail the fork.
+        if let (Some(src), Some(dst)) = (
+            crate::prompt::session_rules_path(&data_dir, &parent_id.0),
+            crate::prompt::session_rules_path(&data_dir, &new_id.0),
+        ) {
+            match tokio::fs::copy(&src, &dst).await {
+                Ok(_) => tracing::info!("copied session rules"),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!("failed to copy session rules: {}", e),
+            }
+        }
+
         // Copy checkpoints from parent to child
         let checkpoint_store = self.checkpoint_store().await;
         match checkpoint_store

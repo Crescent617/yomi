@@ -199,6 +199,56 @@ async fn create_session_inherits_project_dir_when_working_dir_absent() {
     kernel.stop().await;
 }
 
+/// fork 连同 per-session RULE.md 一起复制：rules 是 spawn 时注入的
+/// prompt 组成部分，fork 丢失它等于静默改变新会话的行为。无 rules 的
+/// parent 则不落文件、不报错。
+#[tokio::test]
+async fn fork_session_copies_rules_file() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    config.finalize();
+    let kernel = crate::build_kernel(&config, false).await.unwrap();
+
+    let rules_dir = tmp.path().join("sessions").join("rules");
+    std::fs::create_dir_all(&rules_dir).unwrap();
+
+    let new_bare_session = || async {
+        let id = crate::types::SessionId::new();
+        kernel
+            .session_store()
+            .await
+            .create(crate::storage::NewSession::new(id.clone()))
+            .await
+            .unwrap();
+        id
+    };
+
+    // 有 rules：fork 后 child 拿到同内容副本。
+    let parent = new_bare_session().await;
+    std::fs::write(rules_dir.join(format!("{parent}.md")), "用中文回答。").unwrap();
+    let child = kernel
+        .fork_session(&parent, crate::permission::Level::Caution)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(rules_dir.join(format!("{child}.md"))).unwrap(),
+        "用中文回答。"
+    );
+
+    // 无 rules：fork 正常完成，不落 rules 文件。
+    let bare = new_bare_session().await;
+    let child = kernel
+        .fork_session(&bare, crate::permission::Level::Caution)
+        .await
+        .unwrap();
+    assert!(!rules_dir.join(format!("{child}.md")).exists());
+
+    kernel.stop().await;
+}
+
 /// Mailbox 管理面端到端：入队可见、撤回、按范围清空、`MailboxChanged`
 /// 事件计数跟随。本地黑洞 listener（accept 后永不响应）让 agent 挂在
 /// 首个模型请求上，保证 pending 条目不被抢先消费——环境无关的确定性。
