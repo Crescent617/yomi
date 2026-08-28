@@ -82,12 +82,12 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
                 addr,
                 kernel::transport::SocketAddr::Ws(_) | kernel::transport::SocketAddr::Wss(_)
             );
-            let auth = match (network, kernel::transport::socket_auth_hash()) {
+            let auth = match (network, config.socket_auth_hash.as_deref()) {
                 (true, Some(hash)) => {
                     anyhow::ensure!(
-                        kernel::transport::is_valid_hash_format(&hash),
-                        "invalid YOMI_SOCKET_AUTH_HASH format: expected `blake3:<64 hex chars>` \
-                         (generate one with `yomi daemon auth-hash`)"
+                        kernel::transport::is_valid_hash_format(hash),
+                        "invalid socket_auth_hash format (config field or YOMI_SOCKET_AUTH_HASH): \
+                         expected `blake3:<64 hex chars>` (generate one with `yomi daemon auth-hash`)"
                     );
                     tracing::info!("Socket auth enabled for ws/wss transports");
                     Some(kernel::transport::auth_verifier(&hash))

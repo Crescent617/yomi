@@ -666,3 +666,18 @@ default_model = "default"
     .unwrap();
     assert_eq!(parsed.agent.name, "Yomi");
 }
+
+#[test]
+fn socket_auth_hash_parses_and_defaults_to_none() {
+    assert_eq!(Config::default().socket_auth_hash, None);
+
+    let parsed: Config = toml::from_str(r#"socket_auth_hash = "blake3:abc123""#).unwrap();
+    assert_eq!(parsed.socket_auth_hash.as_deref(), Some("blake3:abc123"));
+}
+
+#[test]
+fn socket_auth_hash_is_redacted_from_effective_config() {
+    let parsed: Config = toml::from_str(r#"socket_auth_hash = "blake3:abc123""#).unwrap();
+    let redacted = redact_effective_config(parsed);
+    assert_eq!(redacted.socket_auth_hash, None);
+}

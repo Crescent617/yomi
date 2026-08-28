@@ -46,6 +46,9 @@ pub mod env_names {
     /// Auto-approve level for tool permissions (safe | caution | dangerous)
     pub const AUTO_APPROVE: &str = env_name!("AUTO_APPROVE");
 
+    /// Socket auth password hash (blake3 hex; ws/wss transports only)
+    pub const SOCKET_AUTH_HASH: &str = env_name!("SOCKET_AUTH_HASH");
+
     /// Context window size for the model (e.g., 131072, 200000, 128k, 200k)
     pub const CONTEXT_WINDOW: &str = env_name!("CONTEXT_WINDOW");
     /// Default model name to activate for new sessions
@@ -262,6 +265,11 @@ pub struct Config {
     pub max_checkpoints: usize,
     /// Garbage-collection policy for expired session resources
     pub gc: GcConfig,
+    /// Socket auth password hash (`blake3:<hex>`), enforced on ws/wss
+    /// transports only; unix sockets rely on filesystem permissions.
+    /// `YOMI_SOCKET_AUTH_HASH` overrides. None = no auth.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub socket_auth_hash: Option<String>,
     /// External platform channels (Telegram, Feishu, etc.)
     #[serde(default)]
     pub channels: Vec<crate::channels::ChannelConfig>,
@@ -295,6 +303,7 @@ impl Default for Config {
             features: FeaturesConfig::default(),
             max_checkpoints: 5,
             gc: GcConfig::default(),
+            socket_auth_hash: None,
             channels: Vec::new(),
             models: vec![ModelConfig::default()],
             extensions: Vec::new(),
@@ -694,6 +703,11 @@ impl Config {
             self.gc.auto = auto;
         }
 
+        // Socket auth password hash (ws/wss transports)
+        if let Some(hash) = env_var(env_names::SOCKET_AUTH_HASH) {
+            self.socket_auth_hash = Some(hash);
+        }
+
         // Tool blocklist (comma-separated regex patterns)
         if let Some(list) = env_var(env_names::TOOL_BLOCKLIST) {
             self.agent.tool_blocklist = list
@@ -731,6 +745,7 @@ impl Config {
 
 fn redact_effective_config(mut config: Config) -> Config {
     config.env.values_mut().for_each(|value| value.clear());
+    config.socket_auth_hash = None;
     for model in &mut config.models {
         model.api_key.clear();
         for (name, value) in &mut model.headers {

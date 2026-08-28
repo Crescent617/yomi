@@ -159,21 +159,22 @@ async fn spawn_daemon_inner() -> Result<kernel::config::Config> {
 
     let addr = socket_addr();
     // Socket auth only applies to ws/wss listeners; unix sockets rely on
-    // filesystem permissions, so skip the env entirely there.
+    // filesystem permissions, so skip it entirely there.
     let auth = if matches!(
         addr,
         kernel::transport::SocketAddr::Ws(_) | kernel::transport::SocketAddr::Wss(_)
     ) {
-        kernel::transport::socket_auth_hash().and_then(|hash| {
-            if kernel::transport::is_valid_hash_format(&hash) {
-                Some(kernel::transport::auth_verifier(&hash))
+        config.socket_auth_hash.as_deref().and_then(|hash| {
+            if kernel::transport::is_valid_hash_format(hash) {
+                Some(kernel::transport::auth_verifier(hash))
             } else {
-                // In-process daemon: we can't exit the app over a bad env
-                // var, and a malformed hash would fail closed — rejecting
-                // every client with no diagnosable signal. Log loudly and
-                // run without socket auth (same as not configuring it).
+                // In-process daemon: we can't exit the app over a bad
+                // config value, and a malformed hash would fail closed —
+                // rejecting every client with no diagnosable signal. Log
+                // loudly and run without socket auth (same as not
+                // configuring it).
                 tracing::error!(
-                    "invalid YOMI_SOCKET_AUTH_HASH format (expected `blake3:<64 hex chars>`); \
+                    "invalid socket_auth_hash format (expected `blake3:<64 hex chars>`); \
                      starting daemon WITHOUT socket auth"
                 );
                 None

@@ -122,21 +122,6 @@ pub fn socket_auth_token() -> Option<String> {
     trimmed_env_non_empty(&format!("{}SOCKET_AUTH", crate::ENV_PREFIX))
 }
 
-/// Daemon-side socket auth password hash (`blake3:<hex>`), from
-/// `YOMI_SOCKET_AUTH_HASH`. When set, ws/wss listeners require clients
-/// to authenticate; unix sockets always rely on filesystem permissions.
-pub fn socket_auth_hash() -> Option<String> {
-    let var = format!("{}SOCKET_AUTH_HASH", crate::ENV_PREFIX);
-    let raw = std::env::var(&var).ok()?;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        // Fail-open would silently disable auth — make it loud.
-        tracing::warn!("{var} is set but empty; socket auth disabled");
-        return None;
-    }
-    Some(trimmed.to_string())
-}
-
 fn trimmed_env_non_empty(var: &str) -> Option<String> {
     std::env::var(var)
         .ok()
