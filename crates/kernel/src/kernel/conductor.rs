@@ -701,7 +701,7 @@ impl Conductor {
         // neither — their output never leaves the parent. Note the narrower
         // predicate than the ask_user blocklist above, which covers every
         // sub-agent outright.
-        let base_prompt = match &template {
+        let mut base_prompt = match &template {
             Some(t) => t.body.clone(),
             None if !is_sub_agent => format!(
                 "{}{}",
@@ -713,6 +713,14 @@ impl Conductor {
             ),
             None => self.base_prompt.clone(),
         };
+
+        // Per-session RULE.md (`<data_dir>/sessions/rules/<sid>.md`):
+        // the session's own persistent rules, appended verbatim at spawn
+        // — compaction-immune, edits take effect next run. Applies to
+        // every session type (file existence is the only gate).
+        if let Some(rules) = crate::prompt::session_rules_section(&self.data_dir, &sid.0).await {
+            base_prompt = format!("{base_prompt}\n\n{rules}");
+        }
 
         // Resolve tool flags here — session-level policy lives in the
         // conductor, not the agent: sub-agent sessions must not spawn

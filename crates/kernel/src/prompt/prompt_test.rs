@@ -106,3 +106,41 @@ async fn skill_section_indexes_only_top_level_skills() {
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[tokio::test]
+async fn session_rules_section_reads_verbatim_or_nothing() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path().join("sessions").join("rules");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // No file → no injection (zero prompt noise).
+    assert!(crate::prompt::session_rules_section(tmp.path(), "sess_x")
+        .await
+        .is_none());
+
+    // Empty/whitespace-only file → no injection.
+    std::fs::write(dir.join("sess_empty.md"), "  \n ").unwrap();
+    assert!(
+        crate::prompt::session_rules_section(tmp.path(), "sess_empty")
+            .await
+            .is_none()
+    );
+
+    // Present → verbatim content (outer whitespace trimmed).
+    std::fs::write(dir.join("sess_a.md"), "用中文回答。\n第二行规则\n").unwrap();
+    assert_eq!(
+        crate::prompt::session_rules_section(tmp.path(), "sess_a")
+            .await
+            .as_deref(),
+        Some("用中文回答。\n第二行规则")
+    );
+
+    // Oversize → truncated at a char boundary with a marker.
+    let big = "规".repeat(5000); // 15000 bytes > 4096
+    std::fs::write(dir.join("sess_big.md"), &big).unwrap();
+    let out = crate::prompt::session_rules_section(tmp.path(), "sess_big")
+        .await
+        .unwrap();
+    assert!(out.ends_with("(truncated)"));
+    assert!(out.len() <= crate::prompt::SESSION_RULES_MAX_BYTES + 20);
+}

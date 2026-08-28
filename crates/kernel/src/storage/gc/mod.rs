@@ -41,6 +41,7 @@ const SESSION_FILE_KINDS: &[(&str, &str)] = &[
     // clean up pre-existing sessions/goals/*.json files.
     ("goals", "json"),
     ("file_states", "jsonl"),
+    ("rules", "md"), // {id}.md — per-session RULE.md (spawn-injected)
 ];
 
 /// Options controlling a gc run

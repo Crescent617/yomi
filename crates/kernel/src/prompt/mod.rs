@@ -45,6 +45,41 @@ pub(crate) fn contract_sections(enable_attachments: bool, channel_routed: bool) 
     sections
 }
 
+/// Per-session rules: `<data_dir>/sessions/rules/<sid>.md`, appended to
+/// the base prompt **verbatim** at spawn when the file exists and is
+/// non-empty — no header, no framing, the file speaks for itself (the
+/// capability contract lives in the `yomi-self` skill, not in the
+/// prompt). No file → no injection: zero prompt noise for sessions
+/// without rules. Capped at [`SESSION_RULES_MAX_BYTES`] with a
+/// truncation marker so an oversized file can't bloat every prompt.
+pub(crate) const SESSION_RULES_MAX_BYTES: usize = 4096;
+
+/// Read the session's RULE.md for prompt injection (see above).
+pub(crate) async fn session_rules_section(
+    data_dir: &std::path::Path,
+    session_id: &str,
+) -> Option<String> {
+    let path = data_dir
+        .join("sessions")
+        .join("rules")
+        .join(format!("{session_id}.md"));
+    let content = tokio::fs::read_to_string(&path).await.ok()?;
+    let content = content.trim();
+    if content.is_empty() {
+        return None;
+    }
+    if content.len() > SESSION_RULES_MAX_BYTES {
+        // UTF-8 安全截断：floor_char_boundary（夜间 MSRV 可用 stable 替代：
+        // 逐字节回退到 char 边界）。
+        let mut end = SESSION_RULES_MAX_BYTES;
+        while !content.is_char_boundary(end) {
+            end -= 1;
+        }
+        return Some(format!("{}\n\n(truncated)", &content[..end]));
+    }
+    Some(content.to_string())
+}
+
 /// Memory library pointer, injected only when a memory index actually exists
 /// (project `.agents/memory/MEMORY.md` and/or global `~/.agents/memory/MEMORY.md`).
 /// The convention lives in the system prompt; the facts live in the files —

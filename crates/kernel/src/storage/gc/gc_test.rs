@@ -53,6 +53,12 @@ async fn create_full_session_with_id(storage: &StorageSet, id: &SessionId, old: 
     tokio::fs::write(fs_dir.join(format!("{}.jsonl", id.0)), b"{}\n")
         .await
         .unwrap();
+    // RULE.md
+    let rules_dir = sessions_dir.join("rules");
+    tokio::fs::create_dir_all(&rules_dir).await.unwrap();
+    tokio::fs::write(rules_dir.join(format!("{}.md", id.0)), b"rule")
+        .await
+        .unwrap();
     // checkpoint dir
     let cp_dir = data_dir.join("checkpoints").join(&*id.0);
     tokio::fs::create_dir_all(&cp_dir).await.unwrap();
@@ -84,6 +90,7 @@ fn session_paths(storage: &StorageSet, id: &SessionId) -> Vec<std::path::PathBuf
         sessions_dir
             .join("file_states")
             .join(format!("{}.jsonl", id.0)),
+        sessions_dir.join("rules").join(format!("{}.md", id.0)),
         storage.data_dir().join("checkpoints").join(&*id.0),
     ]
 }
@@ -118,7 +125,7 @@ async fn test_gc_full_pipeline() {
     // old session collected, recent untouched
     assert_eq!(report.sessions.len(), 1);
     assert_eq!(report.sessions[0].0, old_id.0);
-    assert_eq!(report.files_deleted, 4);
+    assert_eq!(report.files_deleted, 5);
     assert_eq!(report.checkpoint_dirs_deleted, 1);
     assert_eq!(report.channel_mappings_deleted, 1);
     assert!(report.bytes_reclaimed > 0);
@@ -172,7 +179,7 @@ async fn test_gc_dry_run_deletes_nothing() {
 
     assert!(report.dry_run);
     assert_eq!(report.sessions.len(), 1);
-    assert_eq!(report.files_deleted, 4);
+    assert_eq!(report.files_deleted, 5);
     assert_eq!(report.checkpoint_dirs_deleted, 1);
     assert!(report.bytes_reclaimed > 0);
 
@@ -441,7 +448,7 @@ async fn test_purge_sessions_ignores_age_and_pin() {
         .unwrap();
 
     assert_eq!(report.sessions.len(), 1);
-    assert_eq!(report.files_deleted, 4);
+    assert_eq!(report.files_deleted, 5);
     assert_eq!(report.checkpoint_dirs_deleted, 1);
     assert_eq!(report.channel_mappings_deleted, 1);
     assert!(report.errors.is_empty());
