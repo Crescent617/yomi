@@ -90,7 +90,7 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
                          expected `blake3:<64 hex chars>` (generate one with `yomi daemon auth-hash`)"
                     );
                     tracing::info!("Socket auth enabled for ws/wss transports");
-                    Some(kernel::transport::auth_verifier(&hash))
+                    Some(kernel::transport::auth_verifier(hash))
                 }
                 _ => None,
             };

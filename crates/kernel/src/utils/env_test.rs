@@ -164,3 +164,25 @@ fn test_parse_number_with_unit() {
     assert_eq!(parse_number_with_unit("invalid"), None);
     assert_eq!(parse_number_with_unit(""), None);
 }
+
+#[test]
+fn env_var_non_empty_treats_blank_as_unset() {
+    let name = "YOMI_TEST_ENV_VAR_NON_EMPTY";
+    std::env::remove_var(name);
+    assert_eq!(env_var_non_empty(name), None);
+
+    std::env::set_var(name, "");
+    assert_eq!(env_var_non_empty(name), None, "empty string is unset");
+
+    std::env::set_var(name, "   ");
+    assert_eq!(env_var_non_empty(name), None, "whitespace-only is unset");
+
+    std::env::set_var(name, "  value  ");
+    assert_eq!(
+        env_var_non_empty(name),
+        Some("value".to_string()),
+        "value is trimmed"
+    );
+
+    std::env::remove_var(name);
+}

@@ -2,7 +2,9 @@ use crate::agent::AgentConfig;
 use crate::permission::Level;
 use crate::provider::ModelConfig;
 use crate::types::KernelError;
-use crate::utils::env::{env_bool_opt, env_parse, env_var, parse_number_with_unit};
+use crate::utils::env::{
+    env_bool_opt, env_parse, env_var, env_var_non_empty, parse_number_with_unit,
+};
 use crate::utils::path::{default_skill_folders, expand_tilde, DEFAULT_DATA_DIR};
 
 use serde::{Deserialize, Serialize};
@@ -706,13 +708,10 @@ impl Config {
         // Socket auth password hash (ws/wss transports). An empty value
         // (common in launchd/container env templates) must not clobber a
         // valid file value — degrade to the file, loudly.
-        if let Some(hash) = env_var(env_names::SOCKET_AUTH_HASH) {
-            let hash = hash.trim();
-            if hash.is_empty() {
-                tracing::warn!("{} is set but empty; ignoring", env_names::SOCKET_AUTH_HASH);
-            } else {
-                self.socket_auth_hash = Some(hash.to_string());
-            }
+        if let Some(hash) = env_var_non_empty(env_names::SOCKET_AUTH_HASH) {
+            self.socket_auth_hash = Some(hash);
+        } else if std::env::var_os(env_names::SOCKET_AUTH_HASH).is_some() {
+            tracing::warn!("{} is set but empty; ignoring", env_names::SOCKET_AUTH_HASH);
         }
 
         // Tool blocklist (comma-separated regex patterns)
