@@ -513,19 +513,18 @@ pub struct ChannelInfo {
 
 /// The kind of a channel session mapping (the `kind` column).
 ///
-/// `Watch`/`WatchPaused` mark a chat's observer session (see `/watch`
-/// and `hub/watch.rs`): it receives a mirror of every message while on,
-/// but the channel delivers NOTHING for it — the flag is checked at
-/// every exit where the channel would speak for a session (event-
-/// forwarder dispatch, and thereby cards/typing/settle/notify).
-/// `/watch off` flips `Watch` → `WatchPaused`: the row, the session and
-/// its context stay put (a later `/watch on` resumes the same observer);
-/// only the mirror tap closes.
+/// `Watch` marks a chat's session as its observer (see `/watch` and
+/// `hub/watch.rs`): every message of the chat is mirrored to it, but the
+/// channel delivers NOTHING for it — the flag is checked at every exit
+/// where the channel would speak for a session (event-forwarder
+/// dispatch, and thereby cards/typing/settle/notify). There is exactly
+/// ONE session per chat: `/watch on` flips its mapping to `Watch`,
+/// `/watch off` flips back to `Normal` — same session, same memory,
+/// only the mode changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MappingKind {
     Normal,
     Watch,
-    WatchPaused,
 }
 
 impl MappingKind {
@@ -533,7 +532,6 @@ impl MappingKind {
         match self {
             Self::Normal => "normal",
             Self::Watch => "watch",
-            Self::WatchPaused => "watch_off",
         }
     }
 
@@ -542,20 +540,9 @@ impl MappingKind {
     pub fn from_str_lossy(s: &str) -> Self {
         match s {
             "watch" => Self::Watch,
-            "watch_off" => Self::WatchPaused,
             _ => Self::Normal,
         }
     }
-}
-
-/// Mapping-key prefix of a chat's watch-observer session
-/// (`watch:{chat_id}`) — a private namespace that can never collide with
-/// platform ids (`om_…`/`oc_…`).
-pub const WATCH_KEY_PREFIX: &str = "watch:";
-
-/// The observer session's mapping key for a watched chat.
-pub fn watch_mapping_key(chat_id: &str) -> String {
-    format!("{WATCH_KEY_PREFIX}{chat_id}")
 }
 
 /// Runtime routing info for a session that belongs to an external channel.
@@ -577,8 +564,8 @@ pub struct SessionRouting {
 }
 
 /// Result of a `set_channel_watch` query or switch (shared by the RPC and
-/// the `/watch` command). `session_id` names the chat's observer session
-/// whenever its mapping row exists — on or paused.
+/// the `/watch` command). `session_id` names the chat's session whenever
+/// its mapping row exists — on or off, it is the same session.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ChannelWatchStatus {
@@ -587,9 +574,10 @@ pub struct ChannelWatchStatus {
 }
 
 impl SessionRouting {
-    /// Watch observers (on or paused) get no channel delivery of any kind.
+    /// An actively-watched chat's session gets no channel delivery of any
+    /// kind. (Off = `Normal` — an ordinary session, delivered as usual.)
     pub fn is_watch(&self) -> bool {
-        matches!(self.kind, MappingKind::Watch | MappingKind::WatchPaused)
+        matches!(self.kind, MappingKind::Watch)
     }
 }
 
@@ -716,18 +704,30 @@ pub trait ChannelStore: Send + Sync {
         Ok(())
     }
 
-    /// The watch state of a chat: the `kind` of its `watch:{chat_id}`
-    /// mapping — `Some(Watch)` while on, `Some(WatchPaused)` after
-    /// `/watch off` (row and session kept for resume), `None` when the
-    /// chat has never been watched (or the observer was gc'd).
-    async fn get_watch_state(
+    /// Whether the chat is watch-on (its mapping's kind is `Watch`).
+    /// `false` when the row is `Normal` or absent. Default: never watched
+    /// (stores without watch support, e.g. mocks).
+    async fn is_chat_watched(&self, channel_name: &str, chat_id: &str) -> KernelResult<bool> {
+        let _ = (channel_name, chat_id);
+        Ok(false)
+    }
+
+    /// Targeted update of an existing mapping row: refresh the reply
+    /// anchor and/or flip the kind. No-op when both are `None` (or the
+    /// row is gone). Kind flips are deliberately explicit — the upsert in
+    /// `save_mapping` only writes `kind` on the create path, so a racing
+    /// conversation dispatch can never silently flip a watched row back.
+    async fn update_mapping(
         &self,
         channel_name: &str,
-        chat_id: &str,
-    ) -> KernelResult<Option<MappingKind>> {
-        let _ = (channel_name, chat_id);
-        Ok(None)
-    }
+        mapping_key: &str,
+        reply_msg_id: Option<&str>,
+        kind: Option<MappingKind>,
+    ) -> KernelResult<()>;
+
+    /// Sessions whose mapping is currently `Watch`-kind (the `/sessions`
+    /// 👁 marker).
+    async fn list_watch_sessions(&self, channel_name: &str) -> KernelResult<Vec<SessionId>>;
 
     /// Persist a doc-permission application as a pending approval row.
     /// Deduplicates on (channel, file, permission, applicant sets) while a

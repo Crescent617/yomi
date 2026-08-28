@@ -302,8 +302,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 24,
         // channel watch（/watch）：mappings 增 kind 列
-        // （'normal'|'watch'|'watch_off'）——观察者 session 的投递抑制
-        // 判据，同时承载开关状态（off=watch_off，行保留供续任，无需
+        // （'normal'|'watch'）——watch-on 时该 chat 会话的投递抑制
+        // 判据，同时承载开关状态（on=watch，off=normal；一行制，无需
         // 独立开关表）。
         name: "add_channel_watch",
         sqls: &[

@@ -109,7 +109,7 @@ async fn skill_section_indexes_only_top_level_skills() {
 
 #[test]
 fn watch_section_states_the_contract() {
-    let section = crate::prompt::watch_section("feishu", "oc_1", false);
+    let section = crate::prompt::watch_section("feishu", "oc_1");
     // Sole-listener identity + the chat it watches.
     assert!(section.contains("sole listener"));
     assert!(section.contains("oc_1"));
@@ -123,17 +123,6 @@ fn watch_section_states_the_contract() {
     assert!(section.contains("no separate conversation session"));
     // Commands are never mirrored — the intake clause must not overpromise.
     assert!(section.contains("non-command message"));
-    assert!(!section.contains("PAUSED"));
-}
-
-#[test]
-fn watch_section_paused_variant_drops_intake_promise() {
-    let paused = crate::prompt::watch_section("feishu", "oc_1", true);
-    assert!(paused.contains("PAUSED"));
-    assert!(!paused.contains("non-command message"));
-    // Delivery suppression still stated — a paused observer must not
-    // believe its text gets posted either.
-    assert!(paused.contains("delivers NOTHING"));
 }
 
 #[tokio::test]
@@ -263,7 +252,7 @@ async fn compose_system_prompt_main_session_full_stack() {
         is_sub_agent: false,
         enable_attachments: true,
         channel_routed: true,
-        watch: Some(("feishu", "oc_1", false)),
+        watch: Some(("feishu", "oc_1")),
         data_dir: tmp.path(),
         session_id: "watch_oc_1",
     })

@@ -480,8 +480,8 @@ impl ChannelHub {
                         };
                         // Watch tee: in a watch-on chat every plain
                         // message (mention or not) is mirrored to the
-                        // observer session — the group's only consumer on
-                        // this path (the gate suspended conversation
+                        // chat's own session — the group's only consumer
+                        // on this path (the gate suspended conversation
                         // triggers). Commands are control-plane — the hub
                         // is their only consumer; they are never mirrored.
                         // `watch_on` is the gate-time snapshot, so a queued

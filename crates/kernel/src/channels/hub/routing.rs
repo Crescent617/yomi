@@ -347,9 +347,10 @@ pub(crate) async fn subscription_scope_key(
 /// The bool reports whether an existing mapping was reused — context-
 /// injecting callers read it as "the thread's root is already consumed"
 /// (thread mappings are conversation-only, see [`prepare_trigger`]).
-/// `kind` is written on the create path and refreshed on reuse (a reused
-/// mapping keeps its established kind in practice — callers never mix
-/// kinds on one key).
+/// `kind` is written on the create path only; reuse refreshes just the
+/// reply anchor — kind flips (`/watch on|off`) go through the explicit
+/// `update_mapping` path, so a racing dispatch can never flip a watched
+/// row back to normal.
 pub(crate) async fn get_or_create_session(
     channel_name: &str,
     store: &Arc<dyn ChannelStore>,
@@ -375,7 +376,7 @@ pub(crate) async fn get_or_create_session(
         if kernel.session_store().await.get(&sid).await?.is_some() {
             info!(channel = %channel_name, mapping_key, session_id = %sid.0, "reusing session");
             store
-                .save_mapping(channel_name, mapping_key, &sid, chat_id, reply_msg_id, kind)
+                .update_mapping(channel_name, mapping_key, reply_msg_id, None)
                 .await?;
             return Ok((sid, true));
         }

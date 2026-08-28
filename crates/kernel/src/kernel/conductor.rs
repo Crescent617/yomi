@@ -724,7 +724,6 @@ impl Conductor {
                 (
                     routing.channel_name.as_str(),
                     routing.external_chat_id.as_str(),
-                    routing.kind == crate::channels::MappingKind::WatchPaused,
                 )
             }),
             data_dir: &self.data_dir,

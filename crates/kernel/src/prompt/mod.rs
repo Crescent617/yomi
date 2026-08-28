@@ -29,28 +29,21 @@ pub(crate) const ATTACHMENTS_SECTION: &str = "# Attachments\nTo attach files to 
 /// never get it — no platform is there to render it.
 pub(crate) const MENTIONS_SECTION: &str = "# Mentions\nTo mention a user in your reply, write `<@USER_ID>` — the platform renders it as a real mention with notification. Use it only when warranted: the user asked you to @ someone, or you are addressing a bot — in that case the mention is required (it won't receive your message otherwise). Never @ any human gratuitously.";
 
-/// Watch-observer contract for a watched chat's observer session
-/// (`/watch`, mapping kind `watch`): every non-command message of the
-/// chat is mirrored to it and it is the chat's ONLY message consumer
-/// (mention triggers are suspended while watch is on) — but the channel
-/// delivers NOTHING for it: its final text is never posted, no status
-/// card, no reactions. Its only voice is the platform skill from its own
-/// skill list; without one it is a pure read-only observer. Appended to
-/// the base prompt by the conductor at spawn (derived from the session's
-/// routing row), so the contract survives context compaction. `paused`
-/// = the mirror tap is currently closed (`/watch off`): the delivery
-/// suppression still holds, but the "sole listener" clause is dropped —
-/// no new messages are arriving.
-pub(crate) fn watch_section(channel_name: &str, chat_id: &str, paused: bool) -> String {
-    let intake = if paused {
-        "watch is currently PAUSED: no new messages are being mirrored to you."
-    } else {
-        "every non-command message of the chat — including threads and @-mentions of you — \
-         is delivered to you alone."
-    };
+/// Watch-observer contract for a watched chat's session (`/watch`,
+/// mapping kind `watch`): every non-command message of the chat is
+/// mirrored to it and it is the chat's ONLY message consumer (mention
+/// triggers are suspended while watch is on) — but the channel delivers
+/// NOTHING for it: its final text is never posted, no status card, no
+/// reactions. Its only voice is the platform skill from its own skill
+/// list; without one it is a pure read-only observer. Appended to the
+/// base prompt by the conductor at spawn (while the routing row's kind
+/// is `watch`), so the contract survives context compaction.
+pub(crate) fn watch_section(channel_name: &str, chat_id: &str) -> String {
     format!(
         "# Watch mode\n\
-         You are the sole listener of group chat `{chat_id}` on channel `{channel_name}`: {intake}\n\
+         You are the sole listener of group chat `{chat_id}` on channel `{channel_name}`: \
+         every non-command message of the chat — including threads and @-mentions of you — \
+         is delivered to you alone.\n\
          - The channel delivers NOTHING for you: your reply text is never posted, and no cards \
          or reactions mark your runs. To speak, use the skill covering this platform from your \
          own skill list (e.g. the `lark` skill for feishu) via shell — target messages or \
@@ -168,9 +161,9 @@ pub(crate) struct SystemPromptParts<'a> {
     pub is_sub_agent: bool,
     pub enable_attachments: bool,
     pub channel_routed: bool,
-    /// `(channel_name, chat_id, paused)` — set when the session is a watch
-    /// observer (derived from its routing row; see [`watch_section`]).
-    pub watch: Option<(&'a str, &'a str, bool)>,
+    /// `(channel_name, chat_id)` — set while the session's chat is
+    /// watch-on (derived from its routing row; see [`watch_section`]).
+    pub watch: Option<(&'a str, &'a str)>,
     pub data_dir: &'a std::path::Path,
     pub session_id: &'a str,
 }
@@ -190,8 +183,8 @@ pub(crate) async fn compose_system_prompt(parts: SystemPromptParts<'_>) -> Strin
                 parts.enable_attachments,
                 parts.channel_routed,
             ));
-            if let Some((channel, chat_id, paused)) = parts.watch {
-                p = format!("{p}\n\n{}", watch_section(channel, chat_id, paused));
+            if let Some((channel, chat_id)) = parts.watch {
+                p = format!("{p}\n\n{}", watch_section(channel, chat_id));
             }
             p
         }

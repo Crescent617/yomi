@@ -610,70 +610,50 @@ async fn test_watch_state_via_mapping_kind() {
     let pool = create_test_pool().await;
     let store = SqliteChannelStore::new(pool);
 
-    // Never watched: no mapping row → None.
-    assert_eq!(store.get_watch_state("feishu", "oc_1").await.unwrap(), None);
+    // Never watched: no mapping row → false.
+    assert!(!store.is_chat_watched("feishu", "oc_1").await.unwrap());
 
-    // On: a kind=watch mapping means watching.
+    // On: a kind=watch mapping on the chat key means watching.
     let sid = SessionId::new();
     store
-        .save_mapping(
-            "feishu",
-            "watch:oc_1",
-            &sid,
-            "oc_1",
-            None,
-            MappingKind::Watch,
-        )
+        .save_mapping("feishu", "oc_1", &sid, "oc_1", None, MappingKind::Watch)
         .await
         .unwrap();
-    assert_eq!(
-        store.get_watch_state("feishu", "oc_1").await.unwrap(),
-        Some(MappingKind::Watch)
-    );
+    assert!(store.is_chat_watched("feishu", "oc_1").await.unwrap());
     // Scoped per (channel, chat).
-    assert_eq!(store.get_watch_state("feishu", "oc_2").await.unwrap(), None);
-    assert_eq!(
-        store.get_watch_state("telegram", "oc_1").await.unwrap(),
-        None
-    );
+    assert!(!store.is_chat_watched("feishu", "oc_2").await.unwrap());
+    assert!(!store.is_chat_watched("telegram", "oc_1").await.unwrap());
 
-    // Off: kind flips to watch_off; the row (and session) survives.
+    // Off: kind flips to normal; the row (and session) survives.
     store
-        .save_mapping(
-            "feishu",
-            "watch:oc_1",
-            &sid,
-            "oc_1",
-            None,
-            MappingKind::WatchPaused,
-        )
+        .update_mapping("feishu", "oc_1", None, Some(MappingKind::Normal))
         .await
         .unwrap();
+    assert!(!store.is_chat_watched("feishu", "oc_1").await.unwrap());
     assert_eq!(
-        store.get_watch_state("feishu", "oc_1").await.unwrap(),
-        Some(MappingKind::WatchPaused)
+        store.find_mapping("feishu", "oc_1").await.unwrap(),
+        Some(sid.clone())
     );
 
     // Re-on: same row flips back — the same session resumes.
     store
-        .save_mapping(
-            "feishu",
-            "watch:oc_1",
-            &sid,
-            "oc_1",
-            None,
-            MappingKind::Watch,
-        )
+        .update_mapping("feishu", "oc_1", None, Some(MappingKind::Watch))
         .await
         .unwrap();
+    assert!(store.is_chat_watched("feishu", "oc_1").await.unwrap());
     assert_eq!(
-        store.get_watch_state("feishu", "oc_1").await.unwrap(),
-        Some(MappingKind::Watch)
+        store.find_mapping("feishu", "oc_1").await.unwrap(),
+        Some(sid.clone())
     );
-    assert_eq!(
-        store.find_mapping("feishu", "watch:oc_1").await.unwrap(),
-        Some(sid)
-    );
+
+    // Anchor refresh does not touch the kind.
+    store
+        .update_mapping("feishu", "oc_1", Some("om_1"), None)
+        .await
+        .unwrap();
+    assert!(store.is_chat_watched("feishu", "oc_1").await.unwrap());
+    let routing = store.find_routing_by_session(&sid).await.unwrap().unwrap();
+    assert_eq!(routing.reply_msg_id.as_deref(), Some("om_1"));
 }
 
 #[tokio::test]
@@ -686,7 +666,7 @@ async fn test_mapping_kind_roundtrip() {
     store
         .save_mapping(
             "feishu",
-            "watch:oc_1",
+            "oc_1",
             &watch_sid,
             "oc_1",
             None,
@@ -701,16 +681,16 @@ async fn test_mapping_kind_roundtrip() {
         .unwrap();
     assert_eq!(routing.kind, MappingKind::Watch);
     assert!(routing.is_watch());
-    assert_eq!(routing.mapping_key, "watch:oc_1");
+    assert_eq!(routing.mapping_key, "oc_1");
 
-    // A normal mapping stays Normal; the two kinds coexist on one chat.
+    // A normal mapping stays Normal.
     let chat_sid = SessionId::new();
     store
         .save_mapping(
             "feishu",
-            "oc_1",
+            "oc_2",
             &chat_sid,
-            "oc_1",
+            "oc_2",
             None,
             MappingKind::Normal,
         )
@@ -724,17 +704,10 @@ async fn test_mapping_kind_roundtrip() {
     assert_eq!(routing.kind, MappingKind::Normal);
     assert!(!routing.is_watch());
 
-    // A paused observer still counts as watch (delivery stays
-    // suppressed; only the mirror tap is off).
+    // Off (kind flipped back to normal): delivery resumes — the session
+    // is an ordinary session of the chat again.
     store
-        .save_mapping(
-            "feishu",
-            "watch:oc_1",
-            &watch_sid,
-            "oc_1",
-            None,
-            MappingKind::WatchPaused,
-        )
+        .update_mapping("feishu", "oc_1", None, Some(MappingKind::Normal))
         .await
         .unwrap();
     let routing = store
@@ -742,6 +715,6 @@ async fn test_mapping_kind_roundtrip() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(routing.kind, MappingKind::WatchPaused);
-    assert!(routing.is_watch());
+    assert_eq!(routing.kind, MappingKind::Normal);
+    assert!(!routing.is_watch());
 }

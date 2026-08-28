@@ -5840,14 +5840,7 @@ async fn gate_watch_on_routes_everything_to_observer() {
     let store: Arc<dyn ChannelStore> = store;
     let sid = SessionId::new();
     store
-        .save_mapping(
-            "gate",
-            "watch:chat-1",
-            &sid,
-            "chat-1",
-            None,
-            MappingKind::Watch,
-        )
+        .save_mapping("gate", "chat-1", &sid, "chat-1", None, MappingKind::Watch)
         .await
         .unwrap();
 
@@ -6006,7 +5999,7 @@ async fn watch_command_query_set_off() {
         reply.as_deref(),
         Some("Permission denied: not in admin_users.")
     );
-    assert_eq!(store.get_watch_state("mock", "oc_1").await.unwrap(), None);
+    assert!(!store.is_chat_watched("mock", "oc_1").await.unwrap());
 
     // DMs and threads refuse: watch is chat-scoped.
     let reply = handle(msg("ou_admin", "/watch on", None, false))
@@ -6017,23 +6010,20 @@ async fn watch_command_query_set_off() {
         .await
         .unwrap();
     assert!(reply.unwrap().contains("whole chat"));
-    assert_eq!(store.get_watch_state("mock", "oc_1").await.unwrap(), None);
+    assert!(!store.is_chat_watched("mock", "oc_1").await.unwrap());
 
     // Admin turns it on: the observer session is created eagerly.
     let reply = handle(msg("ou_admin", "/watch on", None, true))
         .await
         .unwrap();
     assert!(reply.unwrap().contains("Watch on"));
-    assert_eq!(
-        store.get_watch_state("mock", "oc_1").await.unwrap(),
-        Some(MappingKind::Watch)
-    );
+    assert!(store.is_chat_watched("mock", "oc_1").await.unwrap());
 
     // Occupy the observer with a hung run, then steer a mirrored note
     // into its mailbox — the pending steer is what `/watch off` must
     // drain (mirrored messages must not wake the observer after off).
     let watch_sid = store
-        .find_mapping("mock", "watch:oc_1")
+        .find_mapping("mock", "oc_1")
         .await
         .unwrap()
         .expect("watch on created the observer session");
@@ -6070,16 +6060,13 @@ async fn watch_command_query_set_off() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
 
-    // Admin turns it off: the row flips to watch_off, session kept.
+    // Admin turns it off: the kind flips back to normal, session kept.
     let reply = handle(msg("ou_admin", "/watch off", None, true))
         .await
         .unwrap();
     assert!(reply.unwrap().contains("Watch off"));
-    assert_eq!(
-        store.get_watch_state("mock", "oc_1").await.unwrap(),
-        Some(MappingKind::WatchPaused)
-    );
-    let paused_sid = store.find_mapping("mock", "watch:oc_1").await.unwrap();
+    assert!(!store.is_chat_watched("mock", "oc_1").await.unwrap());
+    let paused_sid = store.find_mapping("mock", "oc_1").await.unwrap();
     assert_eq!(
         paused_sid,
         Some(watch_sid.clone()),
@@ -6096,12 +6083,9 @@ async fn watch_command_query_set_off() {
         .await
         .unwrap();
     assert!(reply.is_some());
+    assert!(store.is_chat_watched("mock", "oc_1").await.unwrap());
     assert_eq!(
-        store.get_watch_state("mock", "oc_1").await.unwrap(),
-        Some(MappingKind::Watch)
-    );
-    assert_eq!(
-        store.find_mapping("mock", "watch:oc_1").await.unwrap(),
+        store.find_mapping("mock", "oc_1").await.unwrap(),
         paused_sid,
         "the same observer resumes with its context"
     );
@@ -6190,7 +6174,7 @@ async fn watch_mirror_integration() {
     crate::channels::hub_watch::mirror_message("mock", &store, &kernel, &msg("第一条", "om_1"))
         .await;
     let sid = store
-        .find_mapping("mock", "watch:oc_1")
+        .find_mapping("mock", "oc_1")
         .await
         .unwrap()
         .expect("mirror must create the observer mapping");
@@ -6205,7 +6189,7 @@ async fn watch_mirror_integration() {
     crate::channels::hub_watch::mirror_message("mock", &store, &kernel, &msg("第二条", "om_2"))
         .await;
     assert_eq!(
-        store.find_mapping("mock", "watch:oc_1").await.unwrap(),
+        store.find_mapping("mock", "oc_1").await.unwrap(),
         Some(sid.clone()),
         "no duplicate observer"
     );
@@ -6231,13 +6215,13 @@ async fn watch_mirror_integration() {
     // re-save to keep the setup explicit either way. The cascade path
     // itself is covered by `delete_session_cascades_channel_mappings`.
     store
-        .save_mapping("mock", "watch:oc_1", &sid, "oc_1", None, MappingKind::Watch)
+        .save_mapping("mock", "oc_1", &sid, "oc_1", None, MappingKind::Watch)
         .await
         .unwrap();
     crate::channels::hub_watch::mirror_message("mock", &store, &kernel, &msg("第三条", "om_3"))
         .await;
     let new_sid = store
-        .find_mapping("mock", "watch:oc_1")
+        .find_mapping("mock", "oc_1")
         .await
         .unwrap()
         .expect("self-heal must recreate the mapping");
@@ -6277,20 +6261,20 @@ async fn delete_session_cascades_channel_mappings() {
         &store,
         &kernel,
         "oc_1",
-        "watch:oc_1",
+        "oc_1",
         None,
         MappingKind::Watch,
     )
     .await
     .unwrap();
     assert_eq!(
-        store.find_mapping("mock", "watch:oc_1").await.unwrap(),
+        store.find_mapping("mock", "oc_1").await.unwrap(),
         Some(sid.clone())
     );
 
     kernel.delete_session(&sid).await.unwrap();
     assert_eq!(
-        store.find_mapping("mock", "watch:oc_1").await.unwrap(),
+        store.find_mapping("mock", "oc_1").await.unwrap(),
         None,
         "the mapping must go with the session"
     );
@@ -6330,7 +6314,7 @@ async fn bind_refuses_watch_session() {
         &store,
         &kernel,
         "oc_1",
-        "watch:oc_1",
+        "oc_1",
         None,
         MappingKind::Watch,
     )
@@ -6354,7 +6338,42 @@ async fn bind_refuses_watch_session() {
         create_time: Some(1000),
         doc_comment: None,
     };
-    let reply = handle_incoming_message("mock", &config, &store, kernel, msg, &obs, &adapter)
+    // 一行制下观察者就是本群会话：在群内 /bind 它，先被 "Already bound"
+    // 短路（它本来就绑定在这个群）。
+    let reply = handle_incoming_message(
+        "mock",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        msg,
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(reply.contains("Already bound"), "{reply}");
+
+    // 跨群重绑一个 watch 会话：仍然拒绝（投递抑制跟着 kind 走，重绑会
+    // 破坏 skill-only 契约）。
+    let cross = ChannelMessage {
+        external_chat_id: "oc_2".to_string(),
+        external_user_id: "ou_admin".to_string(),
+        external_message_id: Some("m2".to_string()),
+        is_mention: true,
+        raw_text: Some(format!("/bind {watch_sid}", watch_sid = watch_sid.0)),
+        content: vec![ContentBlock::Text {
+            text: "/bind".to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: true,
+        create_time: Some(1000),
+        doc_comment: None,
+    };
+    let reply = handle_incoming_message("mock", &config, &store, kernel, cross, &obs, &adapter)
         .await
         .unwrap()
         .unwrap();
@@ -8634,8 +8653,7 @@ async fn set_channel_watch_query_and_switch_round_trip() {
 }
 
 /// `/info` 的 watch 行接线：仅 watch-on 时 chat 级输出带行（从未开启 /
-/// paused / 话题内均无行）；watch-on 且无对话会话时 "No session yet"
-/// 分支同样带行。
+/// off / 话题内均无行）；watch-on 后 /i 走会话信息卡片分支。
 #[tokio::test]
 async fn info_command_shows_watch_line_at_chat_level() {
     let (_pool, store) = create_test_pool().await;
@@ -8703,23 +8721,24 @@ async fn info_command_shows_watch_line_at_chat_level() {
     assert!(reply.contains("No session yet"), "{reply}");
     assert!(!reply.contains("- **Watch**:"), "{reply}");
 
-    // watch on：行内带观察者 session id（仍无对话会话，走 No session 分支）。
+    // watch on：chat 会话本人成为观察者——/i 走会话信息卡片分支，
+    // 卡片里带 watch 行。
     crate::channels::hub::watch::set_channel_watch_by_name(&store, &kernel, "mock", "oc_1", true)
         .await
         .unwrap();
-    let reply = handle(msg("/i")).await.unwrap().unwrap();
-    assert!(reply.contains("No session yet"), "{reply}");
-    assert!(
-        reply.contains("- **Watch**: on · observer `sess_"),
-        "{reply}"
-    );
+    let reply = handle(msg("/i")).await.unwrap();
+    assert!(reply.is_none(), "info replies go to the card: {reply:?}");
+    let card = mock.cards.lock().await.last().unwrap().1.clone();
+    assert!(card.contains("- **Watch**: on · observer `sess_"), "{card}");
 
-    // watch off（paused）：行消失——行只在 actively watched 时存在。
+    // watch off（kind 翻回 normal）：行消失——行只在 actively watched 时存在。
     crate::channels::hub::watch::set_channel_watch_by_name(&store, &kernel, "mock", "oc_1", false)
         .await
         .unwrap();
-    let reply = handle(msg("/i")).await.unwrap().unwrap();
-    assert!(!reply.contains("- **Watch**:"), "{reply}");
+    let reply = handle(msg("/i")).await.unwrap();
+    assert!(reply.is_none(), "info replies go to the card: {reply:?}");
+    let card = mock.cards.lock().await.last().unwrap().1.clone();
+    assert!(!card.contains("- **Watch**:"), "{card}");
 
     // 话题内 /i：watch 是 chat 级状态，不出现该行。
     crate::channels::hub::watch::set_channel_watch_by_name(&store, &kernel, "mock", "oc_1", true)
@@ -8749,9 +8768,8 @@ async fn info_command_shows_watch_line_at_chat_level() {
             &adapter,
         )
     };
-    let reply = handle_no_rit(msg("/i")).await.unwrap().unwrap();
-    assert!(
-        reply.contains("- **Watch**: on · observer `sess_"),
-        "{reply}"
-    );
+    let reply = handle_no_rit(msg("/i")).await.unwrap();
+    assert!(reply.is_none(), "info replies go to the card: {reply:?}");
+    let card = mock.cards.lock().await.last().unwrap().1.clone();
+    assert!(card.contains("- **Watch**: on · observer `sess_"), "{card}");
 }

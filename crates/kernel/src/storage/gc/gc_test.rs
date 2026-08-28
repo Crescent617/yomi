@@ -168,19 +168,20 @@ async fn test_gc_full_pipeline() {
     assert_eq!(usage_count, 1, "token_usage must never be deleted by gc");
 }
 
-/// The documented gc edge of watch: collecting an observer session
-/// deletes its mapping, and with it the watch state (`get_watch_state`
-/// flips to None) — a long-silent chat's watch silently turns off.
+/// The documented gc edge of watch: collecting a watched chat's session
+/// deletes its mapping, and with it the watch state (`is_chat_watched`
+/// flips to false) — a long-silent chat's watch silently turns off.
 #[tokio::test]
 async fn test_gc_watch_mapping_deletion_ends_watch_state() {
     let (_tmp, storage) = setup().await;
     let old_id = create_full_session(&storage, true).await;
+    let chat_key = format!("chat-{}", old_id.0);
 
     storage
         .channel_store()
         .save_mapping(
             "telegram",
-            &format!("watch:chat-{}", old_id.0),
+            &chat_key,
             &old_id,
             "chat",
             None,
@@ -188,14 +189,11 @@ async fn test_gc_watch_mapping_deletion_ends_watch_state() {
         )
         .await
         .unwrap();
-    assert_eq!(
-        storage
-            .channel_store()
-            .get_watch_state("telegram", &format!("chat-{}", old_id.0))
-            .await
-            .unwrap(),
-        Some(crate::channels::MappingKind::Watch)
-    );
+    assert!(storage
+        .channel_store()
+        .is_chat_watched("telegram", &chat_key)
+        .await
+        .unwrap());
 
     let report = storage
         .gc()
@@ -207,14 +205,13 @@ async fn test_gc_watch_mapping_deletion_ends_watch_state() {
         .await
         .unwrap();
     assert!(report.channel_mappings_deleted >= 1);
-    assert_eq!(
-        storage
+    assert!(
+        !storage
             .channel_store()
-            .get_watch_state("telegram", &format!("chat-{}", old_id.0))
+            .is_chat_watched("telegram", &chat_key)
             .await
             .unwrap(),
-        None,
-        "gc of the observer silently ends the watch"
+        "gc of the watched chat's session silently ends the watch"
     );
 }
 

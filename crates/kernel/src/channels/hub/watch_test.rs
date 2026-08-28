@@ -47,24 +47,10 @@ fn mirror_content_appends_image_refs_as_text() {
 }
 
 #[test]
-fn watch_mapping_key_is_namespaced() {
-    assert_eq!(
-        crate::channels::watch_mapping_key("oc_chat"),
-        "watch:oc_chat"
-    );
-    assert!(crate::channels::watch_mapping_key("oc_chat")
-        .starts_with(crate::channels::WATCH_KEY_PREFIX));
-}
-
-#[test]
 fn mapping_kind_roundtrip() {
     assert_eq!(MappingKind::Watch.as_str(), "watch");
-    assert_eq!(MappingKind::WatchPaused.as_str(), "watch_off");
+    assert_eq!(MappingKind::Normal.as_str(), "normal");
     assert_eq!(MappingKind::from_str_lossy("watch"), MappingKind::Watch);
-    assert_eq!(
-        MappingKind::from_str_lossy("watch_off"),
-        MappingKind::WatchPaused
-    );
     assert_eq!(MappingKind::from_str_lossy("normal"), MappingKind::Normal);
     // Unknown/legacy values degrade to Normal.
     assert_eq!(MappingKind::from_str_lossy(""), MappingKind::Normal);

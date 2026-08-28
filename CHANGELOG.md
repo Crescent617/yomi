@@ -15,13 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `/watch` 重构为一个群一个会话：开启后该群会话本人成为观察者（消息全部镜像给它、投递抑制），关闭后同一会话恢复应答 @ 且保留 watch 期间记忆；不再有独立的观察者会话与"暂停"状态。
+- 回退 `YOMI_SOCKET_AUTH_HASH` 空白值忽略逻辑（0.10.1 曾短暂引入）：env 存在即覆盖（空值亦然），与其余字符串类环境变量行为一致。
+
 ### Added
 
 - 群聊顶层发送 `/info`（`/i`）时，若该群 watch 已开启，输出末尾附带一行状态（含观察者会话 ID）；未开启时不显示。
-
-### Changed
-
-- 回退 `YOMI_SOCKET_AUTH_HASH` 空白值忽略逻辑（0.10.1 曾短暂引入）：env 存在即覆盖（空值亦然），与其余字符串类环境变量行为一致。
 
 ## [0.10.1] - 2026-08-29
 

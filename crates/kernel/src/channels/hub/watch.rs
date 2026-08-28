@@ -1,21 +1,22 @@
-//! Watch mode (`/watch`): a chat's sole-listener observer session.
+//! Watch mode (`/watch`): the chat's own session as sole-listener
+//! observer — one session per chat, the mapping's `kind` is the mode.
 //!
-//! While a chat is watch-on (its `watch:{chat_id}` mapping carries
-//! `kind='watch'`), every plain message passing access control — mention
-//! or not — is *mirrored*: steered verbatim into the observer session,
-//! while the gate suspends the conversation-trigger path wholesale (see
-//! `gate.rs`): the observer is the group's only message consumer and
-//! decides for itself when a reply is warranted. Its mapping kind
-//! (`watch`/`watch_off`) suppresses everything the channel would
-//! otherwise do for a session: no status card, no streaming consumption,
-//! no reply delivery, no reactions, no subscriber notify. Its only
-//! voice is the platform skill from its own skill list (e.g. `lark` for
-//! feishu) — with no matching skill it is a pure read-only observer.
-//! `/watch off` flips the kind to `watch_off`: the mirror tap closes but
-//! row, session and context stay put, so `/watch on` resumes the same
-//! observer. The watch contract lives in the system prompt
+//! `/watch on` flips the chat mapping's `kind` to `watch` (creating the
+//! session if absent): from then on every plain message passing access
+//! control — mention or not — is *mirrored*: steered verbatim into the
+//! chat's session, while the gate suspends the conversation-trigger
+//! path (see `gate.rs`). The session is the chat's only message
+//! consumer and decides for itself when a reply is warranted. While
+//! `kind='watch'` the channel delivers NOTHING for it: no status card,
+//! no streaming consumption, no reply delivery, no reactions, no
+//! subscriber notify (suppressed at the event-forwarder single point).
+//! Its only voice is the platform skill from its own skill list (e.g.
+//! `lark` for feishu) — with no matching skill it is a pure read-only
+//! observer. `/watch off` flips the kind back to `normal`: the SAME
+//! session answers mentions again, its watch-period memory intact. The
+//! watch contract lives in the system prompt
 //! ([`crate::prompt::watch_section`], appended by the conductor at
-//! spawn), so it survives context compaction.
+//! spawn while kind is `watch`), so it survives context compaction.
 
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -27,13 +28,13 @@ use crate::channels::{ChannelMessage, ChannelStore, MappingKind};
 
 use crate::channels::hub_routing::get_or_create_session;
 
-/// Mirror one message into the chat's watch-observer session: assemble
-/// the content and steer it in. Fire-and-forget semantics for the
-/// caller — a run starts when the observer is idle, a mid-run mailbox
-/// post when it is already thinking. Images are NOT downloaded (unlike
-/// post-gate triggers): the observer pulls them via skill only if it
-/// cares. Failures are logged, never propagated — the tee must not
-/// break the serial dispatch of the conversation path it mirrors.
+/// Mirror one message into the watched chat's session: assemble the
+/// content and steer it in. Fire-and-forget semantics for the caller —
+/// a run starts when the session is idle, a mid-run mailbox post when
+/// it is already thinking. Images are NOT downloaded (unlike post-gate
+/// triggers): the session pulls them via skill only if it cares.
+/// Failures are logged, never propagated — the tee must not break the
+/// serial dispatch of the conversation path it shadows.
 ///
 /// Fast path: an existing, alive mapping steers without any store write
 /// (one sqlite read + one existence read per message — the naive
@@ -47,13 +48,12 @@ pub(crate) async fn mirror_message(
     msg: &ChannelMessage,
 ) {
     let chat_id = &msg.external_chat_id;
-    let mapping_key = crate::channels::watch_mapping_key(chat_id);
-    let sid = match store.find_mapping(channel_name, &mapping_key).await {
+    let sid = match store.find_mapping(channel_name, chat_id).await {
         Ok(Some(sid)) => match kernel.session_store().await.get(&sid).await {
             Ok(Some(_)) => Some(sid),
             _ => {
                 warn!(channel = %channel_name, chat_id = %chat_id, "watch mapping dangles to a deleted session; recreating");
-                if let Err(e) = store.delete_mapping(channel_name, &mapping_key).await {
+                if let Err(e) = store.delete_mapping(channel_name, chat_id).await {
                     warn!(channel = %channel_name, error = %e, "stale watch mapping delete failed");
                 }
                 None
@@ -73,7 +73,7 @@ pub(crate) async fn mirror_message(
                 store,
                 kernel,
                 chat_id,
-                &mapping_key,
+                chat_id,
                 None,
                 MappingKind::Watch,
             )
@@ -93,7 +93,7 @@ pub(crate) async fn mirror_message(
 
 /// The mirrored content: the message's own blocks verbatim (the adapter
 /// header already carries `[ts][from][chat][msg_id][thread][root]`), plus
-/// image references as text — opaque platform keys the observer can
+/// image references as text — opaque platform keys the session can
 /// resolve on demand via its skill.
 fn mirror_content(msg: &ChannelMessage) -> Vec<ContentBlock> {
     let mut content = msg.content.clone();
@@ -121,21 +121,21 @@ pub(crate) async fn get_channel_watch_by_name(
     channel_name: &str,
     chat_id: &str,
 ) -> crate::types::Result<crate::channels::ChannelWatchStatus> {
-    let kind = store.get_watch_state(channel_name, chat_id).await?;
+    let on = store.is_chat_watched(channel_name, chat_id).await?;
     let session_id = store
-        .find_mapping(channel_name, &crate::channels::watch_mapping_key(chat_id))
+        .find_mapping(channel_name, chat_id)
         .await?
         .map(|sid| sid.0.to_string());
-    Ok(crate::channels::ChannelWatchStatus {
-        on: matches!(kind, Some(MappingKind::Watch)),
-        session_id,
-    })
+    Ok(crate::channels::ChannelWatchStatus { on, session_id })
 }
 
 /// Switch a chat's watch mode by channel name. Same core as `/watch
-/// on|off`: on eagerly creates or resumes the observer session; off
-/// flips the row to `watch_off` (kept), cancels the in-flight run, and
-/// drains the mailbox.
+/// on|off`: on ensures the chat session exists and flips its kind to
+/// `Watch`; off flips back to `Normal`. A flip in either direction
+/// cancels the in-flight run and drains the mailbox: pending I/O from
+/// the previous mode must not leak into the new one (a queued
+/// conversation request must not be answered invisibly while watched,
+/// nor a mirrored message wake the session after off).
 pub(crate) async fn set_channel_watch_by_name(
     store: &Arc<dyn ChannelStore>,
     kernel: &Kernel,
@@ -143,48 +143,48 @@ pub(crate) async fn set_channel_watch_by_name(
     chat_id: &str,
     on: bool,
 ) -> crate::types::Result<crate::channels::ChannelWatchStatus> {
-    let watch_key = crate::channels::watch_mapping_key(chat_id);
-    if on {
+    let sid = if on {
+        // Ensure a live row (heals dangling ones), then flip explicitly —
+        // get_or_create only writes `kind` on create, so this is also
+        // the flip of an existing Normal row.
         let (sid, _reused) = get_or_create_session(
             channel_name,
             store,
             kernel,
             chat_id,
-            &watch_key,
+            chat_id,
             None,
             MappingKind::Watch,
         )
         .await?;
-        Ok(crate::channels::ChannelWatchStatus {
-            on: true,
-            session_id: Some(sid.0.to_string()),
-        })
+        store
+            .update_mapping(channel_name, chat_id, None, Some(MappingKind::Watch))
+            .await?;
+        sid
     } else {
-        let Some(sid) = store.find_mapping(channel_name, &watch_key).await? else {
+        // Off never creates a session: no row, nothing to flip.
+        let Some(sid) = store.find_mapping(channel_name, chat_id).await? else {
             return Ok(crate::channels::ChannelWatchStatus {
                 on: false,
                 session_id: None,
             });
         };
         store
-            .save_mapping(
-                channel_name,
-                &watch_key,
-                &sid,
-                chat_id,
-                None,
-                MappingKind::WatchPaused,
-            )
+            .update_mapping(channel_name, chat_id, None, Some(MappingKind::Normal))
             .await?;
-        kernel.cancel(&sid);
-        kernel
-            .clear_mailbox(&sid, crate::comms::MailboxScope::All)
-            .await;
-        Ok(crate::channels::ChannelWatchStatus {
-            on: false,
-            session_id: Some(sid.0.to_string()),
-        })
-    }
+        sid
+    };
+    // A flip in either direction resets pending I/O: a queued
+    // conversation request must not be answered invisibly while watched,
+    // nor a mirrored message wake the session after off.
+    kernel.cancel(&sid);
+    kernel
+        .clear_mailbox(&sid, crate::comms::MailboxScope::All)
+        .await;
+    Ok(crate::channels::ChannelWatchStatus {
+        on,
+        session_id: Some(sid.0.to_string()),
+    })
 }
 
 impl crate::channels::hub::ChannelHub {

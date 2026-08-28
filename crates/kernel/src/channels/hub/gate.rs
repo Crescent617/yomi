@@ -78,10 +78,10 @@ pub(crate) async fn gate_message(
         // sqlite error must not crash message intake, but the degradation
         // (watch-on group answered like a normal one) must be visible.
         let watch_on = match store
-            .get_watch_state(&config.name, &msg.external_chat_id)
+            .is_chat_watched(&config.name, &msg.external_chat_id)
             .await
         {
-            Ok(state) => state == Some(crate::channels::MappingKind::Watch),
+            Ok(on) => on,
             Err(e) => {
                 warn!(
                     channel = %config.name,
