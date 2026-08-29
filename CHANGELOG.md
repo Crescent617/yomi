@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-08-29
+
 ### Added
 
 - GUI 新增命令面板：`⌘P`（macOS）/ `Ctrl+P` 打开即模糊搜索会话（Enter 跳转），输入 `>` 或 `⌘⇧P` 进入命令模式——新建/Fork/删除/清空会话、编辑内核配置、重启 Kernel、查看日志、用量/收藏/自动化/Agents 面板、切换主题，删除与重启带二次确认。
