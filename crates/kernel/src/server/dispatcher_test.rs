@@ -285,11 +285,20 @@ async fn test_serve_accepts_connections_on_all_listeners() {
     });
 
     // Every bound door accepts and serves its own client.
-    for addr in [unix_addr, ws_addr] {
-        let client = RemoteKernel::connect(&addr).await.unwrap();
+    for addr in [&unix_addr, &ws_addr] {
+        let client = RemoteKernel::connect(addr).await.unwrap();
         client.check_ready().await.unwrap();
     }
+
+    // After shutdown both doors stop accepting.
     shutdown.cancel();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    for addr in [&unix_addr, &ws_addr] {
+        assert!(
+            RemoteKernel::connect(addr).await.is_err(),
+            "{addr} still accepting after shutdown"
+        );
+    }
 }
 
 #[tokio::test]

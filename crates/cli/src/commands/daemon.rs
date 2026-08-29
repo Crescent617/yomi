@@ -102,8 +102,21 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
             let mut listeners = vec![kernel::transport::bind(&addr, auth.clone()).await?];
             tracing::info!("Daemon listening on {addr}");
             if let Some(extra) = &extra_addr {
-                listeners.push(kernel::transport::bind(extra, auth).await?);
-                tracing::info!("Daemon listening on {extra} (extra)");
+                match kernel::transport::bind(extra, auth).await {
+                    Ok(listener) => {
+                        listeners.push(listener);
+                        tracing::info!("Daemon listening on {extra} (extra)");
+                    }
+                    Err(error) => {
+                        // extra 绑定失败即退出：清掉主 socket 文件，
+                        // 不留半成品（下次启动虽能自愈，但 status 探测
+                        // 会把它当成活 socket）。
+                        if let kernel::transport::SocketAddr::Unix(path) = &addr {
+                            let _ = tokio::fs::remove_file(path).await;
+                        }
+                        return Err(error.into());
+                    }
+                }
             }
 
             // Write PID file so external tools can find and signal us.
