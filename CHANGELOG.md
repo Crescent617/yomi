@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 恢复按会话规则文件 `<数据目录>/sessions/rules/<session_id>.md`（与 channel rules 并列）：spawn 时原文注入该会话 system prompt，紧跟 channel rules 之后（冲突以会话规则为准）；这是 local/GUI 会话唯一的规则层，fork 会话会复制规则文件，改动在下次 spawn 生效（agent 空闲约 2 分钟卸载后）。
+
 - kernel 新增编译期 cargo feature `websearch`（默认开）：内建 `web_search` 工具及 duckduckgo/scraper/html2text/urlencoding 依赖可整体裁掉（`--no-default-features`），裁剪后工具不再注册、其余工具不受影响。
 
 - kernel 新增编译期 cargo features `feishu` / `telegram`（`all-channels` 为默认、CLI/GUI/TUI 行为不变）：channel 平台适配器可按需裁剪（`--no-default-features --features feishu` 只编飞书）；二进制未编译某平台时，config 中该平台的 channel 启动报 Config 错误，其余 channel 不受影响。

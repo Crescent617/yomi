@@ -41,10 +41,7 @@ const SESSION_FILE_KINDS: &[(&str, &str)] = &[
     // clean up pre-existing sessions/goals/*.json files.
     ("goals", "json"),
     ("file_states", "jsonl"),
-    // legacy: per-session RULE.md was replaced by chat-scoped channel
-    // rules (2026-08); keep this entry only to clean up pre-existing
-    // sessions/rules/*.md files.
-    ("rules", "md"),
+    ("rules", "md"), // sessions/rules/{id}.md — per-session rules
 ];
 
 /// Options controlling a gc run

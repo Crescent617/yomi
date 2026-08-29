@@ -730,6 +730,14 @@ impl Conductor {
                 )
             }),
             rules_chat,
+            // Session rules are the only rules layer local/GUI sessions
+            // have; sub-agents get none (a sub-agent is a tool, not a
+            // chat voice).
+            rules_session: if is_sub_agent {
+                None
+            } else {
+                Some(sid.0.as_str())
+            },
             data_dir: &self.data_dir,
         })
         .await;

@@ -103,6 +103,22 @@ pub(crate) fn channel_rules_path(
     })
 }
 
+/// The session-scoped rules file applying to ONE session only:
+/// `<data_dir>/sessions/rules/<session_id>.md`. Same id-charset guard
+/// as [`channel_rules_path`]; session ids are ULIDs, so this never
+/// rejects a real one.
+pub(crate) fn session_rules_path(
+    data_dir: &std::path::Path,
+    session_id: &str,
+) -> Option<std::path::PathBuf> {
+    valid_rules_id(session_id).then(|| {
+        data_dir
+            .join("sessions")
+            .join("rules")
+            .join(format!("{session_id}.md"))
+    })
+}
+
 /// Bounded read of one rules file: missing/empty/unreadable → `None`;
 /// oversized → capped at [`SESSION_RULES_MAX_BYTES`] with a marker
 /// (UTF-8 boundary safe). Each file is capped independently.
@@ -156,6 +172,16 @@ pub(crate) async fn channel_rules_section(
     read_rules_file(&channel_rules_path(data_dir, chat_id)?).await
 }
 
+/// Read the session's own rules for prompt injection — same verbatim/
+/// capped/no-framing semantics as [`channel_rules_section`]; the two
+/// layers differ only in scope.
+pub(crate) async fn session_rules_section(
+    data_dir: &std::path::Path,
+    session_id: &str,
+) -> Option<String> {
+    read_rules_file(&session_rules_path(data_dir, session_id)?).await
+}
+
 /// Everything needed to assemble a session's spawn-time system prompt.
 pub(crate) struct SystemPromptParts<'a> {
     pub base_prompt: String,
@@ -168,17 +194,24 @@ pub(crate) struct SystemPromptParts<'a> {
     pub watch: Option<(&'a str, &'a str)>,
     /// Chat id selecting the channel rules file when the session is
     /// channel-routed (see [`channel_rules_section`]); `None` for
-    /// local/sub-agent sessions (they have no rules).
+    /// local/sub-agent sessions (no chat to hang rules on).
     pub rules_chat: Option<&'a str>,
+    /// Session id selecting the session-scoped rules file (see
+    /// [`session_rules_section`]) — the only rules layer local/GUI
+    /// sessions have. `None` for sub-agents (a sub-agent is a tool,
+    /// not a chat voice).
+    pub rules_session: Option<&'a str>,
     pub data_dir: &'a std::path::Path,
 }
 
 /// Assemble the system prompt for one spawn. Template body wins outright;
 /// otherwise a main session gets base + capability contract sections
 /// (attachments, mentions) + the watch-observer section when it observes
-/// a chat, while sub-agents keep the bare base. Either way the chat's
-/// channel rules are appended verbatim when present (see
-/// [`channel_rules_section`]).
+/// a chat, while sub-agents keep the bare base. Either way the rules
+/// layers append verbatim when present: channel rules (chat-scoped,
+/// [`channel_rules_section`]) then session rules (this session only,
+/// [`session_rules_section`]) — the narrower scope speaks last and wins
+/// conflicts for this session only.
 pub(crate) async fn compose_system_prompt(parts: SystemPromptParts<'_>) -> String {
     let mut prompt = match &parts.template_body {
         Some(t) => t.clone(),
@@ -197,6 +230,13 @@ pub(crate) async fn compose_system_prompt(parts: SystemPromptParts<'_>) -> Strin
     };
     if let Some(chat_id) = parts.rules_chat {
         if let Some(rules) = channel_rules_section(parts.data_dir, chat_id).await {
+            prompt = format!("{prompt}\n\n{rules}");
+        }
+    }
+    // Session rules speak after channel rules: the narrower scope wins
+    // conflicts for this session only.
+    if let Some(session_id) = parts.rules_session {
+        if let Some(rules) = session_rules_section(parts.data_dir, session_id).await {
             prompt = format!("{prompt}\n\n{rules}");
         }
     }

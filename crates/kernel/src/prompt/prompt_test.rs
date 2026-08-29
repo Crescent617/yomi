@@ -239,6 +239,7 @@ async fn compose_system_prompt_without_rules_chat_ignores_rules_file() {
         channel_routed: false,
         watch: None,
         rules_chat: None,
+        rules_session: None,
         data_dir: tmp.path(),
     })
     .await;
@@ -261,6 +262,7 @@ async fn compose_system_prompt_main_session_full_stack() {
         channel_routed: true,
         watch: Some(("feishu", "oc_1")),
         rules_chat: Some("oc_1"),
+        rules_session: None,
         data_dir: tmp.path(),
     })
     .await;
@@ -286,6 +288,7 @@ async fn compose_system_prompt_template_wins_rules_still_appended() {
         channel_routed: false,
         watch: None,
         rules_chat: Some("oc_t"),
+        rules_session: None,
         data_dir: tmp.path(),
     })
     .await;
@@ -305,6 +308,102 @@ async fn compose_system_prompt_without_rules_file_leaves_prompt_untouched() {
         channel_routed: false,
         watch: None,
         rules_chat: Some("oc_ghost"),
+        rules_session: None,
+        data_dir: tmp.path(),
+    })
+    .await;
+
+    assert_eq!(prompt, "BASE");
+}
+
+#[tokio::test]
+async fn session_rules_section_reads_verbatim_or_nothing() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path().join("sessions").join("rules");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // No file → no injection (zero prompt noise).
+    assert!(crate::prompt::session_rules_section(tmp.path(), "sess_x")
+        .await
+        .is_none());
+
+    // Present → verbatim content (outer whitespace trimmed).
+    std::fs::write(dir.join("sess_a.md"), "只回答本话题。\n").unwrap();
+    assert_eq!(
+        crate::prompt::session_rules_section(tmp.path(), "sess_a")
+            .await
+            .as_deref(),
+        Some("只回答本话题。")
+    );
+}
+
+#[tokio::test]
+async fn session_rules_section_rejects_unsafe_ids() {
+    // Session ids are ULIDs, but the path builder must never trust that:
+    // anything outside [A-Za-z0-9_-] gets no file.
+    let tmp = tempfile::TempDir::new().unwrap();
+    for evil in ["../../etc/passwd", "..", "a/b", "a.md", "a b", ""] {
+        assert!(
+            crate::prompt::session_rules_section(tmp.path(), evil)
+                .await
+                .is_none(),
+            "id {evil:?} must be rejected"
+        );
+    }
+}
+
+#[tokio::test]
+async fn compose_system_prompt_session_rules_speak_after_channel_rules() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let chat_dir = tmp.path().join("channels").join("rules");
+    let session_dir = tmp.path().join("sessions").join("rules");
+    std::fs::create_dir_all(&chat_dir).unwrap();
+    std::fs::create_dir_all(&session_dir).unwrap();
+    std::fs::write(chat_dir.join("oc_1.md"), "群规则").unwrap();
+    std::fs::write(session_dir.join("sess_1.md"), "会话规则").unwrap();
+
+    let prompt = compose_system_prompt(SystemPromptParts {
+        base_prompt: "BASE".into(),
+        template_body: None,
+        is_sub_agent: false,
+        enable_attachments: false,
+        channel_routed: false,
+        watch: None,
+        rules_chat: Some("oc_1"),
+        rules_session: Some("sess_1"),
+        data_dir: tmp.path(),
+    })
+    .await;
+
+    // Both layers appended, channel first, session last (the narrower
+    // scope wins conflicts).
+    let chat_at = prompt.find("群规则").expect("channel rules appended");
+    let session_at = prompt.find("会话规则").expect("session rules appended");
+    assert!(
+        chat_at < session_at,
+        "session rules must speak last: {prompt}"
+    );
+    assert!(prompt.ends_with("会话规则"));
+}
+
+#[tokio::test]
+async fn compose_system_prompt_without_rules_session_ignores_session_file() {
+    // Sub-agents get `rules_session: None` from the conductor: even when
+    // a session rules file exists it must not leak in.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path().join("sessions").join("rules");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("sess_sub.md"), "不该出现。").unwrap();
+
+    let prompt = compose_system_prompt(SystemPromptParts {
+        base_prompt: "BASE".into(),
+        template_body: None,
+        is_sub_agent: true,
+        enable_attachments: false,
+        channel_routed: false,
+        watch: None,
+        rules_chat: None,
+        rules_session: None,
         data_dir: tmp.path(),
     })
     .await;
