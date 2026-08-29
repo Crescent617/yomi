@@ -154,6 +154,8 @@ one fact per line, keep the index lean.
 
 ## P2：工单 `.yomi/tickets/`（task-tickets skill，agent 面零内核）
 
+> **已退休（2026-08-29）**：task-tickets 与 blackboard 两个 skill 已由 **kanban 任务看板**取代（yomi-extensions `skills/kanban/`：目录即状态列、mv 原子认领、多父依赖闸、review 闸、cron 幂等键、blocked 熔断；卡的 ## Log 吸收黑板职责）。本节及下文提及 tickets/blackboard 的内容仅作历史存档。
+
 > **价值定位修正（2026-08）**：工单的真实定位是**项目的跨 session 待办板**（意图持久层），不是多 agent 协作基础设施。yomi 的主协调循环已闭合（spawn 当面派单 + input_bus 自动回报 + todo 自跟踪 + session 列表的结构性 fleet 视图），多 agent 场景下 tickets 近似仪式化冗余。真实价值在：①工作到达时间 ≠ 处理时间（飞书留言、cron 产物——先记工单后认领）；②session 易失而意图持久（"上次干到哪"不靠翻旧会话）。**memory 装事实，tickets 装意图。** 据此冻结追加投资（结构化 task 工具、dispatch 外循环、租约回收），等真实场景驱动；单写者为主的现状下文件形态完全适配，claim 竞态基本不会出现。
 
 **动机**：父 agent 并发派 N 个异步子 agent 后，跟踪进度只有"自己记"（占上下文）或"逐个 post_message 问"（打扰）两条路。缺的是共享任务状态。
@@ -277,11 +279,11 @@ janitor 的记忆分两层，**其他 agent 只消费第二层，不直接访问
 
 | 事项 | 态度 | 触发条件 |
 |---|---|---|
-| tickets 内核化（task 工具 + tasks 表） | 条件触发 | claim 竞态发生 / 聚合吃力 / GUI 看板需求落地 |
+| tickets 内核化（task 工具 + tasks 表） | 条件触发 | 2026-08-29 tickets skill 已退休、由 kanban skill 取代；内核化判断以 kanban 的实际痛点为起点 |
 | agent discovery（列举活跃 agent） | 观望 | 跨 session 协作痛点出现 |
 | DAG / workflow 引擎、convoy 式重型编排 | **不做** | 反 Ralph 哲学：确定性外循环 + fresh context，不设计流程图 |
 | 模板 marketplace / 社区资产包 | 观望 | 格式已保持可移植，生态等自然出现 |
-| blackboard（多 agent 共享知识空间） | ✅ 已落地（2026-08，`blackboard` skill：`.yomi/boards/<feature>.md`） | 平行 agent 互见 task/progress/findings 的诉求已由纯约定 skill 承载，内核零改动 |
+| blackboard（多 agent 共享知识空间） | ✅ 已落地（2026-08，`blackboard` skill）；→ 2026-08-29 随 kanban 退休，黑板职责并入 kanban 卡的 ## Log | 平行 agent 互见 task/progress/findings 的诉求已由纯约定 skill 承载，内核零改动 |
 | skill 市场 / 自有 installer | **不做** | 通用 `npx skills add`（vercel-labs/skills）已是生态事实标准：支持 72+ agent、默认 symlink 进技能目录、私有仓库走本机 git 凭证；yomi 读 `~/.agents/skills` 通用位置天然兼容 |
 
 ## 资产分发：yomi-extensions 独立仓库
@@ -290,7 +292,7 @@ janitor 的记忆分两层，**其他 agent 只消费第二层，不直接访问
 
 | 资产 | 耦合度 | 归属 |
 |---|---|---|
-| `task-tickets` / `janitor` skill | 零~弱耦合（纯约定 + playbook） | yomi-extensions |
+| `kanban` / `janitor` skill | 零~弱耦合（纯约定 + playbook） | yomi-extensions |
 | ~~`agent-templates` skill~~ | — | **已删除**（2026-08 收敛）：发现由 `agent` 工具 desc 自足承载（内置一句话用途 + 目录约定），不再需要单独 skill |
 | 内置模板 planner/verifier/explorer/reviewer | 强耦合（schema 随 kernel 版本） | **预置进内核**（`crates/kernel/src/agent_tmpl/` + `include_str!`，三层合并的地板层） |
 | `yomi-e2e` / `release-it` / `yomi-self` | 维护者工作流 | 留在 yomi 主仓 `.agents/skills/` |
@@ -315,7 +317,7 @@ templates 不属于 skills 生态：官方模板内核预置、无需安装；yo
 
 1. **P1 模板机制**：✅ 已落地——`NewSession` 参数结构体重构 + sessions.template 列（v20；v21 tools_block 列休眠）+ `agent_tmpl` 三层加载（内置 `include_str!` / 全局 / workspace 覆盖）+ `agent` 工具 `template` 参数（实时 resolve、错误列可用表；desc 自足含内置一句话用途与目录约定）+ conductor spawn 应用（body 换 base prompt；model/skills/工具全继承）+ 内置 planner/verifier/explorer/reviewer（对齐 CC）——纯 markdown 无 frontmatter，无单独 skill；
 2. **P1.5 记忆层**：一期目录约定 + SP 门控指针（✅ 已落地，仅项目层）；二期索引装配（小内核）等空转信号再动；
-3. **P2 tickets**：✅ 文件约定 + task-tickets skill + `ticket.sh` 脚本落地（yomi-extensions，本机 symlink 生效）；GUI 投影曾实现并经 tauri-pilot e2e 验证，后按决策整体撤下（kernel ticket 模块/wire/GUI 组件均移除，git 历史可溯），等工单流程验证好用后再恢复展示层；
+3. **P2 tickets**：✅ 文件约定 + task-tickets skill + `ticket.sh` 脚本落地（yomi-extensions，本机 symlink 生效）；GUI 投影曾实现并经 tauri-pilot e2e 验证，后按决策整体撤下（kernel ticket 模块/wire/GUI 组件均移除，git 历史可溯）；**2026-08-29 task-tickets 与 blackboard 退休，由 kanban skill（`kb.py`，Python 单文件）取代**；
 4. **P3 janitor**：**暂缓**（见 P3 暂缓说明；复活看触发信号）；
 5. P4 按触发条件再议。
 
