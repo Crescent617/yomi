@@ -38,21 +38,6 @@ fn map_client_handshake_err(e: tokio_tungstenite::tungstenite::Error) -> io::Err
     map_tungstenite_err(e)
 }
 
-/// Whether a ws/wss bind address is reachable from beyond this machine:
-/// anything but a loopback IP literal (`127.*`, `::1`). Hostnames count
-/// as exposed — we can't tell where they resolve. Unix sockets are
-/// never exposed.
-pub fn bind_is_exposed(addr: &SocketAddr) -> bool {
-    let host = match addr {
-        SocketAddr::Ws(h) | SocketAddr::Wss(h) => h,
-        SocketAddr::Unix(_) => return false,
-    };
-    match host.parse::<std::net::SocketAddr>() {
-        Ok(sa) => !sa.ip().is_loopback(),
-        Err(_) => true,
-    }
-}
-
 /// IPC address: either a Unix domain socket path or a WebSocket endpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SocketAddr {
@@ -344,15 +329,6 @@ impl Stream {
     }
 }
 
-/// Socket auth gate for one accepted ws peer: loopback peers
-/// (127.0.0.0/8, ::1) are exempt — a same-machine connection sits in
-/// the unix-socket trust domain (connecting to 0.0.0.0 locally lands on
-/// loopback too, and an ssh -L forward arrives as loopback: SSH itself
-/// is the credential there). Only remote peers must present a token.
-fn peer_gate(auth: &Option<AuthVerifier>, peer_ip: std::net::IpAddr) -> Option<AuthVerifier> {
-    auth.clone().filter(|_| !peer_ip.is_loopback())
-}
-
 /// Platform-agnostic listener.
 pub enum Listener {
     #[cfg(unix)]
@@ -401,8 +377,8 @@ impl Listener {
                 };
 
                 let (stream, addr) = listener.accept().await?;
-                let auth = peer_gate(auth, addr.ip());
                 let auth_enabled = auth.is_some();
+                let auth = auth.clone();
                 let ws_stream = tokio_tungstenite::accept_hdr_async(
                     stream,
                     move |req: &Request, resp: Response| {

@@ -15,11 +15,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- ws 监听对本机连接免 socket auth：对端为 loopback（127.0.0.0/8、::1，含本机连 0.0.0.0 与 ssh -L 转发）时不再要求 token，远端机器仍需 `socket_auth_hash` 对应的密码；本机工具链（watchdog、doctor、`yomi rpc`）从此无需导出 `YOMI_SOCKET_AUTH`。
-- ws/wss 绑定超出本机的地址（如 0.0.0.0、网卡 IP、主机名）而未配置 `socket_auth_hash` 时，daemon 启动直接报错（此前会无鉴权裸奔）；绑回环地址不受影响。
-
 ## [0.10.3] - 2026-08-29
 
 ### Added

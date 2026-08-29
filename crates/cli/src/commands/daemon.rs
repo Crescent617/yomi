@@ -89,19 +89,8 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
                         "invalid socket_auth_hash format (config field or YOMI_SOCKET_AUTH_HASH): \
                          expected `blake3:<64 hex chars>` (generate one with `yomi daemon auth-hash`)"
                     );
-                    tracing::info!(
-                        "Socket auth enabled for ws/wss transports (loopback peers are exempt)"
-                    );
+                    tracing::info!("Socket auth enabled for ws/wss transports");
                     Some(kernel::transport::auth_verifier(hash))
-                }
-                // ws bound beyond loopback with no hash would serve the
-                // whole network unauthenticated — refuse to start.
-                (true, None) if kernel::transport::bind_is_exposed(&addr) => {
-                    anyhow::bail!(
-                        "{addr} listens beyond loopback but no socket_auth_hash is configured: \
-                         remote clients would connect unauthenticated. Set socket_auth_hash \
-                         (generate one with `yomi daemon auth-hash`) or bind a loopback address."
-                    );
                 }
                 _ => None,
             };

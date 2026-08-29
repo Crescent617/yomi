@@ -193,24 +193,13 @@ async fn test_agent_templates_wire_round_trip() {
 
 // ── Socket auth over ws (RemoteKernel token propagation) ────────────────
 
-/// This host's primary non-loopback IPv4, if any: auth only gates remote
-/// peers, so the rejection path needs a dial whose source isn't loopback
-/// (connecting to one's own NIC address keeps it as the peer source).
-fn non_loopback_host() -> Option<String> {
-    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    sock.connect("8.8.8.8:80").ok()?;
-    let ip = sock.local_addr().ok()?.ip();
-    (!ip.is_loopback()).then(|| ip.to_string())
-}
-
 async fn setup_ws_auth(
     password: &str,
-) -> Option<(
+) -> (
     crate::transport::SocketAddr,
     TempDir,
     tokio_util::sync::CancellationToken,
-)> {
-    let host = non_loopback_host()?;
+) {
     let tmp = TempDir::new().unwrap();
     let mut config = Config {
         data_dir: tmp.path().to_path_buf(),
@@ -223,62 +212,42 @@ async fn setup_ws_auth(
     let auth = Some(crate::transport::auth_verifier(
         &crate::transport::hash_password(password),
     ));
-    let listener =
-        crate::transport::bind(&crate::transport::SocketAddr::Ws("0.0.0.0:0".into()), auth)
-            .await
-            .unwrap();
+    let listener = crate::transport::bind(
+        &crate::transport::SocketAddr::Ws("127.0.0.1:0".into()),
+        auth,
+    )
+    .await
+    .unwrap();
     let port = listener.local_addr().unwrap().port();
-    let addr = crate::transport::SocketAddr::Ws(format!("{host}:{port}"));
+    let addr = crate::transport::SocketAddr::Ws(format!("127.0.0.1:{port}"));
     let shutdown = tokio_util::sync::CancellationToken::new();
     let serve_shutdown = shutdown.clone();
     tokio::spawn(async move {
         let _ = server.serve(listener, serve_shutdown).await;
     });
-    Some((addr, tmp, shutdown))
+    (addr, tmp, shutdown)
 }
 
 #[tokio::test]
 async fn test_remote_kernel_connect_with_auth() {
-    let Some((addr, _tmp, shutdown)) = setup_ws_auth("pw-123").await else {
-        eprintln!("skip: host has no non-loopback interface");
-        return;
-    };
+    let (addr, _tmp, shutdown) = setup_ws_auth("pw-123").await;
 
-    // Correct token: handshake + Hello succeed, kernel is usable. A
-    // fake-IP VPN can hijack the dial (connection dies pre-handshake) —
-    // skip then; an auth-flavored error means the server was reached yet
-    // rejected a good token: fail.
-    let client = match RemoteKernel::connect_with_auth(&addr, Some("pw-123".to_string())).await {
-        Ok(client) => client,
-        Err(e) => {
-            shutdown.cancel();
-            assert!(
-                !e.to_string().contains("socket auth failed"),
-                "correct token rejected: {e}"
-            );
-            eprintln!("skip: non-loopback dial unusable ({e})");
-            return;
-        }
-    };
+    // Correct token: handshake + Hello succeed, kernel is usable.
+    let client = RemoteKernel::connect_with_auth(&addr, Some("pw-123".to_string()))
+        .await
+        .unwrap();
     client.check_ready().await.unwrap();
 
-    // Wrong / missing tokens are rejected during the ws handshake — but
-    // only when the dial presents a remote peer. macOS hairpins
-    // self-dials to lo0, so the peer is loopback and the (correct)
-    // bypass lets the connection through: that environment simply can't
-    // exercise rejection, skip it there. When rejection does happen it
-    // must carry the socket-auth error.
+    // Wrong / missing tokens are rejected during the ws handshake.
     for token in [Some("nope".to_string()), None] {
-        match RemoteKernel::connect_with_auth(&addr, token).await {
-            Err(e) => assert!(
-                e.to_string().contains("socket auth failed"),
-                "unexpected error: {e}"
-            ),
-            Ok(_) => {
-                eprintln!("skip: self-dial hairpins to loopback; rejection untestable here");
-                break;
-            }
-        }
+        let err = RemoteKernel::connect_with_auth(&addr, token)
+            .await
+            .err()
+            .expect("connection should have been rejected");
+        assert!(
+            err.to_string().contains("socket auth failed"),
+            "unexpected error: {err}"
+        );
     }
 
     shutdown.cancel();
