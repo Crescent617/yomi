@@ -125,9 +125,17 @@ jobs:
       - name: Build & Sign DMG
         working-directory: crates/gui
         run: |
-          cd frontend && npm ci
-          cd .. && npm ci
-          npx tauri build
+          cd frontend && npm ci && cd ..
+          # 前端构建放后台，与根 npm ci + rust 编译并行；tauri 的
+          # beforeBuildCommand 用 --config 置空，避免 tauri build 内部
+          # 再串行跑一遍前端。
+          (cd frontend && npm run build) &
+          FE_PID=$!
+          npm ci
+          npx tauri build --config '{"build":{"beforeBuildCommand":""}}'
+          TAURI_RC=$?
+          wait $FE_PID || { echo "frontend build failed"; exit 1; }
+          [ $TAURI_RC -eq 0 ] || exit $TAURI_RC
           bash ../../scripts/fix-dmg-signature.sh
 
       - name: Calculate SHA256
