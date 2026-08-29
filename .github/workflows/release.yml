@@ -126,16 +126,15 @@ jobs:
         working-directory: crates/gui
         run: |
           cd frontend && npm ci && cd ..
-          # 前端构建放后台，与根 npm ci + rust 编译并行；tauri 的
-          # beforeBuildCommand 用 --config 置空，避免 tauri build 内部
-          # 再串行跑一遍前端。
+          # 根 npm ci 与前端构建并行；但 tauri build 必须等前端产物
+          # 就绪——generate_context! 在 cargo codegen 时嵌入
+          # frontendDist，暖缓存下先跑会把缺失/半成品的 build/ 打进
+          # 签名 DMG；前端失败也在烧 rust 编译时间前快速退出。
           (cd frontend && npm run build) &
           FE_PID=$!
           npm ci
-          npx tauri build --config '{"build":{"beforeBuildCommand":""}}'
-          TAURI_RC=$?
           wait $FE_PID || { echo "frontend build failed"; exit 1; }
-          [ $TAURI_RC -eq 0 ] || exit $TAURI_RC
+          npx tauri build --config '{"build":{"beforeBuildCommand":""}}'
           bash ../../scripts/fix-dmg-signature.sh
 
       - name: Calculate SHA256
