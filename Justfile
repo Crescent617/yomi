@@ -36,6 +36,8 @@ check:
     cargo check -p kernel --no-default-features
     cargo check -p kernel --no-default-features --features feishu
     cargo check -p kernel --no-default-features --features telegram
+    cargo check -p kernel --no-default-features --features websearch
+    cargo check -p kernel --no-default-features --features all-channels
 
 # Run with tracing debug logging
 debug *ARGS:

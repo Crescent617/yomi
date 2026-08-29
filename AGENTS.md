@@ -71,7 +71,7 @@ just ci
 
 ### kernel
 - **Env Vars**: should follow prefix `kernel::ENV_PREFIX`
-- **Channel features**: 平台适配器按同名 cargo feature 裁剪（`feishu` / `telegram`，默认 `all-channels` 全开）；`PlatformConfig` 等 serde 类型不随 feature 门控，编译外平台在 `build_adapter` 报 Config 错误
+- **Channel features**: 平台适配器按同名 cargo feature 裁剪（`feishu` / `telegram`，默认 `all-channels` 全开）；`PlatformConfig` 等 serde 类型不随 feature 门控，编译外平台在 `build_adapter` 报 Config 错误。内建 `web_search` 工具同理（feature `websearch`，默认开；`WEBSEARCH_TOOL_NAME` 不门控，权限解析对扩展提供的同名工具仍生效）
 
 ### gui
 - using tauri with npm as pkg manager

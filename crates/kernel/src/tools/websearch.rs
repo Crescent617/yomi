@@ -1,13 +1,11 @@
 //! `WebSearch` tool — searches the web and returns results with titles, URLs,
 //! snippets, and optionally fetches content from top results.
 
-use crate::tools::{Tool, ToolExecCtx};
+use crate::tools::{Tool, ToolExecCtx, WEBSEARCH_TOOL_NAME};
 use crate::types::{KernelError, Result, ToolOutput};
 use crate::utils::search::{available_engines, format_results, search_all};
 use async_trait::async_trait;
 use serde_json::Value;
-
-pub const WEBSEARCH_TOOL_NAME: &str = "web_search";
 
 const MAX_QUERY_LENGTH: usize = 1000;
 

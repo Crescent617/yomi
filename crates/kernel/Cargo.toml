@@ -43,10 +43,10 @@ globset = { workspace = true }
 base64 = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png", "gif", "webp"] }
 lru = { workspace = true, optional = true }
-html2text = { workspace = true }
-urlencoding = { workspace = true }
-scraper = { workspace = true }
-duckduckgo = { workspace = true }
+html2text = { workspace = true, optional = true }
+urlencoding = { workspace = true, optional = true }
+scraper = { workspace = true, optional = true }
+duckduckgo = { workspace = true, optional = true }
 directories = { workspace = true }
 
 # Task system dependencies
@@ -63,10 +63,12 @@ tempfile = { workspace = true }
 workspace = true
 
 [features]
-default = ["all-channels"]
+default = ["all-channels", "websearch"]
 all-channels = ["feishu", "telegram"]
-feishu = ["dep:lark-websocket-protobuf", "dep:prost", "dep:lru"]
+# reqwest/query: feishu.rs 的 .query()（reqwest 0.13 起为独立 feature）
+feishu = ["dep:lark-websocket-protobuf", "dep:prost", "dep:lru", "reqwest/query"]
 telegram = ["dep:teloxide-core"]
+websearch = ["dep:duckduckgo", "dep:scraper", "dep:html2text", "dep:urlencoding"]
 
 [dev-dependencies]
 rustls = { workspace = true, features = ["ring"] }

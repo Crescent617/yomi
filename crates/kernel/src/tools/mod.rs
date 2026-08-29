@@ -21,6 +21,7 @@ pub mod sleep;
 pub mod subagent;
 pub mod task;
 pub mod todo;
+#[cfg(feature = "websearch")]
 pub mod websearch;
 pub mod write;
 
@@ -43,8 +44,14 @@ pub use skill_load::{SkillTool, SKILL_FILENAME, SKILL_TOOL_NAME};
 pub use sleep::{SleepTool, SLEEP_TOOL_NAME};
 pub use subagent::{SubagentTool, SUBAGENT_TOOL_NAME};
 pub use todo::{TodoTool, TODO_TOOL_NAME};
-pub use websearch::{WebSearchTool, WEBSEARCH_TOOL_NAME};
+#[cfg(feature = "websearch")]
+pub use websearch::WebSearchTool;
 pub use write::{WriteTool, WRITE_TOOL_NAME};
+
+/// The built-in `web_search` tool's name. Kept unconditional: when the
+/// tool itself is compiled out, the permission resolver should still
+/// classify an extension-provided web search tool as Safe.
+pub const WEBSEARCH_TOOL_NAME: &str = "web_search";
 
 /// Guidance for tools that launch async/background tasks.
 /// Tells the agent to end its turn immediately and wait for the result notification.
@@ -293,6 +300,7 @@ impl ToolRegistry {
         self.register(grep_tool);
 
         // Register WebSearch tool
+        #[cfg(feature = "websearch")]
         self.register(WebSearchTool::new());
 
         // Register SubAgent tool if enabled and this is not a sub-agent session

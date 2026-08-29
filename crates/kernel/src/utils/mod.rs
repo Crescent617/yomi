@@ -6,6 +6,7 @@ pub mod env;
 pub mod file_chunk;
 pub mod file_read;
 pub mod g_lock;
+#[cfg(feature = "websearch")]
 pub mod html;
 pub mod http;
 pub mod id;
@@ -16,6 +17,7 @@ pub mod logging;
 pub mod markdown;
 pub mod path;
 pub mod rg_helper;
+#[cfg(feature = "websearch")]
 pub mod search;
 pub mod signal;
 pub mod strs;
