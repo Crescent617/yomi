@@ -117,10 +117,11 @@ fn watch_section_states_the_contract() {
     assert!(section.contains("mirrored"));
     // The hard boundary: nothing it outputs reaches the chat.
     assert!(section.contains("never posted"));
-    // The only voice: the platform skill, anchored by header ids.
-    assert!(section.contains("skill"));
-    assert!(section.contains("[msg_id: …]"));
-    // When to speak is the agent's judgement — no scripted defaults.
+    // The only way out: speak via skill — no operational hints (the
+    // skill list is in the prompt, headers carry the anchors), and no
+    // scripted defaults for when to speak.
+    assert!(section.contains("speak via skill"));
+    assert!(!section.contains("[msg_id:"));
     assert!(!section.contains("usually respond"));
     assert!(!section.contains("silence"));
 }

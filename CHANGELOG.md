@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- watch 观察者注入 system prompt 的契约精简为三句（watch 模式事实 / 输出不可见 / 需要时经 skill 发言），不再脚本化"@ 通常该答、其余沉默"的应答策略。
+- watch 观察者注入 system prompt 的契约精简为三句（watch 模式事实 / 输出不可见 / 需要时经 skill 发言），不再脚本化应答策略，也不含 skill 与锚点的操作提示（材料本就在 prompt 与消息头里）。
 
 ## [0.10.2] - 2026-08-29
 

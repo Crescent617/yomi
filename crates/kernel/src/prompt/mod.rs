@@ -33,10 +33,11 @@ pub(crate) const MENTIONS_SECTION: &str = "# Mentions\nTo mention a user in your
 /// mapping kind `watch`). Deliberately minimal: state the mode (every
 /// message is mirrored for observation), the hard boundary (nothing the
 /// session outputs reaches the chat), and the only way out (speak via
-/// the platform skill, anchored by header ids). When to speak is the
-/// agent's own judgement — the contract must not script it. Appended to
-/// the base prompt by the conductor at spawn (while the routing row's
-/// kind is `watch`), so it survives context compaction.
+/// skill). No operational hints — the skill list is in the prompt
+/// already, and the message headers carry the reply anchors; when to
+/// speak is the agent's own judgement. Appended to the base prompt by
+/// the conductor at spawn (while the routing row's kind is `watch`), so
+/// it survives context compaction.
 pub(crate) fn watch_section(channel_name: &str, chat_id: &str) -> String {
     format!(
         "# Watch mode\n\
@@ -44,9 +45,7 @@ pub(crate) fn watch_section(channel_name: &str, chat_id: &str) -> String {
          here is mirrored to you for observation.\n\
          Nothing you output reaches the chat: your reply text is never posted, and no cards or \
          reactions mark your runs.\n\
-         To speak when you judge it worthwhile, use the platform skill from your own skill list \
-         (e.g. `lark` for feishu) via shell, targeting messages or threads by the \
-         `[msg_id: …]` / `[thread: …]` ids in each message's header."
+         If you think a reply is needed, speak via skill."
     )
 }
 
