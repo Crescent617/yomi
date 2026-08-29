@@ -27,7 +27,10 @@ receipt），bot 对群里的讨论完全无感。想要的是 bot 作为群的*
   普通消息。
 - 契约不进首条消息（会被 compaction 摘要掉）：spawn 时 conductor 按 routing
   kind 把 `prompt::watch_section` 追加进 system prompt，免疫压缩。off 期间
-  （kind=normal）不追加——它就是个普通会话，拿普通契约。
+  （kind=normal）不追加——它就是个普通会话，拿普通契约。契约正文刻意
+  极简，只有三句：处于 watch mode（每条消息镜像给你）、你的正常输出
+  无人可见（channel 不代发）、觉得值得说就经平台 skill 发言（按消息头
+  id 锚定）——何时发言是 agent 自己的判断，契约不替它写默认值。
 - kind 只在建行时写入；reuse 路径只刷新 reply anchor。flip 一律走显式的
   `update_mapping`——并发的对话 dispatch（gate 快照 off、flip 前到达）
   永远不会把 watch 行静默顶回 normal。

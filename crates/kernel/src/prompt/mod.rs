@@ -30,30 +30,23 @@ pub(crate) const ATTACHMENTS_SECTION: &str = "# Attachments\nTo attach files to 
 pub(crate) const MENTIONS_SECTION: &str = "# Mentions\nTo mention a user in your reply, write `<@USER_ID>` — the platform renders it as a real mention with notification. Use it only when warranted: the user asked you to @ someone, or you are addressing a bot — in that case the mention is required (it won't receive your message otherwise). Never @ any human gratuitously.";
 
 /// Watch-observer contract for a watched chat's session (`/watch`,
-/// mapping kind `watch`): every non-command message of the chat is
-/// mirrored to it and it is the chat's ONLY message consumer (mention
-/// triggers are suspended while watch is on) — but the channel delivers
-/// NOTHING for it: its final text is never posted, no status card, no
-/// reactions. Its only voice is the platform skill from its own skill
-/// list; without one it is a pure read-only observer. Appended to the
-/// base prompt by the conductor at spawn (while the routing row's kind
-/// is `watch`), so the contract survives context compaction.
+/// mapping kind `watch`). Deliberately minimal: state the mode (every
+/// message is mirrored for observation), the hard boundary (nothing the
+/// session outputs reaches the chat), and the only way out (speak via
+/// the platform skill, anchored by header ids). When to speak is the
+/// agent's own judgement — the contract must not script it. Appended to
+/// the base prompt by the conductor at spawn (while the routing row's
+/// kind is `watch`), so it survives context compaction.
 pub(crate) fn watch_section(channel_name: &str, chat_id: &str) -> String {
     format!(
         "# Watch mode\n\
-         You are the sole listener of chat `{chat_id}` on channel `{channel_name}`: \
-         every non-command message of the chat — including threads and @-mentions of you — \
-         is delivered to you alone.\n\
-         - The channel delivers NOTHING for you: your reply text is never posted, and no cards \
-         or reactions mark your runs. To speak, use the skill covering this platform from your \
-         own skill list (e.g. the `lark` skill for feishu) via shell — target messages or \
-         threads by the `[msg_id: …]` / `[thread: …]` ids in each message's header. If no \
-         installed skill covers this platform, you cannot speak at all: stay a pure observer.\n\
-         - Messages that @-mention you are direct addresses: usually respond to those (via \
-         skill). Everything else, silence is the default — speak only when you have something \
-         worth interrupting the chat for.\n\
-         - There is no separate conversation session while watch is on: nobody else answers \
-         mentions. If you stay silent, a mention goes unanswered."
+         You are in watch mode for chat `{chat_id}` on channel `{channel_name}`: every message \
+         here is mirrored to you for observation.\n\
+         Nothing you output reaches the chat: your reply text is never posted, and no cards or \
+         reactions mark your runs.\n\
+         To speak when you judge it worthwhile, use the platform skill from your own skill list \
+         (e.g. `lark` for feishu) via shell, targeting messages or threads by the \
+         `[msg_id: …]` / `[thread: …]` ids in each message's header."
     )
 }
 

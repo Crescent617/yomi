@@ -110,19 +110,19 @@ async fn skill_section_indexes_only_top_level_skills() {
 #[test]
 fn watch_section_states_the_contract() {
     let section = crate::prompt::watch_section("feishu", "oc_1");
-    // Sole-listener identity + the chat it watches.
-    assert!(section.contains("sole listener"));
+    // The mode + the chat it watches.
+    assert!(section.contains("watch mode"));
     assert!(section.contains("oc_1"));
     assert!(section.contains("feishu"));
-    // The channel delivers nothing; the skill is the only voice.
-    assert!(section.contains("delivers NOTHING"));
+    assert!(section.contains("mirrored"));
+    // The hard boundary: nothing it outputs reaches the chat.
+    assert!(section.contains("never posted"));
+    // The only voice: the platform skill, anchored by header ids.
     assert!(section.contains("skill"));
-    // Mentions are the agent's own to answer (or not); silence default otherwise.
-    assert!(section.contains("usually respond"));
-    assert!(section.contains("silence is the default"));
-    assert!(section.contains("no separate conversation session"));
-    // Commands are never mirrored — the intake clause must not overpromise.
-    assert!(section.contains("non-command message"));
+    assert!(section.contains("[msg_id: …]"));
+    // When to speak is the agent's judgement — no scripted defaults.
+    assert!(!section.contains("usually respond"));
+    assert!(!section.contains("silence"));
 }
 
 #[tokio::test]
