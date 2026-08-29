@@ -647,24 +647,27 @@ impl Conductor {
         // NB (2026-08): ask_user 已整体下线（tools/mod.rs 不再注册），
         // 本 heuristic 随之惰性（blocklist 匹配不到任何已注册工具），
         // 保留仅以便工具回归时恢复。
-        // Channel routing shapes two decisions below (ask_user blocklist,
-        // mention prompt section) — resolve it once. Subagent sessions
-        // carry no mapping of their own; the parent chain is walked.
-        let channel_routed = self.is_channel_routed(sid, session_info.as_ref()).await;
-        // Watch observers (a watched chat's mirror session, `/watch`)
-        // learn their contract from the routing row — direct routing
-        // only: a sub-agent of an observer is the observer's tool, not
-        // an observer itself.
-        let watch_routing = match &self.agent_shared.channel_hub {
+        // Channel routing shapes three decisions below (watch contract,
+        // chat-scoped rules, ask_user blocklist) — resolve it once.
+        // Subagent sessions carry no mapping of their own; their rules
+        // scope stays None (a sub-agent is a tool, not a chat voice).
+        let routing = match &self.agent_shared.channel_hub {
             Some(hub) if !is_sub_agent => hub
                 .store()
                 .find_routing_by_session(sid)
                 .await
                 .ok()
-                .flatten()
-                .filter(|routing| routing.is_watch()),
+                .flatten(),
             _ => None,
         };
+        // Watch observers (a watched chat's mirror session, `/watch`)
+        // learn their contract from the routing row's kind.
+        let watch_routing = routing.as_ref().filter(|r| r.is_watch());
+        // The chat id rides every routing row (thread rows denormalize
+        // it into actual_chat_id), so the chat-scoped rules file needs
+        // no thread→chat lookup — and no chat session to exist.
+        let rules_chat = routing.as_ref().map(|r| r.external_chat_id.as_str());
+        let channel_routed = self.is_channel_routed(sid, session_info.as_ref()).await;
         let ask_card_capable = match &self.agent_shared.channel_hub {
             Some(hub) if !is_sub_agent => hub.session_channel_supports_cards(sid).await,
             _ => false,
@@ -720,14 +723,14 @@ impl Conductor {
             is_sub_agent,
             enable_attachments: self.agent_config.enable_attachments,
             channel_routed,
-            watch: watch_routing.as_ref().map(|routing| {
+            watch: watch_routing.map(|routing| {
                 (
                     routing.channel_name.as_str(),
                     routing.external_chat_id.as_str(),
                 )
             }),
+            rules_chat,
             data_dir: &self.data_dir,
-            session_id: &sid.0,
         })
         .await;
 

@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- 群规则文件 `<数据目录>/channels/rules/<chat_id>.md`：非空即在 spawn 时原文注入该群所有会话的 system prompt（chat、thread、观察者共享同一份，无包装），天然免疫上下文压缩；改动在下次 spawn 生效（agent 空闲约 2 分钟卸载后），适合记录这个群的持久偏好（agent 可经 write 工具自行维护，契约见 yomi-self skill）；文件上限 4KB。
+
+### Removed
+
+- 按会话的规则文件 `<数据目录>/sessions/rules/<session_id>.md` 不再读取（由上面的群规则取代）；fork 会话不再复制规则文件。
+
 ### Changed
 
 - watch 观察者注入 system prompt 的契约精简为三句（watch 模式事实 / 输出不可见 / 需要时经 skill 发言），不再脚本化应答策略，也不含 skill 与锚点的操作提示（材料本就在 prompt 与消息头里）。

@@ -127,28 +127,26 @@ fn watch_section_states_the_contract() {
 }
 
 #[tokio::test]
-async fn session_rules_section_reads_verbatim_or_nothing() {
+async fn channel_rules_section_reads_verbatim_or_nothing() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let dir = tmp.path().join("sessions").join("rules");
+    let dir = tmp.path().join("channels").join("rules");
     std::fs::create_dir_all(&dir).unwrap();
 
     // No file → no injection (zero prompt noise).
-    assert!(crate::prompt::session_rules_section(tmp.path(), "sess_x")
+    assert!(crate::prompt::channel_rules_section(tmp.path(), "oc_x")
         .await
         .is_none());
 
     // Empty/whitespace-only file → no injection.
-    std::fs::write(dir.join("sess_empty.md"), "  \n ").unwrap();
-    assert!(
-        crate::prompt::session_rules_section(tmp.path(), "sess_empty")
-            .await
-            .is_none()
-    );
+    std::fs::write(dir.join("oc_empty.md"), "  \n ").unwrap();
+    assert!(crate::prompt::channel_rules_section(tmp.path(), "oc_empty")
+        .await
+        .is_none());
 
     // Present → verbatim content (outer whitespace trimmed).
-    std::fs::write(dir.join("sess_a.md"), "用中文回答。\n第二行规则\n").unwrap();
+    std::fs::write(dir.join("oc_a.md"), "用中文回答。\n第二行规则\n").unwrap();
     assert_eq!(
-        crate::prompt::session_rules_section(tmp.path(), "sess_a")
+        crate::prompt::channel_rules_section(tmp.path(), "oc_a")
             .await
             .as_deref(),
         Some("用中文回答。\n第二行规则")
@@ -156,8 +154,8 @@ async fn session_rules_section_reads_verbatim_or_nothing() {
 
     // Oversize → truncated at a char boundary with a marker.
     let big = "规".repeat(5000); // 15000 bytes > 4096
-    std::fs::write(dir.join("sess_big.md"), &big).unwrap();
-    let out = crate::prompt::session_rules_section(tmp.path(), "sess_big")
+    std::fs::write(dir.join("oc_big.md"), &big).unwrap();
+    let out = crate::prompt::channel_rules_section(tmp.path(), "oc_big")
         .await
         .unwrap();
     assert!(out.ends_with("(truncated)"));
@@ -165,19 +163,19 @@ async fn session_rules_section_reads_verbatim_or_nothing() {
 }
 
 #[tokio::test]
-async fn session_rules_section_rejects_unsafe_session_ids() {
-    // Session ids may come from client RPC strings: anything outside
+async fn channel_rules_section_rejects_unsafe_chat_ids() {
+    // Chat ids may come from platform payloads: anything outside
     // [A-Za-z0-9_-] must never be used to build a path.
     let tmp = tempfile::TempDir::new().unwrap();
-    let dir = tmp.path().join("sessions").join("rules");
+    let dir = tmp.path().join("channels").join("rules");
     std::fs::create_dir_all(&dir).unwrap();
 
     // 路径穿越：即便目标文件真实存在，也绝不能被读进 prompt。
-    // （rules 目录上两级即 tmp 根：`sessions/rules/../../secret.md`。）
+    // （rules 目录上两级即 tmp 根：`channels/rules/../../secret.md`。）
     std::fs::write(tmp.path().join("secret.md"), "TOP SECRET").unwrap();
     for evil in [
         "../../secret",
-        "../rules/sess_a",
+        "../rules/oc_a",
         "../../etc/passwd",
         "..",
         "a/b",
@@ -188,41 +186,50 @@ async fn session_rules_section_rejects_unsafe_session_ids() {
         "",
     ] {
         assert!(
-            crate::prompt::session_rules_section(tmp.path(), evil)
+            crate::prompt::channel_rules_section(tmp.path(), evil)
                 .await
                 .is_none(),
             "id {evil:?} must be rejected"
         );
     }
 
-    // 正常 ULID 风格 id（sess_/sub_ 前缀 + Crockford base32）不受影响。
-    std::fs::write(dir.join("sess_01J8QK7V3X.md"), "规则").unwrap();
+    // 正常平台 chat id（oc_ 前缀 / telegram 数字含负号）不受影响。
+    std::fs::write(dir.join("oc_01J8QK7V3X.md"), "规则").unwrap();
     assert_eq!(
-        crate::prompt::session_rules_section(tmp.path(), "sess_01J8QK7V3X")
+        crate::prompt::channel_rules_section(tmp.path(), "oc_01J8QK7V3X")
             .await
             .as_deref(),
         Some("规则")
     );
+    std::fs::write(dir.join("-100123456.md"), "tg 规则").unwrap();
+    assert_eq!(
+        crate::prompt::channel_rules_section(tmp.path(), "-100123456")
+            .await
+            .as_deref(),
+        Some("tg 规则")
+    );
 }
 
 #[tokio::test]
-async fn session_rules_section_treats_non_utf8_as_absent() {
+async fn channel_rules_section_treats_non_utf8_as_absent() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let dir = tmp.path().join("sessions").join("rules");
+    let dir = tmp.path().join("channels").join("rules");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("sess_bin.md"), [0x66, 0x80, 0x81, 0xfe]).unwrap();
+    std::fs::write(dir.join("oc_bin.md"), [0x66, 0x80, 0x81, 0xfe]).unwrap();
 
-    assert!(crate::prompt::session_rules_section(tmp.path(), "sess_bin")
+    assert!(crate::prompt::channel_rules_section(tmp.path(), "oc_bin")
         .await
         .is_none());
 }
 
 #[tokio::test]
-async fn compose_system_prompt_sub_agent_gets_rules_only() {
+async fn compose_system_prompt_without_rules_chat_ignores_rules_file() {
+    // Sub-agents and local sessions get no `rules_chat` from the
+    // conductor: even when a rules file exists it must not leak in.
     let tmp = tempfile::TempDir::new().unwrap();
-    let dir = tmp.path().join("sessions").join("rules");
+    let dir = tmp.path().join("channels").join("rules");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("sub_1.md"), "别跟用户抢话。").unwrap();
+    std::fs::write(dir.join("oc_1.md"), "别跟用户抢话。").unwrap();
 
     let prompt = compose_system_prompt(SystemPromptParts {
         base_prompt: "BASE".into(),
@@ -231,21 +238,20 @@ async fn compose_system_prompt_sub_agent_gets_rules_only() {
         enable_attachments: true,
         channel_routed: false,
         watch: None,
+        rules_chat: None,
         data_dir: tmp.path(),
-        session_id: "sub_1",
     })
     .await;
 
-    // 无契约段（输出不出 parent），RULE.md 原文照注。
-    assert_eq!(prompt, "BASE\n\n别跟用户抢话。");
+    assert_eq!(prompt, "BASE");
 }
 
 #[tokio::test]
 async fn compose_system_prompt_main_session_full_stack() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let dir = tmp.path().join("sessions").join("rules");
+    let dir = tmp.path().join("channels").join("rules");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("watch_oc_1.md"), "群里少说话。").unwrap();
+    std::fs::write(dir.join("oc_1.md"), "群里少说话。").unwrap();
 
     let prompt = compose_system_prompt(SystemPromptParts {
         base_prompt: "BASE".into(),
@@ -254,8 +260,8 @@ async fn compose_system_prompt_main_session_full_stack() {
         enable_attachments: true,
         channel_routed: true,
         watch: Some(("feishu", "oc_1")),
+        rules_chat: Some("oc_1"),
         data_dir: tmp.path(),
-        session_id: "watch_oc_1",
     })
     .await;
 
@@ -268,9 +274,9 @@ async fn compose_system_prompt_main_session_full_stack() {
 #[tokio::test]
 async fn compose_system_prompt_template_wins_rules_still_appended() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let dir = tmp.path().join("sessions").join("rules");
+    let dir = tmp.path().join("channels").join("rules");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("sub_t.md"), "模板也有规矩。").unwrap();
+    std::fs::write(dir.join("oc_t.md"), "模板也有规矩。").unwrap();
 
     let prompt = compose_system_prompt(SystemPromptParts {
         base_prompt: "BASE".into(),
@@ -279,8 +285,8 @@ async fn compose_system_prompt_template_wins_rules_still_appended() {
         enable_attachments: true,
         channel_routed: false,
         watch: None,
+        rules_chat: Some("oc_t"),
         data_dir: tmp.path(),
-        session_id: "sub_t",
     })
     .await;
 
@@ -294,12 +300,12 @@ async fn compose_system_prompt_without_rules_file_leaves_prompt_untouched() {
     let prompt = compose_system_prompt(SystemPromptParts {
         base_prompt: "BASE".into(),
         template_body: None,
-        is_sub_agent: true,
+        is_sub_agent: false,
         enable_attachments: false,
         channel_routed: false,
         watch: None,
+        rules_chat: Some("oc_ghost"),
         data_dir: tmp.path(),
-        session_id: "ghost",
     })
     .await;
 
