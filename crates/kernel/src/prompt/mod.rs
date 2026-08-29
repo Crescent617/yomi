@@ -41,8 +41,8 @@ pub(crate) const MENTIONS_SECTION: &str = "# Mentions\nTo mention a user in your
 pub(crate) fn watch_section(channel_name: &str, chat_id: &str) -> String {
     format!(
         "# Watch mode\n\
-         You are in watch mode for chat `{chat_id}` on channel `{channel_name}`: every message \
-         here is mirrored to you for observation.\n\
+         You are in watch mode for chat `{chat_id}` on channel `{channel_name}`: every \
+         non-command message here is mirrored to you for observation.\n\
          Nothing you output reaches the chat: your reply text is never posted, and no cards or \
          reactions mark your runs.\n\
          If you think a reply is needed, speak via skill."

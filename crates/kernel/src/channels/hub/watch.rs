@@ -43,6 +43,11 @@ use crate::channels::hub_routing::get_or_create_session_locked;
 /// `normal` session answer publicly). A missing row means watch is off
 /// — drop, never resurrect. A dangling row (alive, session gone) is
 /// healed by the locked get-or-create in the same critical section.
+/// (Residual micro-window, accepted: delete_session/gc takes no route
+/// lock, so a row+session delete can still land between the re-read
+/// and the locked create — the create then resurrects a just-ended
+/// watch row. Same window existed pre-refactor; locking delete_session
+/// isn't worth it.)
 pub(crate) async fn mirror_message(
     channel_name: &str,
     store: &Arc<dyn ChannelStore>,
@@ -52,10 +57,13 @@ pub(crate) async fn mirror_message(
     let chat_id = &msg.external_chat_id;
     let _guard =
         crate::utils::g_lock::g_lock(format!("channel_route:{channel_name}:{chat_id}")).await;
-    let watched = matches!(
-        store.find_mapping_kind(channel_name, chat_id).await,
-        Ok(Some((_, MappingKind::Watch)))
-    );
+    let watched = match store.find_mapping_kind(channel_name, chat_id).await {
+        Ok(row) => matches!(row, Some((_, MappingKind::Watch))),
+        Err(e) => {
+            warn!(channel = %channel_name, chat_id = %chat_id, error = %e, "watch mapping lookup failed; mirror dropped");
+            return;
+        }
+    };
     if !watched {
         info!(channel = %channel_name, chat_id = %chat_id, "not watched at tee time; mirror dropped");
         return;

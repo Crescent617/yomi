@@ -1104,7 +1104,7 @@ pub(crate) async fn handle_watch_command(
         )
         .await?;
         Ok(Some(
-            "👁 Watch on — every message here goes to this chat's session as its observer. \
+            "👁 Watch on — every non-command message here goes to this chat's session as its observer. \
              It decides for itself when to speak (via skill) or stay silent; \
              @-mentions no longer trigger conversation replies while watch is on. \
              `/watch off` to stop."

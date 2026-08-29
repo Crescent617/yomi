@@ -110,11 +110,11 @@ async fn skill_section_indexes_only_top_level_skills() {
 #[test]
 fn watch_section_states_the_contract() {
     let section = crate::prompt::watch_section("feishu", "oc_1");
-    // The mode + the chat it watches.
+    // The mode + the chat it watches (commands never mirror).
     assert!(section.contains("watch mode"));
     assert!(section.contains("oc_1"));
     assert!(section.contains("feishu"));
-    assert!(section.contains("mirrored"));
+    assert!(section.contains("non-command message"));
     // The hard boundary: nothing it outputs reaches the chat.
     assert!(section.contains("never posted"));
     // The only way out: speak via skill — no operational hints (the
