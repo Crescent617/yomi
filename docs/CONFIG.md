@@ -100,6 +100,7 @@ KIMI_AGENT_API_KEY = "sk-..."
 | `log_dir` | string | 日志目录 | `<data_dir>/logs` |
 | `skill_folders` | string[] | 技能目录，按优先级从低到高排列：同名 skill 由靠后的目录胜出 | `~/.agents/skills`、`<data_dir>/skills` |
 | `max_checkpoints` | integer | 每会话检查点上限 | `5` |
+| `socket_auth_hash` | string | daemon socket 鉴权哈希（`blake3:<hex>`，`yomi daemon auth-hash --generate` 生成）；仅 ws/wss 监听校验，unix socket 靠文件权限；未配置 = 无鉴权 | — |
 
 ---
 
@@ -218,6 +219,9 @@ app_secret = "..."
 | `YOMI_SKILL_FOLDERS` | 技能目录（逗号分隔） | — |
 | `YOMI_STREAM_MAX_RETRIES` | 单轮 streaming 重试上限 | `20` |
 | `YOMI_SOCKET` | daemon socket 地址 | — |
+| `YOMI_EXTRA_SOCKET` | daemon 额外监听地址（单值，如 `ws://0.0.0.0:57231` 供反代/远端访问，与主 ws 一样按 `socket_auth_hash` 校验） | — |
+| `YOMI_SOCKET_AUTH_HASH` | socket 鉴权哈希（覆盖 `socket_auth_hash`） | — |
+| `YOMI_SOCKET_AUTH` | 客户端连 ws/wss daemon 的明文 token | — |
 | `YOMI_GC_RETENTION_DAYS` / `YOMI_GC_AUTO` | 同 `[gc]` 配置 | — |
 | `RUST_LOG` | 日志级别 | — |
 

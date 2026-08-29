@@ -160,6 +160,13 @@
       },
       "additionalProperties": false
     },
+    "socket_auth_hash": {
+      "description": "Socket auth password hash (`blake3:<hex>`), enforced on ws/wss transports only; unix sockets rely on filesystem permissions. YOMI_SOCKET_AUTH_HASH overrides. Omit = no auth. Generate with `yomi daemon auth-hash --generate`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "channels": {
       "description": "External platform channels (Telegram, Feishu, etc.).",
       "type": "array",
