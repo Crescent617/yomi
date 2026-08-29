@@ -385,6 +385,8 @@ async fn test_non_thread_session_does_not_inherit_model_key() {
     assert_eq!(model_key, None);
 }
 
+// Needs a compilable platform adapter; telegram is the test convention.
+#[cfg(feature = "telegram")]
 #[tokio::test]
 async fn test_start_and_shutdown() {
     let (_pool, store) = create_test_pool().await;
@@ -446,6 +448,8 @@ async fn test_start_and_shutdown() {
     cancel.cancel();
 }
 
+// Needs a compilable platform adapter; telegram is the test convention.
+#[cfg(feature = "telegram")]
 #[tokio::test]
 async fn test_disabled_channel_skipped() {
     let (_pool, store) = create_test_pool().await;
@@ -482,6 +486,8 @@ async fn test_disabled_channel_skipped() {
     cancel.cancel();
 }
 
+// Needs a compilable platform adapter; telegram is the test convention.
+#[cfg(feature = "telegram")]
 #[tokio::test]
 async fn test_skip_existing_channel() {
     let (_pool, store) = create_test_pool().await;
@@ -714,6 +720,8 @@ async fn flush_reply_without_text_sends_nothing() {
     assert!(mock.outgoing.lock().await.is_empty());
 }
 
+// Needs a compilable platform adapter; telegram is the test convention.
+#[cfg(feature = "telegram")]
 #[tokio::test]
 async fn test_skip_duplicate_channel() {
     let (_pool, store) = create_test_pool().await;
@@ -7017,6 +7025,7 @@ async fn passive_receipt_skips_when_observability_off() {
 /// YOMI_E2E_THREAD=omt_… YOMI_E2E_ROOT=om_… YOMI_E2E_TRIGGER=om_… \
 /// cargo test -p kernel e2e_feishu -- --ignored --nocapture
 /// ```
+#[cfg(feature = "feishu")]
 fn e2e_vars() -> Option<[String; 5]> {
     let keys = [
         "YOMI_E2E_FEISHU_APP_ID",
@@ -7035,6 +7044,7 @@ fn e2e_vars() -> Option<[String; 5]> {
 
 /// Run `context_prefix` for a fresh-session, in-thread trigger replying
 /// to the root, against the real Feishu adapter.
+#[cfg(feature = "feishu")]
 async fn e2e_setup(
     app_id: String,
     app_secret: String,
@@ -7065,6 +7075,7 @@ async fn e2e_setup(
 /// block on a fresh session, image included — exactly once. Point the
 /// env vars at a thread whose root is an image message (exercises the
 /// download path too).
+#[cfg(feature = "feishu")]
 #[tokio::test]
 #[ignore = "hits the real Feishu API; env-var driven, run manually"]
 async fn e2e_feishu_fresh_thread_root_delivered_once() {
@@ -7111,6 +7122,7 @@ async fn e2e_feishu_fresh_thread_root_delivered_once() {
 /// quote chain must arrive — the ancestor (an image message, exercising
 /// the download path) first, then the root's text. Point the env vars
 /// at such a thread (root = a text quote-reply of an image message).
+#[cfg(feature = "feishu")]
 #[tokio::test]
 #[ignore = "hits the real Feishu API; env-var driven, run manually"]
 async fn e2e_feishu_quoted_root_chain() {
@@ -8728,6 +8740,8 @@ async fn get_or_create_session_concurrent_same_key_single_creator() {
 /// `set_channel_watch` query/switch round trip (the RPC's hub core):
 /// on eagerly creates the observer, repeated on reuses it, off pauses
 /// (row kept), re-on resumes the same session.
+// Needs a compilable platform adapter; telegram is the test convention.
+#[cfg(feature = "telegram")]
 #[tokio::test]
 async fn set_channel_watch_query_and_switch_round_trip() {
     let (_pool, store) = create_test_pool().await;

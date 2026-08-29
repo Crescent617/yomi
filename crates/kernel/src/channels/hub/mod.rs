@@ -229,7 +229,7 @@ impl ChannelHub {
             }
         }
 
-        let adapter = build_adapter(&config.platform);
+        let adapter = build_adapter(&config.platform)?;
         let status = Arc::new(AtomicU8::new(STATUS_CONNECTING));
 
         let (incoming_tx, incoming_rx) = mpsc::channel::<ChannelEvent>(256);
@@ -969,14 +969,25 @@ async fn routing_for(
     }
 }
 
-fn build_adapter(platform: &crate::channels::PlatformConfig) -> Arc<dyn PlatformAdapter> {
+fn build_adapter(
+    platform: &crate::channels::PlatformConfig,
+) -> std::result::Result<Arc<dyn PlatformAdapter>, crate::channels::ChannelError> {
     match platform {
-        crate::channels::PlatformConfig::Telegram { token } => Arc::new(
+        #[cfg(feature = "telegram")]
+        crate::channels::PlatformConfig::Telegram { token } => Ok(Arc::new(
             crate::channels::telegram::TelegramAdapter::new(token.clone()),
-        ),
-        crate::channels::PlatformConfig::Feishu { app_id, app_secret } => Arc::new(
+        )),
+        #[cfg(feature = "feishu")]
+        crate::channels::PlatformConfig::Feishu { app_id, app_secret } => Ok(Arc::new(
             crate::channels::feishu::FeishuAdapter::new(app_id.clone(), app_secret.clone()),
-        ),
+        )),
+        // Config may name a platform this binary was built without — the
+        // feature and the platform share one name, so `{0}` serves both.
+        #[allow(unreachable_patterns)]
+        _ => Err(crate::channels::ChannelError::Config(format!(
+            "platform '{}' is not compiled in this build (kernel feature `{0}`)",
+            platform.name()
+        ))),
     }
 }
 

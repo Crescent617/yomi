@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) mod utils;
+#[cfg(feature = "feishu")]
 pub(crate) use utils::MAX_RETRY_DELAY;
 
 pub(crate) mod attachments;
@@ -27,7 +28,10 @@ pub(crate) mod render;
 pub mod hub;
 
 pub(crate) use cards::{approval, ask, cron_card, mailbox, settings};
-pub(crate) use platform::{feishu, feishu_events, feishu_text, telegram};
+#[cfg(feature = "telegram")]
+pub(crate) use platform::telegram;
+#[cfg(feature = "feishu")]
+pub(crate) use platform::{feishu, feishu_events, feishu_text};
 pub(crate) use render::{obs, reply};
 
 /// Why a channel message was rejected by access control.
@@ -231,9 +235,15 @@ pub enum PlatformConfig {
 }
 
 /// Default platform for CLI channel selection (currently the only
-/// thread-capable one). Shared by the CLI flag and the kernel-side
-/// Local/remote defaults so they can't drift.
-pub const DEFAULT_PLATFORM: &str = "feishu";
+/// thread-capable one). Follows the compiled feature set so a build
+/// without feishu doesn't default into a compiled-out platform. Shared
+/// by the CLI flag and the kernel-side Local/remote defaults so they
+/// can't drift.
+pub const DEFAULT_PLATFORM: &str = if cfg!(feature = "feishu") {
+    "feishu"
+} else {
+    "telegram"
+};
 
 impl PlatformConfig {
     /// Ack reaction for a message accepted for processing. Values are
@@ -246,13 +256,20 @@ impl PlatformConfig {
         }
     }
 
+    /// Lowercase platform name (`feishu` / `telegram`) — also the kernel
+    /// cargo feature compiling this platform's adapter, so the
+    /// compiled-out error message can name both at once.
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            Self::Feishu { .. } => "feishu",
+            Self::Telegram { .. } => "telegram",
+        }
+    }
+
     /// Case-insensitive platform-name match (`feishu` / `telegram`) for
     /// CLI-side channel selection.
     pub(crate) fn name_is(&self, name: &str) -> bool {
-        match self {
-            Self::Feishu { .. } => name.eq_ignore_ascii_case("feishu"),
-            Self::Telegram { .. } => name.eq_ignore_ascii_case("telegram"),
-        }
+        self.name().eq_ignore_ascii_case(name)
     }
 
     /// Ack reaction for a `/queue`d message — "noted, queued for later".

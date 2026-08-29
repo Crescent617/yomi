@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- kernel 新增编译期 cargo features `feishu` / `telegram`（`all-channels` 为默认、CLI/GUI/TUI 行为不变）：channel 平台适配器可按需裁剪（`--no-default-features --features feishu` 只编飞书）；二进制未编译某平台时，config 中该平台的 channel 启动报 Config 错误，其余 channel 不受影响。
+
 - daemon 以 ws/wss 监听但未配置 `socket_auth_hash` 时，启动日志新增 warning 提示监听处于无鉴权状态并给出配置指引（`yomi daemon auth-hash --generate` + 客户端 `YOMI_SOCKET_AUTH`）；GUI 内嵌 daemon 同样生效。
 
 ## [0.10.4] - 2026-08-29

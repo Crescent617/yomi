@@ -71,6 +71,7 @@ just ci
 
 ### kernel
 - **Env Vars**: should follow prefix `kernel::ENV_PREFIX`
+- **Channel features**: 平台适配器按同名 cargo feature 裁剪（`feishu` / `telegram`，默认 `all-channels` 全开）；`PlatformConfig` 等 serde 类型不随 feature 门控，编译外平台在 `build_adapter` 报 Config 错误
 
 ### gui
 - using tauri with npm as pkg manager

@@ -20,9 +20,9 @@ chrono = { workspace = true }
 ulid = { workspace = true }
 rand = { workspace = true }
 
-lark-websocket-protobuf = { workspace = true }
+lark-websocket-protobuf = { workspace = true, optional = true }
 
-prost = { workspace = true }
+prost = { workspace = true, optional = true }
 
 tokio-util = { workspace = true }
 futures = { workspace = true, features = ["std"] }
@@ -42,7 +42,7 @@ ignore = { workspace = true }
 globset = { workspace = true }
 base64 = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png", "gif", "webp"] }
-lru = { workspace = true }
+lru = { workspace = true, optional = true }
 html2text = { workspace = true }
 urlencoding = { workspace = true }
 scraper = { workspace = true }
@@ -56,11 +56,17 @@ dashmap = { workspace = true }
 tokio-tungstenite = { workspace = true, features = ["connect", "rustls-tls-native-roots"] }
 croner = { workspace = true }
 mime_guess = { workspace = true }
-teloxide-core = { workspace = true }
+teloxide-core = { workspace = true, optional = true }
 tempfile = { workspace = true }
 
 [lints]
 workspace = true
+
+[features]
+default = ["all-channels"]
+all-channels = ["feishu", "telegram"]
+feishu = ["dep:lark-websocket-protobuf", "dep:prost", "dep:lru"]
+telegram = ["dep:teloxide-core"]
 
 [dev-dependencies]
 rustls = { workspace = true, features = ["ring"] }

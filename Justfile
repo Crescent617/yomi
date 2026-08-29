@@ -33,6 +33,9 @@ test:
 
 check:
     cargo check
+    cargo check -p kernel --no-default-features
+    cargo check -p kernel --no-default-features --features feishu
+    cargo check -p kernel --no-default-features --features telegram
 
 # Run with tracing debug logging
 debug *ARGS:

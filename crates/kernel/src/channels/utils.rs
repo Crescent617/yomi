@@ -1,6 +1,7 @@
 //! Shared utilities for platform adapters.
 
 /// Maximum retry delay for platform connection failures (shared across adapters).
+#[cfg(feature = "feishu")]
 #[allow(clippy::duration_suboptimal_units)]
 pub(crate) const MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(300);
 
@@ -65,6 +66,7 @@ pub(crate) fn contains_mention(text: &str) -> bool {
 }
 
 /// A file read and validated for platform upload (see [`read_upload`]).
+#[cfg(any(feature = "feishu", feature = "telegram"))]
 pub(crate) struct UploadFile {
     pub bytes: Vec<u8>,
     pub file_name: String,
@@ -77,6 +79,7 @@ pub(crate) struct UploadFile {
 /// `image_kind`/`file_kind` name the two classes in user-facing errors
 /// (Feishu: image/file; Telegram: photo/document). The delivery file name
 /// falls back to `file` when the path has no usable name.
+#[cfg(any(feature = "feishu", feature = "telegram"))]
 pub(crate) async fn read_upload(
     path: &std::path::Path,
     image_max_bytes: usize,
