@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-08-29
+
 ### Added
 
 - 群规则文件 `<数据目录>/channels/rules/<chat_id>.md`：非空即在 spawn 时原文注入该群所有会话的 system prompt（chat、thread、观察者共享同一份，无包装），天然免疫上下文压缩；改动在下次 spawn 生效（agent 空闲约 2 分钟卸载后），适合记录这个群的持久偏好（agent 可经 write 工具自行维护，契约见 yomi-self skill）；文件上限 4KB。
