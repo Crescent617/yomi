@@ -58,6 +58,9 @@
 
   function handleKeydown(e: KeyboardEvent) {
     if (!open || !isTop()) return;
+    // Key auto-repeat (a held key) must not re-fire submit/close: one
+    // physical keypress, one decision.
+    if (e.repeat) return;
     if (e.key === "Escape") {
       e.preventDefault();
       onClose?.();

@@ -20,10 +20,12 @@ import * as events from "../events";
 import * as updateCheck from "../update-check.svelte";
 import * as mermaid from "../mermaid";
 import * as shareCard from "../share-card";
+import * as commandPalette from "../command-palette.svelte";
 import * as MessageList from "../components/chat/MessageList.svelte";
 import * as StatusBar from "../components/layout/StatusBar.svelte";
 import * as MermaidBlock from "../components/chat/MermaidBlock.svelte";
 import * as CodeBlock from "../components/chat/CodeBlock.svelte";
+import * as CommandPalette from "../components/ui/CommandPalette.svelte";
 
 export const api = {
   svelte,
@@ -35,10 +37,12 @@ export const api = {
   updateCheck,
   mermaid,
   shareCard,
+  commandPalette,
   MessageList,
   StatusBar,
   MermaidBlock,
   CodeBlock,
+  CommandPalette,
 };
 
 (window as unknown as { __e2e: typeof api }).__e2e = api;

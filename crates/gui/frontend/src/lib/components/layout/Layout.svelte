@@ -18,6 +18,7 @@
   import ConfigPanel from "./ConfigPanel.svelte";
   import StatusBar from "./StatusBar.svelte";
   import ShareCardDialog from "../chat/ShareCardDialog.svelte";
+  import CommandPalette from "../ui/CommandPalette.svelte";
   import { startClock } from "../../clock.svelte";
   import { loadFavorites } from "../../favorites.svelte";
 
@@ -275,3 +276,4 @@
 </div>
 
 <ShareCardDialog />
+<CommandPalette />

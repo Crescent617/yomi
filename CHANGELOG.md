@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- GUI 新增命令面板：`⌘P`（macOS）/ `Ctrl+P` 打开即模糊搜索会话（Enter 跳转），输入 `>` 或 `⌘⇧P` 进入命令模式——新建/Fork/删除/清空会话、编辑内核配置、重启 Kernel、查看日志、用量/收藏/自动化/Agents 面板、切换主题，删除与重启带二次确认。
+
 - 恢复按会话规则文件 `<数据目录>/sessions/rules/<session_id>.md`（与 channel rules 并列）：spawn 时原文注入该会话 system prompt，紧跟 channel rules 之后（冲突以会话规则为准）；这是 local/GUI 会话唯一的规则层，fork 会话会复制规则文件，改动在下次 spawn 生效（agent 空闲约 2 分钟卸载后）。
 
 - kernel 新增编译期 cargo feature `websearch`（默认开）：内建 `web_search` 工具及 duckduckgo/scraper/html2text/urlencoding 依赖可整体裁掉（`--no-default-features`），裁剪后工具不再注册、其余工具不受影响。
