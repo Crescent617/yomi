@@ -226,52 +226,69 @@ impl KernelServer {
         });
     }
 
-    /// Run the server on an already-bound listener.
+    /// Run the server on already-bound listeners.
     ///
     /// Returns after either `shutdown` or the server's internal token is
     /// cancelled. All background tasks and the kernel are stopped before
     /// returning, so callers only need to wait for connections to drain.
     pub async fn serve(
         &self,
-        listener: crate::transport::Listener,
+        listeners: Vec<crate::transport::Listener>,
         shutdown: tokio_util::sync::CancellationToken,
     ) -> Result<()> {
-        loop {
-            tokio::select! {
-                biased;
-                () = self.shutdown.cancelled() => break,
-                () = shutdown.cancelled() => break,
-                result = listener.accept() => {
-                    let (stream, _) = match result {
-                        Ok(pair) => pair,
-                        Err(e) => {
-                            tracing::warn!("Accept error: {e}");
-                            tokio::time::sleep(Duration::from_millis(100)).await;
-                            continue;
+        // One accept task per listener; every connection lands in the
+        // same handler regardless of which door it came through.
+        for listener in listeners {
+            let server = Arc::new(self.clone());
+            let cancel = self.shutdown.child_token();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        biased;
+                        () = cancel.cancelled() => break,
+                        result = listener.accept() => {
+                            let (stream, _) = match result {
+                                Ok(pair) => pair,
+                                Err(e) => {
+                                    tracing::warn!("Accept error: {e}");
+                                    tokio::time::sleep(Duration::from_millis(100)).await;
+                                    continue;
+                                }
+                            };
+                            server.spawn_connection(stream);
                         }
-                    };
-                    let conn_id = self
-                        .next_conn_id
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let server = Arc::new(self.clone());
-                    let connections = Arc::clone(&self.connections);
-                    let cancel = self.shutdown.child_token();
-                    connections.insert(conn_id, cancel.clone());
-                    tokio::spawn(async move {
-                        if let Err(e) = server.handle_connection(stream, cancel).await {
-                            tracing::warn!("Connection {conn_id} error: {e}");
-                        }
-                        connections.remove(&conn_id);
-                        tracing::debug!("Connection {conn_id} closed");
-                    });
+                    }
                 }
-            }
+            });
         }
-        tracing::info!("Server shutting down, accept loop stopped");
+        tokio::select! {
+            biased;
+            () = self.shutdown.cancelled() => {},
+            () = shutdown.cancelled() => {},
+        }
+        tracing::info!("Server shutting down, accept loops stopped");
         // Idempotent: cancels all connections/background tasks and stops the
-        // kernel (含持久化排空) regardless of which token ended the loop.
+        // kernel (含持久化排空) regardless of which token ended the wait.
         self.shutdown().await;
         Ok(())
+    }
+
+    /// Track and serve one accepted connection.
+    fn spawn_connection(self: &Arc<Self>, stream: crate::transport::Stream) {
+        let conn_id = self
+            .next_conn_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let server = Arc::clone(self);
+        let connections = Arc::clone(&self.connections);
+        let cancel = self.shutdown.child_token();
+        connections.insert(conn_id, cancel.clone());
+        tokio::spawn(async move {
+            if let Err(e) = server.handle_connection(stream, cancel).await {
+                tracing::warn!("Connection {conn_id} error: {e}");
+            }
+            connections.remove(&conn_id);
+            tracing::debug!("Connection {conn_id} closed");
+        });
     }
 
     pub async fn shutdown(&self) {

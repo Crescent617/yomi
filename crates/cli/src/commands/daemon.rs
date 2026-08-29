@@ -72,17 +72,20 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
             }
 
             let addr = crate::daemon::socket_addr();
+            let extra_addr = kernel::transport::extra_socket_addr();
 
-            // Socket auth only applies to ws/wss listeners; unix sockets
-            // rely on filesystem permissions, so skip the env entirely
-            // there. A malformed hash would start fine yet reject every
-            // client (fail-closed verifier) with no diagnosable signal —
+            // Socket auth applies to ws/wss listeners — primary OR extra;
+            // unix listeners ignore it (filesystem permissions). A
+            // malformed hash would start fine yet reject every client
+            // (fail-closed verifier) with no diagnosable signal —
             // validate the format up front and fail fast instead.
-            let network = matches!(
-                addr,
-                kernel::transport::SocketAddr::Ws(_) | kernel::transport::SocketAddr::Wss(_)
-            );
-            let auth = match (network, config.socket_auth_hash.as_deref()) {
+            let any_ws = [&addr].into_iter().chain(extra_addr.iter()).any(|a| {
+                matches!(
+                    a,
+                    kernel::transport::SocketAddr::Ws(_) | kernel::transport::SocketAddr::Wss(_)
+                )
+            });
+            let auth = match (any_ws, config.socket_auth_hash.as_deref()) {
                 (true, Some(hash)) => {
                     anyhow::ensure!(
                         kernel::transport::is_valid_hash_format(hash),
@@ -95,9 +98,13 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
                 _ => None,
             };
 
-            // Bind listener FIRST so clients can connect while we initialize.
-            let listener = kernel::transport::bind(&addr, auth).await?;
+            // Bind listeners FIRST so clients can connect while we initialize.
+            let mut listeners = vec![kernel::transport::bind(&addr, auth.clone()).await?];
             tracing::info!("Daemon listening on {addr}");
+            if let Some(extra) = &extra_addr {
+                listeners.push(kernel::transport::bind(extra, auth).await?);
+                tracing::info!("Daemon listening on {extra} (extra)");
+            }
 
             // Write PID file so external tools can find and signal us.
             if let Some(parent) = pid_file.parent() {
@@ -161,7 +168,7 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
                 });
             }
 
-            let serve_result = server.serve(listener, shutdown).await;
+            let serve_result = server.serve(listeners, shutdown).await;
             let start = tokio::time::Instant::now();
             while server.connection_count() > 0 && start.elapsed() < SHUTDOWN_WAIT_TIMEOUT {
                 tokio::time::sleep(SHUTDOWN_POLL_INTERVAL).await;
@@ -170,8 +177,10 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
             // Remove PID and socket files so external lifecycle tools
             // (graceful_shutdown, spawn_daemon, etc.) know we've exited.
             let _ = tokio::fs::remove_file(crate::daemon::pid_file_path()).await;
-            if let kernel::transport::SocketAddr::Unix(path) = &addr {
-                let _ = tokio::fs::remove_file(path).await;
+            for a in std::iter::once(&addr).chain(extra_addr.iter()) {
+                if let kernel::transport::SocketAddr::Unix(path) = a {
+                    let _ = tokio::fs::remove_file(path).await;
+                }
             }
 
             tracing::info!(pid = std::process::id(), "Daemon shutting down gracefully");

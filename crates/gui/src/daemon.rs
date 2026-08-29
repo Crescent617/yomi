@@ -205,7 +205,7 @@ async fn spawn_daemon_inner() -> Result<kernel::config::Config> {
     let addr_clone = addr.clone();
     let serve_shutdown = shutdown.clone();
     let serve_handle = tokio::spawn(async move {
-        let result = server_clone.serve(listener, serve_shutdown).await;
+        let result = server_clone.serve(vec![listener], serve_shutdown).await;
         if let Err(e) = result {
             tracing::error!("Daemon server error: {e}");
         }

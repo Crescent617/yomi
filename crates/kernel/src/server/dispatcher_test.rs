@@ -26,7 +26,7 @@ async fn setup_with_config_path(
     let shutdown = tokio_util::sync::CancellationToken::new();
     let serve_shutdown = shutdown.clone();
     tokio::spawn(async move {
-        let _ = server.serve(listener, serve_shutdown).await;
+        let _ = server.serve(vec![listener], serve_shutdown).await;
     });
     let client = RemoteKernel::connect(&addr).await.unwrap();
     (client, tmp, shutdown)
@@ -223,7 +223,7 @@ async fn setup_ws_auth(
     let shutdown = tokio_util::sync::CancellationToken::new();
     let serve_shutdown = shutdown.clone();
     tokio::spawn(async move {
-        let _ = server.serve(listener, serve_shutdown).await;
+        let _ = server.serve(vec![listener], serve_shutdown).await;
     });
     (addr, tmp, shutdown)
 }
@@ -250,6 +250,45 @@ async fn test_remote_kernel_connect_with_auth() {
         );
     }
 
+    shutdown.cancel();
+}
+
+#[tokio::test]
+async fn test_serve_accepts_connections_on_all_listeners() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..Config::default()
+    };
+    config.finalize();
+    let kernel = crate::build_kernel(&config, false).await.unwrap();
+    let server = crate::server::KernelServer::with_lifecycle(kernel, None, None);
+    server.start(&config).await;
+
+    let unix_addr = crate::transport::SocketAddr::Unix(tmp.path().join("daemon.sock"));
+    let unix_listener = crate::transport::bind(&unix_addr, None).await.unwrap();
+    let ws_listener = crate::transport::bind(
+        &crate::transport::SocketAddr::Ws("127.0.0.1:0".into()),
+        None,
+    )
+    .await
+    .unwrap();
+    let port = ws_listener.local_addr().unwrap().port();
+    let ws_addr = crate::transport::SocketAddr::Ws(format!("127.0.0.1:{port}"));
+
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let serve_shutdown = shutdown.clone();
+    tokio::spawn(async move {
+        let _ = server
+            .serve(vec![unix_listener, ws_listener], serve_shutdown)
+            .await;
+    });
+
+    // Every bound door accepts and serves its own client.
+    for addr in [unix_addr, ws_addr] {
+        let client = RemoteKernel::connect(&addr).await.unwrap();
+        client.check_ready().await.unwrap();
+    }
     shutdown.cancel();
 }
 

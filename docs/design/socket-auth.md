@@ -27,7 +27,7 @@ daemon 的 IPC socket 此前完全无鉴权：任何能连上 socket 的进程�
 - 爆破防护：握手失败时 401 立即发给客户端，随后 accept 循环固定睡眠 300ms 再接受下一条连接——失败握手在 accept 循环中串行，在线爆破速率全局封顶 ~3 次/秒（与攻击并行度无关；代价是洪泛时正常连接排队，个人 daemon 可接受）。离线防护依赖密码熵：`yomi daemon auth-hash --generate` 生成 128-bit 随机 token（推荐路径），短密码会触发告警。
 - 哈希生成：`yomi daemon auth-hash [密码]`（无参从 stdin 读；`--generate` 打印随机 token + 哈希）。
 - wire 协议**零改动**（proto 仍为 28）：旧客户端连未启用鉴权的 daemon 完全不受影响。
-- 部署形态：跨机器时 yomi 仍只 bind `ws://`，TLS 由反代（caddy/nginx）终结，客户端走 `wss://`；`Authorization` 头标准透传。明文密码只在 ws 裸传时可被嗅探——跨机器请套 TLS。
+- 部署形态：跨机器时 yomi 仍只 bind `ws://`，TLS 由反代（caddy/nginx）终结，客户端走 `wss://`；`Authorization` 头标准透传。明文密码只在 ws 裸传时可被嗅探——跨机器请套 TLS。需要"本机 unix + 对外 ws"双口并存时用 `YOMI_EXTRA_SOCKET`（env，单值）：主 socket 保持本机发现入口（unix 免鉴权），额外 ws 口照常全量校验——同机反代后 daemon 看到的对端虽是回环，但 ws 无回环豁免，鉴权不受影响。
 
 ## 注意点
 

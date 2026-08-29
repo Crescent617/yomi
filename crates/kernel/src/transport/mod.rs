@@ -116,6 +116,16 @@ pub fn socket_addr() -> SocketAddr {
     }
 }
 
+/// One optional *additional* listen address for the daemon, from
+/// `YOMI_EXTRA_SOCKET`. The primary socket ([`socket_addr`]) stays the
+/// local clients' discovery entry point; the extra serves a second
+/// audience (e.g. `ws://0.0.0.0:57231` behind a reverse proxy) with the
+/// same auth rules as any ws/wss listener.
+pub fn extra_socket_addr() -> Option<SocketAddr> {
+    trimmed_env_non_empty(&format!("{}EXTRA_SOCKET", crate::ENV_PREFIX))
+        .map(|val| val.parse().expect("Invalid YOMI_EXTRA_SOCKET format"))
+}
+
 /// Socket auth token presented by clients on ws/wss transports
 /// (`Authorization: Bearer <token>`), from `YOMI_SOCKET_AUTH`.
 pub fn socket_auth_token() -> Option<String> {
