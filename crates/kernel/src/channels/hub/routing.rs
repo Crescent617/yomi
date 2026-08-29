@@ -366,6 +366,33 @@ pub(crate) async fn get_or_create_session(
     // 孤儿（消息静默路由到脱离映射的 session）。锁与 ext_route 同键空间。
     let _guard =
         crate::utils::g_lock::g_lock(format!("channel_route:{channel_name}:{mapping_key}")).await;
+    get_or_create_session_locked(
+        channel_name,
+        store,
+        kernel,
+        chat_id,
+        mapping_key,
+        reply_msg_id,
+        kind,
+    )
+    .await
+}
+
+/// The lock-free kernel of [`get_or_create_session`]. **The caller must
+/// hold the route lock** (`channel_route:{channel_name}:{mapping_key}`,
+/// see `g_lock`) across the call — check-then-act is atomic only under
+/// it. Exists for callers that already hold the lock for a wider
+/// critical section (the watch tee / kind flip), since `g_lock` is not
+/// re-entrant.
+pub(crate) async fn get_or_create_session_locked(
+    channel_name: &str,
+    store: &Arc<dyn ChannelStore>,
+    kernel: &Kernel,
+    chat_id: &str,
+    mapping_key: &str,
+    reply_msg_id: Option<&str>,
+    kind: crate::channels::MappingKind,
+) -> Result<(SessionId, bool)> {
     if let Some(sid) = store.find_mapping(channel_name, mapping_key).await? {
         // Dangling-mapping guard: the session may be gone (manual
         // delete_session, a gc purge interrupted between the session and

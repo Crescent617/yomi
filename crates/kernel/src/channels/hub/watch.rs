@@ -26,7 +26,7 @@ use crate::types::ContentBlock;
 
 use crate::channels::{ChannelMessage, ChannelStore, MappingKind};
 
-use crate::channels::hub_routing::get_or_create_session;
+use crate::channels::hub_routing::get_or_create_session_locked;
 
 /// Mirror one message into the watched chat's session: assemble the
 /// content and steer it in. Fire-and-forget semantics for the caller —
@@ -37,13 +37,12 @@ use crate::channels::hub_routing::get_or_create_session;
 /// serial dispatch of the conversation path it shadows.
 ///
 /// The tee fires on the gate-time snapshot, then re-reads the live row
-/// under the route lock — the same lock the kind flip holds across its
-/// update+cancel+drain (see [`set_channel_watch_by_name`]), so an
-/// off/gc can never interleave between the re-read and the steer (which
-/// would make a back-to-`normal` session answer publicly). A missing
-/// row means watch is off — drop, never resurrect. Only a dangling row
-/// (alive, session gone) heals, outside the lock (get_or_create takes
-/// it internally).
+/// and steers under a single route lock — the same lock the kind flip
+/// holds across its read-flip-reset (see [`set_channel_watch_by_name`]),
+/// so an off/gc can never interleave (which would make a back-to-
+/// `normal` session answer publicly). A missing row means watch is off
+/// — drop, never resurrect. A dangling row (alive, session gone) is
+/// healed by the locked get-or-create in the same critical section.
 pub(crate) async fn mirror_message(
     channel_name: &str,
     store: &Arc<dyn ChannelStore>,
@@ -51,41 +50,17 @@ pub(crate) async fn mirror_message(
     msg: &ChannelMessage,
 ) {
     let chat_id = &msg.external_chat_id;
-    let lock_key = format!("channel_route:{channel_name}:{chat_id}");
-    let mut heal = false;
-    {
-        let _guard = crate::utils::g_lock::g_lock(lock_key.clone()).await;
-        match store.find_mapping_kind(channel_name, chat_id).await {
-            Ok(Some((sid, MappingKind::Watch))) => {
-                match kernel.session_store().await.get(&sid).await {
-                    Ok(Some(_)) => {
-                        // Fast path: steer under the lock — one sqlite
-                        // read + one existence read per message.
-                        kernel.send_steer(&sid, mirror_content(msg)).await;
-                        info!(channel = %channel_name, chat_id = %chat_id, session_id = %sid.0, "mirrored to watch session");
-                    }
-                    _ => {
-                        warn!(channel = %channel_name, chat_id = %chat_id, "watch mapping dangles to a deleted session; recreating");
-                        if let Err(e) = store.delete_mapping(channel_name, chat_id).await {
-                            warn!(channel = %channel_name, error = %e, "stale watch mapping delete failed");
-                        }
-                        heal = true;
-                    }
-                }
-            }
-            Ok(Some((_, MappingKind::Normal))) => {
-                info!(channel = %channel_name, chat_id = %chat_id, "watch ended between gate and tee; mirror dropped");
-            }
-            Ok(None) => {}
-            Err(e) => {
-                warn!(channel = %channel_name, chat_id = %chat_id, error = %e, "watch mapping lookup failed");
-            }
-        }
-    }
-    if !heal {
+    let _guard =
+        crate::utils::g_lock::g_lock(format!("channel_route:{channel_name}:{chat_id}")).await;
+    let watched = matches!(
+        store.find_mapping_kind(channel_name, chat_id).await,
+        Ok(Some((_, MappingKind::Watch)))
+    );
+    if !watched {
+        info!(channel = %channel_name, chat_id = %chat_id, "not watched at tee time; mirror dropped");
         return;
     }
-    let sid = match get_or_create_session(
+    match get_or_create_session_locked(
         channel_name,
         store,
         kernel,
@@ -96,19 +71,13 @@ pub(crate) async fn mirror_message(
     )
     .await
     {
-        Ok((sid, _reused)) => sid,
+        Ok((sid, _reused)) => {
+            kernel.send_steer(&sid, mirror_content(msg)).await;
+            info!(channel = %channel_name, chat_id = %chat_id, session_id = %sid.0, "mirrored to watch session");
+        }
         Err(e) => {
             warn!(channel = %channel_name, chat_id = %chat_id, error = %e, "watch session resolution failed");
-            return;
         }
-    };
-    let _guard = crate::utils::g_lock::g_lock(lock_key).await;
-    if matches!(
-        store.find_mapping_kind(channel_name, chat_id).await,
-        Ok(Some((_, MappingKind::Watch)))
-    ) {
-        kernel.send_steer(&sid, mirror_content(msg)).await;
-        info!(channel = %channel_name, chat_id = %chat_id, session_id = %sid.0, "mirrored to watch session (healed)");
     }
 }
 
@@ -170,23 +139,24 @@ pub(crate) async fn set_channel_watch_by_name(
 ) -> crate::types::Result<crate::channels::ChannelWatchStatus> {
     let lock_key = format!("channel_route:{channel_name}:{chat_id}");
     if on {
-        // Already watched (and alive): nothing to do.
+        let _guard = crate::utils::g_lock::g_lock(lock_key).await;
+        // Idempotent: already watched (and alive) — nothing to do. The
+        // liveness check is not redundant: without it an idempotent on
+        // over a dangling row would no-op and never heal.
+        if let Some((sid, MappingKind::Watch)) =
+            store.find_mapping_kind(channel_name, chat_id).await?
         {
-            let _guard = crate::utils::g_lock::g_lock(lock_key.clone()).await;
-            if let Some((sid, MappingKind::Watch)) =
-                store.find_mapping_kind(channel_name, chat_id).await?
-            {
-                if kernel.session_store().await.get(&sid).await?.is_some() {
-                    return Ok(crate::channels::ChannelWatchStatus {
-                        on: true,
-                        session_id: Some(sid.0.to_string()),
-                    });
-                }
+            if kernel.session_store().await.get(&sid).await?.is_some() {
+                return Ok(crate::channels::ChannelWatchStatus {
+                    on: true,
+                    session_id: Some(sid.0.to_string()),
+                });
             }
         }
-        // Ensure a live row (heals dangling ones) — outside the lock,
-        // get_or_create takes it internally.
-        let (sid, reused) = get_or_create_session(
+        // Ensure a live row, then flip explicitly — get_or_create only
+        // writes `kind` on create, so the flip is needed exactly when an
+        // existing row was reused.
+        let (sid, reused) = get_or_create_session_locked(
             channel_name,
             store,
             kernel,
@@ -196,7 +166,6 @@ pub(crate) async fn set_channel_watch_by_name(
             MappingKind::Watch,
         )
         .await?;
-        let _guard = crate::utils::g_lock::g_lock(lock_key).await;
         if reused {
             store
                 .update_mapping(channel_name, chat_id, None, Some(MappingKind::Watch))

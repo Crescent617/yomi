@@ -100,10 +100,10 @@ receipt），bot 对群里的讨论完全无感。想要的是 bot 作为群的*
   `update_mapping`（anchor 刷新 / kind flip 的显式通道）、
   `list_watch_sessions`（👁）；`save_mapping` 的 upsert 不写 kind
   （insert-only，不变量由构造保证）。
-- `channels/hub/watch.rs`：`mirror_message`（tee 本体：route 锁内重读
-  实时行（与 flip 的 update+cancel+drain 互斥——off/gc 不得插队到
-  重读与 steer 之间），行在且存活即 steer，仅悬空行走锁外
-  get_or_create 自愈，行不在=watch 已结束、丢弃不重建）；
+- `channels/hub/watch.rs`：`mirror_message`（tee 本体：单次 route 锁内
+  重读实时行 + steer——与 flip 的 read-flip-reset 同锁互斥，off/gc
+  不得插队；行 kind=watch 即走 `get_or_create_session_locked`（存活
+  =reuse，悬空=删+建，同临界区），行不在=丢弃不重建）；
   `{get,set}_channel_watch_by_name`（查询/开关核心，slash 命令与 RPC
   共用；无状态变化=纯 no-op，off 绝不误杀普通会话）；hub 薄封装 +
   `rpc_set_channel_watch`（`on` 缺省 = 查询，Vim `:set` 风格）。wire
@@ -113,7 +113,9 @@ receipt），bot 对群里的讨论完全无感。想要的是 bot 作为群的*
 - `channels/hub/mod.rs`：dispatch 循环 tee（gate 快照 && `Command::None`
   → `mirror_message`）；事件转发器 `routing.is_watch() → continue`（投递
   抑制单点）。
-- `channels/hub/routing.rs`：`get_or_create_session` 复用前校验 session
+- `channels/hub/routing.rs`：`get_or_create_session`（取锁外壳）+
+  `get_or_create_session_locked`（内核，契约：调用方须持 route 锁——
+  g_lock 不可重入，供 tee/flip 的宽临界区复用）；复用前校验 session
   存活，悬空行删除重建；kind 只在建行时写入，reuse 仅刷新 anchor。
 - `kernel/mod.rs`：`delete_session` 级联删除 channel mappings。
 - `kernel/conductor.rs` + `prompt/mod.rs`：spawn 按 routing kind==Watch
