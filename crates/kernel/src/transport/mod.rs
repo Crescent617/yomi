@@ -132,6 +132,17 @@ pub fn socket_auth_token() -> Option<String> {
     trimmed_env_non_empty(&format!("{}SOCKET_AUTH", crate::ENV_PREFIX))
 }
 
+/// Startup warning for daemons serving a ws/wss listener with no socket
+/// auth configured — any process that can reach the port gets full RPC
+/// access (run agents → execute shell). Shared by the CLI and embedded
+/// (GUI) daemon paths so both give identical configuration guidance.
+pub const NO_SOCKET_AUTH_WARNING: &str = "\
+    ws/wss listener is running WITHOUT socket auth: any process that can \
+    reach the port gets full RPC access. To enable: run \
+    `yomi daemon auth-hash --generate`, set `socket_auth_hash` in \
+    config.toml (or env YOMI_SOCKET_AUTH_HASH) on the daemon, and export \
+    YOMI_SOCKET_AUTH on every client";
+
 fn trimmed_env_non_empty(var: &str) -> Option<String> {
     std::env::var(var)
         .ok()

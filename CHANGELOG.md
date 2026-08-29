@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- daemon 以 ws/wss 监听但未配置 `socket_auth_hash` 时，启动日志新增 warning 提示监听处于无鉴权状态并给出配置指引（`yomi daemon auth-hash --generate` + 客户端 `YOMI_SOCKET_AUTH`）；GUI 内嵌 daemon 同样生效。
+
 ## [0.10.4] - 2026-08-29
 
 ### Added

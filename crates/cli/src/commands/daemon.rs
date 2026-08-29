@@ -96,6 +96,10 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
                     tracing::info!("Socket auth enabled for ws/wss transports");
                     Some(kernel::transport::auth_verifier(hash))
                 }
+                (true, None) => {
+                    tracing::warn!("{}", kernel::transport::NO_SOCKET_AUTH_WARNING);
+                    None
+                }
                 _ => None,
             };
 

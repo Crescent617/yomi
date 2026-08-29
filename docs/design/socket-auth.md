@@ -21,7 +21,7 @@ daemon 的 IPC socket 此前完全无鉴权：任何能连上 socket 的进程�
 
 ## 行为
 
-- daemon：config.toml 的 `socket_auth_hash = "blake3:<hex>"` 启用鉴权（`YOMI_SOCKET_AUTH_HASH` 环境变量覆盖，便于临时/容器场景）；仅对 ws listener 生效（unix 忽略）。未设置 = 现状，完全向后兼容。
+- daemon：config.toml 的 `socket_auth_hash = "blake3:<hex>"` 启用鉴权（`YOMI_SOCKET_AUTH_HASH` 环境变量覆盖，便于临时/容器场景）；仅对 ws listener 生效（unix 忽略）。未设置 = 现状，完全向后兼容；但只要绑了 ws/wss listener 而未配置哈希，启动时会打 warning 提示裸奔风险与配置方法（CLI 与 GUI 内嵌 daemon 共用同一条文案 `NO_SOCKET_AUTH_WARNING`）。
 - 客户端：`YOMI_SOCKET_AUTH=<明文密码>`，`transport::connect` 在 ws/wss 握手自动附加 `Authorization: Bearer` 头；失败报 `socket auth failed: missing or invalid token (set YOMI_SOCKET_AUTH or pass an explicit token)`（`PermissionDenied`）。也可显式传 token（`RemoteKernel::connect_with_auth`；显式值缺失或全空白时回退环境变量），token 存于客户端实例、重连复用；GUI 远程连接弹窗即走此路径（掩码输入，随地址存入 GUI 偏好，明文字段与 config 里的 API key 同级敏感）。
 - 校验：`blake3(password)` hex 与配置哈希常量时间比较。定位为高熵机器 token（非人类口令），故不需要慢哈希/盐。
 - 爆破防护：握手失败时 401 立即发给客户端，随后 accept 循环固定睡眠 300ms 再接受下一条连接——失败握手在 accept 循环中串行，在线爆破速率全局封顶 ~3 次/秒（与攻击并行度无关；代价是洪泛时正常连接排队，个人 daemon 可接受）。离线防护依赖密码熵：`yomi daemon auth-hash --generate` 生成 128-bit 随机 token（推荐路径），短密码会触发告警。

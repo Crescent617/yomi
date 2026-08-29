@@ -164,22 +164,28 @@ async fn spawn_daemon_inner() -> Result<kernel::config::Config> {
         addr,
         kernel::transport::SocketAddr::Ws(_) | kernel::transport::SocketAddr::Wss(_)
     ) {
-        config.socket_auth_hash.as_deref().and_then(|hash| {
-            if kernel::transport::is_valid_hash_format(hash) {
-                Some(kernel::transport::auth_verifier(hash))
-            } else {
-                // In-process daemon: we can't exit the app over a bad
-                // config value, and a malformed hash would fail closed —
-                // rejecting every client with no diagnosable signal. Log
-                // loudly and run without socket auth (same as not
-                // configuring it).
-                tracing::error!(
-                    "invalid socket_auth_hash format (expected `blake3:<64 hex chars>`); \
-                     starting daemon WITHOUT socket auth"
-                );
+        match config.socket_auth_hash.as_deref() {
+            Some(hash) => {
+                if kernel::transport::is_valid_hash_format(hash) {
+                    Some(kernel::transport::auth_verifier(hash))
+                } else {
+                    // In-process daemon: we can't exit the app over a bad
+                    // config value, and a malformed hash would fail closed —
+                    // rejecting every client with no diagnosable signal. Log
+                    // loudly and run without socket auth (same as not
+                    // configuring it).
+                    tracing::error!(
+                        "invalid socket_auth_hash format (expected `blake3:<64 hex chars>`); \
+                         starting daemon WITHOUT socket auth"
+                    );
+                    None
+                }
+            }
+            None => {
+                tracing::warn!("{}", kernel::transport::NO_SOCKET_AUTH_WARNING);
                 None
             }
-        })
+        }
     } else {
         None
     };
