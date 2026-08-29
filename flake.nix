@@ -4,46 +4,42 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    # crane：把依赖编译拆成独立 derivation，改源码不再全量重编依赖
+    crane.url = "github:ipetkov/crane";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, crane }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        inherit (pkgs) lib;
+        craneLib = crane.mkLib pkgs;
 
         # 从 Cargo.toml 自动读取 workspace 版本
         version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;
 
-        # 严格过滤：排除所有构建产物、开发环境文件及日志
-        src = pkgs.lib.cleanSourceWith {
+        # 只保留构建必需：根 Cargo.toml/Cargo.lock + crates/ 下的源码。
+        # docs/site/evals/examples/scripts 等改动不再触发重编；
+        # 构建产物与缓存目录（target/node_modules/前端 build 产物等）一律排除。
+        src = lib.cleanSourceWith {
           src = ./.;
           filter = path: type:
             let
+              rel = lib.removePrefix (toString ./. + "/") (toString path);
               base = baseNameOf path;
-              isJunk = builtins.elem base [
+              junkDirs = [
                 "target"
                 "node_modules"
                 "build"
                 "dist"
                 ".svelte-kit"
                 ".vite"
-                ".cargo"
-                ".git"
-                ".github"
-                ".vscode"
-                ".direnv"
-                ".envrc"
-                ".eslintcache"
-                ".stylelintcache"
-                ".prettiercache"
-                "result"
-              ]
-              || pkgs.lib.hasPrefix "result-" base
-              || pkgs.lib.hasSuffix ".log" base
-              || pkgs.lib.hasSuffix ".tmp" base
-              || pkgs.lib.hasSuffix ".tsbuildinfo" base;
+                "test-results"
+              ];
             in
-              !isJunk && pkgs.lib.cleanSourceFilter path type;
+            (rel == "Cargo.toml" || rel == "Cargo.lock" || rel == "crates" || lib.hasPrefix "crates/" rel)
+            && !(type == "directory" && builtins.elem base junkDirs)
+            && !(lib.hasSuffix ".log" base);
         };
 
         commonNativeBuildInputs = with pkgs; [
@@ -56,10 +52,45 @@
           openssl
         ];
 
-        commonMeta = with pkgs.lib; {
-          license = licenses.mit;
+        # Tauri/WebKit 系统依赖（gui 的 sys crate 编译需要，仅 Linux）
+        guiBuildInputs = with pkgs; lib.optionals stdenv.isLinux [
+          webkitgtk_4_1
+          gtk3
+          libsoup_3
+          libappindicator-gtk3
+          glib
+          gdk-pixbuf
+          pango
+          cairo
+          harfbuzz
+          at-spi2-atk
+          dbus
+        ];
+
+        commonMeta = {
+          license = lib.licenses.agpl3Only;
           homepage = "https://github.com/Crescent617/yomi";
         };
+
+        # crane 共享构建参数
+        commonArgs = {
+          inherit src;
+          strictDeps = true;
+          # sandbox 中测试需要 ripgrep/git/显示服务；测试在 dev shell 或 CI 中单独跑：cargo test
+          doCheck = false;
+          nativeBuildInputs = commonNativeBuildInputs;
+          buildInputs = commonBuildInputs ++ guiBuildInputs;
+        };
+
+        # 依赖预编译：workspace 全部第三方依赖单独一个 derivation，cli/gui 共享。
+        # 只有 Cargo.toml/Cargo.lock 变化时才重编依赖（crane 内部用 dummy 源码，
+        # 源码改动不影响本 derivation）；日常改代码只重编 workspace 自身 crate。
+        # 注意：因为是整 workspace 的依赖，首次构建会编译包括 tauri/webkit 在内的
+        # 全部依赖（一次性成本），之后 cli 与 gui 的构建都复用这份缓存。
+        cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
+          pname = "yomi-deps";
+          inherit version;
+        });
 
         rustDev = with pkgs; [
           rustc
@@ -77,95 +108,44 @@
         };
 
         packages = {
-          yomi-cli = pkgs.rustPlatform.buildRustPackage {
-            inherit src version;
+          yomi-cli = craneLib.buildPackage (commonArgs // {
+            inherit version cargoArtifacts;
             pname = "yomi-cli";
 
-            cargoLock = {
-              lockFile = ./Cargo.lock;
-              allowBuiltinFetchGit = true;
-            };
-
-            cargoBuildFlags = [ "-p" "cli" ];
-
-            nativeBuildInputs = commonNativeBuildInputs;
-            buildInputs = commonBuildInputs;
-
-            # 构建阶段的 checkPhase 在 sandbox 中测试 kernel 包需要 ripgrep/git，
-            # 而 cargoCheckFlags 在 nixpkgs 的 cargoCheckHook 中实际不生效（被当作 test binary 参数）。
-            # 测试应在开发环境或 CI 中单独运行：cargo test -p cli
-            doCheck = false;
+            cargoExtraArgs = "-p cli";
 
             meta = commonMeta // {
               description = "Yomi CLI - AI coding assistant command-line interface";
               mainProgram = "yomi";
             };
-          };
+          });
 
-          yomi-gui = pkgs.rustPlatform.buildRustPackage {
-            inherit src version;
+          yomi-gui = craneLib.buildPackage (commonArgs // {
+            inherit version cargoArtifacts;
             pname = "yomi-gui";
 
-            cargoLock = {
-              lockFile = ./Cargo.lock;
-              allowBuiltinFetchGit = true;
-            };
-
-            # Tauri 后端在 workspace 子目录中。
-            # 注意：workspace 项目的 Cargo.lock 在根目录，因此不设置 cargoRoot
-            #（cargoRoot 控制 cargoDeps 的 lockfile 查找路径）。
-            # buildAndTestSubdir 仅用于构建/测试阶段的 pushd，不影响 cargoDeps 生成。
-            buildAndTestSubdir = "crates/gui";
+            cargoExtraArgs = "-p yomi-gui";
 
             # 前端 npm 依赖（直接读取 crates/gui/frontend/package-lock.json，无需维护 hash）
             npmDeps = pkgs.importNpmLock { npmRoot = ./crates/gui/frontend; };
-
-            nativeBuildInputs = with pkgs; [
-              cargo-tauri.hook
-              nodejs
-              importNpmLock.npmConfigHook
-              pkg-config
-              wrapGAppsHook4
-              makeWrapper
-            ] ++ commonNativeBuildInputs;
-
-            buildInputs = with pkgs; [
-              webkitgtk_4_1
-              gtk3
-              libsoup_3
-              libappindicator-gtk3
-              glib
-              gdk-pixbuf
-              pango
-              cairo
-              harfbuzz
-              at-spi2-atk
-              dbus
-            ] ++ commonBuildInputs;
-
-            # npmHooks.npmConfigHook 在 crates/gui/frontend/ 运行 npm ci
             npmRoot = "crates/gui/frontend";
 
-            # 禁用 beforeBuildCommand，避免递归（preBuild 已手动构建前端）
-            postPatch = ''
-              substituteInPlace crates/gui/tauri.conf.json \
-                --replace-fail '"beforeBuildCommand": "cd frontend && npm run build"' \
-                '"beforeBuildCommand": "true"'
-            '';
+            nativeBuildInputs = commonArgs.nativeBuildInputs ++ (with pkgs; [
+              nodejs
+              importNpmLock.npmConfigHook
+              makeWrapper
+            ]) ++ lib.optionals pkgs.stdenv.isLinux [
+              pkgs.wrapGAppsHook4
+            ];
 
-            # 在 cargo tauri build 之前手动构建前端
-            # cargo-tauri.hook 的 beforeBuildCommand 在递归调用中可能被跳过
+            # 在 cargo build 前手动构建前端：tauri-build 会把 frontendDist 嵌进二进制
             preBuild = ''
               pushd crates/gui/frontend
               npm run build
               popd
             '';
 
-            # Tauri 构建在 sandbox 中无法运行测试（需要显示/WebKit），且 workspace 测试依赖外部命令
-            doCheck = false;
-
-            # 复用同一 target dir 顺带编译 CLI：deps（kernel 等）已为本包编译过，
-            # 增量构建 -p cli 只需编译 cli crate 本身，几乎零成本
+            # 复用同一 target dir 顺带编译 CLI：deps 已编译过，只需编译 cli crate 本身
             postBuild = ''
               cargo build --release -p cli
             '';
@@ -192,72 +172,9 @@
               description = "Yomi GUI - Tauri-based AI coding assistant desktop app";
               mainProgram = "yomi-gui";
             };
-          };
+          });
 
           default = self.packages.${system}.yomi-cli;
-        }
-        // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
-          # yomi 的 docker 镜像：yomi + 基础工具链，无配置无密钥。
-          # nix build .#dockerImage && docker load < result  →  yomi:<version>
-          # （本地/复现路径；CI 发版镜像走 docker/Dockerfile + 预编译二进制，
-          #   两边工具集保持一致，改动时同步）
-          dockerImage =
-            let
-              yomi = self.packages.${system}.yomi-cli;
-            in
-            pkgs.dockerTools.buildLayeredImage {
-              name = "yomi";
-              tag = version;
-
-              # 基础工具链 + 常规 unix 用户态；node 等可选工具链由 agent 运行时自装
-              contents = with pkgs; [
-                yomi
-                bashInteractive
-                coreutils
-                curl
-                diffutils
-                findutils
-                gawk
-                git
-                gnugrep
-                gnused
-                gnutar
-                gzip
-                jq
-                ncurses # tmux 需要 terminfo
-                openssh
-                procps
-                python3
-                ripgrep
-                tmux
-                which
-                xz
-                # FHS 兼容件：/bin/sh、/usr/bin/env、CA bundle、/etc/passwd
-                dockerTools.binSh
-                dockerTools.usrBinEnv
-                dockerTools.caCertificates
-                dockerTools.fakeNss
-              ];
-
-              extraCommands = ''
-                mkdir -p home/yomi
-                install -d -m 1777 tmp
-              '';
-
-              config = {
-                Entrypoint = [ "${yomi}/bin/yomi" "daemon" "start" ];
-                WorkingDir = "/home/yomi";
-                Env = [
-                  "HOME=/home/yomi"
-                  "PATH=/bin:/usr/bin"
-                  "LANG=C.UTF-8"
-                  "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-                  "NIX_SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-                  "GIT_SSL_CAINFO=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-                  "TERMINFO_DIRS=${pkgs.ncurses}/share/terminfo"
-                ];
-              };
-            };
         };
 
         devShells = {
@@ -271,21 +188,10 @@
             nativeBuildInputs = commonNativeBuildInputs ++ rustDev ++ [
               pkgs.nodejs
               pkgs.npmHooks.npmConfigHook
+            ] ++ lib.optionals pkgs.stdenv.isLinux [
               pkgs.wrapGAppsHook4
             ];
-            buildInputs = with pkgs; [
-              webkitgtk_4_1
-              gtk3
-              libsoup_3
-              libappindicator-gtk3
-              glib
-              gdk-pixbuf
-              pango
-              cairo
-              harfbuzz
-              at-spi2-atk
-              dbus
-            ] ++ commonBuildInputs;
+            buildInputs = commonBuildInputs ++ guiBuildInputs;
             RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
           };
         };
