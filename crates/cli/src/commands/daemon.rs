@@ -95,13 +95,17 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
                     Some(kernel::transport::auth_verifier(hash))
                 }
                 // ws bound beyond loopback with no hash would serve the
-                // whole network unauthenticated — refuse to start.
+                // whole network unauthenticated — refuse to start. Log
+                // it too: the anyhow report only reaches the spawner's
+                // stderr, which a detached daemon discards.
                 (true, None) if kernel::transport::bind_is_exposed(&addr) => {
-                    anyhow::bail!(
+                    let msg = format!(
                         "{addr} listens beyond loopback but no socket_auth_hash is configured: \
                          remote clients would connect unauthenticated. Set socket_auth_hash \
                          (generate one with `yomi daemon auth-hash`) or bind a loopback address."
                     );
+                    tracing::error!("{msg}");
+                    anyhow::bail!(msg);
                 }
                 _ => None,
             };
