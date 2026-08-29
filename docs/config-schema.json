@@ -410,6 +410,27 @@
         "required": ["name", "provider", "model_id", "endpoint", "api_key"],
         "additionalProperties": false
       }
+    },
+    "extensions": {
+      "description": "Wire-protocol external extensions spawned alongside the daemon (TOML: [[extensions]]). Listed = launched with the daemon, group-killed when it dies, restarted with fixed backoff on crash.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Extension name.",
+            "type": "string"
+          },
+          "command": {
+            "description": "Command line (argv[0] is the executable).",
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "required": ["name", "command"],
+        "additionalProperties": false
+      },
+      "default": []
     }
   },
   "additionalProperties": false
