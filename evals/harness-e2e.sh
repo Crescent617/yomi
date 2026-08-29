@@ -15,7 +15,7 @@ DB="${YOMI_DB:-$HOME/.yomi/yomi.db}"
 # sessions 落盘在 data_dir（即 db 所在目录）的 sessions/ 下——隔离测试
 # （YOMI_DB 指向别处）时跟着走，不写死 ~/.yomi。
 SESS_DIR="$(dirname "$DB")/sessions"
-TICKET_SH="${TICKET_SH:-$HOME/.agents/skills/task-tickets/scripts/ticket.sh}"
+TICKET_SH="${KB_PY:-$HOME/.agents/skills/kanban/scripts/kb.py}"
 PASS=0; FAIL=0
 
 ok()  { PASS=$((PASS+1)); echo "PASS  $1"; }
@@ -85,18 +85,60 @@ out=$(cd /tmp && "$YOMI" run --yolo --timeout 90 \
 echo "$out" | grep -q "没有" \
   && ok "memory 门控反例（/tmp）" || bad "memory 门控反例（/tmp）" "$out"
 
-# ── 5. ticket.sh 仅建单；状态流转为文件直改约定（见工单内嵌规则）──
+# ── 5. kanban 建卡形状（todo/ 落盘、frontmatter id/created）──
 T=$(mktemp -d)
-F=$(cd "$T" && "$TICKET_SH" new --title "e2e" --body "验收用")
-if [ -f "$F" ] && grep -q '^status: pending' "$F" && grep -q '^created_at:' "$F"; then
-  ok "ticket 建单形状（.yomi/tickets 落盘、pending、created_at）"
+kid=$(cd "$T" && KB_DIR="$T/kb" python3 "$TICKET_SH" new "e2e" -m "验收用")
+if [ -n "$kid" ] && grep -q '^id: ' "$T"/kb/todo/$kid-*.md 2>/dev/null \
+  && grep -q '^created: ' "$T"/kb/todo/$kid-*.md 2>/dev/null; then
+  ok "kanban 建卡形状（todo/ 落盘、frontmatter id/created）"
 else
-  bad "ticket 建单形状" "$(cat "$F" 2>/dev/null)"
+  bad "kanban 建卡形状" "kid=$kid"
 fi
-# set 子命令已移除：流转直改工单文件，脚本必须拒绝 set
-"$TICKET_SH" set "$F" claimed >/dev/null 2>&1 \
-  && bad "ticket.sh 仅建单" "set 被放行" || ok "ticket.sh 仅建单（set 拒绝）"
 rm -rf "$T"
+
+# ── 6. session rules：spawn 时原文注入 system prompt，只作用当前会话 ──
+# 模型复读暗号 = 规则真进了 system prompt 的铁证：jsonl 只存消息不存
+# system prompt，user 提问不含暗号，assistant 答出即注入生效。
+new_sid() { "$YOMI" rpc "$1" "$2" | tr -d '"'; }  # create/fork 返回裸 id 字符串
+wait_idle() {  # $1=session id；首次消息含 spawn，轮询 phase=idle
+  local i phase
+  for i in $(seq 1 90); do
+    phase=$("$YOMI" rpc get_session "{\"session_id\":\"$1\"}" 2>/dev/null \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin).get("phase",""))' 2>/dev/null)
+    [ "$phase" = "idle" ] && return 0
+    sleep 2
+  done
+  return 1
+}
+sid_a=$(new_sid create_session '{}')
+sid_b=$(new_sid create_session '{}')
+mkdir -p "$SESS_DIR/rules"
+MARK_A="暗号紫气东来42号"
+MARK_B="口令北斗七星7号"
+printf '本话题守则：\n- 接头暗号：%s\n' "$MARK_A" > "$SESS_DIR/rules/$sid_a.md"
+printf '本话题守则：\n- 接头暗号：%s\n' "$MARK_B" > "$SESS_DIR/rules/$sid_b.md"
+
+"$YOMI" session send -s "$sid_a" "你的规则文件里的接头暗号是什么？只回答暗号本身，不要别的字。" >/dev/null 2>&1
+wait_idle "$sid_a" || bad "session rules 会话 A 跑完" "超时未 idle"
+grep -q "$MARK_A" "$SESS_DIR/$sid_a.jsonl" 2>/dev/null \
+  && ok "session rules 注入（A 复读暗号）" || bad "session rules 注入（A 复读暗号）" "jsonl 未见暗号（$sid_a）"
+
+"$YOMI" session send -s "$sid_b" "你的规则文件里的接头暗号是什么？只回答暗号本身，不要别的字。" >/dev/null 2>&1
+wait_idle "$sid_b" || bad "session rules 会话 B 跑完" "超时未 idle"
+grep -q "$MARK_B" "$SESS_DIR/$sid_b.jsonl" 2>/dev/null \
+  && ok "session rules 注入（B 复读暗号）" || bad "session rules 注入（B 复读暗号）" "jsonl 未见暗号（$sid_b）"
+grep -q "$MARK_A" "$SESS_DIR/$sid_b.jsonl" 2>/dev/null \
+  && bad "session rules 隔离（B 不见 A 暗号）" "B 的 jsonl 出现 A 暗号（$sid_b）" \
+  || ok "session rules 隔离（B 不见 A 暗号）"
+
+# fork 复制：确定性断言，无模型调用
+child=$(new_sid fork_session "{\"parent_id\":\"$sid_a\",\"auto_approve_level\":\"caution\"}")
+if [ -n "$child" ] && [ -f "$SESS_DIR/rules/$child.md" ] \
+  && cmp -s "$SESS_DIR/rules/$sid_a.md" "$SESS_DIR/rules/$child.md"; then
+  ok "fork 复制 rules 文件"
+else
+  bad "fork 复制 rules 文件" "child=$child 文件缺失或内容不同"
+fi
 
 echo
 echo "== $PASS passed, $FAIL failed =="
