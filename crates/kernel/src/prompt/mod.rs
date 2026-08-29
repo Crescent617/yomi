@@ -74,11 +74,10 @@ pub(crate) fn contract_sections(enable_attachments: bool, channel_routed: bool) 
 /// truncation marker so an oversized file can't bloat every prompt.
 pub(crate) const SESSION_RULES_MAX_BYTES: usize = 4096;
 
-/// Path of a session's RULE.md, or `None` when the id can't safely name
-/// a file: session ids may originate from client RPC strings
-/// ([`crate::types::SessionId`] is serde-transparent), so an unvalidated
-/// id like `../../etc/x` would make the daemon read an arbitrary `.md`
-/// file into the system prompt (exfiltrated via the agent's reply).
+/// `None` when the id can't safely name a rules file: chat ids arrive
+/// in platform payloads, so an unvalidated id like `../../etc/x` would
+/// make the daemon read an arbitrary `.md` file into the system prompt
+/// (exfiltrated via the agent's reply).
 /// Only `[A-Za-z0-9_-]` ids may name a rules file.
 fn valid_rules_id(id: &str) -> bool {
     !id.is_empty()
@@ -178,7 +177,7 @@ pub(crate) struct SystemPromptParts<'a> {
 /// otherwise a main session gets base + capability contract sections
 /// (attachments, mentions) + the watch-observer section when it observes
 /// a chat, while sub-agents keep the bare base. Either way the chat's
-/// RULE.md is appended verbatim when present (see
+/// channel rules are appended verbatim when present (see
 /// [`channel_rules_section`]).
 pub(crate) async fn compose_system_prompt(parts: SystemPromptParts<'_>) -> String {
     let mut prompt = match &parts.template_body {

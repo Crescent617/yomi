@@ -712,7 +712,7 @@ impl Conductor {
         };
 
         // Prompt assembly (capability contracts, watch-observer section,
-        // per-session RULE.md) lives in one testable function — the
+        // channel rules) lives in one testable function — the
         // conductor only gathers the inputs. Sub-agents get no contract
         // sections: their output never leaves the parent. Note the
         // narrower predicate than the ask_user blocklist above, which
