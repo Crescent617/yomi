@@ -79,12 +79,13 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
             // malformed hash would start fine yet reject every client
             // (fail-closed verifier) with no diagnosable signal —
             // validate the format up front and fail fast instead.
-            let any_ws = [&addr].into_iter().chain(extra_addr.iter()).any(|a| {
+            let is_ws = |a: &kernel::transport::SocketAddr| {
                 matches!(
                     a,
                     kernel::transport::SocketAddr::Ws(_) | kernel::transport::SocketAddr::Wss(_)
                 )
-            });
+            };
+            let any_ws = is_ws(&addr) || extra_addr.as_ref().is_some_and(is_ws);
             let auth = match (any_ws, config.socket_auth_hash.as_deref()) {
                 (true, Some(hash)) => {
                     anyhow::ensure!(
