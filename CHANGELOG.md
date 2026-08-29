@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-08-29
+
 ### Added
 
 - 新增环境变量 `YOMI_EXTRA_SOCKET`：daemon 在主 socket 之外可多监听一个地址，例如主 unix 供本机工具链免鉴权使用、`YOMI_EXTRA_SOCKET=ws://0.0.0.0:57231` 供 Nginx 反代或远端访问；额外的 ws 监听与主 ws 一样按 `socket_auth_hash` 全量校验。
