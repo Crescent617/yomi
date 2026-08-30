@@ -180,6 +180,8 @@ enum ConfigCommands {
         /// The value to set
         value: String,
     },
+    /// Print the JSON Schema of the config file (generated from code)
+    Schema,
 }
 
 #[derive(Parser)]
@@ -436,6 +438,10 @@ async fn run_config(args: ConfigArgs) -> Result<()> {
         ConfigCommands::Show => commands::config::show(&args.global),
         ConfigCommands::Get { key } => commands::config::get(&args.global, &key),
         ConfigCommands::Set { key, value } => commands::config::set(&args.global, &key, value),
+        ConfigCommands::Schema => {
+            commands::config::schema();
+            Ok(())
+        }
     }
 }
 

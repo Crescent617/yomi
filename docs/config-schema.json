@@ -1,437 +1,538 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://raw.githubusercontent.com/Crescent617/yomi/main/docs/config-schema.json",
-  "title": "Yomi Config",
-  "description": "Configuration schema for the Yomi agent system.",
-  "type": "object",
-  "properties": {
-    "agent": {
-      "description": "Agent behavior and execution settings.",
-      "type": "object",
+  "$defs": {
+    "AgentConfig": {
+      "description": "Agent configuration",
       "properties": {
-        "name": {
-          "description": "Agent identity name. Substituted into the {{name}} placeholder of system_prompt.",
-          "type": "string",
-          "default": "Yomi"
+        "compactor": {
+          "$ref": "#/$defs/Compactor",
+          "description": "Compactor configuration for context management"
         },
         "default_model": {
-          "description": "Default model name for new sessions (points to a model in Config.models).",
-          "type": "string",
-          "default": "default"
-        },
-        "max_iterations": {
-          "description": "Maximum number of iterations per agent session.",
-          "type": "integer",
-          "minimum": 0,
-          "default": 100
+          "description": "Default model name for new sessions (points to a model in Config.models)",
+          "type": "string"
         },
         "enable_subagent": {
-          "description": "Allow the agent to spawn sub-agents.",
-          "type": "boolean",
-          "default": true
+          "description": "Allow the agent to spawn sub-agents",
+          "type": "boolean"
+        },
+        "max_iterations": {
+          "description": "Maximum number of iterations per agent run",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_tool_output_length": {
+          "description": "Maximum tool output length in bytes (default `40_000`)",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "description": "Agent identity name. Substituted into the `{{name}}` placeholder of\n`system_prompt` when the config is finalized in `build_agent_config`.",
+          "type": "string"
         },
         "system_prompt": {
-          "description": "Custom system prompt override; supports the {{name}} placeholder. If omitted, the built-in default prompt is used.",
+          "description": "Custom system prompt override; supports the {{name}} placeholder.\nThe built-in default prompt is used when unset.",
           "type": "string"
         },
         "tool_blocklist": {
-          "description": "Regex patterns for tools that should be disabled.",
-          "type": "array",
-          "items": { "type": "string" },
-          "default": []
-        },
-        "compactor": {
-          "description": "Context compaction settings for managing long conversations.",
-          "type": "object",
-          "properties": {
-            "micro_compact_enabled": {
-              "description": "Enable client-side micro-compaction before full compaction. Disabled by default to preserve prompt-cache reuse.",
-              "type": "boolean",
-              "default": false
-            },
-            "threshold_ratio": {
-              "description": "Ratio (0.0–1.0) of the context window at which compaction is triggered.",
-              "type": "number",
-              "minimum": 0.0,
-              "maximum": 1.0,
-              "default": 0.8
-            },
-            "keep_recent_messages": {
-              "description": "Number of recent messages to preserve during full compaction.",
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            },
-            "keep_recent_tool_results": {
-              "description": "Number of recent messages whose tool results survive micro-compaction.",
-              "type": "integer",
-              "minimum": 0,
-              "default": 5
-            },
-            "summary_max_tokens": {
-              "description": "Max tokens allocated for generating a summary during full compaction.",
-              "type": "integer",
-              "minimum": 1,
-              "default": 8192
-            }
+          "description": "Tool blocklist (regex patterns) for disabling tools",
+          "items": {
+            "type": "string"
           },
-          "additionalProperties": false
-        },
-        "max_tool_output_length": {
-          "description": "Maximum tool output length in bytes.",
-          "type": "integer",
-          "minimum": 1,
-          "default": 40000
+          "type": "array"
         }
       },
-      "additionalProperties": false
+      "type": "object"
     },
-    "auto_approve": {
-      "description": "Auto-approve threshold for tool permissions.",
-      "type": "string",
-      "enum": ["safe", "caution", "dangerous"],
-      "default": "safe"
-    },
-    "data_dir": {
-      "description": "Data directory for persistent storage. Supports ~ expansion.",
-      "type": "string"
-    },
-    "log_dir": {
-      "description": "Log directory. Defaults to <data_dir>/logs if omitted.",
-      "type": ["string", "null"]
-    },
-    "skill_folders": {
-      "description": "List of skill folder paths, ordered by precedence (low → high): on name collision the later folder wins. Defaults to [~/.agents/skills, <data_dir>/skills] if omitted.",
-      "type": ["array", "null"],
-      "items": { "type": "string" }
-    },
-    "features": {
-      "description": "Experimental feature flags.",
-      "type": "object",
+    "ChannelConfig": {
+      "description": "One external platform channel instance (e.g. a Feishu app)",
       "properties": {
-        "all": {
-          "description": "Enable every feature that is not explicitly overridden.",
-          "type": "boolean",
-          "default": false
+        "admin_users": {
+          "description": "`open_id`s allowed to approve/deny doc-permission applications\n(buttons and `/approve` `/deny` `/permits` commands alike). Also the\nDM recipients when `approval_chat_id` is unset.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
-        "update_session_title": {
-          "description": "Generate session titles with a model. Inherits from all when omitted.",
+        "allowed_chats": {
+          "description": "Chat allowlist; empty = all chats allowed",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allowed_users": {
+          "description": "User allowlist; empty = all users allowed",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "approval_chat_id": {
+          "description": "Target group chat for doc-permission application notifications.\nWhen unset, each of `admin_users` is notified by DM instead; when\nboth are unset the feature is off (applications are only logged).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "auto_approve_level": {
+          "$ref": "#/$defs/Level",
+          "description": "Channel-level auto-approve override for tool permissions"
+        },
+        "blocked_chats": {
+          "description": "Chat blocklist",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "blocked_users": {
+          "description": "User blocklist",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "disabled_events": {
+          "description": "Runtime kill-switch for platform event features (the vocabulary is\nper-platform, see [`PlatformConfig::known_event_names`]); unset =\nall enabled. Event delivery itself requires console-side\nsubscription — this disables *reacting* without a console trip.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "description": "Whether this channel is active",
+          "type": "boolean"
+        },
+        "history_context": {
+          "description": "Recent-chat messages injected as context when the bot is triggered\nin a group (fetched since the last trigger in that thread/chat,\nnewest cap). 0 disables.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mid_run_split": {
+          "description": "Mid-run split: when the user posts messages while a run is in\nflight, freeze the status card in place as a terminal receipt and\ndeliver the final reply as a NEW message below them (carrying the\nrun trace). When disabled, the status card always morphs into the\nfinal reply in place (one message per run), leaving the answer\nabove the user's mid-run messages.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Unique channel instance name",
+          "type": "string"
+        },
+        "observability": {
+          "description": "Status card + run receipts for run observability. When disabled,\nno status card or run receipts are shown; reply buffering (only the\nlast assistant text becomes the reply bubble) still applies.",
+          "type": "boolean"
+        },
+        "platform": {
+          "$ref": "#/$defs/PlatformConfig"
+        },
+        "reply_in_thread": {
+          "description": "When enabled, group-chat replies are anchored to the triggering\nmessage so they land in its thread (Feishu thread reply, Telegram\nquote-reply). Private chats are unaffected.",
+          "type": "boolean"
+        },
+        "require_mention": {
+          "description": "In group chats, require @mention to trigger the bot",
+          "type": "boolean"
+        },
+        "tool_trace": {
+          "description": "Attach the run trace (tool calls + intermediate texts) to the final\nreply bubble — a collapsible panel on card-capable platforms\n(Feishu, requires client V7.9+), plain-text lines elsewhere.",
           "type": "boolean"
         }
       },
-      "additionalProperties": false
+      "required": [
+        "name",
+        "enabled",
+        "platform"
+      ],
+      "type": "object"
     },
-    "max_checkpoints": {
-      "description": "Maximum number of checkpoints to retain per session.",
-      "type": "integer",
-      "minimum": 1,
-      "default": 5
-    },
-    "gc": {
-      "description": "Garbage-collection policy for expired session resources. Whether a run actually deletes (dry_run) is controlled by the CLI only and is not configurable.",
-      "type": "object",
+    "Compactor": {
+      "description": "Compactor for managing conversation context",
       "properties": {
-        "retention_days": {
-          "description": "Sessions are retained for this many days after their last update before gc collects them.",
-          "type": "integer",
-          "minimum": 1,
-          "default": 90
+        "keep_recent_messages": {
+          "description": "Number of recent messages to preserve during full compaction",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
         },
-        "keep_pinned": {
-          "description": "Skip pinned sessions.",
-          "type": "boolean",
-          "default": true
+        "keep_recent_tool_results": {
+          "description": "Number of recent messages whose tool results survive micro-compaction",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
         },
-        "sweep_orphans": {
-          "description": "Sweep orphan files whose session no longer exists in the DB.",
-          "type": "boolean",
-          "default": true
+        "micro_compact_enabled": {
+          "description": "Whether client-side micro-compaction is enabled",
+          "type": "boolean"
         },
-        "vacuum": {
-          "description": "Run VACUUM + WAL truncate after deletion.",
-          "type": "boolean",
-          "default": false
+        "summary_max_tokens": {
+          "description": "Max tokens for summary",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
         },
-        "auto": {
-          "description": "Run gc automatically in the daemon: once at startup (catching up for downtime), then every day at local midnight. Performs real deletions.",
-          "type": "boolean",
-          "default": false
+        "threshold_ratio": {
+          "description": "Ratio (0.0–1.0) of the context window at which compaction is triggered",
+          "format": "float",
+          "type": "number"
         }
       },
-      "additionalProperties": false
+      "type": "object"
     },
-    "socket_auth_hash": {
-      "description": "Socket auth password hash (`blake3:<hex>`), enforced on ws/wss transports only; unix sockets rely on filesystem permissions. YOMI_SOCKET_AUTH_HASH overrides. Omit = no auth. Generate with `yomi daemon auth-hash --generate`.",
+    "ExtensionConfig": {
+      "description": "`[[extensions]]` 条目：列出即拉起，daemon 死则组杀，崩溃固定退避重拉。",
+      "properties": {
+        "command": {
+          "description": "命令行（argv[0] 为可执行文件）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "description": "Extension name (unique identifier)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "command"
+      ],
+      "type": "object"
+    },
+    "FeaturesConfig": {
+      "description": "Feature flags for experimental capabilities.",
+      "properties": {
+        "all": {
+          "description": "Enable all features unless a feature is explicitly overridden.",
+          "type": "boolean"
+        },
+        "attachments": {
+          "description": "Teach agents the `<yomi_attachments>` syntax for attaching files to\nreplies (channels deliver the files, the app shows clickable items).\nUnlike the experimental flags above this is **on by default** and\nignores `all`; set `false` to disable. Attachments already declared\nin history still surface when disabled — the flag only gates what\nagents are taught.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "cron_tool": {
+          "description": "Expose the cron tool to agents (create/list/update/delete/trigger jobs).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "todo_tool": {
+          "description": "Expose the todo tool to agents (task list tracking).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "update_session_title": {
+          "description": "Generate a session title with a model after receiving a user message.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "GcConfig": {
+      "description": "Garbage-collection policy for expired session resources (`[gc]` section).\n\nThese are *policy* settings: what to collect and, for the daemon, how\noften. Whether a run actually deletes (`dry_run`) is a per-invocation\nflag and deliberately not configurable here.",
+      "properties": {
+        "auto": {
+          "description": "Run gc automatically in the daemon (opt-in; performs real deletions).\nRuns once at startup and then every day at local midnight.",
+          "type": "boolean"
+        },
+        "keep_pinned": {
+          "description": "Skip pinned sessions",
+          "type": "boolean"
+        },
+        "retention_days": {
+          "description": "Sessions are retained for this many days after their last update\nbefore gc collects them (min 1)",
+          "format": "int64",
+          "type": "integer"
+        },
+        "sweep_orphans": {
+          "description": "Sweep orphan files whose session no longer exists in the DB",
+          "type": "boolean"
+        },
+        "vacuum": {
+          "description": "Run `VACUUM` + WAL truncate after deletion",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Level": {
+      "description": "工具危险级别 / 自动批准阈值\n\n用于表示：\n- 工具的固有危险级别（Tool Level）\n- 用户配置的自动批准阈值（Auto-approve Threshold）",
+      "oneOf": [
+        {
+          "const": "safe",
+          "description": "只读、无副作用的操作",
+          "type": "string"
+        },
+        {
+          "const": "caution",
+          "description": "可修改，但可撤销的操作（如编辑文件）",
+          "type": "string"
+        },
+        {
+          "const": "dangerous",
+          "description": "破坏性、不可撤销或影响外部的操作",
+          "type": "string"
+        }
+      ]
+    },
+    "ModelConfig": {
+      "description": "Model configuration",
+      "properties": {
+        "api_key": {
+          "description": "API key for the provider",
+          "type": "string"
+        },
+        "context_window": {
+          "description": "该模型对应的上下文窗口大小",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "endpoint": {
+          "description": "API base URL of the provider",
+          "type": "string"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Extra HTTP headers sent with every request",
+          "type": "object"
+        },
+        "max_tokens": {
+          "description": "Maximum output tokens per request",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "model_id": {
+          "description": "Model identifier sent to the provider API",
+          "type": "string"
+        },
+        "name": {
+          "description": "模型的唯一标识名（如 \"`claude_sonnet\"、\"gpt4o`\"）",
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/ModelProvider"
+        },
+        "sse_timeout_secs": {
+          "description": "SSE stream read timeout in seconds",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "temperature": {
+          "description": "Sampling temperature",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "thinking": {
+          "$ref": "#/$defs/ThinkingConfig"
+        }
+      },
+      "type": "object"
+    },
+    "ModelProvider": {
+      "description": "Provider API dialect",
+      "oneOf": [
+        {
+          "enum": [
+            "openai",
+            "anthropic"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "openai_response",
+          "description": "`OpenAI` Responses API (`/v1/responses`), for GPT-5 / o-series reasoning models",
+          "type": "string"
+        }
+      ]
+    },
+    "PlatformConfig": {
+      "description": "Platform adapter credentials; the variant is selected by the `type` tag",
+      "oneOf": [
+        {
+          "properties": {
+            "token": {
+              "description": "Bot token from `@BotFather`",
+              "type": "string"
+            },
+            "type": {
+              "const": "telegram",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "token"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "app_id": {
+              "description": "Feishu app id",
+              "type": "string"
+            },
+            "app_secret": {
+              "description": "Feishu app secret",
+              "type": "string"
+            },
+            "type": {
+              "const": "feishu",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "app_id",
+            "app_secret"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TasksConfig": {
+      "description": "Configuration for lightweight model-backed tasks.",
+      "properties": {
+        "fast_model": {
+          "description": "Model key used for lightweight tasks. Falls back to the session model when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ThinkingConfig": {
+      "description": "Thinking configuration for supported models",
+      "properties": {
+        "budget_tokens": {
+          "description": "Maximum tokens for thinking (Anthropic `budget_tokens`)",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "effort": {
+          "description": "Reasoning effort / output quality level (low/medium/high)\nUsed for `OpenAI` `reasoning_effort` and `Anthropic` `output_config.effort`",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Enable thinking/reasoning output",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Complete yomi configuration from environment",
+  "properties": {
+    "agent": {
+      "$ref": "#/$defs/AgentConfig",
+      "description": "Agent behavior settings"
+    },
+    "auto_approve": {
+      "$ref": "#/$defs/Level",
+      "description": "Default auto-approve level for tool permissions (safe | caution | dangerous)"
+    },
+    "channels": {
+      "description": "External platform channels (Telegram, Feishu, etc.)",
+      "items": {
+        "$ref": "#/$defs/ChannelConfig"
+      },
+      "type": "array"
+    },
+    "data_dir": {
+      "description": "Data directory for sessions, logs, databases, etc. (default `~/.yomi`)",
+      "type": "string"
+    },
+    "env": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "General-purpose environment variables injected at startup, overriding\nhost values.\nKeys are used verbatim and do not require the [`crate::ENV_PREFIX`] prefix.",
+      "type": "object"
+    },
+    "extensions": {
+      "description": "wire 外部扩展（TOML: `[[extensions]]`）：跟随 daemon 拉起的扩展进程。",
+      "items": {
+        "$ref": "#/$defs/ExtensionConfig"
+      },
+      "type": "array"
+    },
+    "features": {
+      "$ref": "#/$defs/FeaturesConfig",
+      "description": "Experimental feature flags"
+    },
+    "gc": {
+      "$ref": "#/$defs/GcConfig",
+      "description": "Garbage-collection policy for expired session resources"
+    },
+    "log_dir": {
+      "description": "Log directory (default `<data_dir>/logs`)",
       "type": [
         "string",
         "null"
       ]
     },
-    "channels": {
-      "description": "External platform channels (Telegram, Feishu, etc.).",
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "description": "Channel name.",
-            "type": "string"
-          },
-          "enabled": {
-            "description": "Whether the channel is enabled.",
-            "type": "boolean",
-            "default": false
-          },
-          "platform": {
-            "description": "Platform-specific configuration.",
-            "type": "object",
-            "properties": {
-              "type": {
-                "description": "Platform type.",
-                "type": "string",
-                "enum": ["telegram", "feishu"]
-              },
-              "token": {
-                "description": "Telegram bot token.",
-                "type": "string"
-              },
-              "app_id": {
-                "description": "Feishu app ID.",
-                "type": "string"
-              },
-              "app_secret": {
-                "description": "Feishu app secret.",
-                "type": "string"
-              }
-            },
-            "required": ["type"],
-            "additionalProperties": false,
-            "allOf": [
-              {
-                "if": {
-                  "properties": { "type": { "const": "telegram" } },
-                  "required": ["type"]
-                },
-                "then": { "required": ["token"] }
-              },
-              {
-                "if": {
-                  "properties": { "type": { "const": "feishu" } },
-                  "required": ["type"]
-                },
-                "then": { "required": ["app_id", "app_secret"] }
-              }
-            ]
-          },
-          "allowed_chats": {
-            "description": "Chat IDs that are allowed to access this channel. Empty means allow all. Messages mentioning the bot from other chats get a denial reaction instead of a reply.",
-            "type": "array",
-            "items": { "type": "string" },
-            "default": []
-          },
-          "allowed_users": {
-            "description": "User IDs that are allowed to access this channel. Empty means allow all. Messages mentioning the bot from other users get a denial reaction instead of a reply.",
-            "type": "array",
-            "items": { "type": "string" },
-            "default": []
-          },
-          "blocked_chats": {
-            "description": "Chat IDs that are blocked. Blocked chats are ignored silently (no feedback).",
-            "type": "array",
-            "items": { "type": "string" },
-            "default": []
-          },
-          "blocked_users": {
-            "description": "User IDs that are blocked. Blocked users are ignored silently (no feedback).",
-            "type": "array",
-            "items": { "type": "string" },
-            "default": []
-          },
-          "require_mention": {
-            "description": "Whether the bot must be mentioned to respond.",
-            "type": "boolean",
-            "default": true
-          },
-          "reply_in_thread": {
-            "description": "Whether group-chat replies are anchored to the triggering message so they land in its thread (Feishu thread reply, Telegram quote-reply). Private chats are unaffected.",
-            "type": "boolean",
-            "default": false
-          },
-          "auto_approve_level": {
-            "description": "Auto-approve level for this channel.",
-            "type": "string",
-            "enum": ["safe", "caution", "dangerous"],
-            "default": "safe"
-          },
-          "observability": {
-            "description": "Status card + run receipts for run observability. When disabled, channels behave as before (ack reaction + final reply).",
-            "type": "boolean",
-            "default": true
-          },
-          "tool_trace": {
-            "description": "Attach the run trace (tool calls + intermediate texts) to the final reply bubble: a collapsible panel on card-capable platforms (Feishu, requires client V7.9+), plain-text lines elsewhere. When disabled, the final reply is the bare text.",
-            "type": "boolean",
-            "default": true
-          },
-          "mid_run_split": {
-            "description": "When the user posts messages mid-run, freeze the status card in place as a terminal receipt and deliver the final reply as a NEW message below them (carrying the run trace). When disabled, the status card always morphs into the final reply in place (one message per run).",
-            "type": "boolean",
-            "default": true
-          },
-          "history_context": {
-            "description": "Recent-chat messages injected as context when the bot is triggered in a group (fetched since the last trigger in that thread/chat, newest cap; 0 disables; capped at 50 per platform page).",
-            "type": "integer",
-            "default": 20
-          },
-          "approval_chat_id": {
-            "description": "Target group chat_id for Feishu doc-permission application notifications. When unset, every admin in admin_users is notified by DM instead; when both are unset the feature is off (applications are only logged, queryable via /permits). Note: docs events are two-level — each document also needs one file-level subscribe API call (POST /open-apis/drive/v1/files/{token}/subscribe?file_type=docx, body {\"event_type\":\"drive.file.permission_member_applied_v1\"}) or no event is generated.",
-            "type": ["string", "null"]
-          },
-          "admin_users": {
-            "description": "Admin open_ids allowed to approve/deny doc-permission applications (card buttons and /permits /approve /deny commands alike). Also the DM recipients when approval_chat_id is unset.",
-            "type": "array",
-            "items": { "type": "string" },
-            "default": []
-          },
-          "disabled_events": {
-            "description": "Platform event features disabled at runtime (vocabulary is per-platform; Feishu currently supports doc_comment = doc comment triggers). Event delivery itself requires console-side subscription — this disables reacting without a console trip. Unknown names only warn at startup; unset = all enabled.",
-            "type": "array",
-            "items": { "type": "string", "enum": ["doc_comment"] },
-            "default": []
-          }
-        },
-        "required": ["name", "platform"],
-        "additionalProperties": false
-      }
-    },
-    "env": {
-      "description": "General-purpose environment variables injected at startup, overriding host values. Keys are used verbatim and do not require the YOMI_ prefix.",
-      "type": "object",
-      "additionalProperties": { "type": "string" },
-      "default": {}
-    },
-    "tasks": {
-      "description": "Lightweight task configuration (e.g., auto title generation).",
-      "type": "object",
-      "properties": {
-        "fast_model": {
-          "description": "Model key used for lightweight tasks. Falls back to the session model when absent.",
-          "type": ["string", "null"]
-        }
-      },
-      "additionalProperties": false
+    "max_checkpoints": {
+      "description": "Maximum number of checkpoints to retain per session (default: 5)",
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
     },
     "models": {
-      "description": "Multi-model configuration array. At least one model is required.",
-      "type": "array",
-      "minItems": 1,
+      "description": "Multi-model configuration array (TOML: `[[models]]`), at least one element",
       "items": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "description": "Unique model identifier used in the config (e.g., 'claude_sonnet', 'gpt4o').",
-            "type": "string",
-            "default": "default"
-          },
-          "provider": {
-            "description": "Model provider.",
-            "type": "string",
-            "enum": ["openai", "anthropic", "openai_response"],
-            "default": "openai"
-          },
-          "model_id": {
-            "description": "Actual model ID sent to the API (e.g., 'gpt-4o', 'claude-3-5-sonnet-20241022').",
-            "type": "string"
-          },
-          "endpoint": {
-            "description": "API base URL / endpoint.",
-            "type": "string"
-          },
-          "api_key": {
-            "description": "API key for the provider.",
-            "type": "string"
-          },
-          "max_tokens": {
-            "description": "Maximum tokens per response.",
-            "type": ["integer", "null"],
-            "minimum": 1
-          },
-          "temperature": {
-            "description": "Sampling temperature (0.0–2.0).",
-            "type": ["number", "null"],
-            "minimum": 0.0,
-            "maximum": 2.0
-          },
-          "fallback_model_id": {
-            "description": "Fallback model ID to use if this model is unavailable.",
-            "type": ["string", "null"]
-          },
-          "sse_timeout_secs": {
-            "description": "SSE streaming timeout in seconds.",
-            "type": "integer",
-            "minimum": 1,
-            "default": 30
-          },
-          "thinking": {
-            "description": "Thinking / reasoning configuration for supported models.",
-            "type": "object",
-            "properties": {
-              "enabled": {
-                "description": "Enable extended thinking mode.",
-                "type": "boolean",
-                "default": false
-              },
-              "budget_tokens": {
-                "description": "Token budget for thinking.",
-                "type": "integer",
-                "minimum": 1,
-                "default": 2048
-              },
-              "effort": {
-                "description": "Reasoning effort level (low/medium/high) for OpenAI o1/o3 models.",
-                "type": ["string", "null"]
-              }
-            },
-            "additionalProperties": false
-          },
-          "headers": {
-            "description": "Extra HTTP headers to send with API requests.",
-            "type": "object",
-            "additionalProperties": { "type": "string" },
-            "default": {}
-          },
-          "context_window": {
-            "description": "Context window size for this model.",
-            "type": "integer",
-            "minimum": 1,
-            "default": 131072
-          }
-        },
-        "required": ["name", "provider", "model_id", "endpoint", "api_key"],
-        "additionalProperties": false
-      }
-    },
-    "extensions": {
-      "description": "Wire-protocol external extensions spawned alongside the daemon (TOML: [[extensions]]). Listed = launched with the daemon, group-killed when it dies, restarted with fixed backoff on crash.",
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "description": "Extension name.",
-            "type": "string"
-          },
-          "command": {
-            "description": "Command line (argv[0] is the executable).",
-            "type": "array",
-            "items": { "type": "string" }
-          }
-        },
-        "required": ["name", "command"],
-        "additionalProperties": false
+        "$ref": "#/$defs/ModelConfig"
       },
-      "default": []
+      "type": "array"
+    },
+    "skill_folders": {
+      "description": "Skill 目录列表，按优先级从低到高排列（同名 skill 由靠后的目录胜出）。",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "socket_auth_hash": {
+      "description": "Socket auth password hash (`blake3:<hex>`), enforced on ws/wss\ntransports only; unix sockets rely on filesystem permissions.\n`YOMI_SOCKET_AUTH_HASH` overrides. None = no auth.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tasks": {
+      "$ref": "#/$defs/TasksConfig",
+      "description": "Lightweight model-backed task settings"
     }
   },
-  "additionalProperties": false
+  "title": "Yomi Config",
+  "type": "object"
 }

@@ -97,8 +97,10 @@ fn validate_env_entry(name: &str, value: &str) -> std::result::Result<(), Kernel
     Ok(())
 }
 
-/// Provider type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// Provider API dialect
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelProvider {
     #[default]
@@ -149,7 +151,7 @@ impl std::fmt::Display for ModelProvider {
 }
 
 /// Feature flags for experimental capabilities.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(default)]
 pub struct FeaturesConfig {
     /// Enable all features unless a feature is explicitly overridden.
@@ -192,7 +194,7 @@ impl FeaturesConfig {
 }
 
 /// Configuration for lightweight model-backed tasks.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct TasksConfig {
     /// Model key used for lightweight tasks. Falls back to the session model when absent.
@@ -204,7 +206,7 @@ pub struct TasksConfig {
 /// These are *policy* settings: what to collect and, for the daemon, how
 /// often. Whether a run actually deletes (`dry_run`) is a per-invocation
 /// flag and deliberately not configurable here.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct GcConfig {
@@ -243,17 +245,23 @@ pub struct KernelConfig {
 }
 
 /// Complete yomi configuration from environment
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
+#[schemars(title = "Yomi Config")]
 pub struct Config {
+    /// Agent behavior settings
     pub agent: AgentConfig,
     /// General-purpose environment variables injected at startup, overriding
     /// host values.
     /// Keys are used verbatim and do not require the [`crate::ENV_PREFIX`] prefix.
     pub env: BTreeMap<String, String>,
+    /// Lightweight model-backed task settings
     pub tasks: TasksConfig,
+    /// Default auto-approve level for tool permissions (safe | caution | dangerous)
     pub auto_approve: Level,
+    /// Data directory for sessions, logs, databases, etc. (default `~/.yomi`)
     pub data_dir: PathBuf,
+    /// Log directory (default `<data_dir>/logs`)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_dir: Option<PathBuf>,
     /// Skill 目录列表，按优先级从低到高排列（同名 skill 由靠后的目录胜出）。
@@ -282,8 +290,9 @@ pub struct Config {
 }
 
 /// `[[extensions]]` 条目：列出即拉起，daemon 死则组杀，崩溃固定退避重拉。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct ExtensionConfig {
+    /// Extension name (unique identifier)
     pub name: String,
     /// 命令行（argv[0] 为可执行文件）。
     pub command: Vec<String>,

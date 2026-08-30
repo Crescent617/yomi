@@ -8,6 +8,9 @@
 #:schema https://raw.githubusercontent.com/Crescent617/yomi/main/docs/config-schema.json
 ```
 
+> `docs/config-schema.json` 由代码生成，勿手改。查看：`yomi config schema`；
+> 改动配置结构后重新生成：`cargo run -p cli -- config schema > docs/config-schema.json`（有测试防漂移）。
+
 ## 配置示例
 
 ```toml
@@ -44,7 +47,6 @@ KIMI_AGENT_API_KEY = "sk-..."
 | `api_key` | string | API 密钥 | 空（需配置） |
 | `max_tokens` | integer | 单次最大输出 token | — |
 | `temperature` | float | 温度 | — |
-| `fallback_model_id` | string | 降级模型 ID | — |
 | `sse_timeout_secs` | integer | SSE 流超时（秒） | `30` |
 | `context_window` | integer | 上下文窗口大小 | `131072` |
 | `headers` | object | 额外 HTTP 请求头 | `{}` |

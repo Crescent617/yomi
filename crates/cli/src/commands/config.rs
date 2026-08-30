@@ -46,3 +46,42 @@ pub fn set(global: &GlobalArgs, key: &str, value: String) -> Result<()> {
     println!("Config saved to {}", config_path.display());
     Ok(())
 }
+
+/// Print the JSON Schema of the config file, generated from the `Config`
+/// type so it can never drift from the code. `docs/config-schema.json` is
+/// the verbatim output of this command (enforced by a test).
+///
+/// `default` values are stripped: they are machine-dependent (e.g.
+/// `data_dir` expands `~`) and verbose (the whole built-in system prompt),
+/// and the effective defaults are always visible via `config show`.
+pub fn schema() {
+    println!("{}", schema_json_string());
+}
+
+pub(crate) fn schema_json_string() -> String {
+    let mut schema = serde_json::to_value(schemars::schema_for!(kernel::config::Config))
+        .expect("Config schema must serialize");
+    strip_defaults(&mut schema);
+    serde_json::to_string_pretty(&schema).expect("Config schema must serialize")
+}
+
+fn strip_defaults(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.remove("default");
+            for v in map.values_mut() {
+                strip_defaults(v);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for v in items {
+                strip_defaults(v);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+#[path = "config_test.rs"]
+mod tests;

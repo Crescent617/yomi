@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
 /// Agent configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 // Independent feature switches; a bool per capability is the intended shape.
 #[allow(clippy::struct_excessive_bools)]
@@ -19,8 +19,12 @@ pub struct AgentConfig {
     pub name: String,
     /// Default model name for new sessions (points to a model in Config.models)
     pub default_model: String,
+    /// Maximum number of iterations per agent run
     pub max_iterations: usize,
+    /// Allow the agent to spawn sub-agents
     pub enable_subagent: bool,
+    /// Custom system prompt override; supports the {{name}} placeholder.
+    /// The built-in default prompt is used when unset.
     pub system_prompt: String,
     /// Tool blocklist (regex patterns) for disabling tools
     pub tool_blocklist: Vec<String>,

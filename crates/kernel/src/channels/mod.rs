@@ -113,21 +113,29 @@ pub enum ChannelStatus {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One external platform channel instance (e.g. a Feishu app)
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[allow(clippy::struct_excessive_bools)] // feature toggles are naturally bools
 pub struct ChannelConfig {
+    /// Unique channel instance name
     pub name: String,
+    /// Whether this channel is active
     pub enabled: bool,
     pub platform: PlatformConfig,
+    /// Chat allowlist; empty = all chats allowed
     #[serde(default)]
     pub allowed_chats: Vec<String>,
+    /// User allowlist; empty = all users allowed
     #[serde(default)]
     pub allowed_users: Vec<String>,
+    /// Chat blocklist
     #[serde(default)]
     pub blocked_chats: Vec<String>,
+    /// User blocklist
     #[serde(default)]
     pub blocked_users: Vec<String>,
+    /// In group chats, require @mention to trigger the bot
     #[serde(default = "default_require_mention")]
     pub require_mention: bool,
     /// When enabled, group-chat replies are anchored to the triggering
@@ -136,6 +144,7 @@ pub struct ChannelConfig {
     #[serde(default)]
     pub reply_in_thread: bool,
     #[serde(default)]
+    /// Channel-level auto-approve override for tool permissions
     pub auto_approve_level: Level,
     /// Status card + run receipts for run observability. When disabled,
     /// no status card or run receipts are shown; reply buffering (only the
@@ -227,11 +236,20 @@ impl Default for ChannelConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Platform adapter credentials; the variant is selected by the `type` tag
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PlatformConfig {
-    Telegram { token: String },
-    Feishu { app_id: String, app_secret: String },
+    Telegram {
+        /// Bot token from `@BotFather`
+        token: String,
+    },
+    Feishu {
+        /// Feishu app id
+        app_id: String,
+        /// Feishu app secret
+        app_secret: String,
+    },
 }
 
 /// Default platform for CLI channel selection (currently the only

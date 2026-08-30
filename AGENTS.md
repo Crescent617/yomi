@@ -84,3 +84,4 @@ just ci
 ## Docs
 
 - Design: ./docs/design
+- `docs/config-schema.json` 由代码生成，勿手改：改了 Config 结构后跑 `cargo run -p cli -- config schema > docs/config-schema.json`（drift 测试兜底）

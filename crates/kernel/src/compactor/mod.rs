@@ -126,7 +126,7 @@ fn trim_oldest_context_rounds(messages: &[Arc<Message>]) -> Option<Vec<Arc<Messa
 }
 
 /// Compactor for managing conversation context
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct Compactor {
     /// Whether client-side micro-compaction is enabled

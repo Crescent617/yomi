@@ -166,10 +166,12 @@ pub struct ToolCallRequest {
 }
 
 /// Thinking configuration for supported models
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ThinkingConfig {
+    /// Enable thinking/reasoning output
     pub enabled: bool,
+    /// Maximum tokens for thinking (Anthropic `budget_tokens`)
     pub budget_tokens: u32,
     /// Reasoning effort / output quality level (low/medium/high)
     /// Used for `OpenAI` `reasoning_effort` and `Anthropic` `output_config.effort`
@@ -188,20 +190,26 @@ impl Default for ThinkingConfig {
 }
 
 /// Model configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ModelConfig {
     /// 模型的唯一标识名（如 "`claude_sonnet"、"gpt4o`"）
     pub name: String,
     pub provider: crate::config::ModelProvider,
+    /// Model identifier sent to the provider API
     pub model_id: String,
+    /// API base URL of the provider
     pub endpoint: String,
+    /// API key for the provider
     pub api_key: String,
+    /// Maximum output tokens per request
     pub max_tokens: Option<u32>,
+    /// Sampling temperature
     pub temperature: Option<f32>,
-    pub fallback_model_id: Option<String>,
+    /// SSE stream read timeout in seconds
     pub sse_timeout_secs: u64,
     pub thinking: ThinkingConfig,
+    /// Extra HTTP headers sent with every request
     #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub headers: HashMap<String, String>,
     /// 该模型对应的上下文窗口大小
@@ -218,7 +226,6 @@ impl Default for ModelConfig {
             api_key: String::new(),
             max_tokens: None,
             temperature: None,
-            fallback_model_id: None,
             sse_timeout_secs: 30,
             thinking: ThinkingConfig::default(),
             headers: HashMap::new(),
