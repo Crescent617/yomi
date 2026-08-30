@@ -124,7 +124,10 @@
             inherit version cargoArtifacts;
             pname = "yomi-gui";
 
-            cargoExtraArgs = "-p yomi-gui";
+            # custom-protocol：tauri 用它区分生产/开发模式（见 tauri 官方模板约定，勿放进 default
+            # feature，否则 tauri dev 的 devUrl/HMR 会失效）。缺失时二进制误以为 dev 去连
+            # devUrl localhost:1420 → 整页 "Could not connect to localhost: Connection refused"。
+            cargoExtraArgs = "-p yomi-gui --features custom-protocol";
 
             # 前端 npm 依赖（直接读取 crates/gui/frontend/package-lock.json，无需维护 hash）
             npmDeps = pkgs.importNpmLock { npmRoot = ./crates/gui/frontend; };
@@ -151,6 +154,19 @@
             '';
 
             postFixup = ''
+              # applications 菜单条目（a47b19a 重构时丢失，在此恢复）
+              install -Dm644 crates/gui/icons/128x128.png $out/share/icons/hicolor/128x128/apps/yomi.png
+              install -Dm644 crates/gui/icons/32x32.png $out/share/icons/hicolor/32x32/apps/yomi.png
+              mkdir -p $out/share/applications
+              cat > $out/share/applications/yomi.desktop <<EOF
+              [Desktop Entry]
+              Name=Yomi
+              Exec=yomi-gui
+              Icon=yomi
+              Type=Application
+              Categories=Utility;
+              EOF
+
               # 确保前端产物在 store 中的正确位置
               mkdir -p $out/frontend
               cp -r crates/gui/frontend/build $out/frontend/
