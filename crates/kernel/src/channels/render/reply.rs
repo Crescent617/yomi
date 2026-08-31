@@ -3,15 +3,16 @@
 //! A run (see `obs.rs` for the lifecycle definition) may produce several
 //! assistant texts. The **last** one is the reply body; the rest of the
 //! run renders as a **process panel** below it (Feishu card JSON 2.0
-//! `collapsible_panel`, requires Feishu client V7.9+): expanded by
-//! default, the full chronological narrative — each earlier text as a
-//! markdown element, each run of consecutive tool calls folded into a
-//! nested collapsed panel (click to expand). Runs without intermediate
-//! texts keep the classic single collapsed tool-trace panel. On
-//! platforms without card support the trace appends as plain-text
-//! lines. With observability enabled the run's status card **morphs**
-//! into this final reply on settlement — one message per run; otherwise
-//! the reply is sent as a new message bubble.
+//! `collapsible_panel`, requires Feishu client V7.9+): collapsed by
+//! default like every panel on the final card — one click reveals the
+//! full chronological narrative, each earlier text as a markdown
+//! element, each run of consecutive tool calls folded into a nested
+//! collapsed panel. Runs without intermediate texts keep the classic
+//! single collapsed tool-trace panel. On platforms without card support
+//! the trace appends as plain-text lines. With observability enabled
+//! the run's status card **morphs** into this final reply on settlement —
+//! one message per run; otherwise the reply is sent as a new message
+//! bubble.
 
 use serde_json::json;
 use std::fmt::Write as _;
@@ -315,7 +316,6 @@ impl RunReplyBuffer {
                 usage_out: self.usage_out,
                 ..Default::default()
             }),
-            false,
         ))
     }
 
@@ -408,12 +408,13 @@ impl FinalReply {
 
 /// Render the Feishu reply card (schema 2.0, no header): an optional notice
 /// line (e.g. error summary for abnormal endings), the final text, and the
-/// run trace. When the run produced intermediate texts the trace renders
-/// as a **process panel** (default expanded): the full chronological
-/// narrative — each intermediate text as a markdown element, each run of
-/// consecutive tool calls folded into a nested collapsed panel. Without
-/// intermediate texts it stays the classic collapsed tool-trace panel.
-/// Returns `None` when there is nothing to show.
+/// run trace — every panel collapsed by default on the final card. When
+/// the run produced intermediate texts the trace renders as a **process
+/// panel**: the full chronological narrative one click away — each
+/// intermediate text as a markdown element, each run of consecutive tool
+/// calls folded into a nested collapsed panel. Without intermediate texts
+/// it stays the classic collapsed tool-trace panel. Returns `None` when
+/// there is nothing to show.
 pub(crate) fn render_card(reply: &FinalReply, notice: Option<&str>) -> Option<String> {
     let mut elements = Vec::new();
     if let Some(notice) = notice {
@@ -439,7 +440,6 @@ pub(crate) fn render_card(reply: &FinalReply, notice: Option<&str>) -> Option<St
             &reply.entries,
             reply.dropped_entries,
             &reply_trace_title(reply),
-            true,
         ));
     }
 
@@ -496,21 +496,17 @@ pub(crate) fn render_plain(reply: &FinalReply) -> String {
     out
 }
 
-/// Panel builder shared by the reply card (`expanded`) and the terminal
-/// receipt (collapsed): entries holding intermediate texts render as a
-/// process panel (full texts + folded tool runs); tool-only entries
-/// render as the classic collapsed tool-trace panel.
-fn entries_panel(
-    entries: &[TraceEntry],
-    dropped_entries: usize,
-    title: &str,
-    expanded: bool,
-) -> serde_json::Value {
+/// Panel builder shared by the reply card and the terminal receipt —
+/// always collapsed (only the live card renders expanded panels):
+/// entries holding intermediate texts render as a process panel (full
+/// texts + folded tool runs); tool-only entries render as the classic
+/// collapsed tool-trace panel.
+fn entries_panel(entries: &[TraceEntry], dropped_entries: usize, title: &str) -> serde_json::Value {
     if entries
         .iter()
         .any(|e| matches!(e, TraceEntry::Narration(_)))
     {
-        process_panel(entries, dropped_entries, title, expanded)
+        process_panel(entries, dropped_entries, title)
     } else {
         trace_panel(
             &trace_lines_with_marker(entries, dropped_entries, true),
@@ -534,18 +530,15 @@ fn trace_lines_with_marker(
     lines
 }
 
-/// Process panel: the full chronological narrative — each intermediate
-/// text as a full-size markdown element (mention rewrite + fence
-/// balancing applied, no truncation), each maximal run of consecutive
-/// tool calls folded into a nested collapsed panel. Panels are stripped
-/// on bot read paths regardless of `expanded` — the narrative is
-/// human-only, like the live card's whisper.
-fn process_panel(
-    entries: &[TraceEntry],
-    dropped_entries: usize,
-    title: &str,
-    expanded: bool,
-) -> serde_json::Value {
+/// Process panel (collapsed, like every panel on terminal cards — only
+/// the live card expands): the full chronological narrative one click
+/// away — each intermediate text as a full-size markdown element
+/// (mention rewrite + fence balancing applied, no truncation), each
+/// maximal run of consecutive tool calls folded into a nested collapsed
+/// panel. Panels are stripped on bot read paths regardless of
+/// `expanded` — the narrative is human-only, like the live card's
+/// whisper.
+fn process_panel(entries: &[TraceEntry], dropped_entries: usize, title: &str) -> serde_json::Value {
     let mut body: Vec<serde_json::Value> = Vec::new();
     if dropped_entries > 0 {
         body.push(json!({
@@ -577,7 +570,7 @@ fn process_panel(
     }
     json!({
         "tag": "collapsible_panel",
-        "expanded": expanded,
+        "expanded": false,
         "header": {
             "title": {
                 "tag": "markdown",

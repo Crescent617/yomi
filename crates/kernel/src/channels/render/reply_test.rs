@@ -273,7 +273,9 @@ fn render_card_structure() {
 
     let panel = &elements[1];
     assert_eq!(panel["tag"], "collapsible_panel");
-    assert_eq!(panel["expanded"], true);
+    // Every panel on the final card starts collapsed — the process
+    // narrative is one click away.
+    assert_eq!(panel["expanded"], false);
     let title = panel["header"]["title"]["content"].as_str().unwrap();
     assert!(title.contains("🐾 0s · 💬 2"), "title: {title}");
 

@@ -2061,10 +2061,11 @@ async fn stopped_morphs_status_card_into_final_reply() {
     assert!(morphed["header"].is_null(), "no header after morph");
     let elements = morphed["body"]["elements"].as_array().unwrap();
     assert_eq!(elements[0]["content"], "the final answer");
-    // Process panel (expanded): intermediate text full-size, tool run
-    // folded into a nested collapsed panel.
+    // Process panel (collapsed like every panel on the final card):
+    // intermediate text full-size inside, tool run folded into a nested
+    // collapsed panel.
     assert_eq!(elements[1]["tag"], "collapsible_panel");
-    assert_eq!(elements[1]["expanded"], true);
+    assert_eq!(elements[1]["expanded"], false);
     let body = elements[1]["elements"].as_array().unwrap();
     assert_eq!(body[0]["content"], "intermediate thought");
     assert_eq!(body[1]["tag"], "collapsible_panel");
