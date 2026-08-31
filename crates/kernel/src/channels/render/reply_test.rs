@@ -144,7 +144,7 @@ fn tool_call_only_turns_count_as_steps() {
     assert!(out.contains("🐾 0s · 💬 2"), "out: {out}");
 }
 
-/// 标题段统一：model / ctx / failed / 流量设置后出现在 full trace 标题
+/// 标题段统一：model / ctx / failed / 流量设置后出现在 trace 标题
 /// 上——live 卡、终态收据、回复卡三面共用同一套段落规则（仅 ~
 /// 标记的输出估算是 live-only，按"缺失即省略"规则不出现在终态）。
 #[test]
@@ -157,9 +157,10 @@ fn trace_title_carries_model_ctx_usage_and_failed_when_set() {
     buf.add_usage(&crate::types::MessageId::new(), 12_345, 2_345);
     buf.add_usage(&crate::types::MessageId::new(), 100, 5);
 
-    let Some((_, title)) = buf.full_trace_render() else {
+    let Some(panel) = buf.terminal_trace_panel() else {
         panic!("expected a trace");
     };
+    let title = panel["header"]["title"]["content"].as_str().unwrap();
     assert_eq!(
         title, "🐾 0s · 💬 2 · 12.4k↑ · 2.4k↓ · ❌ 1 · k3-hs · 10%",
         "title: {title}"
@@ -189,9 +190,10 @@ fn title_counters_survive_buffer_cap() {
     }
     assert!(buf.entries.len() <= 100);
 
-    let Some((_, title)) = buf.full_trace_render() else {
+    let Some(panel) = buf.terminal_trace_panel() else {
         panic!("expected a trace");
     };
+    let title = panel["header"]["title"]["content"].as_str().unwrap();
     assert!(
         title.contains("💬 90"),
         "all steps counted despite cap: {title}"
@@ -203,21 +205,28 @@ fn title_counters_survive_buffer_cap() {
 }
 
 #[test]
-fn full_trace_render_keeps_every_entry_and_empty_is_none() {
-    assert!(RunReplyBuffer::new().full_trace_render().is_none());
+fn terminal_trace_panel_keeps_every_entry_and_empty_is_none() {
+    assert!(RunReplyBuffer::new().terminal_trace_panel().is_none());
 
     let buf = buffer_with_run();
-    let Some((lines, title)) = buf.full_trace_render() else {
+    let Some(panel) = buf.terminal_trace_panel() else {
         panic!("expected a trace");
     };
     // Unlike into_reply, the final text stays a narration — the terminal
     // receipt card shows the whole run, the reply text lands separately.
+    let title = panel["header"]["title"]["content"].as_str().unwrap();
     assert!(title.starts_with("🐾 0s · 💬 2"), "{title}");
-    let joined = lines.join("\n");
-    assert!(joined.contains("💬 Let me look at the code."), "{joined}");
-    assert!(joined.contains("✅ **read**"), "{joined}");
-    assert!(joined.contains("✅ **shell**"), "{joined}");
-    assert!(joined.contains("💬 All tests pass."), "{joined}");
+    // Collapsed tombstone with the process layout: both texts full-size,
+    // the tool run folded into a nested panel.
+    assert_eq!(panel["expanded"], false);
+    let body = panel["elements"].as_array().unwrap();
+    let tags: Vec<&str> = body.iter().map(|e| e["tag"].as_str().unwrap()).collect();
+    assert_eq!(tags, ["markdown", "collapsible_panel", "markdown"]);
+    assert_eq!(body[0]["content"], "Let me look at the code.");
+    assert_eq!(body[2]["content"], "All tests pass.");
+    let tools = body[1]["elements"][0]["content"].as_str().unwrap();
+    assert!(tools.contains("✅ **read**"), "{tools}");
+    assert!(tools.contains("✅ **shell**"), "{tools}");
 }
 
 #[test]
@@ -257,20 +266,103 @@ fn render_card_structure() {
 
     assert_eq!(card["schema"], "2.0");
     let elements = card["body"]["elements"].as_array().unwrap();
+    // final text → process panel (expanded: narrative + folded tool runs)
     assert_eq!(elements.len(), 2);
     assert_eq!(elements[0]["tag"], "markdown");
     assert_eq!(elements[0]["content"], "All tests pass.");
 
     let panel = &elements[1];
     assert_eq!(panel["tag"], "collapsible_panel");
-    assert_eq!(panel["expanded"], false);
+    assert_eq!(panel["expanded"], true);
     let title = panel["header"]["title"]["content"].as_str().unwrap();
     assert!(title.contains("🐾 0s · 💬 2"), "title: {title}");
 
+    let body = panel["elements"].as_array().unwrap();
+    assert_eq!(body.len(), 2);
+    // Intermediate text: full-size markdown, no snippet truncation.
+    assert_eq!(body[0]["tag"], "markdown");
+    assert_eq!(body[0]["content"], "Let me look at the code.");
+    // The tool run folds into a nested collapsed panel.
+    let tools = &body[1];
+    assert_eq!(tools["tag"], "collapsible_panel");
+    assert_eq!(tools["expanded"], false);
+    let ttitle = tools["header"]["title"]["content"].as_str().unwrap();
+    assert!(ttitle.starts_with("🔧 read · shell"), "title: {ttitle}");
+    let tbody = tools["elements"][0]["content"].as_str().unwrap();
+    assert!(tbody.contains("✅ **read** · `crates/kernel/src/hub.rs` · 120ms"));
+    assert!(tbody.contains("✅ **shell** · `cargo test -p kernel` · 1m05s"));
+}
+
+#[test]
+fn process_panel_keeps_chronology_and_folds_each_tool_run() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_tool_start("t0", "read", None);
+    buf.record_tool_end("t0", 5, false);
+    buf.record_model_end("first note");
+    buf.record_tool_start("t1", "shell", None);
+    buf.record_tool_end("t1", 100, false);
+    buf.record_tool_start("t2", "shell", None);
+    buf.record_tool_end("t2", 200, false);
+    buf.record_model_end("second note");
+    buf.record_tool_start("t3", "edit", None);
+    buf.record_tool_end("t3", 8, false);
+    buf.record_model_end("final answer");
+    let card: serde_json::Value =
+        serde_json::from_str(&render_card(&buf.into_reply(), None).unwrap()).unwrap();
+    let elements = card["body"]["elements"].as_array().unwrap();
+    assert_eq!(elements.len(), 2);
+    assert_eq!(elements[0]["content"], "final answer");
+
+    let body = elements[1]["elements"].as_array().unwrap();
+    let tags: Vec<&str> = body.iter().map(|e| e["tag"].as_str().unwrap()).collect();
+    assert_eq!(
+        tags,
+        [
+            "collapsible_panel", // leading tool run (t0)
+            "markdown",          // first note
+            "collapsible_panel", // t1+t2 grouped
+            "markdown",          // second note
+            "collapsible_panel", // trailing tool run (t3)
+        ]
+    );
+    assert_eq!(body[1]["content"], "first note");
+    assert_eq!(body[3]["content"], "second note");
+    let t0 = body[0]["header"]["title"]["content"].as_str().unwrap();
+    assert!(t0.starts_with("🔧 read"), "title: {t0}");
+    let t12 = body[2]["header"]["title"]["content"].as_str().unwrap();
+    assert!(t12.starts_with("🔧 shell×2"), "title: {t12}");
+    let t12body = body[2]["elements"][0]["content"].as_str().unwrap();
+    assert_eq!(t12body.lines().count(), 2, "two tools in one panel");
+}
+
+#[test]
+fn process_panel_rewrites_mentions_in_intermediate_texts() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("cc <@ou_mid>");
+    buf.record_model_end("done");
+    let card = render_card(&buf.into_reply(), None).unwrap();
+    assert!(card.contains("<at id=ou_mid></at>"), "{card}");
+}
+
+#[test]
+fn tools_only_run_keeps_single_collapsed_trace_panel() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_tool_start("t1", "read", None);
+    buf.record_tool_end("t1", 5, false);
+    buf.record_model_end("done");
+    let card: serde_json::Value =
+        serde_json::from_str(&render_card(&buf.into_reply(), None).unwrap()).unwrap();
+    let elements = card["body"]["elements"].as_array().unwrap();
+    assert_eq!(elements.len(), 2);
+    // No intermediate texts → no process panel, no nesting: the classic
+    // collapsed trace panel.
+    let panel = &elements[1];
+    assert_eq!(panel["tag"], "collapsible_panel");
+    assert_eq!(panel["expanded"], false);
+    let title = panel["header"]["title"]["content"].as_str().unwrap();
+    assert!(title.starts_with("🐾"), "title: {title}");
     let body = panel["elements"][0]["content"].as_str().unwrap();
-    assert!(body.contains("💬 Let me look at the code."));
-    assert!(body.contains("✅ **read** · `crates/kernel/src/hub.rs` · 120ms"));
-    assert!(body.contains("✅ **shell** · `cargo test -p kernel` · 1m05s"));
+    assert!(body.contains("✅ **read**"), "body: {body}");
 }
 
 #[test]
@@ -281,7 +373,7 @@ fn trace_panel_element_expanded_starts_open() {
     assert_eq!(panel["tag"], "collapsible_panel");
     assert_eq!(panel["expanded"], true);
     // The collapsed variant used on terminal/reply cards stays collapsed.
-    let panel = super::trace_panel_element(&["l1".to_string()], "t");
+    let panel = super::trace_panel(&["l1".to_string()], "t", false);
     assert_eq!(panel["expanded"], false);
 }
 
@@ -342,18 +434,32 @@ fn buffer_drops_oldest_entries_beyond_cap() {
         Some(format!("text {}", BUFFER_MAX_ENTRIES + 19)).as_deref()
     );
     assert!(reply.entries.len() <= BUFFER_MAX_ENTRIES);
-    // … and the final render surfaces the dropped count as a marker line.
+    // … and the process panel leads with the dropped-count marker line.
     let card = render_card(&reply, None).unwrap();
     assert!(card.contains("··· and 20 earlier entries"));
+    let v: serde_json::Value = serde_json::from_str(&card).unwrap();
+    let body = v["body"]["elements"][1]["elements"].as_array().unwrap();
+    assert_eq!(body[0]["tag"], "markdown");
+    assert_eq!(body[0]["text_size"], "notation");
+    assert_eq!(body[0]["content"], "··· and 20 earlier entries");
+    // The plain fallback carries the same marker after the title line.
+    let out = render_plain(&reply);
+    assert!(
+        out.contains("\n··· and 20 earlier entries\n"),
+        "plain marker: {out}"
+    );
 }
 
 #[test]
 fn render_plain_appends_trace_without_markup() {
     let reply = buffer_with_run().into_reply();
     let out = render_plain(&reply);
+    // Final text first, then the title and the chronological transcript:
+    // intermediate text in full (no 💬 snippet), tools as plain lines.
     assert!(out.starts_with("All tests pass."));
     assert!(out.contains("🐾 0s · 💬 2"));
-    assert!(out.contains("💬 Let me look at the code."));
+    assert!(out.contains("\nLet me look at the code.\n"));
+    assert!(!out.contains("💬 Let me look at the code."));
     assert!(out.contains("✅ shell · cargo test -p kernel · 1m05s"));
     assert!(!out.contains("<font"), "no Feishu markup in plain fallback");
     assert!(!out.contains("**"), "no markdown bold in plain fallback");
@@ -596,4 +702,185 @@ fn cron_tool_summary_combines_action_target_schedule() {
     // 无目标时 action 本身也要显示（此前整行空白）
     let line = summary_of(r#"{"action":"list"}"#);
     assert!(line.contains("list"), "got: {line}");
+}
+
+#[test]
+fn tool_run_title_merges_consecutive_same_name_tools() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_tool_start("t1", "shell", None);
+    buf.record_tool_end("t1", 100, false);
+    buf.record_tool_start("t2", "shell", None);
+    buf.record_tool_end("t2", 200, false);
+    buf.record_tool_start("t3", "read", None);
+    buf.record_tool_end("t3", 5, false);
+    buf.record_tool_start("t4", "shell", None);
+    buf.record_tool_end("t4", 50, false);
+    buf.record_model_end("done");
+    let reply = buf.into_reply();
+    let title = tool_run_title(&reply.entries);
+    // Consecutive duplicates merge with ×N; the later shell stays
+    // separate (chronology beats global counting).
+    assert_eq!(title, "🔧 shell×2 · read · shell · 355ms");
+}
+
+#[test]
+fn tool_run_title_caps_long_name_lists() {
+    let mut buf = RunReplyBuffer::new();
+    for i in 0..20 {
+        buf.record_tool_start(&format!("t{i}"), &format!("toolname{i}"), None);
+        buf.record_tool_end(&format!("t{i}"), 1, false);
+    }
+    buf.record_model_end("done");
+    let reply = buf.into_reply();
+    let title = tool_run_title(&reply.entries);
+    assert!(title.starts_with("🔧 toolname0 · toolname1"), "{title}");
+    assert!(title.contains('…'), "names capped: {title}");
+    assert!(title.ends_with("· 20ms"), "elapsed kept: {title}");
+}
+
+#[test]
+fn tool_run_title_omits_zero_elapsed() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_tool_start("t1", "read", None);
+    let reply = {
+        buf.record_model_end("done");
+        buf.into_reply()
+    };
+    // Pending tool (no elapsed yet): names only, no duration segment.
+    assert_eq!(tool_run_title(&reply.entries), "🔧 read");
+}
+
+#[test]
+fn balance_fences_closes_unclosed_fence() {
+    assert_eq!(
+        balance_fences("text\n```rust\nfn main() {}").as_ref(),
+        "text\n```rust\nfn main() {}\n```"
+    );
+    assert_eq!(balance_fences("~~~\ncode").as_ref(), "~~~\ncode\n~~~");
+}
+
+#[test]
+fn balance_fences_leaves_balanced_text_borrowed() {
+    let balanced = "a ``` b\n```rust\nx\n```\ndone";
+    let std::borrow::Cow::Borrowed(_) = balance_fences(balanced) else {
+        panic!("balanced text must not be reallocated");
+    };
+    // A complete open/close pair stays untouched.
+    assert_eq!(balance_fences("```\nx\n```").as_ref(), "```\nx\n```");
+}
+
+#[test]
+fn balance_fences_treats_the_other_marker_as_content() {
+    // Tilde fences quoted inside a backtick fence (the standard way to
+    // show markdown source) must not flip the state — appending a stray
+    // fence here would manufacture the very degradation this prevents.
+    let quoted = "```markdown\n~~~\nx\n~~~\n```";
+    let std::borrow::Cow::Borrowed(_) = balance_fences(quoted) else {
+        panic!("mixed but balanced text must be left untouched");
+    };
+    // … and a genuinely unclosed outer fence still closes with its own
+    // marker, not the inner content's.
+    assert_eq!(
+        balance_fences("```markdown\n~~~\nx\n~~~").as_ref(),
+        "```markdown\n~~~\nx\n~~~\n```"
+    );
+}
+
+#[test]
+fn balance_fences_ignores_info_string_closers_and_indented_lines() {
+    // An inner fence line WITH an info string is content, not a closer
+    // (CommonMark): the whole block is one balanced fence.
+    let quoted = "```markdown\n```rust\nfn main() {}\n```";
+    let std::borrow::Cow::Borrowed(_) = balance_fences(quoted) else {
+        panic!("info-string inner fence must be content");
+    };
+    // 4+ space indent = indented code block, not a fence at all.
+    let indented = "example:\n\n    ```\n    not a fence";
+    let std::borrow::Cow::Borrowed(_) = balance_fences(indented) else {
+        panic!("indented fence-like lines must be ignored");
+    };
+}
+
+#[test]
+fn balance_fences_closes_with_the_openers_run_length() {
+    // A truncated 4-backtick fence needs ≥4 backticks to close.
+    assert_eq!(balance_fences("````\nx").as_ref(), "````\nx\n````");
+    // A shorter bare run inside a longer fence is content; the fence
+    // is still open and closes at its own length.
+    assert_eq!(
+        balance_fences("````\nx\n```").as_ref(),
+        "````\nx\n```\n````"
+    );
+}
+
+#[test]
+fn balance_fences_rejects_backtick_in_opener_info_string() {
+    // CommonMark: a backtick fence's info string may not contain a
+    // backtick — the line is a paragraph, no fence opens.
+    let sloppy = "```bash echo `date`\n\ntext";
+    let std::borrow::Cow::Borrowed(_) = balance_fences(sloppy) else {
+        panic!("backtick-in-info line must not open a fence");
+    };
+    // Tilde fences may carry backticks in the info string.
+    assert_eq!(
+        balance_fences("~~~bash echo `date`\nx").as_ref(),
+        "~~~bash echo `date`\nx\n~~~"
+    );
+    // Closers accept trailing spaces/tabs, nothing else.
+    let tabbed = "```\nx\n```\t";
+    let std::borrow::Cow::Borrowed(_) = balance_fences(tabbed) else {
+        panic!("tab after closer is allowed");
+    };
+    assert_eq!(
+        balance_fences("```\nx\n```\u{a0}").as_ref(),
+        "```\nx\n```\u{a0}\n```",
+        "NBSP after the run is not a closer — still open"
+    );
+}
+
+#[test]
+fn render_card_balances_fence_cut_by_byte_cap() {
+    // No cancel needed: the byte cap can slice between a fence pair —
+    // pad past the cap inside an open fence so the cut leaves it open.
+    let mut text = "```\n".to_string();
+    text.push_str(&"x".repeat(FINAL_TEXT_MAX_BYTES));
+    text.push_str("\n```");
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end(&text);
+    let card = render_card(&buf.into_reply(), None).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&card).unwrap();
+    let content = v["body"]["elements"][0]["content"].as_str().unwrap();
+    assert!(content.contains("...(truncated)"), "capped: {content}");
+    assert!(content.ends_with("```"), "cut fence closed: {content}");
+}
+
+#[test]
+fn narration_only_process_panel_has_no_tool_panels() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("first");
+    buf.record_model_end("second");
+    buf.record_model_end("final");
+    let card: serde_json::Value =
+        serde_json::from_str(&render_card(&buf.into_reply(), None).unwrap()).unwrap();
+    let body = card["body"]["elements"][1]["elements"].as_array().unwrap();
+    assert_eq!(body.len(), 2);
+    assert!(
+        body.iter().all(|e| e["tag"] == "markdown"),
+        "texts only, no stray empty tool panel: {body:?}"
+    );
+    assert_eq!(body[0]["content"], "first");
+    assert_eq!(body[1]["content"], "second");
+}
+
+#[test]
+fn render_card_balances_fence_cut_by_cancellation() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("看这段代码：\n```rust\nfn broken(");
+    buf.record_model_end("done");
+    let card = render_card(&buf.into_reply(), None).unwrap();
+    // (serialized JSON escapes newlines as \\n)
+    assert!(
+        card.contains(r"fn broken(\n```"),
+        "fence closed in the process panel: {card}"
+    );
 }

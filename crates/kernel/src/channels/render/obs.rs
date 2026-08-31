@@ -1273,11 +1273,12 @@ fn render_terminal(s: &ObsCardState, settle: &Settle, keep_trace: bool) -> Strin
     let mut elements =
         vec![json!({ "tag": "markdown", "text_size": "notation", "content": lines.join("\n") })];
     // The trace that streamed live during the run stays on the frozen
-    // card as a collapsed panel — unless the reply message carries it
-    // instead (mid-run split with a flushable reply).
+    // card as a collapsed panel — the process narrative when texts were
+    // recorded, the plain tool trace otherwise — unless the reply
+    // message carries it instead (mid-run split with a flushable reply).
     if keep_trace {
-        if let Some((trace_lines, trace_title)) = s.trace.full_trace_render() {
-            elements.push(reply::trace_panel_element(&trace_lines, &trace_title));
+        if let Some(panel) = s.trace.terminal_trace_panel() {
+            elements.push(panel);
         }
     }
     json!({

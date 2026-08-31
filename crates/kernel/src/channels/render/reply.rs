@@ -1,13 +1,17 @@
 //! Final-reply buffering for external channels.
 //!
 //! A run (see `obs.rs` for the lifecycle definition) may produce several
-//! assistant texts, but only the **last** one is delivered; earlier texts
-//! and tool calls are collected into a chronological trace rendered as a
-//! collapsible panel (Feishu card JSON 2.0 `collapsible_panel`, requires
-//! Feishu client V7.9+), or appended as plain-text lines on platforms
-//! without card support. With observability enabled the run's status card
-//! **morphs** into this final reply on settlement — one message per run;
-//! otherwise the reply is sent as a new message bubble.
+//! assistant texts. The **last** one is the reply body; the rest of the
+//! run renders as a **process panel** below it (Feishu card JSON 2.0
+//! `collapsible_panel`, requires Feishu client V7.9+): expanded by
+//! default, the full chronological narrative — each earlier text as a
+//! markdown element, each run of consecutive tool calls folded into a
+//! nested collapsed panel (click to expand). Runs without intermediate
+//! texts keep the classic single collapsed tool-trace panel. On
+//! platforms without card support the trace appends as plain-text
+//! lines. With observability enabled the run's status card **morphs**
+//! into this final reply on settlement — one message per run; otherwise
+//! the reply is sent as a new message bubble.
 
 use serde_json::json;
 use std::fmt::Write as _;
@@ -16,15 +20,19 @@ use std::time::{Duration, Instant};
 use crate::channels::obs::{fmt_elapsed, fmt_tokens};
 use crate::utils::strs::truncate_by_chars;
 
-/// Reply text budget in bytes. Feishu card payloads cap around 30KB; leave
-/// headroom for the trace panel and the JSON envelope. Bytes, not chars —
-/// a char budget would let ~3x that size through for CJK text.
+/// Reply text budget in bytes. Feishu card payloads cap around 30KB; the
+/// process panel's narrations are deliberately uncapped (product call),
+/// so an oversized card send degrades to the plain-text fallback
+/// (`flush_reply`, obs settle) instead of losing content. Bytes, not
+/// chars — a char budget would let ~3x that size through for CJK text.
 const FINAL_TEXT_MAX_BYTES: usize = 28_000;
 /// Trace entries kept in the buffer (oldest dropped beyond this). Bounds
 /// memory for long runs; dropped entries are counted and shown
 /// as a marker line at render time.
 const BUFFER_MAX_ENTRIES: usize = 100;
-/// Intermediate-text snippet truncation inside the trace panel.
+/// Intermediate-text snippet truncation in single-line trace lines —
+/// exercised by the live card's trace preview (reply/receipt panels
+/// render narrations in full).
 const NARRATION_MAX_CHARS: usize = 120;
 /// Tool argument summary truncation (single-line displays: inline trace
 /// entries). Long enough for typical shell commands and paths to stay
@@ -63,9 +71,12 @@ const FALLBACK_ARG_KEYS: &[&str] = &[
 /// One chronological trace entry: an intermediate assistant text or a tool call.
 #[derive(Debug)]
 enum TraceEntry {
-    /// One assistant text. Every text recorded during the run is a Narration
-    /// until [`RunReplyBuffer::into_reply`] promotes the latest one to the
-    /// reply body.
+    /// One assistant text. Texts recorded during the run stay Narrations
+    /// in the buffer (live preview, terminal receipt); at flush time
+    /// [`RunReplyBuffer::into_reply`] promotes the latest one to the
+    /// reply body, and the rest stay in the chronological trace — on the
+    /// reply card they render full-size in the expanded process panel,
+    /// with tool calls folded into nested panels between them.
     Narration(String),
     Tool(ToolTrace),
 }
@@ -238,8 +249,10 @@ impl RunReplyBuffer {
     }
 
     /// Split into the reply body (the most recent assistant text, if any)
-    /// and the remaining trace, carrying the attachment paths collected
-    /// from `<yomi_attachments>` blocks at record time.
+    /// and the remaining trace — kept chronological (intermediate texts
+    /// interleaved with tool calls) so the reply card can render the
+    /// run's process narrative in order. Carries the attachment paths
+    /// collected from `<yomi_attachments>` blocks at record time.
     pub(crate) fn into_reply(self) -> FinalReply {
         let body_idx = self
             .entries
@@ -279,17 +292,20 @@ impl RunReplyBuffer {
         lines
     }
 
-    /// The full trace (title + all entry lines) as rendered on the reply
-    /// card's trace panel — used by the terminal receipt card, which keeps
-    /// the whole run trace (the reply text stays a narration here: only
-    /// `into_reply` promotes it). `None` when nothing was recorded.
-    pub(crate) fn full_trace_render(&self) -> Option<(Vec<String>, String)> {
+    /// The full trace (title + entries) as a terminal-receipt panel —
+    /// used when the run's card freezes without a reply to morph into:
+    /// with no reply message to carry it, this panel is the only place
+    /// the trace survives settlement. Collapsed (the receipt is a
+    /// tombstone); narrations render in the process-panel layout, like
+    /// the reply card. `None` when nothing was recorded.
+    pub(crate) fn terminal_trace_panel(&self) -> Option<serde_json::Value> {
         if self.entries.is_empty() {
             return None;
         }
-        Some(render_trace_parts(
+        Some(entries_panel(
             &self.entries,
-            &TraceTitle {
+            self.dropped,
+            &render_trace_title(&TraceTitle {
                 steps: self.steps,
                 failed: self.failed,
                 elapsed: self.started_at.elapsed(),
@@ -298,9 +314,8 @@ impl RunReplyBuffer {
                 usage_in: self.usage_in,
                 usage_out: self.usage_out,
                 ..Default::default()
-            },
-            self.dropped,
-            true,
+            }),
+            false,
         ))
     }
 
@@ -317,7 +332,9 @@ impl Default for RunReplyBuffer {
     }
 }
 
-/// The deliverable reply: optional final text + the run trace (may be empty).
+/// The deliverable reply: optional final text + the run trace (may be
+/// empty). The trace stays chronological: intermediate texts interleaved
+/// with tool calls.
 pub(crate) struct FinalReply {
     text: Option<String>,
     /// Completed model responses this run (`ModelEvent::End` count) — the
@@ -390,9 +407,13 @@ impl FinalReply {
 }
 
 /// Render the Feishu reply card (schema 2.0, no header): an optional notice
-/// line (e.g. error summary for abnormal endings), the final text, and a
-/// collapsible run-trace panel (default collapsed). Returns `None` when
-/// there is nothing to show.
+/// line (e.g. error summary for abnormal endings), the final text, and the
+/// run trace. When the run produced intermediate texts the trace renders
+/// as a **process panel** (default expanded): the full chronological
+/// narrative — each intermediate text as a markdown element, each run of
+/// consecutive tool calls folded into a nested collapsed panel. Without
+/// intermediate texts it stays the classic collapsed tool-trace panel.
+/// Returns `None` when there is nothing to show.
 pub(crate) fn render_card(reply: &FinalReply, notice: Option<&str>) -> Option<String> {
     let mut elements = Vec::new();
     if let Some(notice) = notice {
@@ -408,12 +429,18 @@ pub(crate) fn render_card(reply: &FinalReply, notice: Option<&str>) -> Option<St
             FINAL_TEXT_MAX_BYTES,
             "\n\n...(truncated)",
         );
+        // Truncation can cut a fence pair — balance after capping.
+        let text = balance_fences(&text);
         elements.push(json!({ "tag": "markdown", "content": text }));
     }
 
     if !reply.entries.is_empty() {
-        let (lines, title) = render_trace(reply, true);
-        elements.push(trace_panel_element(&lines, &title));
+        elements.push(entries_panel(
+            &reply.entries,
+            reply.dropped_entries,
+            &reply_trace_title(reply),
+            true,
+        ));
     }
 
     if elements.is_empty() {
@@ -429,27 +456,181 @@ pub(crate) fn render_card(reply: &FinalReply, notice: Option<&str>) -> Option<St
 }
 
 /// Render the plain-text fallback (platforms without card support): the
-/// final text followed by the trace as plain lines.
+/// final text, then the trace title and the chronological transcript —
+/// intermediate texts in full, tool calls as plain lines.
 pub(crate) fn render_plain(reply: &FinalReply) -> String {
     let mut out = String::new();
     if let Some(text) = reply.text() {
         out.push_str(text);
     }
     if !reply.entries.is_empty() {
-        let (lines, title) = render_trace(reply, false);
+        let title = reply_trace_title(reply);
         if !out.is_empty() {
             out.push_str("\n\n");
         }
         let _ = writeln!(out, "{title}");
-        out.push_str(&lines.join("\n"));
+        if reply.dropped_entries > 0 {
+            let _ = writeln!(out, "{}", dropped_marker(reply.dropped_entries));
+        }
+        let mut i = 0;
+        while i < reply.entries.len() {
+            match &reply.entries[i] {
+                TraceEntry::Narration(text) => {
+                    out.push_str(text);
+                    out.push('\n');
+                    i += 1;
+                }
+                TraceEntry::Tool(_) => {
+                    let start = i;
+                    while i < reply.entries.len() && matches!(reply.entries[i], TraceEntry::Tool(_))
+                    {
+                        i += 1;
+                    }
+                    out.push_str(&trace_lines(&reply.entries[start..i], false).join("\n"));
+                    out.push('\n');
+                }
+            }
+        }
+        out.truncate(out.trim_end().len());
     }
     out
 }
 
-/// Collapsible run-trace panel (default collapsed) shared by the reply
-/// card and the terminal receipt card.
-pub(crate) fn trace_panel_element(lines: &[String], title: &str) -> serde_json::Value {
-    trace_panel(lines, title, false)
+/// Panel builder shared by the reply card (`expanded`) and the terminal
+/// receipt (collapsed): entries holding intermediate texts render as a
+/// process panel (full texts + folded tool runs); tool-only entries
+/// render as the classic collapsed tool-trace panel.
+fn entries_panel(
+    entries: &[TraceEntry],
+    dropped_entries: usize,
+    title: &str,
+    expanded: bool,
+) -> serde_json::Value {
+    if entries
+        .iter()
+        .any(|e| matches!(e, TraceEntry::Narration(_)))
+    {
+        process_panel(entries, dropped_entries, title, expanded)
+    } else {
+        trace_panel(
+            &trace_lines_with_marker(entries, dropped_entries, true),
+            title,
+            false,
+        )
+    }
+}
+
+/// The trace lines plus the marker line for entries dropped at the
+/// buffer cap.
+fn trace_lines_with_marker(
+    entries: &[TraceEntry],
+    dropped_entries: usize,
+    markdown: bool,
+) -> Vec<String> {
+    let mut lines = trace_lines(entries, markdown);
+    if dropped_entries > 0 {
+        lines.insert(0, dropped_marker(dropped_entries));
+    }
+    lines
+}
+
+/// Process panel: the full chronological narrative — each intermediate
+/// text as a full-size markdown element (mention rewrite + fence
+/// balancing applied, no truncation), each maximal run of consecutive
+/// tool calls folded into a nested collapsed panel. Panels are stripped
+/// on bot read paths regardless of `expanded` — the narrative is
+/// human-only, like the live card's whisper.
+fn process_panel(
+    entries: &[TraceEntry],
+    dropped_entries: usize,
+    title: &str,
+    expanded: bool,
+) -> serde_json::Value {
+    let mut body: Vec<serde_json::Value> = Vec::new();
+    if dropped_entries > 0 {
+        body.push(json!({
+            "tag": "markdown",
+            "text_size": "notation",
+            "content": dropped_marker(dropped_entries),
+        }));
+    }
+    let mut i = 0;
+    while i < entries.len() {
+        match &entries[i] {
+            TraceEntry::Narration(text) => {
+                let text = crate::channels::utils::rewrite_mentions(text, &|id| {
+                    format!("<at id={id}></at>")
+                });
+                body.push(json!({ "tag": "markdown", "content": balance_fences(&text) }));
+                i += 1;
+            }
+            TraceEntry::Tool(_) => {
+                let start = i;
+                while i < entries.len() && matches!(entries[i], TraceEntry::Tool(_)) {
+                    i += 1;
+                }
+                let tools = &entries[start..i];
+                let lines = trace_lines(tools, true);
+                body.push(trace_panel(&lines, &tool_run_title(tools), false));
+            }
+        }
+    }
+    json!({
+        "tag": "collapsible_panel",
+        "expanded": expanded,
+        "header": {
+            "title": {
+                "tag": "markdown",
+                "text_size": "notation",
+                "content": title,
+            },
+            "vertical_align": "center",
+            "padding": "4px 0px 4px 8px",
+        },
+        "vertical_spacing": "4px",
+        "padding": "0px 0px 0px 8px",
+        "elements": body,
+    })
+}
+
+/// Char cap for the tool-name summary in a folded tool-run panel's
+/// title — the header is one line; beyond this the names truncate with
+/// an ellipsis and the detail is one click away anyway.
+const TOOL_RUN_NAMES_MAX_CHARS: usize = 48;
+
+/// Title for one folded tool-run panel: consecutive same-name tools
+/// merged as `name×N` (`shell×2 · read`), plus the run's total elapsed.
+/// The names tell what happened without expanding the panel.
+fn tool_run_title(tools: &[TraceEntry]) -> String {
+    let mut runs: Vec<(&str, usize)> = Vec::new();
+    let mut elapsed = 0u64;
+    for entry in tools {
+        let TraceEntry::Tool(tool) = entry else {
+            unreachable!("tool-run slice holds only tools")
+        };
+        elapsed += tool.elapsed_ms.unwrap_or(0);
+        match runs.last_mut() {
+            Some((name, count)) if *name == tool.tool_name => *count += 1,
+            _ => runs.push((&tool.tool_name, 1)),
+        }
+    }
+    let names = runs
+        .iter()
+        .map(|(name, count)| {
+            if *count > 1 {
+                format!("{name}×{count}")
+            } else {
+                (*name).to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let names = truncate_by_chars(&names, TOOL_RUN_NAMES_MAX_CHARS, "…");
+    let mut title = format!("🔧 {names}");
+    if elapsed > 0 {
+        let _ = write!(title, " · {}", fmt_tool_elapsed(elapsed));
+    }
+    title
 }
 
 /// Collapsible run-trace panel that starts **expanded** — used on the live
@@ -480,24 +661,19 @@ fn trace_panel(lines: &[String], title: &str, expanded: bool) -> serde_json::Val
     })
 }
 
-/// Render the trace lines (all of them — entries are single-line, so the
-/// full run stays compact) and the summary title.
-fn render_trace(reply: &FinalReply, markdown: bool) -> (Vec<String>, String) {
-    render_trace_parts(
-        &reply.entries,
-        &TraceTitle {
-            steps: reply.steps,
-            failed: reply.failed,
-            elapsed: reply.elapsed,
-            model: reply.model.as_deref(),
-            ctx_footer: reply.ctx_footer.as_deref(),
-            usage_in: reply.usage_in,
-            usage_out: reply.usage_out,
-            ..Default::default()
-        },
-        reply.dropped_entries,
-        markdown,
-    )
+/// The run-summary title for this reply, shared by the trace panel, the
+/// process panel, and the plain fallback.
+fn reply_trace_title(reply: &FinalReply) -> String {
+    render_trace_title(&TraceTitle {
+        steps: reply.steps,
+        failed: reply.failed,
+        elapsed: reply.elapsed,
+        model: reply.model.as_deref(),
+        ctx_footer: reply.ctx_footer.as_deref(),
+        usage_in: reply.usage_in,
+        usage_out: reply.usage_out,
+        ..Default::default()
+    })
 }
 
 /// Fields for the trace/stats summary line, shared by the terminal receipt
@@ -567,21 +743,6 @@ pub(crate) fn render_trace_title(t: &TraceTitle<'_>) -> String {
     parts.extend(head);
     parts.extend(tail);
     parts.join(" · ")
-}
-
-/// Shared trace renderer behind [`render_trace`] and
-/// [`RunReplyBuffer::full_trace_render`].
-fn render_trace_parts(
-    entries: &[TraceEntry],
-    title: &TraceTitle<'_>,
-    dropped_entries: usize,
-    markdown: bool,
-) -> (Vec<String>, String) {
-    let mut lines = trace_lines(entries, markdown);
-    if dropped_entries > 0 {
-        lines.insert(0, dropped_marker(dropped_entries));
-    }
-    (lines, render_trace_title(title))
 }
 
 /// The marker line noting trace entries dropped at the buffer/display cap.
@@ -700,6 +861,73 @@ pub(crate) fn md_safe(text: &str) -> String {
         .replace('>', "＞")
         .replace('`', "｀")
         .replace('*', "＊")
+}
+
+/// Close an unclosed code fence: full assistant texts render as card
+/// markdown, and a truncated stream (cancel, byte cap) can end inside a
+/// ``` block — Feishu then degrades the whole element to plain text
+/// with raw tags leaking (see [`md_safe`]). Appends the matching fence
+/// when the text ends inside one. Follows CommonMark conservatively so
+/// already-balanced text is never altered: inside a fence only a *bare*
+/// run of the same marker char, at least as long as the opener, closes
+/// (an info-string line like ``````rust``` is content); lines indented
+/// 4+ spaces are code blocks, not fences. Inline markers (`` ` ``,
+/// `**`) are too ambiguous to auto-close. Unlike `utils/markdown.rs`
+/// (```-only region mapping), this deliberately recognizes `~~~` too —
+/// the cost of a missed close is a degraded card element.
+fn balance_fences(text: &str) -> std::borrow::Cow<'_, str> {
+    // The open fence's marker char and run length, if any.
+    let mut open: Option<(char, usize)> = None;
+    for line in text.lines() {
+        // CommonMark: up to 3 leading spaces; 4+ is an indented code
+        // block (not a fence). Tab-indented lines fail the marker
+        // prefix check below on their own.
+        let spaces = line.len() - line.trim_start_matches(' ').len();
+        if spaces > 3 {
+            continue;
+        }
+        let trimmed = &line[spaces..];
+        let Some((c, len)) = fence_run(trimmed) else {
+            continue;
+        };
+        match open {
+            Some((oc, olen)) => {
+                // Marker chars are ASCII, so `len` is also the byte
+                // index of the run's end. CommonMark closers allow
+                // only spaces/tabs after the run.
+                if c == oc
+                    && len >= olen
+                    && trimmed[len..]
+                        .trim_matches(|ch| ch == ' ' || ch == '\t')
+                        .is_empty()
+                {
+                    open = None;
+                }
+            }
+            // A backtick opener's info string may not contain a
+            // backtick (CommonMark) — such a line is a paragraph,
+            // not a fence (````bash echo `date``` style sloppy
+            // markdown-about-markdown).
+            None if c != '`' || !trimmed[len..].contains('`') => open = Some((c, len)),
+            None => {}
+        }
+    }
+    match open {
+        Some((c, len)) => format!("{text}\n{}", c.to_string().repeat(len)).into(),
+        None => text.into(),
+    }
+}
+
+/// The fence marker char and run length when a (space-trimmed) line
+/// starts with a code fence (a run of ≥3 backticks or tildes).
+fn fence_run(line: &str) -> Option<(char, usize)> {
+    let mut chars = line.chars();
+    let c = chars.next()?;
+    if c != '`' && c != '~' {
+        return None;
+    }
+    let len = 1 + chars.take_while(|&x| x == c).count();
+    (len >= 3).then_some((c, len))
 }
 
 fn fmt_tool_elapsed(ms: u64) -> String {

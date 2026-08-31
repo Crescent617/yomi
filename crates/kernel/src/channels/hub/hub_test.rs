@@ -682,6 +682,10 @@ async fn flush_reply_plain_platform_appends_trace_lines() {
     };
     assert!(text.starts_with("final answer"));
     assert!(text.contains("🐾 0s · 💬 2"));
+    assert!(
+        text.contains("Let me check."),
+        "narration in the transcript"
+    );
     assert!(text.contains("cargo test"));
 }
 
