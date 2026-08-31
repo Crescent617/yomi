@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.7] - 2026-09-01
+
+### Changed
+
+- 终态卡的所有面板统一默认收起：过程面板不再默认展开，最终正文之外的中间正文与工具明细都一点即开；只有运行中的 live 卡保持展开。
+
 ## [0.10.6] - 2026-09-01
 
 ### Added
