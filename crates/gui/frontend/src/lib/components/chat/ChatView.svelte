@@ -32,6 +32,7 @@
   import ModelSelector from "./ModelSelector.svelte";
   import {
     ChevronDown,
+    ChevronRight,
     ArrowUp,
     Check,
     ExternalLink,
@@ -463,10 +464,17 @@
   };
   let sessionDetail = $state<SessionDetail>({});
 
+  // Rules in effect (channel + session layers): `undefined` while the
+  // fetch is in flight, `null` when it failed — both render quietly.
+  let sessionRules = $state<api.SessionRules | null | undefined>(undefined);
+  let channelRulesOpen = $state(false);
+  let sessionRulesOpen = $state(false);
+
   $effect(() => {
     if (!showSessionInfo || !activeSession) return;
     const id = activeSession.id;
     sessionDetail = {};
+    sessionRules = undefined;
     void api
       .getSession(id)
       .then((info) => {
@@ -477,6 +485,20 @@
           };
       })
       .catch(() => {});
+    void api
+      .getSessionRules(id)
+      .then((rules) => {
+        if (showSessionInfo && activeSession?.id === id) {
+          sessionRules = rules;
+          // Present layers arrive expanded (the popover itself is the
+          // disclosure step); each remains collapsible.
+          channelRulesOpen = !!rules.channel_rules;
+          sessionRulesOpen = !!rules.session_rules;
+        }
+      })
+      .catch(() => {
+        if (showSessionInfo && activeSession?.id === id) sessionRules = null;
+      });
   });
 
   // ── Copy session IDs from the info popover (local check-swap feedback) ──
@@ -812,8 +834,72 @@
                     </div>
                   {/if}
                 </div>
+                <div class="border-t border-border/60 pt-2.5">
+                  <span class="micro-label text-muted-foreground">Rules</span>
+                  {#if sessionRules === undefined}
+                    <p class="mt-1.5 text-[11px] text-muted-foreground">
+                      Loading…
+                    </p>
+                  {:else if sessionRules === null || (!sessionRules.channel_rules && !sessionRules.session_rules)}
+                    <p class="mt-1.5 text-[11px] text-muted-foreground">
+                      No rules in effect.
+                    </p>
+                  {:else}
+                    <div class="mt-1.5 space-y-1">
+                      {#if sessionRules.channel_rules}
+                        {@render rulesBlock(
+                          "Channel rules",
+                          sessionRules.channel_rules,
+                          channelRulesOpen,
+                          () => (channelRulesOpen = !channelRulesOpen),
+                        )}
+                      {/if}
+                      {#if sessionRules.session_rules}
+                        {@render rulesBlock(
+                          "Session rules",
+                          sessionRules.session_rules,
+                          sessionRulesOpen,
+                          () => (sessionRulesOpen = !sessionRulesOpen),
+                        )}
+                      {/if}
+                    </div>
+                    <p
+                      class="mt-1.5 text-[10px] leading-snug text-muted-foreground/80"
+                    >
+                      Injected into the system prompt at spawn; session rules
+                      win conflicts.
+                    </p>
+                  {/if}
+                </div>
               </PopoverPanel>
             {/if}
+            {#snippet rulesBlock(
+              label: string,
+              body: string,
+              expanded: boolean,
+              toggle: () => void,
+            )}
+              <div>
+                <button
+                  type="button"
+                  class="flex w-full items-center gap-1 rounded-sm px-0.5 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+                  aria-expanded={expanded}
+                  onclick={toggle}
+                >
+                  <ChevronRight
+                    size={11}
+                    class="shrink-0 transition-transform {expanded
+                      ? 'rotate-90'
+                      : ''}"
+                  />
+                  {label}
+                </button>
+                {#if expanded}
+                  <pre
+                    class="mt-1 max-h-40 overflow-auto rounded-sm bg-code-bg px-2 py-1.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-foreground">{body}</pre>
+                {/if}
+              </div>
+            {/snippet}
           </div>
           {#if activeSession.git_info?.branch}
             <span class="text-border">·</span>

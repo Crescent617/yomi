@@ -228,6 +228,13 @@ impl KernelApi for Kernel {
         Ok(Self::get_session(self, session_id).await?)
     }
 
+    async fn get_session_rules(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<crate::types::SessionRulesResponse> {
+        Self::get_session_rules(self, session_id).await
+    }
+
     async fn read_session_jsonl(
         &self,
         session_id: &SessionId,

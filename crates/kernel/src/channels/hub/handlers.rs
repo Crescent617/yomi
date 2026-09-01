@@ -9,10 +9,10 @@ use std::sync::Arc;
 use tracing::warn;
 
 use crate::channels::hub_command::{
-    format_current_model, format_model_list, format_runtime_status, format_session_info,
-    format_unknown_model, format_usage, format_watch_line, format_workflow_list,
-    format_workflow_result, parse_channel_command, suggest_command, ChannelCommand, OverrideMode,
-    HELP_TEXT, WORKFLOW_USAGE,
+    format_current_model, format_model_list, format_rules, format_runtime_status,
+    format_session_info, format_unknown_model, format_usage, format_watch_line,
+    format_workflow_list, format_workflow_result, parse_channel_command, suggest_command,
+    ChannelCommand, OverrideMode, HELP_TEXT, WORKFLOW_USAGE,
 };
 use crate::channels::hub_context::{append_message_images, prepare_trigger, TriggerKind};
 use crate::channels::hub_deliver::send_info_reply;
@@ -610,6 +610,26 @@ pub(crate) async fn handle_incoming_message(
                 body = format!("{body}\n{line}");
             }
             send_info_reply(adapter, &msg, reply_msg_id, "ℹ️ Session info", body).await?;
+            Ok(None)
+        }
+        ChannelCommand::Rules => {
+            // Read-only: the same bounded reads the prompt assembly
+            // uses, so the reply shows exactly what the next spawn
+            // would inject. Never creates a session or mapping.
+            let key = command_session_key(&msg, rit, &chat_id, &mapping_key);
+            let sid = store.find_mapping(channel_name, key).await?;
+            let data_dir = kernel.data_dir().await;
+            let channel_rules = crate::prompt::channel_rules_section(&data_dir, &chat_id).await;
+            let session_rules = match &sid {
+                Some(sid) => crate::prompt::session_rules_section(&data_dir, &sid.0).await,
+                None => None,
+            };
+            let body = format_rules(
+                channel_rules.as_deref(),
+                session_rules.as_deref(),
+                sid.is_some(),
+            );
+            send_info_reply(adapter, &msg, reply_msg_id, "📜 Rules", body).await?;
             Ok(None)
         }
         ChannelCommand::Permits => {

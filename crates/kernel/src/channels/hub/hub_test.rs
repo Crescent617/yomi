@@ -803,6 +803,29 @@ fn test_parse_invalid_model_command() {
 }
 
 #[test]
+fn test_parse_rules_command() {
+    assert!(matches!(
+        parse_channel_command(Some("/rules")),
+        ChannelCommand::Rules
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/rules@yomi_bot")),
+        ChannelCommand::Rules
+    ));
+    // Stray arguments pass through as a plain message (same convention
+    // as `/info`); lookalike words stay unknown commands.
+    assert!(matches!(
+        parse_channel_command(Some("/rules please")),
+        ChannelCommand::None
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/ruleset")),
+        ChannelCommand::Unknown(_)
+    ));
+    assert!(HELP_TEXT.contains("/rules"));
+}
+
+#[test]
 fn test_parse_existing_commands_from_raw_text() {
     assert!(matches!(
         parse_channel_command(Some("/clear")),
@@ -1453,6 +1476,50 @@ async fn stop_at_chat_level_addresses_the_chat_session() {
         .unwrap();
     let reply = rig.call(chat_level_cmd("/stop")).await.unwrap();
     assert_eq!(reply.as_deref(), Some("⏹ Stopped."));
+}
+
+/// `/rules` replies with both layers exactly as the prompt injection
+/// reads them — channel rules by chat id, session rules by the bound
+/// session — and stays honest about absent layers.
+#[tokio::test]
+async fn rules_command_shows_both_layers() {
+    let rig = ChatLevelRig::new().await;
+    let data_dir = rig._tmp.path().to_path_buf();
+
+    // Channel rules only (no session bound): shown; the session layer
+    // says so instead of claiming "(none)".
+    let channel_dir = data_dir.join("channels").join("rules");
+    std::fs::create_dir_all(&channel_dir).unwrap();
+    std::fs::write(channel_dir.join("chat-1.md"), "用中文回答。").unwrap();
+
+    rig.call(chat_level_cmd("/rules")).await.unwrap();
+    let text = last_outgoing_text(&rig.mock).await;
+    assert!(text.contains("用中文回答。"), "{text}");
+    assert!(text.contains("no session here yet"), "{text}");
+
+    // Bind a chat session with its own rules file: both layers appear.
+    let sid = rig.new_session().await;
+    rig.store
+        .save_mapping("mock", "chat-1", &sid, "chat-1", None, MappingKind::Normal)
+        .await
+        .unwrap();
+    let session_dir = data_dir.join("sessions").join("rules");
+    std::fs::create_dir_all(&session_dir).unwrap();
+    std::fs::write(session_dir.join(format!("{}.md", sid.0)), "只答本话题。\n").unwrap();
+
+    rig.call(chat_level_cmd("/rules")).await.unwrap();
+    let text = last_outgoing_text(&rig.mock).await;
+    assert!(text.contains("用中文回答。"), "{text}");
+    assert!(text.contains("只答本话题。"), "{text}");
+    assert!(text.contains("wins conflicts"), "{text}");
+
+    // A chat without any rules gets explicit "(none)" markers.
+    let mut other = chat_level_cmd("/rules");
+    other.external_chat_id = "chat-2".to_string();
+    other.external_message_id = Some("m9".to_string());
+    rig.call(other).await.unwrap();
+    let text = last_outgoing_text(&rig.mock).await;
+    assert!(text.contains("(none)"), "{text}");
 }
 
 /// `/compact` at chat level addresses the chat session (same scope
@@ -3342,6 +3409,28 @@ fn test_format_watch_line() {
     ] {
         assert!(format_watch_line(&status).is_none());
     }
+}
+
+#[test]
+fn test_format_rules() {
+    // Both layers present: both bodies appear under their headers.
+    let body = format_rules(Some("说中文"), Some("只答本话题"), true);
+    assert!(body.contains("**Channel rules**"));
+    assert!(body.contains("说中文"));
+    assert!(body.contains("**Session rules**"));
+    assert!(body.contains("只答本话题"));
+
+    // Absent layers are explicit ("(none)"), never silently dropped.
+    let body = format_rules(None, None, true);
+    assert_eq!(body.matches("(none)").count(), 2);
+
+    // No session in this scope: called out instead of "(none)".
+    let body = format_rules(Some("说中文"), None, false);
+    assert!(body.contains("no session here yet"));
+
+    // A session-less reply never shows session rules.
+    let body = format_rules(None, Some("orphaned"), false);
+    assert!(!body.contains("orphaned"));
 }
 
 #[tokio::test]

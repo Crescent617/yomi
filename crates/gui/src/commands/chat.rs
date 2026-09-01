@@ -169,6 +169,20 @@ pub async fn get_session(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn get_session_rules(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<serde_json::Value, GuiError> {
+    let coord = state.kernel_snapshot();
+    let sid = SessionId::from(session_id);
+    let rules = coord
+        .get_session_rules(&sid)
+        .await
+        .map_err(GuiError::kernel)?;
+    Ok(serde_json::to_value(rules)?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn get_todos(
     state: State<'_, AppState>,
     session_id: String,

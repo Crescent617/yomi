@@ -149,6 +149,23 @@ pub struct SessionResponse {
     pub template: Option<String>,
 }
 
+/// Rules in effect for one session: the chat-scoped channel rules (when
+/// the session is channel-routed) and the session's own rules — the
+/// same bounded reads the prompt assembly applies at spawn, so callers
+/// show exactly what the next spawn would inject.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SessionRulesResponse {
+    /// Chat the channel rules belong to; `None` when the session is not
+    /// channel-routed (local/GUI session).
+    pub chat_id: Option<String>,
+    /// Verbatim channel rules content; `None` when absent/empty or the
+    /// session has no chat.
+    pub channel_rules: Option<String>,
+    /// Verbatim session rules content; `None` when absent/empty.
+    pub session_rules: Option<String>,
+}
+
 /// A session that is actively executing in the kernel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

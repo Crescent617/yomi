@@ -43,7 +43,7 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
   - `list_subagents '{"parent_session_id":"sess_…"}'`：直接子 agent（`is_running`）；会话不存在返回空数组而非报错。
 - **等待跑完**：`scripts/session-wait <session_id>`——轮询（无超时）至 `phase=idle` 且无 running subagent、无后台 shell；退出码 0 安静 / 2 用法错或首查失败。`session send` + `session-wait` = 驱动兄弟会话干活并等它完成的最小回路。
 - checkpoint：列表走 `rpc get_checkpoints`；回滚在 TUI `/rewind`；无属主备份由 `gc` 孤儿 sweep 清理。
-- 规则文件两层（非空即在 spawn 时原文注入 system prompt）：channel rules `<data_dir>/channels/rules/<chat_id>.md` 作用于全群会话（chat/thread/观察者）；session rules `<data_dir>/sessions/rules/<session_id>.md` 只作用于当前 session。两层都只在用户要求时更改。
+- 规则文件两层（非空即在 spawn 时原文注入 system prompt）：channel rules `<data_dir>/channels/rules/<chat_id>.md` 作用于全群会话（chat/thread/观察者）；session rules `<data_dir>/sessions/rules/<session_id>.md` 只作用于当前 session。两层都只在用户要求时更改。IM 里 `/rules` 查看当前生效的两层（与注入同一读取路径，所见即所注入）；GUI 侧会话信息区同口径展示（get_rules RPC）。
 
 ## cron（自己的闹钟）
 

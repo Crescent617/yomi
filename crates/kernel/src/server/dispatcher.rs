@@ -307,6 +307,12 @@ impl KernelServer {
                 "get_session_failed",
                 self.kernel.get_session(&SessionId::from(session_id)).await,
             ),
+            ReqMethod::GetRules { session_id } => rpc_body(
+                "get_rules_failed",
+                self.kernel
+                    .get_session_rules(&SessionId::from(session_id))
+                    .await,
+            ),
             ReqMethod::DeleteSession { session_id } => {
                 let sid = SessionId::from(session_id);
                 let result = self

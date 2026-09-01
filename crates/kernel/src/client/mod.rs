@@ -211,6 +211,12 @@ pub trait KernelApi: Send + Sync {
         after_offset: Option<u64>,
     ) -> Result<SessionJsonlChunk>;
     async fn get_session(&self, session_id: &SessionId) -> Result<crate::types::SessionResponse>;
+    /// Rules in effect for a session: channel rules of its chat (when
+    /// channel-routed) + the session's own rules.
+    async fn get_session_rules(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<crate::types::SessionRulesResponse>;
     async fn subscribe_session_events(
         &self,
         session_id: &SessionId,

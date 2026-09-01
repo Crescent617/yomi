@@ -23,6 +23,8 @@ pub(crate) const CMD_QUEUE: &str = "/queue";
 
 pub(crate) const CMD_INFO: &str = "/info";
 
+pub(crate) const CMD_RULES: &str = "/rules";
+
 pub(crate) const CMD_HELP: &str = "/help";
 
 pub(crate) const CMD_PERMITS: &str = "/permits";
@@ -67,6 +69,7 @@ pub(crate) const CMD_WORKFLOW: &str = "/workflow";
 pub(crate) const COMMANDS: &[(&str, &[&str])] = &[
     (CMD_HELP, &["/h"]),
     (CMD_INFO, &["/i"]),
+    (CMD_RULES, &[]),
     (CMD_MODELS, &[]),
     (CMD_MODEL, &["/m"]),
     (CMD_CLEAR, &["/c"]),
@@ -100,6 +103,7 @@ pub(crate) const HELP_TEXT: &str = "\
 **Info**
 `/help` (`/h`) — this help
 `/info` (`/i`) — current session info
+`/rules` — rules in effect here: the chat's channel rules + this session's own
 `/mailbox` (`/mb`) — pending steer/queued messages; `/mailbox retract <n>` · `/mailbox clear [steer|queue|all]` (admin)
 `/bg` — background tasks (shells + running subagents) with stop buttons (admin)
 `/models` — list configured models (current one marked)
@@ -159,6 +163,9 @@ pub(crate) enum ChannelCommand {
     InvalidModelCommand,
     /// Show basic info about the current session.
     Info,
+    /// Show the rules in effect here (read-only): the chat's channel
+    /// rules plus the current session's own rules.
+    Rules,
     /// Show the command list.
     Help,
     /// List pending doc-permission applications (admin only).
@@ -322,6 +329,7 @@ pub(crate) fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
         CMD_COMPACT if parts.next().is_none() => ChannelCommand::Compact,
         CMD_STOP if parts.next().is_none() => ChannelCommand::Stop,
         CMD_INFO if parts.next().is_none() => ChannelCommand::Info,
+        CMD_RULES if parts.next().is_none() => ChannelCommand::Rules,
         CMD_HELP if parts.next().is_none() => ChannelCommand::Help,
         CMD_STEER | CMD_QUEUE => {
             let rest = parts.collect::<Vec<_>>().join(" ");
@@ -671,6 +679,35 @@ pub(crate) fn format_session_info(
         ),
     ]
     .join("\n")
+}
+
+/// `/rules` body: both rules layers exactly as the next spawn would
+/// inject them (the same bounded reads the prompt assembly uses) —
+/// channel rules shared by every session of the chat, session rules
+/// applying to this session only and winning conflicts. `(none)` marks
+/// an absent layer so "no rules" is distinguishable from "not shown".
+pub(crate) fn format_rules(
+    channel: Option<&str>,
+    session: Option<&str>,
+    has_session: bool,
+) -> String {
+    let session_body = if has_session {
+        session.unwrap_or("(none)")
+    } else {
+        "(no session here yet — the first message starts one)"
+    };
+    [
+        format!(
+            "**Channel rules** — every session in this chat\n{}",
+            channel.unwrap_or("(none)")
+        ),
+        format!("**Session rules** — this session only, wins conflicts\n{session_body}"),
+        format!(
+            "Injected verbatim into the system prompt at spawn; capped at {} bytes per layer.",
+            crate::prompt::SESSION_RULES_MAX_BYTES
+        ),
+    ]
+    .join("\n\n")
 }
 
 /// The `/info` watch line (chat-level only): `Some` only while the chat

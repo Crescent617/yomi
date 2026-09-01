@@ -128,6 +128,10 @@ pub enum ReqMethod {
     GetSession {
         session_id: String,
     },
+    /// Rules in effect for a session (channel + session layers).
+    GetRules {
+        session_id: String,
+    },
     GetCheckpoints {
         session_id: String,
     },

@@ -121,6 +121,33 @@ async fn test_config_wire_round_trip() {
 }
 
 #[tokio::test]
+async fn test_get_rules_wire_round_trip() {
+    let (client, tmp, shutdown) = setup().await;
+    let sid = SessionId::new();
+
+    // No files and no chat binding: every layer is absent.
+    let rules = client.get_session_rules(&sid).await.unwrap();
+    assert_eq!(rules.chat_id, None);
+    assert_eq!(rules.channel_rules, None);
+    assert_eq!(rules.session_rules, None);
+
+    // Session rules file: verbatim (trimmed) content round-trips.
+    let dir = tmp.path().join("sessions").join("rules");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(format!("{}.md", sid.0)), "只回答本话题。\n").unwrap();
+    let rules = client.get_session_rules(&sid).await.unwrap();
+    assert_eq!(rules.session_rules.as_deref(), Some("只回答本话题。"));
+
+    // An unsafe id never resolves to a file (same guard as the prompt
+    // injection path).
+    let evil = SessionId::from("../etc/passwd".to_string());
+    let rules = client.get_session_rules(&evil).await.unwrap();
+    assert_eq!(rules.session_rules, None);
+
+    shutdown.cancel();
+}
+
+#[tokio::test]
 async fn test_restart_wire_request() {
     let (restart_tx, mut restart_rx) = tokio::sync::mpsc::channel(1);
     let (client, _tmp, shutdown) = setup_with_config_path(None, Some(restart_tx)).await;

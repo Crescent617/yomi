@@ -411,6 +411,16 @@ impl KernelApi for RemoteKernel {
         .await
     }
 
+    async fn get_session_rules(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<crate::types::SessionRulesResponse> {
+        self.call_json(ReqMethod::GetRules {
+            session_id: session_id.0.to_string(),
+        })
+        .await
+    }
+
     async fn read_session_jsonl(
         &self,
         session_id: &SessionId,

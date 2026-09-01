@@ -533,6 +533,23 @@ export async function getSession(session_id: string): Promise<{
   return invokeCmd("get_session", { session_id: session_id });
 }
 
+export interface SessionRules {
+  /** Chat the channel rules belong to; null for local/GUI sessions. */
+  chat_id: string | null;
+  channel_rules: string | null;
+  session_rules: string | null;
+}
+
+/**
+ * Rules in effect for a session (channel + session layers) — the same
+ * content the next spawn would inject into the system prompt.
+ */
+export async function getSessionRules(
+  session_id: string,
+): Promise<SessionRules> {
+  return invokeCmd("get_session_rules", { session_id: session_id });
+}
+
 export interface Checkpoint {
   id: string;
   session_id: string;
@@ -920,6 +937,23 @@ export async function readAttachmentImage(
   path: string,
 ): Promise<AttachmentImage> {
   return invokeCmd("read_attachment_image", { base_dir, path });
+}
+
+export interface AttachmentText {
+  text: string;
+  mime: string;
+}
+
+/**
+ * Read a text attachment for in-app preview (same daemon-side resolution
+ * as `openAttachment`, works in remote mode too; rejects binary and
+ * oversized files — callers fall back to external open).
+ */
+export async function readAttachmentText(
+  base_dir: string | null,
+  path: string,
+): Promise<AttachmentText> {
+  return invokeCmd("read_attachment_text", { base_dir, path });
 }
 
 export async function openInVscode(path: string): Promise<void> {

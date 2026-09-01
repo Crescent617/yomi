@@ -1301,6 +1301,41 @@ impl Kernel {
         Ok(self.session_response(info))
     }
 
+    /// Rules in effect for one session — the same bounded reads the
+    /// prompt assembly applies at spawn, so callers (the GUI rules view)
+    /// show exactly what the next spawn would inject: the session's own
+    /// rules file plus, when channel-routed, its chat's channel rules.
+    /// Read-only and stateless: unknown sessions simply have no files.
+    pub async fn get_session_rules(
+        &self,
+        sid: &SessionId,
+    ) -> Result<crate::types::SessionRulesResponse> {
+        // Channel routing supplies the chat id (thread rows denormalize
+        // it), mirroring the spawn-time rules resolution in the
+        // conductor; local/GUI sessions have no routing row.
+        let routing = match &self.channel_manager {
+            Some(hub) => hub
+                .store()
+                .find_routing_by_session(sid)
+                .await
+                .ok()
+                .flatten(),
+            None => None,
+        };
+        let chat_id = routing.map(|r| r.external_chat_id);
+        let data_dir = self.data_dir().await;
+        let channel_rules = match &chat_id {
+            Some(chat_id) => crate::prompt::channel_rules_section(&data_dir, chat_id).await,
+            None => None,
+        };
+        let session_rules = crate::prompt::session_rules_section(&data_dir, &sid.0).await;
+        Ok(crate::types::SessionRulesResponse {
+            chat_id,
+            channel_rules,
+            session_rules,
+        })
+    }
+
     fn session_response(
         &self,
         info: crate::storage::session::SessionInfo,
