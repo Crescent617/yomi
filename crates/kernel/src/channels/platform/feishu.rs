@@ -1244,7 +1244,11 @@ impl PlatformAdapter for FeishuAdapter {
         )
         .await
         .map_err(|_| ChannelError::Platform("message fetch timed out".into()))??;
-        let Some(item) = resp["data"]["items"].as_array().and_then(|a| a.first()) else {
+        let items = resp["data"]["items"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let Some(item) = items.first() else {
             return Ok(None);
         };
         if item["deleted"].as_bool().unwrap_or(false) {
@@ -1253,7 +1257,13 @@ impl PlatformAdapter for FeishuAdapter {
         // No sender filter here — quoting the bot's own answer is a
         // primary use case. With `card_msg_content_type` the API echoes the
         // real card body for any sender, no local cache needed.
-        let (text, image_keys) = Self::extract_history_content(item);
+        // A merge_forward's sub-messages ride the same response right
+        // after the parent — expansion costs no extra call.
+        let (text, image_keys) = if item["msg_type"].as_str() == Some("merge_forward") {
+            Self::format_merge_forward(&items)
+        } else {
+            Self::extract_history_content(item)
+        };
         Ok(Some(crate::channels::HistoryMessage {
             message_id: item["message_id"]
                 .as_str()

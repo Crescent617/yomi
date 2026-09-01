@@ -200,6 +200,26 @@ fn response_for(method: &str, path: &str) -> Vec<u8> {
                  "body":{"content":"{\"schema\":\"2.0\",\"body\":{\"elements\":[{\"tag\":\"markdown\",\"content\":\"卡片里的问题：怎么配 daemon？\"},{\"tag\":\"collapsible_panel\",\"elements\":[{\"tag\":\"markdown\",\"content\":\"折叠的轨迹\"}]}]}}"}}
             ]}}"#
             .into(),
+            // merge_forward: the get-message API inlines the sub-messages
+            // after the parent — text, image and sticker subs, one nested
+            // merge_forward (grandchildren never inline).
+            "/open-apis/im/v1/messages/om_merged" => r#"{"code":0,"msg":"ok","data":{"items":[
+                {"message_id":"om_merged","create_time":"1700000060000","msg_type":"merge_forward","deleted":false,
+                 "sender":{"id":"ou_user","sender_type":"user"},"body":{"content":"Merged and Forwarded Message"}},
+                {"message_id":"om_sub1","create_time":"1700000000000","msg_type":"text","deleted":false,
+                 "sender":{"id":"ou_a","sender_type":"user"},"upper_message_id":"om_merged",
+                 "body":{"content":"{\"text\":\"第一条\"}"}},
+                {"message_id":"om_sub2","create_time":"1700000012000","msg_type":"image","deleted":false,
+                 "sender":{"id":"ou_b","sender_type":"user"},"upper_message_id":"om_merged",
+                 "body":{"content":"{\"image_key\":\"img_m1\"}"}},
+                {"message_id":"om_sub3","create_time":"1700000024000","msg_type":"sticker","deleted":false,
+                 "sender":{"id":"ou_b","sender_type":"user"},"upper_message_id":"om_merged",
+                 "body":{"content":"{\"file_key\":\"st_m1\"}"}},
+                {"message_id":"om_sub4","create_time":"1700000036000","msg_type":"merge_forward","deleted":false,
+                 "sender":{"id":"ou_a","sender_type":"user"},"upper_message_id":"om_merged",
+                 "body":{"content":"Merged and Forwarded Message"}}
+            ]}}"#
+            .into(),
             _ => r#"{"code":0,"msg":"ok","data":{"items":[]}}"#.into(),
         };
     }
@@ -717,7 +737,7 @@ fn extract_history_content_reads_card_markdown() {
     assert_eq!(text, "真实内容");
 }
 
-/// Stickers keep their file_key in history context (quoting one must not
+/// Stickers keep their `file_key` in history context (quoting one must not
 /// lose it); a missing key degrades to the bare placeholder.
 #[test]
 fn extract_history_content_keeps_sticker_file_key() {
@@ -731,10 +751,83 @@ fn extract_history_content_keeps_sticker_file_key() {
 
     let item = json!({
         "msg_type": "sticker",
-        "body": { "content": r#"{}"# }
+        "body": { "content": "{}" }
     });
     let (text, _) = super::FeishuAdapter::extract_history_content(&item);
     assert_eq!(text, "[sticker]");
+}
+
+/// A `merge_forward` in a history LIST stays a bare placeholder — the list
+/// API never inlines sub-messages, so expansion only happens via
+/// `fetch_message` (single get, children ride along).
+#[test]
+fn extract_history_content_merge_forward_stays_placeholder() {
+    let item = json!({
+        "msg_type": "merge_forward",
+        "body": { "content": "Merged and Forwarded Message" }
+    });
+    let (text, image_keys) = super::FeishuAdapter::extract_history_content(&item);
+    assert_eq!(text, "[merge_forward]");
+    assert!(image_keys.is_empty());
+}
+
+/// Sub-messages expand through the shared extractor (text rendered,
+/// image as placeholder + key, sticker with its key); a nested
+/// `merge_forward` degrades to one placeholder line.
+#[test]
+fn format_merge_forward_expands_sub_messages() {
+    let sub = |msg_type: &str, content: &str, sender: &str| {
+        json!({
+            "msg_type": msg_type,
+            "create_time": "1700000000000",
+            "sender": { "id": sender },
+            "body": { "content": content }
+        })
+    };
+    let items = vec![
+        json!({ "msg_type": "merge_forward", "body": { "content": "Merged and Forwarded Message" } }),
+        sub("text", r#"{"text":"第一条"}"#, "ou_a"),
+        sub("image", r#"{"image_key":"img_m1"}"#, "ou_b"),
+        sub("sticker", r#"{"file_key":"st_m1"}"#, "ou_b"),
+        sub("merge_forward", "Merged and Forwarded Message", "ou_a"),
+    ];
+
+    let (text, image_keys) = super::FeishuAdapter::format_merge_forward(&items);
+
+    assert!(text.starts_with("[merge_forward: 4 messages]\n"), "{text}");
+    assert!(text.contains("] ou_a: 第一条"), "{text}");
+    assert!(text.contains("] ou_b: [image]"), "{text}");
+    assert!(text.contains("] ou_b: [sticker: st_m1]"), "{text}");
+    assert!(text.contains("] ou_a: [merge_forward]"), "{text}");
+    assert!(text.ends_with("\n[/merge_forward]"), "{text}");
+    assert_eq!(image_keys, vec!["img_m1".to_string()]);
+
+    // Parent-only response (no children inlined) still yields a header.
+    let (text, _) = super::FeishuAdapter::format_merge_forward(&items[..1]);
+    assert_eq!(text, "[merge_forward: 0 messages]");
+}
+
+#[tokio::test]
+async fn fetch_message_expands_merge_forward() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+
+    let h = adapter
+        .fetch_message("om_merged")
+        .await
+        .unwrap()
+        .expect("merge_forward fetched");
+
+    assert_eq!(h.message_id, "om_merged");
+    assert_eq!(h.sender_id, "ou_user");
+    assert!(
+        h.text.starts_with("[merge_forward: 4 messages]\n"),
+        "{}",
+        h.text
+    );
+    assert!(h.text.contains("] ou_a: 第一条"), "{}", h.text);
+    assert!(h.text.contains("] ou_b: [sticker: st_m1]"), "{}", h.text);
+    assert_eq!(h.image_keys, vec!["img_m1".to_string()]);
 }
 
 /// Card `<at id=...>` mention tags are rewritten to the neutral `<@id>name`
@@ -972,6 +1065,59 @@ async fn sticker_event_is_forwarded_with_file_key() {
     assert_eq!(msg_id.as_deref(), Some("om_1"));
     let msg = expect_message(rx.try_recv().expect("sticker message forwarded"));
     assert_eq!(msg.raw_text.as_deref(), Some("[sticker: st_x]"));
+    assert!(msg.image_keys.is_empty());
+}
+
+/// `merge_forward` event with the platform's raw (non-JSON) fixed content
+/// string and a caller-chosen message id.
+fn merge_forward_event(msg_id: &str) -> serde_json::Value {
+    json!({
+        "header": { "event_type": "im.message.receive_v1" },
+        "event": {
+            "sender": { "sender_id": { "open_id": "ou_user" } },
+            "message": {
+                "message_id": msg_id,
+                "chat_id": "oc_chat",
+                "chat_type": "p2p",
+                "message_type": "merge_forward",
+                "create_time": "1700000060000",
+                "content": "Merged and Forwarded Message",
+            }
+        }
+    })
+}
+
+#[tokio::test]
+async fn merge_forward_event_is_expanded_via_fetch() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let event = merge_forward_event("om_merged");
+
+    let msg_id = adapter.parse_event_json(&event, &tx).await.unwrap();
+
+    assert_eq!(msg_id.as_deref(), Some("om_merged"));
+    let msg = expect_message(rx.try_recv().expect("merge_forward forwarded"));
+    let text = msg.raw_text.as_deref().unwrap_or("");
+    assert!(text.starts_with("[merge_forward: 4 messages]\n"), "{text}");
+    assert!(text.contains("] ou_a: 第一条"), "{text}");
+    assert_eq!(msg.image_keys, vec!["img_m1".to_string()]);
+}
+
+#[tokio::test]
+async fn merge_forward_event_falls_back_to_placeholder() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    // Unknown to the stub → empty items → no body to expand, but the
+    // message must still be forwarded, never silently swallowed.
+    let event = merge_forward_event("om_nothing");
+
+    let msg_id = adapter.parse_event_json(&event, &tx).await.unwrap();
+
+    assert_eq!(msg_id.as_deref(), Some("om_nothing"));
+    let msg = expect_message(rx.try_recv().expect("placeholder forwarded"));
+    assert_eq!(msg.raw_text.as_deref(), Some("[merge_forward]"));
     assert!(msg.image_keys.is_empty());
 }
 

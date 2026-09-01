@@ -59,6 +59,37 @@ impl FeishuAdapter {
         (text, image_keys)
     }
 
+    /// Expand a `merge_forward` get-message response: the API inlines the
+    /// sub-messages right after the parent (`items[0]`), each a normal
+    /// message the shared extractor reads; their image keys aggregate
+    /// so they ride the same post-gate download as plain images. Lines
+    /// mirror the hub's `[HH:MM] sender: text` quote format. A nested
+    /// `merge_forward` degrades to a placeholder line — the API never
+    /// inlines grandchildren.
+    pub(crate) fn format_merge_forward(items: &[serde_json::Value]) -> (String, Vec<String>) {
+        let mut image_keys = Vec::new();
+        let mut lines = Vec::new();
+        for sub in items.iter().skip(1) {
+            let (text, keys) = Self::extract_history_content(sub);
+            image_keys.extend(keys);
+            let ts = sub["create_time"]
+                .as_str()
+                .and_then(|s| s.parse::<i64>().ok())
+                .and_then(chrono::DateTime::from_timestamp_millis)
+                .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M").to_string())
+                .unwrap_or_default();
+            let sender = sub["sender"]["id"].as_str().unwrap_or("unknown");
+            lines.push(format!("[{ts}] {sender}: {text}"));
+        }
+        let mut out = format!("[merge_forward: {} messages]", lines.len());
+        if !lines.is_empty() {
+            out.push('\n');
+            out.push_str(&lines.join("\n"));
+            out.push_str("\n[/merge_forward]");
+        }
+        (out, image_keys)
+    }
+
     /// Locate the post body node: the first known locale with a content
     /// array, else the content itself (bare `{title, content}` form).
     pub(crate) fn post_node(content: &serde_json::Value) -> &serde_json::Value {

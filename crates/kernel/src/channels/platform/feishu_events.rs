@@ -206,17 +206,29 @@ impl FeishuAdapter {
         let content_str = message["content"]
             .as_str()
             .ok_or_else(|| api_err("missing content", ""))?;
-        let content_json: serde_json::Value =
-            serde_json::from_str(content_str).map_err(|e| api_err("content JSON", e))?;
+        let msg_type = message["message_type"].as_str().unwrap_or("");
+        let content_json: serde_json::Value = match serde_json::from_str(content_str) {
+            Ok(v) => v,
+            // merge_forward event content is a fixed plain string
+            // ("Merged and Forwarded Message"), not JSON; the real body
+            // is fetched below. Other types keep failing hard on
+            // corrupt content.
+            Err(_) if msg_type == "merge_forward" => serde_json::Value::Null,
+            Err(e) => return Err(api_err("content JSON", e)),
+        };
         // Rich-text (post) content has no top-level `text` — its body lives
         // in per-locale paragraphs; images ride along as `img` runs there
         // or as the whole body of an `image` message.
-        let msg_type = message["message_type"].as_str().unwrap_or("");
         // Interactive (card) messages: the event content is only a legacy
         // placeholder, never the real card body — the text is fetched later
         // via `fetch_message` (with `card_msg_content_type`), but only after
         // the mention gate so group cards that don't @ the bot stay ignored.
         let is_card = msg_type == "interactive";
+        // merge_forward events also carry only the fixed placeholder — the
+        // sub-messages are fetched below like cards, but WITHOUT the
+        // adapter-side mention gate: hub policy (incl. watch mirroring)
+        // applies to it like any normal message.
+        let is_merge_forward = msg_type == "merge_forward";
         let (text, image_keys) = match msg_type {
             "text" => (
                 content_json["text"].as_str().unwrap_or("").to_string(),
@@ -243,9 +255,9 @@ impl FeishuAdapter {
             ),
             _ => (String::new(), Vec::new()),
         };
-        // Cards defer their content to the mention gate below, so they are
-        // exempt from the empty-content drop here.
-        if !is_card && text.is_empty() && image_keys.is_empty() {
+        // Cards and merge_forwards defer their content to the fetch below,
+        // so they are exempt from the empty-content drop here.
+        if !is_card && !is_merge_forward && text.is_empty() && image_keys.is_empty() {
             debug!(chat_id, msg_type, "ignoring message without usable content");
             return Ok(None);
         }
@@ -275,12 +287,14 @@ impl FeishuAdapter {
         // the bot is @'d. Fetch the real body (best-effort); on failure fall
         // back to the `[interactive]` placeholder but still trigger — never
         // silently swallow like before.
-        let text = if is_card {
+        // merge_forward: same fetch-and-degrade shape, but no mention gate —
+        // the expansion also carries any sub-message image keys along.
+        let (text, image_keys) = if is_card {
             if !is_mention {
                 debug!(chat_id, msg_id, "ignoring group card without bot mention");
                 return Ok(None);
             }
-            match self.fetch_message(&msg_id).await {
+            let t = match self.fetch_message(&msg_id).await {
                 Ok(Some(h)) if !h.text.is_empty() => h.text,
                 Ok(_) => {
                     debug!(
@@ -293,9 +307,25 @@ impl FeishuAdapter {
                     warn!(chat_id, msg_id, error = %e, "card fetch failed, using placeholder");
                     "[interactive]".to_string()
                 }
+            };
+            (t, image_keys)
+        } else if is_merge_forward {
+            match self.fetch_message(&msg_id).await {
+                Ok(Some(h)) if !h.text.is_empty() => (h.text, h.image_keys),
+                Ok(_) => {
+                    debug!(
+                        chat_id,
+                        msg_id, "merge_forward body empty on fetch, using placeholder"
+                    );
+                    ("[merge_forward]".to_string(), image_keys)
+                }
+                Err(e) => {
+                    warn!(chat_id, msg_id, error = %e, "merge_forward fetch failed, using placeholder");
+                    ("[merge_forward]".to_string(), image_keys)
+                }
             }
         } else {
-            text
+            (text, image_keys)
         };
 
         let thread_part = thread_id
