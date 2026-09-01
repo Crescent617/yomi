@@ -233,6 +233,14 @@ impl FeishuAdapter {
                     .map(|k| vec![k.to_string()])
                     .unwrap_or_default(),
             ),
+            // Stickers carry their key inline so the agent can echo the
+            // same sticker back (lark send needs the file_key).
+            "sticker" => (
+                content_json["file_key"]
+                    .as_str()
+                    .map_or_else(|| "[sticker]".to_string(), |k| format!("[sticker: {k}]")),
+                Vec::new(),
+            ),
             _ => (String::new(), Vec::new()),
         };
         // Cards defer their content to the mention gate below, so they are

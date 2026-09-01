@@ -717,6 +717,26 @@ fn extract_history_content_reads_card_markdown() {
     assert_eq!(text, "真实内容");
 }
 
+/// Stickers keep their file_key in history context (quoting one must not
+/// lose it); a missing key degrades to the bare placeholder.
+#[test]
+fn extract_history_content_keeps_sticker_file_key() {
+    let item = json!({
+        "msg_type": "sticker",
+        "body": { "content": r#"{"file_key":"st_x"}"# }
+    });
+    let (text, image_keys) = super::FeishuAdapter::extract_history_content(&item);
+    assert_eq!(text, "[sticker: st_x]");
+    assert!(image_keys.is_empty());
+
+    let item = json!({
+        "msg_type": "sticker",
+        "body": { "content": r#"{}"# }
+    });
+    let (text, _) = super::FeishuAdapter::extract_history_content(&item);
+    assert_eq!(text, "[sticker]");
+}
+
 /// Card `<at id=...>` mention tags are rewritten to the neutral `<@id>name`
 /// contract on extraction — quoted or bare ids, with or without a surviving
 /// display name; fenced/inline code is left literal.
@@ -941,11 +961,26 @@ async fn text_event_still_forwarded() {
 }
 
 #[tokio::test]
-async fn non_text_event_without_text_is_ignored() {
+async fn sticker_event_is_forwarded_with_file_key() {
     let stub = StubFeishu::start().await;
     let adapter = stub_adapter(&stub.base_url);
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let event = receive_event("sticker", &json!({ "file_key": "st_x" }));
+
+    let msg_id = adapter.parse_event_json(&event, &tx).await.unwrap();
+
+    assert_eq!(msg_id.as_deref(), Some("om_1"));
+    let msg = expect_message(rx.try_recv().expect("sticker message forwarded"));
+    assert_eq!(msg.raw_text.as_deref(), Some("[sticker: st_x]"));
+    assert!(msg.image_keys.is_empty());
+}
+
+#[tokio::test]
+async fn unknown_event_without_text_is_ignored() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let event = receive_event("audio", &json!({ "file_key": "aud_x" }));
 
     let msg_id = adapter.parse_event_json(&event, &tx).await.unwrap();
 

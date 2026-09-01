@@ -41,6 +41,11 @@ impl FeishuAdapter {
                     text
                 }
             }
+            // Keep the sticker's file_key in context so it can be replied
+            // with or fetched later.
+            "sticker" => content["file_key"]
+                .as_str()
+                .map_or_else(|| "[sticker]".to_string(), |k| format!("[sticker: {k}]")),
             other => format!("[{other}]"),
         };
         let image_keys = match msg_type {
