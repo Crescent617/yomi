@@ -17,6 +17,7 @@
     createSessionState,
   } from "../../session";
   import * as api from "../../api";
+  import { previewFile } from "../../file-preview.svelte";
   import TabBar from "../layout/TabBar.svelte";
   import MessageList from "./MessageList.svelte";
   import ChatInput from "./ChatInput.svelte";
@@ -36,6 +37,7 @@
     ArrowUp,
     Check,
     ExternalLink,
+    Maximize2,
     Paperclip,
     Plus,
     Search,
@@ -850,6 +852,7 @@
                         {@render rulesBlock(
                           "Channel rules",
                           sessionRules.channel_rules,
+                          sessionRules.chat_id,
                           channelRulesOpen,
                           () => (channelRulesOpen = !channelRulesOpen),
                         )}
@@ -858,6 +861,7 @@
                         {@render rulesBlock(
                           "Session rules",
                           sessionRules.session_rules,
+                          activeSession.id,
                           sessionRulesOpen,
                           () => (sessionRulesOpen = !sessionRulesOpen),
                         )}
@@ -876,24 +880,42 @@
             {#snippet rulesBlock(
               label: string,
               body: string,
+              hint: string | null,
               expanded: boolean,
               toggle: () => void,
             )}
               <div>
-                <button
-                  type="button"
-                  class="flex w-full items-center gap-1 rounded-sm px-0.5 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-                  aria-expanded={expanded}
-                  onclick={toggle}
-                >
-                  <ChevronRight
-                    size={11}
-                    class="shrink-0 transition-transform {expanded
-                      ? 'rotate-90'
-                      : ''}"
-                  />
-                  {label}
-                </button>
+                <div class="flex items-center gap-0.5">
+                  <button
+                    type="button"
+                    class="flex min-w-0 flex-1 items-center gap-1 rounded-sm px-0.5 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+                    aria-expanded={expanded}
+                    onclick={toggle}
+                  >
+                    <ChevronRight
+                      size={11}
+                      class="shrink-0 transition-transform {expanded
+                        ? 'rotate-90'
+                        : ''}"
+                    />
+                    {label}
+                  </button>
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-sm p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                    title="Open in full preview"
+                    aria-label="Open {label} in full preview"
+                    onclick={() =>
+                      previewFile({
+                        name: label,
+                        sub: hint,
+                        markdown: true,
+                        source: { kind: "inline", text: body },
+                      })}
+                  >
+                    <Maximize2 size={11} />
+                  </button>
+                </div>
                 {#if expanded}
                   <pre
                     class="mt-1 max-h-40 overflow-auto rounded-sm bg-code-bg px-2 py-1.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-foreground">{body}</pre>

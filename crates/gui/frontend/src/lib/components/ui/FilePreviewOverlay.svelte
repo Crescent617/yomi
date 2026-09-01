@@ -1,11 +1,13 @@
 <script lang="ts">
   /**
-   * In-app preview overlay for text attachments (Markdown, code, logs…):
-   * a calm reading surface with the file's identity up top and a soft
-   * "Open externally" action as the escape hatch. Markdown renders
-   * through the chat's TextBlock; other text is syntax-highlighted via
-   * the shared shiki singleton (plain-text fallback). Bytes come from
-   * the daemon over the wire, so local and remote mode behave the same;
+   * In-app preview overlay for text content (Markdown, code, logs…): a
+   * calm reading surface with the content's identity up top. Attachment
+   * sources get an icon-only "open externally" action as the escape
+   * hatch; inline sources (e.g. session rules) have no file behind
+   * them, so the action is omitted. Markdown renders through the chat's
+   * TextBlock; other text is syntax-highlighted via the shared shiki
+   * singleton (plain-text fallback). Attachment bytes come from the
+   * daemon over the wire, so local and remote mode behave the same;
    * unreadable/binary files degrade to the external-open hint.
    */
   import { ExternalLink, FileText, Loader2, X } from "lucide-svelte";
@@ -31,14 +33,6 @@
     | { kind: "ready"; text: string; highlighted: string | null };
 
   const target = $derived(filePreview.target);
-  const name = $derived(
-    target
-      ? (target.path.split(/[/\\]/).filter(Boolean).pop() ?? target.path)
-      : "",
-  );
-  const isMarkdown = $derived(
-    !!target && /\.(md|markdown)$/i.test(target.path),
-  );
 
   let load = $state<LoadState>({ kind: "loading" });
   let openingExternal = $state(false);
@@ -51,13 +45,17 @@
     let cancelled = false;
     void (async () => {
       try {
-        const { text } = await readAttachmentText(t.base_dir, t.path);
+        const text =
+          t.source.kind === "inline"
+            ? t.source.text
+            : (await readAttachmentText(t.source.base_dir, t.source.path)).text;
         if (cancelled) return;
-        if (/\.(md|markdown)$/i.test(t.path)) {
+        if (t.markdown) {
           load = { kind: "ready", text, highlighted: null };
           return;
         }
-        const highlighted = await highlightCode(text, detectLang(t.path));
+        const name = t.source.kind === "attachment" ? t.source.path : t.name;
+        const highlighted = await highlightCode(text, detectLang(name));
         if (!cancelled) load = { kind: "ready", text, highlighted };
       } catch (e) {
         if (!cancelled) load = { kind: "error", message: errorMessage(e) };
@@ -77,10 +75,10 @@
 
   async function openExternally() {
     const t = target;
-    if (!t || openingExternal) return;
+    if (!t || t.source.kind !== "attachment" || openingExternal) return;
     openingExternal = true;
     try {
-      await openAttachment(t.base_dir, t.path);
+      await openAttachment(t.source.base_dir, t.source.path);
     } catch (e: unknown) {
       showNotification(errorMessage(e), "error");
     } finally {
@@ -101,7 +99,7 @@
     }}
     role="dialog"
     aria-modal="true"
-    aria-label={`Preview ${name}`}
+    aria-label={`Preview ${target.name}`}
     tabindex="-1"
   >
     <div
@@ -113,35 +111,42 @@
       >
         <FileText size={14} class="shrink-0 text-muted-foreground" />
         <div class="min-w-0 flex-1">
-          <div class="truncate text-sm font-medium text-foreground">{name}</div>
-          <div
-            class="truncate font-mono text-[10px] text-muted-foreground"
-            title={target.path}
-          >
-            {target.path}
+          <div class="truncate text-sm font-medium text-foreground">
+            {target.name}
           </div>
-        </div>
-        <button
-          type="button"
-          class="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-secondary/50 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-70"
-          onclick={openExternally}
-          disabled={openingExternal}
-          title="Open in the system default app"
-        >
-          {#if openingExternal}
-            <Loader2 size={12} class="animate-spin" />
-          {:else}
-            <ExternalLink size={12} />
+          {#if target.sub}
+            <div
+              class="truncate font-mono text-[10px] text-muted-foreground"
+              title={target.sub}
+            >
+              {target.sub}
+            </div>
           {/if}
-          Open externally
-        </button>
+        </div>
+        {#if target.source.kind === "attachment"}
+          <button
+            type="button"
+            class="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-70"
+            onclick={openExternally}
+            disabled={openingExternal}
+            title="Open in the system default app"
+            aria-label="Open externally"
+          >
+            {#if openingExternal}
+              <Loader2 size={14} class="animate-spin" />
+            {:else}
+              <ExternalLink size={14} />
+            {/if}
+          </button>
+        {/if}
         <button
           type="button"
           onclick={closeFilePreview}
           aria-label="Close preview"
-          class="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          title="Close preview"
+          class="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
         >
-          <X size={15} />
+          <X size={14} />
         </button>
       </div>
 
@@ -163,7 +168,7 @@
               This file can't be previewed — open it externally instead.
             </p>
           </div>
-        {:else if isMarkdown}
+        {:else if target.markdown}
           <div class="px-5 py-4">
             <TextBlock content={load.text} />
           </div>
@@ -171,7 +176,7 @@
           <div class="file-preview-code">{@html load.highlighted}</div>
         {:else}
           <pre
-            class="px-5 py-4 font-mono text-xs leading-relaxed whitespace-pre-wrap text-foreground">{load.text}</pre>
+            class="whitespace-pre-wrap px-5 py-4 font-mono text-xs leading-relaxed text-foreground">{load.text}</pre>
         {/if}
       </div>
     </div>

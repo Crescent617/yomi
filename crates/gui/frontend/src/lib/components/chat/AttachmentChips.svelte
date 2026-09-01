@@ -99,7 +99,12 @@
     // Text types open in the in-app preview overlay (bytes over the wire,
     // both connection modes); everything else keeps system-default open.
     if (isTextPreviewable(path)) {
-      previewFile({ path, base_dir: baseDir });
+      previewFile({
+        name: basename(path),
+        sub: path,
+        markdown: /\.(md|markdown)$/i.test(path),
+        source: { kind: "attachment", path, base_dir: baseDir },
+      });
       return;
     }
     opening = path;
