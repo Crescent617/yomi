@@ -1,7 +1,5 @@
 <script lang="ts" module>
-  // Stack of currently-open modals so global key handling (Escape/Enter)
-  // only ever targets the top-most one.
-  const modalStack: symbol[] = [];
+  import { pushModal, isTopModal } from "../../modal-stack";
 </script>
 
 <script lang="ts">
@@ -45,15 +43,11 @@
   };
 
   const id = Symbol("modal");
-  const isTop = () => modalStack[modalStack.length - 1] === id;
+  const isTop = () => isTopModal(id);
 
   $effect(() => {
     if (!open) return;
-    modalStack.push(id);
-    return () => {
-      const idx = modalStack.indexOf(id);
-      if (idx !== -1) modalStack.splice(idx, 1);
-    };
+    return pushModal(id);
   });
 
   function handleKeydown(e: KeyboardEvent) {

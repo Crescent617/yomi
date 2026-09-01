@@ -2,6 +2,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { Minus, Plus, RotateCcw, Scan, X } from "lucide-svelte";
+  import { isTopModal, pushModal } from "../../modal-stack";
+
+  const modalId = Symbol("mermaid-preview");
 
   let { svg, onClose }: { svg: string; onClose: () => void } = $props();
 
@@ -96,6 +99,10 @@
 
   function handleKeydown(event: KeyboardEvent) {
     if (event.key === "Escape") {
+      // Only the top-most overlay layer may consume Escape — a preview
+      // stacked above (or below) keeps its own state untouched.
+      if (!isTopModal(modalId)) return;
+      event.preventDefault();
       onClose();
       return;
     }
@@ -128,6 +135,7 @@
     const previousOverflow = document.body.style.overflow;
     const previousFocus = document.activeElement as HTMLElement | null;
     document.body.style.overflow = "hidden";
+    const popModal = pushModal(modalId);
     window.addEventListener("keydown", handleKeydown);
     const resizeObserver = new ResizeObserver(() => {
       if (fitted) fitToViewport();
@@ -139,6 +147,7 @@
     });
     return () => {
       document.body.style.overflow = previousOverflow;
+      popModal();
       window.removeEventListener("keydown", handleKeydown);
       resizeObserver.disconnect();
       previousFocus?.focus();

@@ -117,20 +117,20 @@ const TEXT_PREVIEW_EXTENSIONS = new Set([
   "patch",
 ]);
 
-/** Well-known extensionless text files. */
+/** Well-known extensionless text files (matched case-insensitively). */
 const TEXT_PREVIEW_BASENAMES = new Set([
-  "Dockerfile",
-  "Makefile",
-  "LICENSE",
-  "NOTICE",
+  "dockerfile",
+  "makefile",
+  "license",
+  "notice",
 ]);
 
 /** Whether an attachment path opens in the in-app text preview on click. */
 export function isTextPreviewable(path: string): boolean {
-  const basename = path.split(/[/\\]/).pop() ?? path;
+  const basename = (path.split(/[/\\]/).pop() ?? path).toLowerCase();
   if (TEXT_PREVIEW_BASENAMES.has(basename)) return true;
   if (!basename.includes(".")) return false;
-  const ext = basename.split(".").pop()?.toLowerCase() ?? "";
+  const ext = basename.split(".").pop() ?? "";
   return TEXT_PREVIEW_EXTENSIONS.has(ext);
 }
 

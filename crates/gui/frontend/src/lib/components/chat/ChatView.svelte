@@ -842,7 +842,11 @@
                     <p class="mt-1.5 text-[11px] text-muted-foreground">
                       Loading…
                     </p>
-                  {:else if sessionRules === null || (!sessionRules.channel_rules && !sessionRules.session_rules)}
+                  {:else if sessionRules === null}
+                    <p class="mt-1.5 text-[11px] text-muted-foreground">
+                      Couldn't load rules.
+                    </p>
+                  {:else if !sessionRules.channel_rules && !sessionRules.session_rules}
                     <p class="mt-1.5 text-[11px] text-muted-foreground">
                       No rules in effect.
                     </p>

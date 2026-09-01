@@ -17,6 +17,9 @@
   import { detectLang } from "../../utils";
   import TextBlock from "../chat/TextBlock.svelte";
   import { highlightCode } from "../chat/code-highlight";
+  import { isTopModal, pushModal } from "../../modal-stack";
+
+  const overlayId = Symbol("file-preview");
 
   function portal(node: HTMLElement) {
     document.body.appendChild(node);
@@ -67,11 +70,26 @@
   });
 
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape" && filePreview.target) {
+    // Only when top-most: a layer opened above (e.g. mermaid zoom inside
+    // a markdown preview) owns Escape until it closes.
+    if (e.key === "Escape" && filePreview.target && isTopModal(overlayId)) {
       e.preventDefault();
       closeFilePreview();
     }
   }
+
+  // Layer registration: the overlay is Escape-eligible only while it is
+  // the stack's top entry.
+  $effect(() => {
+    if (!target) return;
+    return pushModal(overlayId);
+  });
+
+  // Move focus into the dialog so Tab doesn't walk the background app.
+  let dialogEl = $state<HTMLDivElement | null>(null);
+  $effect(() => {
+    if (target && dialogEl) dialogEl.focus();
+  });
 
   async function openExternally() {
     const t = target;
@@ -101,6 +119,7 @@
     aria-modal="true"
     aria-label={`Preview ${target.name}`}
     tabindex="-1"
+    bind:this={dialogEl}
   >
     <div
       class="flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-border bg-background shadow-2xl"

@@ -421,3 +421,65 @@ async fn fork_session_copies_rules_file() {
 
     kernel.stop().await;
 }
+
+/// `get_session_rules`：channel 层经 routing 行解析 chat id 再读文件
+/// （thread 行的 actual_chat_id 已 denormalize 父群 id，无需 thread→chat
+/// 反查），session 层按会话 id 读；sub-agent 永不返回 session 层——与
+/// spawn 时不注入对齐，视图不能展示下次 spawn 不会注入的规则。
+#[tokio::test]
+async fn get_session_rules_layers_and_sub_agent_exclusion() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        channels: vec![crate::channels::ChannelConfig {
+            name: "mock".to_string(),
+            enabled: true,
+            platform: crate::channels::PlatformConfig::Feishu {
+                app_id: "app".to_string(),
+                app_secret: "secret".to_string(),
+            },
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    config.finalize();
+    let kernel = crate::build_kernel(&config, false).await.unwrap();
+
+    // Thread-scoped routing row: mapping key is the thread, actual chat
+    // id the parent chat — rules resolve against the chat.
+    let sid = crate::types::SessionId::new();
+    kernel
+        .channel_manager()
+        .expect("channel hub")
+        .store()
+        .save_mapping(
+            "mock",
+            "omt_1",
+            &sid,
+            "oc_1",
+            None,
+            crate::channels::MappingKind::Normal,
+        )
+        .await
+        .unwrap();
+
+    let channel_dir = tmp.path().join("channels").join("rules");
+    std::fs::create_dir_all(&channel_dir).unwrap();
+    std::fs::write(channel_dir.join("oc_1.md"), "用中文回答。").unwrap();
+    let session_dir = tmp.path().join("sessions").join("rules");
+    std::fs::create_dir_all(&session_dir).unwrap();
+    std::fs::write(session_dir.join(format!("{sid}.md")), "只答本话题。").unwrap();
+
+    let rules = kernel.get_session_rules(&sid).await.unwrap();
+    assert_eq!(rules.chat_id.as_deref(), Some("oc_1"));
+    assert_eq!(rules.channel_rules.as_deref(), Some("用中文回答。"));
+    assert_eq!(rules.session_rules.as_deref(), Some("只答本话题。"));
+
+    // Sub-agent：即使存在同名 rules 文件也不返回 session 层。
+    let sub = crate::types::SessionId::from(format!("{}xyz", crate::types::SUB_PREFIX));
+    std::fs::write(session_dir.join(format!("{sub}.md")), "不该显示").unwrap();
+    let rules = kernel.get_session_rules(&sub).await.unwrap();
+    assert_eq!(rules.session_rules, None);
+
+    kernel.stop().await;
+}

@@ -1328,7 +1328,14 @@ impl Kernel {
             Some(chat_id) => crate::prompt::channel_rules_section(&data_dir, chat_id).await,
             None => None,
         };
-        let session_rules = crate::prompt::session_rules_section(&data_dir, &sid.0).await;
+        // Sub-agents get no session rules at spawn (a sub-agent is a
+        // tool, not a chat voice) — mirror that here so the view never
+        // shows rules the next spawn would not inject.
+        let session_rules = if sid.starts_with(crate::types::SUB_PREFIX) {
+            None
+        } else {
+            crate::prompt::session_rules_section(&data_dir, &sid.0).await
+        };
         Ok(crate::types::SessionRulesResponse {
             chat_id,
             channel_rules,

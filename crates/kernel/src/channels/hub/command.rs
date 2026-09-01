@@ -103,7 +103,7 @@ pub(crate) const HELP_TEXT: &str = "\
 **Info**
 `/help` (`/h`) — this help
 `/info` (`/i`) — current session info
-`/rules` — rules in effect here: the chat's channel rules + this session's own
+`/rules` — rules in effect here: the chat's channel rules + this session's own rules
 `/mailbox` (`/mb`) — pending steer/queued messages; `/mailbox retract <n>` · `/mailbox clear [steer|queue|all]` (admin)
 `/bg` — background tasks (shells + running subagents) with stop buttons (admin)
 `/models` — list configured models (current one marked)
