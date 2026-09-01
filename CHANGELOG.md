@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.8] - 2026-09-01
+
 ### Added
 
 - 飞书/Telegram 新增 `/rules` 命令：查看当前生效的 channel rules（全群共享）与 session rules（标明所属会话）；与 prompt 注入同一条读取路径，所见即该会话 spawn 时的实际注入内容。
