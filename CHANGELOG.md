@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.9] - 2026-09-01
+
 ### Changed
 
 - `/watch on` 的群现在镜像**所有成员**的普通消息：不再按 user allowlist 过滤发言者（显式 block、chat allowlist、频道禁用仍拦截；斜杠命令与疑似其他 bot 的未知斜杠词不豁免，访问控制照全）。
