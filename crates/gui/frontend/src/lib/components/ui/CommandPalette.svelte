@@ -2,6 +2,7 @@
   import { onMount, tick } from "svelte";
   import { Search } from "lucide-svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
+  import { hasOpenModal } from "../../modal-stack";
   import {
     closePalette,
     commandRows,
@@ -83,7 +84,11 @@
       if (paletteState.confirm) return;
       if (paletteState.open) {
         closePalette();
-      } else {
+      } else if (!hasOpenModal()) {
+        // A stacked overlay layer (preview / modal / mermaid zoom) is
+        // portaled to body and paints above the palette — opening behind
+        // it would focus an invisible input that still accepts typed
+        // commands (rows include delete/restart confirms).
         restoreFocus =
           document.activeElement instanceof HTMLElement
             ? document.activeElement

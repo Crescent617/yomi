@@ -542,7 +542,6 @@ pub async fn read_attachment_image(
 #[derive(serde::Serialize)]
 pub struct AttachmentText {
     pub text: String,
-    pub mime: String,
 }
 
 /// Largest text read for in-app preview (rendering is DOM-bound).
@@ -563,13 +562,13 @@ pub async fn read_attachment_text(
         base_dir: base_dir.filter(|d| !d.is_empty()),
         path: path.clone(),
     };
-    let (bytes, mime) =
+    let (bytes, _mime) =
         kernel::client::read_file_bytes(kernel.as_ref(), source, MAX_PREVIEW_TEXT_BYTES)
             .await
             .map_err(GuiError::kernel)?;
     let text = String::from_utf8(bytes)
         .map_err(|_| GuiError::unknown(format!("not utf-8 text: {path}")))?;
-    Ok(AttachmentText { text, mime })
+    Ok(AttachmentText { text })
 }
 
 #[tauri::command(rename_all = "snake_case")]

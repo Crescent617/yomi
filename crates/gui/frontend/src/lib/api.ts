@@ -941,7 +941,6 @@ export async function readAttachmentImage(
 
 export interface AttachmentText {
   text: string;
-  mime: string;
 }
 
 /**

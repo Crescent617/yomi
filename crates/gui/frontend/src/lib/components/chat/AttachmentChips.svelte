@@ -179,7 +179,9 @@
           ? 'text-muted-foreground hover:bg-secondary/60'
           : 'text-muted-foreground hover:bg-secondary hover:text-foreground'} disabled:opacity-70"
         title={failed
-          ? `${path} (preview unavailable)`
+          ? isTextPreviewable(path)
+            ? `${path} (image load failed — click to preview source)`
+            : `${path} (preview unavailable)`
           : isTextPreviewable(path)
             ? `${path} (click to preview)`
             : isRemote

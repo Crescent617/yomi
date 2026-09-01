@@ -100,8 +100,9 @@
   function handleKeydown(event: KeyboardEvent) {
     if (event.key === "Escape") {
       // Only the top-most overlay layer may consume Escape — a preview
-      // stacked above (or below) keeps its own state untouched.
-      if (!isTopModal(modalId)) return;
+      // stacked above (or below) keeps its own state untouched. Key
+      // auto-repeat must not unwind two layers in one physical hold.
+      if (!isTopModal(modalId) || event.repeat) return;
       event.preventDefault();
       onClose();
       return;

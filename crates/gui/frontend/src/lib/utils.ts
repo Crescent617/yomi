@@ -30,13 +30,13 @@ export function formatTimeAgo(
 
 export function detectLang(filename: string): string {
   const map: Record<string, string> = {
-    Dockerfile: "dockerfile",
-    Makefile: "makefile",
+    dockerfile: "dockerfile",
+    makefile: "makefile",
   };
-  const basename = filename.split("/").pop() ?? filename;
+  const basename = (filename.split("/").pop() ?? filename).toLowerCase();
   if (map[basename]) return map[basename];
 
-  const ext = basename.split(".").pop()?.toLowerCase() ?? "";
+  const ext = basename.split(".").pop() ?? "";
   const extensionMap: Record<string, string> = {
     rs: "rust",
     js: "javascript",

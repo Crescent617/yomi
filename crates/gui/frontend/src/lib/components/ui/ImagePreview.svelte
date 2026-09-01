@@ -1,6 +1,16 @@
 <script lang="ts">
   import { X } from "lucide-svelte";
   import { closeImagePreview, imagePreview } from "../../image-preview.svelte";
+  import { isTopModal, pushModal } from "../../modal-stack";
+
+  const lightboxId = Symbol("image-preview");
+
+  // Layer registration (shared overlay stack): the lightbox is
+  // Escape-eligible only while it is the stack's top entry.
+  $effect(() => {
+    if (!imagePreview.src) return;
+    return pushModal(lightboxId);
+  });
 
   function portal(node: HTMLElement) {
     document.body.appendChild(node);
@@ -12,7 +22,13 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape" && imagePreview.src) {
+    // Top-most layer only; key auto-repeat must not unwind two layers.
+    if (
+      e.key === "Escape" &&
+      imagePreview.src &&
+      isTopModal(lightboxId) &&
+      !e.repeat
+    ) {
       e.preventDefault();
       closeImagePreview();
     }

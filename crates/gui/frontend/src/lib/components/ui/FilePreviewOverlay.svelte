@@ -70,11 +70,32 @@
   });
 
   function handleKeydown(e: KeyboardEvent) {
-    // Only when top-most: a layer opened above (e.g. mermaid zoom inside
-    // a markdown preview) owns Escape until it closes.
-    if (e.key === "Escape" && filePreview.target && isTopModal(overlayId)) {
+    // Only the top-most layer owns global keys: a layer opened above
+    // (e.g. mermaid zoom inside a markdown preview) keeps its state
+    // until it closes.
+    if (!filePreview.target || !isTopModal(overlayId)) return;
+    // Key auto-repeat must not unwind two layers in one physical hold.
+    if (e.key === "Escape" && !e.repeat) {
       e.preventDefault();
       closeFilePreview();
+      return;
+    }
+    // Keep Tab cycling inside the dialog (same trap as MermaidPreview).
+    if (e.key === "Tab" && dialogEl) {
+      const focusable = [
+        ...dialogEl.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        ),
+      ].filter((el) => !el.hasAttribute("disabled"));
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last?.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first?.focus();
+      }
     }
   }
 
