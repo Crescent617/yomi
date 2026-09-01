@@ -2,18 +2,22 @@
   /**
    * Attachments declared via `<yomi_attachments>` blocks in an assistant
    * message: images render inline as a gallery (click opens the in-app
-   * lightbox), everything else renders as chips (click opens the system
-   * default app). Resolution happens on the daemon's host — same safety
-   * rules as channel delivery — with bytes fetched over the wire in
-   * remote mode, so both modes behave the same. Images that fail to load
-   * fall back to chips. Opening a file in remote mode downloads it into a
-   * local content-keyed cache first and opens that copy.
+   * lightbox), text types (Markdown, code, logs…) open in the in-app
+   * preview overlay, and everything else renders as chips that open the
+   * system default app. Resolution happens on the daemon's host — same
+   * safety rules as channel delivery — with bytes fetched over the wire
+   * in remote mode, so both modes behave the same. Images that fail to
+   * load fall back to chips. Opening a file externally in remote mode
+   * downloads it into a local content-keyed cache first and opens that
+   * copy.
    */
-  import { ImageOff, Loader2, Paperclip } from "lucide-svelte";
+  import { FileText, ImageOff, Loader2, Paperclip } from "lucide-svelte";
   import { errorMessage, openAttachment, readAttachmentImage } from "../../api";
   import { connectionState } from "../../connection.svelte";
+  import { previewFile } from "../../file-preview.svelte";
   import { previewImage } from "../../image-preview.svelte";
   import { getSession, showNotification } from "../../state.svelte";
+  import { isTextPreviewable } from "../../utils";
 
   let {
     paths,
@@ -92,6 +96,12 @@
 
   async function open(path: string) {
     if (opening) return;
+    // Text types open in the in-app preview overlay (bytes over the wire,
+    // both connection modes); everything else keeps system-default open.
+    if (isTextPreviewable(path)) {
+      previewFile({ path, base_dir: baseDir });
+      return;
+    }
     opening = path;
     try {
       await openAttachment(baseDir, path);
@@ -165,15 +175,19 @@
           : 'text-muted-foreground hover:bg-secondary hover:text-foreground'} disabled:opacity-70"
         title={failed
           ? `${path} (preview unavailable)`
-          : isRemote
-            ? `${path} (opens a downloaded copy)`
-            : path}
+          : isTextPreviewable(path)
+            ? `${path} (click to preview)`
+            : isRemote
+              ? `${path} (opens a downloaded copy)`
+              : path}
         onclick={() => open(path)}
       >
         {#if downloading}
           <Loader2 size={12} class="shrink-0 animate-spin" />
         {:else if failed && isImagePath(path)}
           <ImageOff size={12} class="shrink-0" />
+        {:else if isTextPreviewable(path)}
+          <FileText size={12} class="shrink-0" />
         {:else}
           <Paperclip size={12} class="shrink-0" />
         {/if}

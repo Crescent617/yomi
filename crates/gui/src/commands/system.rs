@@ -538,6 +538,40 @@ pub async fn read_attachment_image(
     })
 }
 
+/// Text payload for in-app attachment preview.
+#[derive(serde::Serialize)]
+pub struct AttachmentText {
+    pub text: String,
+    pub mime: String,
+}
+
+/// Largest text read for in-app preview (rendering is DOM-bound).
+const MAX_PREVIEW_TEXT_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Read a text attachment for in-app preview (Markdown, code, logs…).
+/// Same wire path as [`read_attachment_image`], so local and remote mode
+/// behave the same. Binary files fail the UTF-8 check and oversized
+/// files are rejected — the frontend then falls back to external open.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn read_attachment_text(
+    state: State<'_, AppState>,
+    base_dir: Option<String>,
+    path: String,
+) -> Result<AttachmentText, GuiError> {
+    let kernel = state.kernel_snapshot();
+    let source = kernel::utils::file_read::FileSource::Attachment {
+        base_dir: base_dir.filter(|d| !d.is_empty()),
+        path: path.clone(),
+    };
+    let (bytes, mime) =
+        kernel::client::read_file_bytes(kernel.as_ref(), source, MAX_PREVIEW_TEXT_BYTES)
+            .await
+            .map_err(GuiError::kernel)?;
+    let text = String::from_utf8(bytes)
+        .map_err(|_| GuiError::unknown(format!("not utf-8 text: {path}")))?;
+    Ok(AttachmentText { text, mime })
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn open_in_vscode(path: String) -> Result<(), GuiError> {
     #[cfg(target_os = "macos")]

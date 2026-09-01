@@ -66,6 +66,74 @@ export function detectLang(filename: string): string {
   return extensionMap[ext] ?? "plaintext";
 }
 
+/**
+ * Extensions that open in the in-app text preview (Markdown rendered,
+ * everything else syntax-highlighted) instead of the system default app.
+ * Binary-looking types stay external-only.
+ */
+const TEXT_PREVIEW_EXTENSIONS = new Set([
+  "md",
+  "markdown",
+  "txt",
+  "log",
+  "json",
+  "jsonl",
+  "csv",
+  "tsv",
+  "xml",
+  "yaml",
+  "yml",
+  "toml",
+  "ini",
+  "env",
+  "rs",
+  "js",
+  "mjs",
+  "cjs",
+  "ts",
+  "jsx",
+  "tsx",
+  "py",
+  "go",
+  "java",
+  "c",
+  "h",
+  "cpp",
+  "hpp",
+  "cs",
+  "rb",
+  "php",
+  "swift",
+  "kt",
+  "sql",
+  "sh",
+  "bash",
+  "zsh",
+  "html",
+  "css",
+  "scss",
+  "svg",
+  "diff",
+  "patch",
+]);
+
+/** Well-known extensionless text files. */
+const TEXT_PREVIEW_BASENAMES = new Set([
+  "Dockerfile",
+  "Makefile",
+  "LICENSE",
+  "NOTICE",
+]);
+
+/** Whether an attachment path opens in the in-app text preview on click. */
+export function isTextPreviewable(path: string): boolean {
+  const basename = path.split(/[/\\]/).pop() ?? path;
+  if (TEXT_PREVIEW_BASENAMES.has(basename)) return true;
+  if (!basename.includes(".")) return false;
+  const ext = basename.split(".").pop()?.toLowerCase() ?? "";
+  return TEXT_PREVIEW_EXTENSIONS.has(ext);
+}
+
 export function formatElapsed(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;

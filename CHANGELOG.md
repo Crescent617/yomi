@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 飞书/Telegram 新增 `/rules` 命令：查看当前生效的 channel rules（全群共享）与 session rules（本会话），内容与下次运行时实际注入 system prompt 的完全一致。
 - GUI 会话信息面板新增 Rules 区块：查看当前会话的两层规则（经新增 `get_rules` RPC 读取，本地与远程 daemon 均可）。
+- GUI 附件预览：点击 Markdown 等文本类附件直接在应用内预览（Markdown 渲染、代码高亮），预览框带"外部打开"按钮；不可预览类型维持原外部打开行为。
 
 
 ## [0.10.7] - 2026-09-01

@@ -11,6 +11,7 @@
   import { EventFrameBuffer } from "../lib/event-frame-buffer";
   import ToastContainer from "../lib/components/ui/ToastContainer.svelte";
   import ImagePreview from "../lib/components/ui/ImagePreview.svelte";
+  import FilePreviewOverlay from "../lib/components/ui/FilePreviewOverlay.svelte";
   import {
     initSettings,
     guiPreferences,
@@ -130,5 +131,6 @@
     : 'bg-background'}"
 >
   <slot />
-  {#if !isPetWindow}<ToastContainer /><ImagePreview />{/if}
+  {#if !isPetWindow}<ToastContainer /><ImagePreview /><FilePreviewOverlay
+    />{/if}
 </div>
