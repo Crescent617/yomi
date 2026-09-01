@@ -1420,9 +1420,53 @@ pub(crate) async fn set_chat_model(
         }
         if let Ok(Some(routing)) = store.find_routing_by_session(&sid).await {
             if routing.external_chat_id == chat_id {
-                match key {
-                    Some(k) => kernel.set_session_model(&sid, k).await?,
-                    None => kernel.clear_session_model(&sid).await?,
+                // 个别 session 失败（并发删除/陈旧 mapping）不中断扇出——
+                // 写得进去的写，失败仅告警。
+                let r = match key {
+                    Some(k) => kernel.set_session_model(&sid, k).await,
+                    None => kernel.clear_session_model(&sid).await,
+                };
+                if let Err(e) = r {
+                    warn!(channel = %channel_name, chat_id, session_id = %sid.0, error = %e, "fan-out model switch skipped a session");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Chat-scope context-window override：与 [`set_chat_model`] 同扇出——写
+/// chat session 与该 chat 现存的全部 thread session（未来 thread 建行
+/// 时经 `overrides_for_new_channel_session` 继承）。`None` 清除覆盖，
+/// 回落跟随模型配置。Shared by the settings card（channel 侧唯一入口；
+/// 精确值走 GUI/TUI/CLI）。
+pub(crate) async fn set_chat_context_window(
+    channel_name: &str,
+    store: &Arc<dyn ChannelStore>,
+    kernel: &Arc<Kernel>,
+    chat_id: &str,
+    tokens: Option<u32>,
+) -> Result<()> {
+    let (chat_sid, _) = get_or_create_session(
+        channel_name,
+        store,
+        kernel,
+        chat_id,
+        chat_id,
+        None,
+        crate::channels::MappingKind::Normal,
+    )
+    .await?;
+    kernel.set_session_context_window(&chat_sid, tokens).await?;
+    for (mk, sid) in store.list_mappings(channel_name).await? {
+        if mk == chat_id {
+            continue;
+        }
+        if let Ok(Some(routing)) = store.find_routing_by_session(&sid).await {
+            if routing.external_chat_id == chat_id {
+                // 与 model 扇出同规：个别 session 失败不中断。
+                if let Err(e) = kernel.set_session_context_window(&sid, tokens).await {
+                    warn!(channel = %channel_name, chat_id, session_id = %sid.0, error = %e, "fan-out ctx switch skipped a session");
                 }
             }
         }

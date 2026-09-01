@@ -118,6 +118,14 @@ enum SessionsCommands {
     },
     /// Full-text search across session histories
     Search(commands::session::search::SearchArgs),
+    /// Show, set, or reset the session's context-window override
+    Ctx {
+        /// Session ID (defaults to current directory's last session)
+        #[arg(short, long)]
+        session: Option<String>,
+        /// New value (`512k`, `1m`, plain tokens) or `reset`; omit to query
+        value: Option<String>,
+    },
     /// Retract one pending mailbox item (already-consumed ids fail safely)
     MailboxRemove {
         /// Mailbox item id (mbx_...)
@@ -415,6 +423,9 @@ async fn run_session(args: SessionArgs) -> Result<()> {
         }
         SessionsCommands::Search(search_args) => {
             commands::session::search::run_cli(&search_args).await
+        }
+        SessionsCommands::Ctx { session, value } => {
+            commands::session::ctx::run(&args.global, session, value).await
         }
         SessionsCommands::MailboxRemove { item_id, session } => {
             commands::session::mailbox::remove(&args.global, session, item_id).await

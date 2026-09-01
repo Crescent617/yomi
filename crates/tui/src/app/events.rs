@@ -163,6 +163,7 @@ impl Model {
                     if context_window > 0 {
                         self.context_window = context_window;
                     }
+                    self.total_tokens = total_tokens;
                     // Update context window usage in status bar
                     let usage_str = format!("{total_tokens}\x00{context_window}");
                     if let Err(e) = self.app.attr(
@@ -399,6 +400,10 @@ impl Model {
                         Ok(session_messages) => {
                             let context_window = self.context_window;
                             let total_tokens = crate::app::calc_token_usage(&session_messages);
+                            // 三处推值共享同一份缓存：/ctx 与换模型后的
+                            // SET_CTX_USAGE 重推依赖这两个字段，必须处处
+                            // 同步（rewind/clear/compact 路径此前漏了）。
+                            self.total_tokens = total_tokens;
 
                             let _ = self.app.attr(
                                 &Id::ChatView,

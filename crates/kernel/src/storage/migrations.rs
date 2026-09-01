@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 24;
+pub const CURRENT_SCHEMA_VERSION: i64 = 25;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -309,6 +309,15 @@ const MIGRATIONS: &[Migration] = &[
         sqls: &[
             r"ALTER TABLE channel_session_mappings ADD COLUMN kind TEXT NOT NULL DEFAULT 'normal';",
         ],
+    },
+    Migration {
+        version: 25,
+        // session 级覆盖的通用袋（JSON object，NULL=无覆盖）：此后
+        // session 级旋钮（首个：context_window，见
+        // docs/design/session-context-window.md）都进这个袋，不再一个
+        // 旋钮一列。更新走 json_set/json_remove 原子按键写。
+        name: "add_session_settings",
+        sqls: &[r"ALTER TABLE sessions ADD COLUMN settings TEXT;"],
     },
 ];
 

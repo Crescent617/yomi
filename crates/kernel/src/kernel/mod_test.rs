@@ -154,6 +154,7 @@ async fn create_session_inherits_project_dir_when_working_dir_absent() {
         auto_approve_level: None,
         tool_blocklist: vec![],
         model_key: None,
+        context_window: None,
     };
     let stored_dir = async |sid: &crate::types::SessionId| {
         kernel
@@ -497,6 +498,96 @@ async fn get_session_rules_layers_and_sub_agent_exclusion() {
     assert_eq!(rules.session_rules, None);
     assert_eq!(rules.chat_id, None);
     assert_eq!(rules.channel_rules, None);
+
+    kernel.stop().await;
+}
+
+/// `get/set_session_context_window`：覆盖 → 生效值与来源正确；清除 →
+/// 回落模型默认；`Some(0)` 拒绝；未知 session 报 NotFound；换模型
+/// **不清**覆盖（model_default 跟随新模型）；create 传 Some(0) 过滤为
+/// 无覆盖。
+#[tokio::test]
+async fn session_context_window_override_roundtrip() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    config.models = vec![
+        crate::provider::ModelConfig {
+            name: "m1".to_string(),
+            context_window: 128_000,
+            ..Default::default()
+        },
+        crate::provider::ModelConfig {
+            name: "m2".to_string(),
+            context_window: 800_000,
+            ..Default::default()
+        },
+    ];
+    config.agent.default_model = "m1".to_string();
+    config.finalize();
+    let kernel = crate::build_kernel(&config, false).await.unwrap();
+
+    let new_session = |context_window| crate::kernel::CreateSessionInput {
+        project_id: None,
+        working_dir: None,
+        auto_approve_level: None,
+        tool_blocklist: vec![],
+        model_key: None,
+        context_window,
+    };
+    let sid = kernel.create_session(new_session(None)).await.unwrap();
+
+    // 无覆盖：生效值 == 模型默认，override 为 None。
+    let info = kernel.get_session_context_window(&sid).await.unwrap();
+    assert_eq!(info.override_, None);
+    assert_eq!(info.effective, info.model_default);
+    assert_eq!(info.model_default, 128_000);
+
+    // 设置覆盖：生效值 == 覆盖。
+    kernel
+        .set_session_context_window(&sid, Some(400_000))
+        .await
+        .unwrap();
+    let info = kernel.get_session_context_window(&sid).await.unwrap();
+    assert_eq!(info.override_, Some(400_000));
+    assert_eq!(info.effective, 400_000);
+
+    // 换模型不清覆盖：override 保留，model_default 跟随新模型。
+    kernel.set_session_model(&sid, "m2").await.unwrap();
+    let info = kernel.get_session_context_window(&sid).await.unwrap();
+    assert_eq!(info.override_, Some(400_000), "override survives /model");
+    assert_eq!(info.effective, 400_000);
+    assert_eq!(info.model_default, 800_000);
+    assert_eq!(info.model_key, "m2");
+
+    // `Some(0)` 拒绝且不写。
+    assert!(kernel
+        .set_session_context_window(&sid, Some(0))
+        .await
+        .is_err());
+    let info = kernel.get_session_context_window(&sid).await.unwrap();
+    assert_eq!(info.override_, Some(400_000));
+
+    // 清除：回落模型默认。
+    kernel.set_session_context_window(&sid, None).await.unwrap();
+    let info = kernel.get_session_context_window(&sid).await.unwrap();
+    assert_eq!(info.override_, None);
+    assert_eq!(info.effective, info.model_default);
+
+    // create 传 Some(0)：过滤为无覆盖。
+    let zero_sid = kernel.create_session(new_session(Some(0))).await.unwrap();
+    let info = kernel.get_session_context_window(&zero_sid).await.unwrap();
+    assert_eq!(info.override_, None, "Some(0) filtered at create");
+
+    // 未知 session：NotFound。
+    let missing = crate::types::SessionId::new();
+    assert!(kernel
+        .set_session_context_window(&missing, Some(1))
+        .await
+        .is_err());
+    assert!(kernel.get_session_context_window(&missing).await.is_err());
 
     kernel.stop().await;
 }

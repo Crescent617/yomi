@@ -1036,6 +1036,29 @@ export async function setSessionModel(
   return invokeCmd("set_session_model", { session_id, key });
 }
 
+// ─── Session context window ─────────────────────────────
+
+export interface ContextWindowInfo {
+  effective: number;
+  override: number | null;
+  model_default: number;
+  model_key: string;
+}
+
+export async function getSessionContextWindow(
+  session_id: string,
+): Promise<ContextWindowInfo> {
+  return invokeCmd("get_session_context_window", { session_id });
+}
+
+/** `tokens = null` clears the override (follows the model default). */
+export async function setSessionContextWindow(
+  session_id: string,
+  tokens: number | null,
+): Promise<void> {
+  return invokeCmd("set_session_context_window", { session_id, tokens });
+}
+
 // ─── Cron / Automation ──────────────────────────────────
 
 export interface CronSessionTemplate {

@@ -17,7 +17,7 @@ use crate::channels::hub_deliver::info_card_envelope;
 use crate::channels::hub_routing::read_mention_override;
 use crate::channels::{CardAction, ChannelConfig, ChannelMessage, ChannelStore, PlatformAdapter};
 
-/// 面板管理的三个配置项的当前状态（chat scope；`None` = 跟随 channel
+/// 面板管理的配置项的当前状态（chat scope；`None` = 跟随 channel
 /// default）。
 struct SettingsState {
     mention_override: Option<bool>,
@@ -27,6 +27,10 @@ struct SettingsState {
     default_rit: bool,
     default_model: String,
     models: Vec<String>,
+    /// 当前 chat session 的 context-window 覆盖（settings 袋）。
+    ctx_override: Option<u32>,
+    /// 解析到当前模型（覆盖或默认）的配置窗口，预设档位的基准。
+    model_context_window: u32,
 }
 
 async fn read_state(
@@ -41,31 +45,39 @@ async fn read_state(
     // The chat-level session's raw model_key: `None` means "follow the
     // default" — distinct from an explicit choice that happens to equal
     // it (which would stop tracking default changes).
-    let model_override = match store.find_mapping(channel_name, chat_id).await? {
-        Some(sid) => kernel
-            .session_store()
-            .await
-            .get(&sid)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|info| info.model_key),
+    let session = match store.find_mapping(channel_name, chat_id).await? {
+        Some(sid) => kernel.session_store().await.get(&sid).await.ok().flatten(),
         None => None,
     };
-    let models = kernel
-        .list_models()
-        .await?
-        .into_iter()
-        .map(|m| m.name)
-        .collect();
+    let model_override = session.as_ref().and_then(|info| info.model_key.clone());
+    let ctx_override = session
+        .and_then(|info| info.settings)
+        .and_then(|s| s.context_window);
+    let models_info = kernel.list_models().await?;
+    // 档位基准 = 解析后模型的配置窗口（与 resolve_model 同回落：覆盖 key
+    // 失效时回落默认模型）。
+    let default_model = kernel.default_model_key();
+    let resolved_key = model_override
+        .as_deref()
+        .filter(|k| models_info.iter().any(|m| &m.name == k))
+        .unwrap_or(&default_model);
+    let model_context_window = models_info
+        .iter()
+        .find(|m| m.name == resolved_key)
+        .map_or(crate::compactor::DEFAULT_CONTEXT_WINDOW, |m| {
+            m.context_window
+        });
+    let models = models_info.into_iter().map(|m| m.name).collect();
     Ok(SettingsState {
         mention_override,
         rit_override,
         model_override,
         default_mention: config.require_mention,
         default_rit: config.reply_in_thread,
-        default_model: kernel.default_model_key(),
+        default_model,
         models,
+        ctx_override,
+        model_context_window,
     })
 }
 
@@ -173,6 +185,60 @@ fn settings_card(chat_id: &str, state: &SettingsState) -> String {
         &model_options,
         model_initial,
         json!({ "action": "cfg_model", "scope": chat_id }),
+    ));
+    // Context window row: presets keyed to the resolved model's
+    // configured window — 25/50/75/100% + the reset pseudo-option.
+    // Labels carry the percentage; the callback recomputes tokens off
+    // the THEN-current model default. A custom value set elsewhere
+    // (TUI/GUI/CLI) shows as a `custom (Nk)` option so the visible
+    // selection never lies (selecting it is a no-op).
+    let fmt_k = |t: u64| {
+        if t % 1000 == 0 {
+            format!("{}k", t / 1000)
+        } else {
+            format!("{:.1}k", t as f64 / 1000.0)
+        }
+    };
+    let mut ctx_labels: Vec<String> = [25u32, 50, 75, 100]
+        .iter()
+        .map(|p| {
+            format!(
+                "{} ({p}%)",
+                fmt_k(u64::from(state.model_context_window) * u64::from(*p) / 100)
+            )
+        })
+        .collect();
+    let mut ctx_initial = usize::MAX; // unset → the default pseudo-option
+    if let Some(ov) = state.ctx_override {
+        match ctx_labels
+            .iter()
+            .position(|l| parse_ctx_label(l, state.model_context_window) == CtxOp::Set(ov))
+        {
+            Some(i) => ctx_initial = i,
+            None => {
+                ctx_labels.insert(0, format!("custom ({})", fmt_k(u64::from(ov))));
+                ctx_initial = 0;
+            }
+        }
+    }
+    ctx_labels.push(format!(
+        "default ({})",
+        fmt_k(u64::from(state.model_context_window))
+    ));
+    if ctx_initial == usize::MAX {
+        ctx_initial = ctx_labels.len() - 1;
+    }
+    elements.push(select_row(
+        "cfg_ctx",
+        &format!(
+            "Context window (now {})",
+            fmt_k(u64::from(
+                state.ctx_override.unwrap_or(state.model_context_window)
+            ))
+        ),
+        &ctx_labels,
+        ctx_initial,
+        json!({ "action": "cfg_ctx", "scope": chat_id }),
     ));
     // Footer: global actions, mailbox-style small bordered buttons.
     elements.push(json!({
@@ -311,10 +377,49 @@ async fn handle_card_action_inner(
                 }
             }
         }
+        Some("cfg_ctx") => {
+            let opt = value["option"].as_str().unwrap_or_default();
+            // Tokens are recomputed off the CURRENT model default (the
+            // card may be stale), never parsed from the label's k-text.
+            let model_default = read_state(channel_name, config, kernel, store, chat_id)
+                .await?
+                .model_context_window;
+            match parse_ctx_label(opt, model_default) {
+                CtxOp::Set(tokens) => {
+                    crate::channels::hub_handlers::set_chat_context_window(
+                        channel_name,
+                        store,
+                        kernel,
+                        chat_id,
+                        Some(tokens),
+                    )
+                    .await?
+                }
+                CtxOp::Clear => {
+                    crate::channels::hub_handlers::set_chat_context_window(
+                        channel_name,
+                        store,
+                        kernel,
+                        chat_id,
+                        None,
+                    )
+                    .await?
+                }
+                CtxOp::Noop => {}
+            }
+        }
         Some("cfg_reset_all") => {
             store.clear_mention_override(channel_name, chat_id).await?;
             store.clear_rit_override(channel_name, chat_id).await?;
             crate::channels::hub_handlers::set_chat_model(
+                channel_name,
+                store,
+                kernel,
+                chat_id,
+                None,
+            )
+            .await?;
+            crate::channels::hub_handlers::set_chat_context_window(
                 channel_name,
                 store,
                 kernel,
@@ -370,6 +475,41 @@ fn map_cfg_model<'a>(models: &[String], opt: &'a str) -> Option<Option<&'a str>>
     }
 }
 
+/// cfg_ctx 档位解析的结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CtxOp {
+    Set(u32),
+    Clear,
+    Noop,
+}
+
+/// cfg_ctx label → operation：档位标签形如 `200k (25%)`，按其中的百分比
+/// 乘当前模型默认窗口得 tokens（不解析 k 文本——卡片可能是旧的）；
+/// `default (…)` 伪选项清除覆盖；**算出来正好等于模型默认（100% 档）也
+/// 视为清除**——把等于默认的值钉成显式覆盖会断送对默认变化的跟踪；
+/// `custom (…)`（别处设的精确值）与任何畸形标签一律 no-op，绝不误清。
+fn parse_ctx_label(opt: &str, model_default: u32) -> CtxOp {
+    if opt.starts_with("default (") {
+        return CtxOp::Clear;
+    }
+    let pct = opt
+        .strip_suffix(')')
+        .and_then(|s| s.rsplit_once('('))
+        .and_then(|(_, tail)| tail.strip_suffix('%'))
+        .and_then(|n| n.parse::<u32>().ok());
+    match pct {
+        Some(p @ 1..=100) if opt.contains("k (") => {
+            let tokens = (u64::from(model_default) * u64::from(p) / 100) as u32;
+            if tokens == model_default {
+                CtxOp::Clear
+            } else {
+                CtxOp::Set(tokens)
+            }
+        }
+        _ => CtxOp::Noop,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,6 +523,8 @@ mod tests {
             default_rit: false,
             default_model: "k3-hs".to_string(),
             models: vec!["k3-hs".to_string(), "opus-4-6".to_string()],
+            ctx_override: None,
+            model_context_window: 800_000,
         }
     }
 
@@ -426,7 +568,7 @@ mod tests {
     fn card_renders_tri_state_and_model_selection() {
         let card = settings_card("oc_1", &state(Some(false), None, Some("opus-4-6")));
         let s = selects_of(&card);
-        assert_eq!(s.len(), 3, "{card}");
+        assert_eq!(s.len(), 4, "{card}");
 
         // Mention overridden off → selects "off".
         assert_eq!(s[0].0, "off");
@@ -447,6 +589,56 @@ mod tests {
         assert_eq!(s[2].0, "opus-4-6");
         assert_eq!(s[2].1, ["k3-hs", "opus-4-6", "default (k3-hs)"]);
         assert_eq!(s[2].2, "opus-4-6");
+
+        // Ctx unset → presets keyed to the model window + default pseudo.
+        assert_eq!(s[3].0, "default (800k)");
+        assert_eq!(
+            s[3].1,
+            [
+                "200k (25%)",
+                "400k (50%)",
+                "600k (75%)",
+                "800k (100%)",
+                "default (800k)"
+            ]
+        );
+        assert_eq!(s[3].2, "default (800k)");
+        assert_eq!(s[3].3["action"], "cfg_ctx");
+    }
+
+    #[test]
+    fn card_ctx_row_marks_preset_override_and_custom_value() {
+        // Override exactly on a preset → that preset is the selection.
+        let mut st = state(None, None, None);
+        st.ctx_override = Some(400_000);
+        let card = settings_card("oc_1", &st);
+        let s = selects_of(&card);
+        assert_eq!(s[3].0, "400k (50%)");
+        assert_eq!(s[3].2, "400k (50%)");
+        assert!(!s[3].1.iter().any(|l| l.starts_with("custom (")));
+
+        // Off-preset override (set via TUI/GUI/CLI) → honest custom option.
+        st.ctx_override = Some(320_000);
+        let card = settings_card("oc_1", &st);
+        let s = selects_of(&card);
+        assert_eq!(s[3].0, "custom (320k)");
+        assert_eq!(s[3].1[0], "custom (320k)");
+        assert_eq!(s[3].2, "custom (320k)");
+    }
+
+    #[test]
+    fn parse_ctx_label_maps_presets_pseudo_and_garbage() {
+        assert_eq!(parse_ctx_label("200k (25%)", 800_000), CtxOp::Set(200_000));
+        // 100% 档 == 默认值 → 清除而非钉死（保留对默认变化的跟踪）。
+        assert_eq!(parse_ctx_label("800k (100%)", 800_000), CtxOp::Clear);
+        // 百分比乘的是当前模型默认，不是标签里的 k 文本。
+        assert_eq!(parse_ctx_label("200k (25%)", 128_000), CtxOp::Set(32_000));
+        assert_eq!(parse_ctx_label("default (800k)", 800_000), CtxOp::Clear);
+        // custom/畸形/0% 一律 no-op，绝不误清。
+        assert_eq!(parse_ctx_label("custom (320k)", 800_000), CtxOp::Noop);
+        assert_eq!(parse_ctx_label("0k (0%)", 800_000), CtxOp::Noop);
+        assert_eq!(parse_ctx_label("", 800_000), CtxOp::Noop);
+        assert_eq!(parse_ctx_label("200k", 800_000), CtxOp::Noop);
     }
 
     #[test]

@@ -534,6 +534,7 @@ mod tests {
             auto_approve_level: None,
             model_key: Some("custom-model".into()),
             template: None,
+            settings: None,
         };
 
         let out = super::super::create_cron_job(

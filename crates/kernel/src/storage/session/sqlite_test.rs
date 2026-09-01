@@ -43,6 +43,94 @@ async fn test_create_with_working_dir() {
 }
 
 #[tokio::test]
+async fn test_fork_copies_settings_bag() {
+    let store = create_test_store().await;
+
+    let parent = SessionId::new();
+    store
+        .create(NewSession {
+            settings: Some(super::super::SessionOverrides {
+                context_window: Some(400_000),
+            }),
+            ..NewSession::new(parent.clone())
+        })
+        .await
+        .unwrap();
+    let child = store.fork(&parent).await.unwrap();
+
+    let child_info = store.get(&child).await.unwrap().unwrap();
+    assert_eq!(
+        child_info.settings.and_then(|s| s.context_window),
+        Some(400_000),
+        "fork 复制 settings 袋"
+    );
+}
+
+#[tokio::test]
+async fn test_settings_bag_atomic_per_key_and_null_normalization() {
+    let store = create_test_store().await;
+    let id = SessionId::new();
+    store.create(NewSession::new(id.clone())).await.unwrap();
+    assert_eq!(
+        store.get(&id).await.unwrap().unwrap().settings,
+        None,
+        "fresh session: no overrides"
+    );
+
+    // 按键原子写：第二个 key 不踩第一个。
+    store
+        .set_setting(&id, "context_window", serde_json::json!(400_000))
+        .await
+        .unwrap();
+    store
+        .set_setting(&id, "future_knob", serde_json::json!("x"))
+        .await
+        .unwrap();
+    let info = store.get(&id).await.unwrap().unwrap();
+    assert_eq!(info.settings.and_then(|s| s.context_window), Some(400_000));
+    let raw: Option<String> = sqlx::query_scalar("SELECT settings FROM sessions WHERE id = ?")
+        .bind(&*id.0)
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    let raw = raw.expect("bag present");
+    assert!(raw.contains("future_knob"), "coexisting key intact: {raw}");
+
+    // 删掉一个：另一个还在（不经读-改-写，未知 key 不被吃掉）。
+    store.remove_setting(&id, "context_window").await.unwrap();
+    let raw: Option<String> = sqlx::query_scalar("SELECT settings FROM sessions WHERE id = ?")
+        .bind(&*id.0)
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert!(raw.unwrap().contains("future_knob"));
+    assert_eq!(store.get(&id).await.unwrap().unwrap().settings, None);
+
+    // 删空归一 NULL。
+    store.remove_setting(&id, "future_knob").await.unwrap();
+    let raw: Option<String> = sqlx::query_scalar("SELECT settings FROM sessions WHERE id = ?")
+        .bind(&*id.0)
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(raw, None, "empty bag normalizes to NULL");
+}
+
+#[tokio::test]
+async fn test_settings_malformed_json_tolerated() {
+    let store = create_test_store().await;
+    let id = SessionId::new();
+    store.create(NewSession::new(id.clone())).await.unwrap();
+    sqlx::query("UPDATE sessions SET settings = '{oops' WHERE id = ?")
+        .bind(&*id.0)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    let info = store.get(&id).await.unwrap().unwrap();
+    assert_eq!(info.settings, None, "malformed JSON reads as no overrides");
+}
+
+#[tokio::test]
 async fn test_fork() {
     let store = create_test_store().await;
 

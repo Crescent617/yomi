@@ -147,6 +147,7 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
       prompt_tokens: u.prompt_tokens,
       completion_tokens: u.completion_tokens,
       total_tokens: u.total_tokens,
+      context_window: u.context_window,
     };
     // Hold the real output for the end-fold; providers may report usage
     // multiple times per response — the last report wins (as the kernel).

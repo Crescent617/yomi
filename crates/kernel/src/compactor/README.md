@@ -8,11 +8,10 @@ Compaction runs when estimated request input reaches the earliest of:
 
 ```text
 context_window × threshold_ratio
-110_000 tokens
 context_window - safety_buffer - summary_prompt - minimum_summary_output
 ```
 
-The default ratio is `0.9`. The reserve threshold is applied only when the context window can fit it; smaller windows keep the ratio/hard-cap trigger and rely on request budgeting to return an explicit insufficient-context error. Token accounting uses the same estimator as request output budgeting:
+The default ratio is `0.9`. The reserve threshold is applied only when the context window can fit it; smaller windows keep the ratio trigger and rely on request budgeting to return an explicit insufficient-context error. The window here is the session's **effective** context window: a per-session override (settings 袋，见 docs/design/session-context-window.md) replaces the model's configured value at model-resolution time. Token accounting uses the same estimator as request output budgeting:
 
 - Reuse the latest assistant message's real total usage and estimate only later messages.
 - Otherwise estimate all model-facing messages and tool definitions. Internal metadata is excluded.

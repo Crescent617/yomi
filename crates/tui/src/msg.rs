@@ -124,9 +124,18 @@ pub enum Msg {
     CloseModelPicker,              // Close model picker without selection
     ModelSwitched {
         // set_session_model succeeded; update UI
+        session_id: String,
         key: String,
         model_id: String,
         context_window: u32,
+    },
+
+    // Context window (/ctx)
+    CommandCtx(Option<String>), // /ctx [value|reset] - query or set the session override
+    CtxUpdated {
+        // set/reset succeeded; update status ctx
+        session_id: String,
+        info: kernel::kernel::ContextWindowInfo,
     },
 }
 

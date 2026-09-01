@@ -328,6 +328,16 @@ pub trait KernelApi: Send + Sync {
     async fn list_models(&self) -> Result<Vec<crate::kernel::ModelInfo>>;
     async fn get_session_model(&self, session_id: &SessionId) -> Result<String>;
     async fn set_session_model(&self, session_id: &SessionId, key: &str) -> Result<()>;
+    async fn get_session_context_window(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<crate::kernel::ContextWindowInfo>;
+    /// `None` 清除覆盖（跟随模型配置）。
+    async fn set_session_context_window(
+        &self,
+        session_id: &SessionId,
+        tokens: Option<u32>,
+    ) -> Result<()>;
 
     // ── Agent Template ─────────────────────────────────────────────────────
     async fn list_agent_templates(

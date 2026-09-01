@@ -152,6 +152,9 @@ pub struct Model {
     pub(crate) model_name: String,
     /// Context window size for the current session's model (resolved from session store).
     pub(crate) context_window: u32,
+    /// Latest token total reported by the kernel（TokenUsage 事件更新）——
+    /// 与 context_window 配对，供 /ctx、换模型后刷新状态栏 ctx 用量。
+    pub(crate) total_tokens: u32,
     /// Direct child subagents currently running.
     pub(crate) active_subagents: std::collections::HashSet<String>,
     /// Background shell processes currently running for this session.

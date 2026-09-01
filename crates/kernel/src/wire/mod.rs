@@ -340,6 +340,14 @@ pub enum ReqMethod {
         session_id: String,
         key: String,
     },
+    GetSessionContextWindow {
+        session_id: String,
+    },
+    SetSessionContextWindow {
+        session_id: String,
+        /// `null` 清除覆盖（跟随模型配置）。
+        tokens: Option<u32>,
+    },
 
     // ── Agent Template ───────────────────────────────────────────────
     ListAgentTemplates {

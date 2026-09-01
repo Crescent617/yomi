@@ -411,7 +411,7 @@ pub(crate) async fn get_or_create_session_locked(
         store.delete_mapping(channel_name, mapping_key).await?;
     }
 
-    let model_key = model_key_for_new_channel_session(
+    let (model_key, context_window) = overrides_for_new_channel_session(
         channel_name,
         chat_id,
         mapping_key,
@@ -431,6 +431,7 @@ pub(crate) async fn get_or_create_session_locked(
             // currently unused).
             tool_blocklist: vec![],
             model_key,
+            context_window,
         })
         .await?;
     store
@@ -475,16 +476,44 @@ pub(crate) async fn model_key_for_new_channel_session(
     channel_store: &Arc<dyn ChannelStore>,
     session_store: &Arc<dyn SessionStore>,
 ) -> Result<Option<String>> {
+    Ok(overrides_for_new_channel_session(
+        channel_name,
+        chat_id,
+        mapping_key,
+        channel_store,
+        session_store,
+    )
+    .await?
+    .0)
+}
+
+/// The persisted overrides a newly-created channel session inherits from
+/// its parent chat session: explicit model choice AND the settings bag's
+/// `context_window`（thread 继承对称于 model_key，见
+/// docs/design/session-context-window.md）。Missing mappings or sessions
+/// intentionally yield `(None, None)` — runtime resolution then follows
+/// the configured defaults without persisting anything.
+pub(crate) async fn overrides_for_new_channel_session(
+    channel_name: &str,
+    chat_id: &str,
+    mapping_key: &str,
+    channel_store: &Arc<dyn ChannelStore>,
+    session_store: &Arc<dyn SessionStore>,
+) -> Result<(Option<String>, Option<u32>)> {
     if mapping_key == chat_id {
-        return Ok(None);
+        return Ok((None, None));
     }
 
     let Some(parent_session_id) = channel_store.find_mapping(channel_name, chat_id).await? else {
-        return Ok(None);
+        return Ok((None, None));
     };
 
-    Ok(session_store
-        .get(&parent_session_id)
-        .await?
-        .and_then(|session| session.model_key))
+    let Some(session) = session_store.get(&parent_session_id).await? else {
+        return Ok((None, None));
+    };
+
+    Ok((
+        session.model_key,
+        session.settings.and_then(|s| s.context_window),
+    ))
 }

@@ -399,6 +399,9 @@ export interface SessionState {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
+    /** Effective window carried by the latest TokenUsage event (already
+     *  includes any per-session override). */
+    context_window?: number;
   };
   /** Run-cumulative streamed output for the inline status line: in-flight
    *  response bytes (reset per request — a retried attempt is discarded)

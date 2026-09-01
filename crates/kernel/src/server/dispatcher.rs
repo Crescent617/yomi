@@ -195,6 +195,7 @@ impl KernelServer {
                     auto_approve_level,
                     tool_blocklist: Vec::new(),
                     model_key,
+                context_window: None,
                 };
                 rpc_body(
                     "create_session_failed",
@@ -761,6 +762,23 @@ impl KernelServer {
                     "set_session_model_failed",
                     self.kernel
                         .set_session_model(&sid, &key)
+                        .await
+                        .map(|()| serde_json::Value::Null),
+                )
+            }
+            ReqMethod::GetSessionContextWindow { session_id } => {
+                let sid = SessionId::from(session_id);
+                rpc_body(
+                    "get_session_context_window_failed",
+                    self.kernel.get_session_context_window(&sid).await,
+                )
+            }
+            ReqMethod::SetSessionContextWindow { session_id, tokens } => {
+                let sid = SessionId::from(session_id);
+                rpc_body(
+                    "set_session_context_window_failed",
+                    self.kernel
+                        .set_session_context_window(&sid, tokens)
                         .await
                         .map(|()| serde_json::Value::Null),
                 )

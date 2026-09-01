@@ -25,6 +25,20 @@ pub struct ModelInfo {
     pub context_window: u32,
 }
 
+/// The context-window state of one session（`GetSessionContextWindow` 的
+/// 返回）：生效值、显式覆盖（`null` = 跟随模型）、模型默认与解析到的
+/// 模型 key。
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct ContextWindowInfo {
+    pub effective: u32,
+    #[serde(rename = "override")]
+    pub override_: Option<u32>,
+    pub model_default: u32,
+    pub model_key: String,
+}
+
 /// Input for creating a new session
 #[derive(Debug, Clone)]
 pub struct CreateSessionInput {
@@ -39,6 +53,9 @@ pub struct CreateSessionInput {
     /// Initial model key persisted for this session. When absent, runtime
     /// model resolution falls back to `agent.default_model` without storing it.
     pub model_key: Option<String>,
+    /// Initial per-session context-window override（写入 settings 袋；
+    /// thread session 继承 chat session 的显式值走这里）。
+    pub context_window: Option<u32>,
 }
 
 pub struct Kernel {
@@ -338,6 +355,7 @@ impl Kernel {
                 auto_approve_level: None,
                 tool_blocklist: vec![],
                 model_key: None,
+                context_window: None,
             })
             .await?;
         self.extension_registry.route_set(source, key, sid.clone());
@@ -853,6 +871,83 @@ impl Kernel {
         Ok(())
     }
 
+    /// The session's effective context window, its explicit override (if
+    /// any), and the resolved model's configured default. The model key
+    /// resolution mirrors `AgentShared::resolve_model`（含 stale key 回落
+    /// 默认模型）；默认模型自身不在注册表（配置残缺）时模型默认编造为
+    /// `compactor::DEFAULT_CONTEXT_WINDOW` 供展示——该边界 resolve_model
+    /// 会直接报错，数字不再可比。
+    pub async fn get_session_context_window(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<ContextWindowInfo> {
+        let info = self.session_store().await.get(session_id).await?;
+        let Some(info) = info else {
+            return Err(SessionError::NotFound {
+                session_id: session_id.0.to_string(),
+            }
+            .into());
+        };
+        let mut model_key = info
+            .model_key
+            .unwrap_or_else(|| self.agent_config.default_model.clone());
+        if !self.models.contains_key(&model_key) {
+            model_key.clone_from(&self.agent_config.default_model);
+        }
+        let model_default = self
+            .models
+            .get(&model_key)
+            .map(|m| m.context_window)
+            .unwrap_or(crate::compactor::DEFAULT_CONTEXT_WINDOW);
+        let override_ = info
+            .settings
+            .and_then(|s| s.context_window)
+            // 与 resolve_model 同规：0 值（只可能来自手工改库）视为无覆盖，
+            // 展示与运行行为保持一致。
+            .filter(|&cw| cw > 0);
+        Ok(ContextWindowInfo {
+            effective: override_.unwrap_or(model_default),
+            override_,
+            model_default,
+            model_key,
+        })
+    }
+
+    /// Set (`Some`) or clear (`None`) the session's context-window
+    /// override（settings 袋按键原子写；`Some(0)` 拒绝）。
+    pub async fn set_session_context_window(
+        &self,
+        session_id: &SessionId,
+        tokens: Option<u32>,
+    ) -> Result<()> {
+        if tokens == Some(0) {
+            return Err(
+                SessionError::Other("context_window must be greater than 0".to_string()).into(),
+            );
+        }
+        let rows_affected = match tokens {
+            Some(t) => {
+                self.session_store()
+                    .await
+                    .set_setting(session_id, "context_window", serde_json::json!(t))
+                    .await?
+            }
+            None => {
+                self.session_store()
+                    .await
+                    .remove_setting(session_id, "context_window")
+                    .await?
+            }
+        };
+        if rows_affected == 0 {
+            return Err(SessionError::NotFound {
+                session_id: session_id.0.to_string(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+
     // ── Session API ──────────────────────────────────────────────────────
 
     /// Create a new session with the given input.
@@ -894,6 +989,11 @@ impl Kernel {
                 working_dir,
                 auto_approve_level: Some(auto_approve_level.as_str().to_string()),
                 model_key: input.model_key.clone(),
+                settings: input.context_window.filter(|&cw| cw > 0).map(|cw| {
+                    crate::storage::SessionOverrides {
+                        context_window: Some(cw),
+                    }
+                }),
                 ..crate::storage::NewSession::new(id.clone())
             })
             .await?;

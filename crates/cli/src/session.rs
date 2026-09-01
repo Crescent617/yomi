@@ -113,6 +113,7 @@ pub async fn resolve_session(
         auto_approve_level: Some(auto_approve_level),
         tool_blocklist: vec![],
         model_key,
+        context_window: None,
     };
 
     // When not launching (e.g., creating new session mid-run), ignore --resume/--fork args

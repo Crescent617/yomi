@@ -463,6 +463,7 @@
   type SessionDetail = {
     created_at?: string;
     template?: string | null;
+    ctx?: api.ContextWindowInfo;
   };
   let sessionDetail = $state<SessionDetail>({});
 
@@ -485,6 +486,13 @@
             created_at: info.created_at,
             template: info.template ?? null,
           };
+      })
+      .catch(() => {});
+    void api
+      .getSessionContextWindow(id)
+      .then((ctx) => {
+        if (showSessionInfo && activeSession?.id === id)
+          sessionDetail = { ...sessionDetail, ctx };
       })
       .catch(() => {});
     void api
@@ -796,6 +804,27 @@
                         title={activeSession.model_key}
                       >
                         {activeSession.model_key}
+                      </span>
+                    </div>
+                  {/if}
+                  {#if sessionDetail.ctx}
+                    <div class="flex items-center gap-1.5">
+                      <span
+                        class="micro-label w-24 shrink-0 text-muted-foreground"
+                        >Context</span
+                      >
+                      <span
+                        class="min-w-0 truncate rounded-sm bg-code-bg px-1.5 py-0.5 font-mono text-foreground"
+                        title={sessionDetail.ctx.override !== null
+                          ? `Override of the ${sessionDetail.ctx.model_key} default (${sessionDetail.ctx.model_default.toLocaleString()})`
+                          : `Following the ${sessionDetail.ctx.model_key} default`}
+                      >
+                        {sessionDetail.ctx.effective.toLocaleString()}
+                        <span class="text-muted-foreground">
+                          {sessionDetail.ctx.override !== null
+                            ? "override"
+                            : "default"}</span
+                        >
                       </span>
                     </div>
                   {/if}

@@ -74,6 +74,7 @@ pub async fn create_session(
         auto_approve_level: Some(level),
         tool_blocklist: vec![],
         model_key,
+        context_window: None,
     };
     let session_id = coord
         .create_session(input)

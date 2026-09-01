@@ -271,6 +271,8 @@ pub fn run() {
             commands::system::get_models,
             commands::system::get_session_model,
             commands::system::set_session_model,
+            commands::system::get_session_context_window,
+            commands::system::set_session_context_window,
             commands::system::open_default,
             commands::system::open_attachment,
             commands::system::read_attachment_image,

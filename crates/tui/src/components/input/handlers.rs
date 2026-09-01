@@ -90,6 +90,10 @@ impl InputComponent {
                 let key = parts.get(1).map(|s| (*s).to_string());
                 Some(Msg::CommandModels(key))
             }
+            "/ctx" => {
+                let arg = parts.get(1).map(|s| (*s).to_string());
+                Some(Msg::CommandCtx(arg))
+            }
             "/compact" => Some(Msg::CommandCompact),
             "/rewind" => Some(Msg::CommandRewind),
             "/undo" => Some(Msg::CommandUndo),

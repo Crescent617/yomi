@@ -86,6 +86,7 @@ impl Model {
             _event_pump: event_pump,
             model_name: String::new(),
             context_window: 0,
+            total_tokens: 0,
             active_subagents: std::collections::HashSet::new(),
             background_shell_count: 0,
         };

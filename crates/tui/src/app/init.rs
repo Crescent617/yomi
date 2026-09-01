@@ -204,6 +204,11 @@ impl Model {
 
     /// Initialize context window display in status bar
     pub fn init_ctx_usage(&mut self, tokens: u32, context_window: u32) -> Result<()> {
+        // 同步缓存：/ctx、ModelSwitched 的 SET_CTX_USAGE 重推吃这两个字段。
+        self.total_tokens = tokens;
+        if context_window > 0 {
+            self.context_window = context_window;
+        }
         let usage_str = format!("{tokens}\x00{context_window}");
         self.app.attr(
             &Id::StatusBar,

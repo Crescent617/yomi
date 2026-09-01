@@ -26,6 +26,7 @@
 
   import ModelSelector from "./ModelSelector.svelte";
   import PermissionSelector from "./PermissionSelector.svelte";
+  import ContextWindowEditor from "./ContextWindowEditor.svelte";
 
   let content = $state("");
   let textareaRef: HTMLTextAreaElement | null = $state(null);
@@ -65,7 +66,42 @@
     activeSession ? isActiveSessionPhase(activeSession.phase) : false,
   );
 
-  let context_window = $state(0);
+  // ModelSelector 汇报的是「当前模型的配置窗口」（兜底）；会话的生效窗口
+  // （含 per-session override）优先取 getSessionContextWindow 拉取值
+  // （apply 后即时刷新），其次 TokenUsage 事件携带值（上一 turn 的），
+  // 最后才是模型配置窗口（见 docs/design/session-context-window.md）。
+  let selectorWindow = $state(0);
+  let ctxInfo = $state<api.ContextWindowInfo | null>(null);
+  const context_window = $derived(
+    ctxInfo?.effective ??
+      activeSession?.token_usage?.context_window ??
+      selectorWindow,
+  );
+
+  // ctxInfo 的失效键 = session 切换 OR 模型切换（selectorWindow 变化即
+  // ModelSelector 解析到了新模型）：不换模型就一直用 apply/事件刷新后的值，
+  // 换了就必须重拉，否则旧 effective 压住新模型默认。切 session 先置
+  // null——fetch 失败时回退到事件/模型值，而不是压着上一 session 的数字。
+  let ctxInfoSid = $state<string | null>(null);
+  $effect(() => {
+    const sid = activeSession?.id;
+    selectorWindow; // track: model switch invalidates ctxInfo
+    if (!sid) {
+      ctxInfo = null;
+      ctxInfoSid = null;
+      return;
+    }
+    if (ctxInfoSid !== sid) {
+      ctxInfo = null;
+      ctxInfoSid = sid;
+    }
+    void api
+      .getSessionContextWindow(sid)
+      .then((info) => {
+        if (activeSession?.id === sid) ctxInfo = info;
+      })
+      .catch(() => {});
+  });
   const total_tokens = $derived(activeSession?.token_usage?.total_tokens ?? 0);
   const context_percent = $derived(
     context_window > 0 && total_tokens > 0
@@ -83,8 +119,11 @@
   const context_title = $derived(
     context_percent !== null
       ? `${total_tokens.toLocaleString()} of ${context_window.toLocaleString()} tokens used (${context_percent.toFixed(1)}%) · ${Math.max(context_window - total_tokens, 0).toLocaleString()} remaining`
-      : "",
+      : "No tokens used yet",
   );
+  // 仪表展示用的百分比：新 session（尚无 token 用量）按 0 显示——编辑器
+  // 入口不能依赖已经跑过的会话（review: fresh session 也要有入口）。
+  const context_display_percent = $derived(context_percent ?? 0);
 
   // detect completion triggers
   function detectCompletion() {
@@ -973,42 +1012,49 @@
         />
         <ModelSelector
           session_id={activeSession.id}
-          onContextWindowChange={(value) => (context_window = value)}
+          onContextWindowChange={(value) => (selectorWindow = value)}
         />
       </div>
-      {#if context_percent !== null}
-        <div
-          class="group/context flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1.5 text-[10px] text-muted-foreground transition-colors hover:bg-secondary/50"
-          title={context_title}
-          aria-label={`Context usage ${context_percent.toFixed(1)} percent`}
-        >
-          <span
-            class="flex items-center gap-0.5"
-            role="progressbar"
-            aria-valuemin="0"
-            aria-valuemax="100"
-            aria-valuenow={Math.round(context_progress_percent)}
-          >
-            {#each Array(5) as _, index (index)}
+      {#if context_window > 0}
+        <ContextWindowEditor session_id={activeSession.id} bind:info={ctxInfo}>
+          {#snippet trigger(toggle)}
+            <button
+              type="button"
+              onclick={toggle}
+              class="group/context flex shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 py-1.5 text-[10px] text-muted-foreground transition-colors hover:bg-secondary/50"
+              title={`${context_title} · click to configure`}
+              aria-label={`Context usage ${context_display_percent.toFixed(1)} percent; click to configure the context window`}
+            >
               <span
-                class="h-2 w-1.5 rounded-[2px] transition-colors {index >=
-                context_segments
-                  ? 'bg-secondary'
-                  : context_percent >= 90
-                    ? 'bg-error'
-                    : context_percent >= 70
-                      ? 'bg-warning'
-                      : 'bg-muted-foreground'}"
-              ></span>
-            {/each}
-          </span>
-          <span
-            class="font-mono tabular-nums leading-none"
-            class:text-warning={context_percent >= 70 && context_percent < 90}
-            class:text-error={context_percent >= 90}
-            >{Math.round(context_percent)}%</span
-          >
-        </div>
+                class="flex items-center gap-0.5"
+                role="progressbar"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow={Math.round(context_display_percent)}
+              >
+                {#each Array(5) as _, index (index)}
+                  <span
+                    class="h-2 w-1.5 rounded-[2px] transition-colors {index >=
+                    context_segments
+                      ? 'bg-secondary'
+                      : context_display_percent >= 90
+                        ? 'bg-error'
+                        : context_display_percent >= 70
+                          ? 'bg-warning'
+                          : 'bg-muted-foreground'}"
+                  ></span>
+                {/each}
+              </span>
+              <span
+                class="font-mono tabular-nums leading-none"
+                class:text-warning={context_display_percent >= 70 &&
+                  context_display_percent < 90}
+                class:text-error={context_display_percent >= 90}
+                >{Math.round(context_display_percent)}%</span
+              >
+            </button>
+          {/snippet}
+        </ContextWindowEditor>
       {/if}
     </div>
   {/if}

@@ -21,6 +21,10 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/browse", "Toggle browse mode"),
     ("/sessions", "Switch to another session"),
     ("/models", "[key] Switch model for this session"),
+    (
+        "/ctx",
+        "[value|reset] Session context window (e.g. 512k, 1m)",
+    ),
     ("/rewind", "Restore conversation/file checkpoint"),
     ("/undo", "Undo last turn"),
     ("/compact", "Force message compaction"),

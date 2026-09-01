@@ -214,6 +214,14 @@ pub async fn run_tui(
             model.model_name.clone_from(&cfg.model_id);
             model.context_window = cfg.context_window;
         }
+        // 生效窗口（含 per-session override）以 kernel 为准——否则首个
+        // TokenUsage 之前状态栏 % 全是错的（远程 daemon 配置不同更错）。
+        match kernel.get_session_context_window(&sid).await {
+            Ok(info) => model.context_window = info.effective,
+            Err(e) => {
+                tracing::warn!("Failed to get session context window, using model default: {e}");
+            }
+        }
     }
 
     model.init_status_bar()?;

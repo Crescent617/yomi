@@ -265,6 +265,271 @@ async fn create_session_with_model(
     id
 }
 
+/// settings 卡 cfg_ctx 回调链路：按钮值 → handle_card_action →
+/// set_chat_context_window → chat session（含 thread 扇出）；Reset all
+/// 联动清 ctx 覆盖。
+#[tokio::test]
+async fn settings_card_cfg_ctx_callback_and_reset_all() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram {
+            token: "fake".into(),
+        },
+        admin_users: vec!["admin-1".to_string()],
+        ..Default::default()
+    };
+
+    // chat session（Config::default() 的模型窗口是 131_072 → 25% 档 =
+    // 32_768）。
+    let chat_sid = kernel
+        .create_session(crate::kernel::CreateSessionInput {
+            project_id: None,
+            working_dir: None,
+            auto_approve_level: None,
+            tool_blocklist: vec![],
+            model_key: None,
+            context_window: None,
+        })
+        .await
+        .unwrap();
+    store
+        .save_mapping("mock", "oc_1", &chat_sid, "oc_1", None, MappingKind::Normal)
+        .await
+        .unwrap();
+
+    let action = |value: serde_json::Value| crate::channels::CardAction {
+        operator_open_id: "admin-1".to_string(),
+        chat_id: Some("oc_1".to_string()),
+        message_id: None,
+        value,
+    };
+
+    // 点 25% 档 → 覆盖 = 模型默认 × 25%。
+    crate::channels::cards::settings::handle_card_action(
+        "mock",
+        &config,
+        &kernel,
+        &store,
+        &adapter,
+        action(serde_json::json!({"action": "cfg_ctx", "scope": "oc_1", "option": "32.8k (25%)"})),
+    )
+    .await;
+    let info = kernel.get_session_context_window(&chat_sid).await.unwrap();
+    assert_eq!(info.override_, Some(32_768), "25% preset applied");
+
+    // 点 default 伪选项 → 清除。
+    crate::channels::cards::settings::handle_card_action(
+        "mock",
+        &config,
+        &kernel,
+        &store,
+        &adapter,
+        action(
+            serde_json::json!({"action": "cfg_ctx", "scope": "oc_1", "option": "default (131.1k)"}),
+        ),
+    )
+    .await;
+    let info = kernel.get_session_context_window(&chat_sid).await.unwrap();
+    assert_eq!(info.override_, None, "default pseudo-option clears");
+
+    // 非 admin 点按钮：不动配置。
+    crate::channels::cards::settings::handle_card_action(
+        "mock",
+        &config,
+        &kernel,
+        &store,
+        &adapter,
+        crate::channels::CardAction {
+            operator_open_id: "user-1".to_string(),
+            chat_id: Some("oc_1".to_string()),
+            message_id: None,
+            value: serde_json::json!({"action": "cfg_ctx", "scope": "oc_1", "option": "65.5k (50%)"}),
+        },
+    )
+    .await;
+    let info = kernel.get_session_context_window(&chat_sid).await.unwrap();
+    assert_eq!(info.override_, None, "non-admin callback is a no-op");
+
+    // Reset all 联动：先设上覆盖，再 reset。
+    kernel
+        .set_session_context_window(&chat_sid, Some(65_536))
+        .await
+        .unwrap();
+    crate::channels::cards::settings::handle_card_action(
+        "mock",
+        &config,
+        &kernel,
+        &store,
+        &adapter,
+        action(serde_json::json!({"action": "cfg_reset_all", "scope": "oc_1"})),
+    )
+    .await;
+    let info = kernel.get_session_context_window(&chat_sid).await.unwrap();
+    assert_eq!(info.override_, None, "reset-all clears the ctx override");
+
+    kernel.stop().await;
+}
+
+/// chat 级 model/ctx 扇出：个别 thread session 已删（陈旧 mapping，gc
+/// 中断窗口期的真实形态）不得中断整个扇出——存活者照常写入。
+#[tokio::test]
+async fn chat_scope_switches_skip_stale_thread_sessions() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let new_session = || crate::kernel::CreateSessionInput {
+        project_id: None,
+        working_dir: None,
+        auto_approve_level: None,
+        tool_blocklist: vec![],
+        model_key: None,
+        context_window: None,
+    };
+    let chat_sid = kernel.create_session(new_session()).await.unwrap();
+    store
+        .save_mapping("mock", "oc_1", &chat_sid, "oc_1", None, MappingKind::Normal)
+        .await
+        .unwrap();
+    let mut thread_sids = Vec::new();
+    for i in 0..2 {
+        let sid = kernel.create_session(new_session()).await.unwrap();
+        store
+            .save_mapping(
+                "mock",
+                &format!("om_thread_{i}"),
+                &sid,
+                "oc_1",
+                None,
+                MappingKind::Normal,
+            )
+            .await
+            .unwrap();
+        thread_sids.push(sid);
+    }
+    // 陈旧 mapping：直接删 session 行（绕过 kernel.delete_session 的
+    // mapping 级联——gc 中断窗口正是这样产生的）。
+    kernel
+        .session_store()
+        .await
+        .delete(&thread_sids[0])
+        .await
+        .unwrap();
+
+    crate::channels::hub_handlers::set_chat_context_window(
+        "mock",
+        &store,
+        &kernel,
+        "oc_1",
+        Some(300_000),
+    )
+    .await
+    .expect("stale thread session must not abort the ctx fan-out");
+
+    let info = kernel.get_session_context_window(&chat_sid).await.unwrap();
+    assert_eq!(info.override_, Some(300_000), "chat session updated");
+    let info = kernel
+        .get_session_context_window(&thread_sids[1])
+        .await
+        .unwrap();
+    assert_eq!(info.override_, Some(300_000), "surviving thread updated");
+
+    // model 扇出同规（clear 路径同样会撞 NotFound）。
+    crate::channels::hub_handlers::set_chat_model("mock", &store, &kernel, "oc_1", None)
+        .await
+        .expect("stale thread session must not abort the model fan-out");
+
+    kernel.stop().await;
+}
+
+#[tokio::test]
+async fn test_thread_session_inherits_parent_context_window() {
+    let (channel_store, session_store) = create_model_key_test_stores().await;
+    let parent_id = create_session_with_model(&session_store, Some("parent-model")).await;
+    session_store
+        .set_setting(&parent_id, "context_window", serde_json::json!(400_000))
+        .await
+        .unwrap();
+    channel_store
+        .save_mapping(
+            "feishu",
+            "chat-1",
+            &parent_id,
+            "chat-1",
+            None,
+            MappingKind::Normal,
+        )
+        .await
+        .unwrap();
+
+    let (model_key, ctx) = crate::channels::hub_routing::overrides_for_new_channel_session(
+        "feishu",
+        "chat-1",
+        "chat-1:thread-1",
+        &channel_store,
+        &session_store,
+    )
+    .await
+    .unwrap();
+    assert_eq!(model_key.as_deref(), Some("parent-model"));
+    assert_eq!(ctx, Some(400_000), "thread 继承 chat 的显式窗口覆盖");
+
+    // 顶层 mapping（mapping_key == chat_id）不继承；无覆盖的父 session
+    // 也不留下任何值。
+    let top = crate::channels::hub_routing::overrides_for_new_channel_session(
+        "feishu",
+        "chat-1",
+        "chat-1",
+        &channel_store,
+        &session_store,
+    )
+    .await
+    .unwrap();
+    assert_eq!(top, (None, None));
+
+    let bare_parent = create_session_with_model(&session_store, None).await;
+    channel_store
+        .save_mapping(
+            "feishu",
+            "chat-2",
+            &bare_parent,
+            "chat-2",
+            None,
+            MappingKind::Normal,
+        )
+        .await
+        .unwrap();
+    let bare = crate::channels::hub_routing::overrides_for_new_channel_session(
+        "feishu",
+        "chat-2",
+        "chat-2:thread-1",
+        &channel_store,
+        &session_store,
+    )
+    .await
+    .unwrap();
+    assert_eq!(bare, (None, None));
+}
+
 #[tokio::test]
 async fn test_thread_session_inherits_parent_chat_model_key() {
     let (channel_store, session_store) = create_model_key_test_stores().await;
@@ -1149,6 +1414,7 @@ async fn bind_command_show_adopt_and_guards() {
             auto_approve_level: Some(crate::permission::Level::Dangerous),
             tool_blocklist: vec![],
             model_key: None,
+            context_window: None,
         })
         .await
         .unwrap();
@@ -1265,6 +1531,7 @@ async fn bind_command_move_and_bind_back() {
         auto_approve_level: Some(crate::permission::Level::Dangerous),
         tool_blocklist: vec![],
         model_key: None,
+        context_window: None,
     };
     let sid1 = kernel.create_session(new_session()).await.unwrap();
     let sid2 = kernel.create_session(new_session()).await.unwrap();
@@ -1402,6 +1669,7 @@ impl ChatLevelRig {
                 auto_approve_level: Some(crate::permission::Level::Dangerous),
                 tool_blocklist: vec![],
                 model_key: None,
+                context_window: None,
             })
             .await
             .unwrap()

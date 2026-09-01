@@ -23,7 +23,7 @@ impl SqliteSessionStore {
 #[async_trait]
 impl SessionStore for SqliteSessionStore {
     async fn create(&self, input: NewSession) -> Result<()> {
-        sqlx::query("INSERT INTO sessions (id, project_id, working_dir, auto_approve_level, parent_id, model_key, template) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        sqlx::query("INSERT INTO sessions (id, project_id, working_dir, auto_approve_level, parent_id, model_key, template, settings) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
             .bind(&*input.id.0)
             .bind(input.project_id.as_ref().map(|p| &*p.0))
             .bind(input.working_dir.as_deref())
@@ -31,6 +31,7 @@ impl SessionStore for SqliteSessionStore {
             .bind(input.parent_id.as_ref().map(|p| &*p.0))
             .bind(input.model_key.as_deref())
             .bind(input.template.as_deref())
+            .bind(input.settings.as_ref().and_then(super::SessionOverrides::to_storage))
             .execute(&self.pool)
             .await
             .map_err(|e| storage_err(format!("failed to create session: {e}")))?;
@@ -40,8 +41,8 @@ impl SessionStore for SqliteSessionStore {
     async fn fork(&self, parent_id: &SessionId) -> Result<SessionId> {
         let new_id = SessionId::new();
         sqlx::query(
-            "INSERT INTO sessions (id, project_id, working_dir, auto_approve_level, model_key, template)
-             SELECT ?, project_id, working_dir, auto_approve_level, model_key, NULL FROM sessions WHERE id = ?",
+            "INSERT INTO sessions (id, project_id, working_dir, auto_approve_level, model_key, template, settings)
+             SELECT ?, project_id, working_dir, auto_approve_level, model_key, NULL, settings FROM sessions WHERE id = ?",
         )
         .bind(&*new_id.0)
         .bind(&*parent_id.0)
@@ -82,9 +83,44 @@ impl SessionStore for SqliteSessionStore {
         Ok(result.rows_affected())
     }
 
+    async fn set_setting(
+        &self,
+        id: &SessionId,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<u64> {
+        // 按键原子写：json_set 的路径拼自白名单常量 key（绑定参数不能
+        // 直接做 JSON path，但 path 可以是表达式——`'$.' || key` 仍是
+        // 值级拼接，无 SQL 注入面）。列里已是非法 JSON（手工改库）时
+        // json_valid 兜底重建空袋——写侧必须能自愈，否则该 session 的
+        // 覆盖进入不可写不可清的卡死态。
+        let result = sqlx::query(
+            "UPDATE sessions SET settings = json_set(CASE WHEN json_valid(settings) THEN settings ELSE '{}' END, '$.' || ?, json(?)), updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        )
+        .bind(key)
+        .bind(value.to_string())
+        .bind(&*id.0)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("failed to set session setting: {e}")))?;
+        Ok(result.rows_affected())
+    }
+
+    async fn remove_setting(&self, id: &SessionId, key: &str) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE sessions SET settings = NULLIF(json_remove(CASE WHEN json_valid(settings) THEN settings ELSE '{}' END, '$.' || ?), '{}'), updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        )
+        .bind(key)
+        .bind(&*id.0)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("failed to remove session setting: {e}")))?;
+        Ok(result.rows_affected())
+    }
+
     async fn get(&self, id: &SessionId) -> Result<Option<SessionInfo>> {
         let row = sqlx::query_as::<_, SessionRow>(
-            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template
+            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template, settings
              FROM sessions WHERE id = ?",
         )
         .bind(&*id.0)
@@ -120,7 +156,7 @@ impl SessionStore for SqliteSessionStore {
         limit: usize,
     ) -> Result<(Vec<SessionInfo>, Option<String>)> {
         let mut builder = sqlx::QueryBuilder::new(
-            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template
+            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template, settings
              FROM sessions WHERE id NOT LIKE 'sub_%'",
         );
 
@@ -159,7 +195,7 @@ impl SessionStore for SqliteSessionStore {
 
     async fn list_subagents(&self, parent_id: &SessionId) -> Result<Vec<SessionInfo>> {
         let rows = sqlx::query_as::<_, SessionRow>(
-            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template
+            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template, settings
              FROM sessions
              WHERE parent_id = ? AND id LIKE 'sub_%'
              ORDER BY updated_at DESC",
@@ -372,6 +408,7 @@ struct SessionRow {
     auto_approve_level: Option<String>,
     model_key: Option<String>,
     template: Option<String>,
+    settings: Option<String>,
 }
 
 impl From<SessionRow> for SessionInfo {
@@ -388,6 +425,7 @@ impl From<SessionRow> for SessionInfo {
             auto_approve_level: row.auto_approve_level,
             model_key: row.model_key,
             template: row.template,
+            settings: super::SessionOverrides::from_storage(row.settings.as_deref()),
         }
     }
 }

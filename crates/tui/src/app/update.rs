@@ -19,6 +19,15 @@ use kernel::permission::Level;
 
 use super::types::{AppMode, Model};
 
+/// `400000` → `"400k"`（非整千保留一位小数）——/ctx 展示用。
+fn fmt_k(t: u32) -> String {
+    if t % 1000 == 0 {
+        format!("{}k", t / 1000)
+    } else {
+        format!("{:.1}k", t as f64 / 1000.0)
+    }
+}
+
 impl Model {
     pub async fn update(&mut self, msg: Option<Msg>) -> Option<Msg> {
         if let Some(msg) = msg {
@@ -677,12 +686,30 @@ impl Model {
                                 // gracefully if the key is unknown locally (e.g.
                                 // remote daemon with a different config).
                                 let config = crate::config();
-                                let (model_id, context_window) =
-                                    config.models.iter().find(|m| m.name == key).map_or_else(
-                                        || (key.clone(), 0),
-                                        |m| (m.model_id.clone(), m.context_window),
-                                    );
+                                let model_id = config
+                                    .models
+                                    .iter()
+                                    .find(|m| m.name == key)
+                                    .map_or_else(|| key.clone(), |m| m.model_id.clone());
+                                // The status bar's window must be the session's
+                                // EFFECTIVE one — a per-session override survives
+                                // the switch (设计：换模型不清覆盖)。
+                                let context_window =
+                                    match coord.get_session_context_window(&sid).await {
+                                        Ok(info) => info.effective,
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "ctx requery after model switch failed: {e}"
+                                            );
+                                            config
+                                                .models
+                                                .iter()
+                                                .find(|m| m.name == key)
+                                                .map_or(0, |m| m.context_window)
+                                        }
+                                    };
                                 let _ = tx.send(Msg::ModelSwitched {
+                                    session_id: sid.0.to_string(),
                                     key,
                                     model_id,
                                     context_window,
@@ -699,13 +726,26 @@ impl Model {
                     None
                 }
                 Msg::ModelSwitched {
+                    session_id,
                     key,
                     model_id,
                     context_window,
                 } => {
+                    // RPC 飞行中切换了 session：丢弃过期结果。
+                    if session_id != self.session_id {
+                        return None;
+                    }
                     self.model_name.clone_from(&model_id);
                     if context_window > 0 {
                         self.context_window = context_window;
+                        // 状态栏 ctx 用量同步换窗口（换模型/覆盖都即时反映，
+                        // 不等下一 turn 的 TokenUsage）。
+                        let usage_str = format!("{}\x00{}", self.total_tokens, context_window);
+                        let _ = self.app.attr(
+                            &Id::StatusBar,
+                            Attribute::Custom(attr::SET_CTX_USAGE),
+                            AttrValue::String(usage_str),
+                        );
                     }
                     let _ = self.app.attr(
                         &Id::StatusBar,
@@ -731,6 +771,128 @@ impl Model {
                         AttrValue::Flag(true),
                     );
                     self.set_focus(&Id::InputBox);
+                    self.state.should_redraw = true;
+                    None
+                }
+                Msg::CommandCtx(arg) => {
+                    let coord = Arc::clone(&self.kernel);
+                    let tx = self.cmd_tx.clone();
+                    let session_id = self.session_id.clone();
+                    tokio::spawn(async move {
+                        let sid = kernel::types::SessionId::from(session_id);
+                        let notify = |info: kernel::kernel::ContextWindowInfo| Msg::CtxUpdated {
+                            session_id: sid.0.to_string(),
+                            info,
+                        };
+                        match arg.as_deref() {
+                            // 查询：生效值 + 来源 + 模型默认。
+                            None => match coord.get_session_context_window(&sid).await {
+                                Ok(info) => {
+                                    let source = if info.override_.is_some() {
+                                        "override"
+                                    } else {
+                                        "model default"
+                                    };
+                                    let _ = tx.send(Msg::Notification(Notification::info(
+                                        format!(
+                                            "ctx: {} ({source}; model `{}` default {})",
+                                            fmt_k(info.effective),
+                                            info.model_key,
+                                            fmt_k(info.model_default)
+                                        ),
+                                        5000,
+                                    )));
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(Msg::Notification(Notification::error(
+                                        format!("ctx query failed: {e}"),
+                                        4000,
+                                    )));
+                                }
+                            },
+                            Some(v) if v.eq_ignore_ascii_case("reset") => {
+                                match coord.set_session_context_window(&sid, None).await {
+                                    Ok(()) => match coord.get_session_context_window(&sid).await {
+                                        Ok(info) => {
+                                            let _ = tx.send(notify(info));
+                                        }
+                                        Err(e) => {
+                                            let _ =
+                                                tx.send(Msg::Notification(Notification::error(
+                                                    format!("ctx requery failed: {e}"),
+                                                    4000,
+                                                )));
+                                        }
+                                    },
+                                    Err(e) => {
+                                        let _ = tx.send(Msg::Notification(Notification::error(
+                                            format!("ctx reset failed: {e}"),
+                                            4000,
+                                        )));
+                                    }
+                                }
+                            }
+                            Some(v) => match kernel::utils::env::parse_number_with_unit(v) {
+                                Some(tokens) if tokens > 0 => {
+                                    match coord.set_session_context_window(&sid, Some(tokens)).await
+                                    {
+                                        Ok(()) => {
+                                            match coord.get_session_context_window(&sid).await {
+                                                Ok(info) => {
+                                                    let _ = tx.send(notify(info));
+                                                }
+                                                Err(e) => {
+                                                    let _ = tx.send(Msg::Notification(
+                                                        Notification::error(
+                                                            format!("ctx requery failed: {e}"),
+                                                            4000,
+                                                        ),
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let _ =
+                                                tx.send(Msg::Notification(Notification::error(
+                                                    format!("ctx set failed: {e}"),
+                                                    4000,
+                                                )));
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    let _ = tx.send(Msg::Notification(Notification::error(
+                                        format!("invalid context window `{v}` (try 512k, 1m, or `reset`)"),
+                                        4000,
+                                    )));
+                                }
+                            },
+                        }
+                    });
+                    None
+                }
+                Msg::CtxUpdated { session_id, info } => {
+                    // RPC 飞行中切换了 session：丢弃过期结果。
+                    if session_id != self.session_id {
+                        return None;
+                    }
+                    self.context_window = info.effective;
+                    let usage_str = format!("{}\x00{}", self.total_tokens, info.effective);
+                    let _ = self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom(attr::SET_CTX_USAGE),
+                        AttrValue::String(usage_str),
+                    );
+                    let text = match info.override_ {
+                        Some(t) => {
+                            format!("ctx override set: {} (takes effect next turn)", fmt_k(t))
+                        }
+                        None => format!(
+                            "ctx override cleared: following model default ({})",
+                            fmt_k(info.model_default)
+                        ),
+                    };
+                    self.show_notification(&Notification::success(text, 3000));
                     self.state.should_redraw = true;
                     None
                 }

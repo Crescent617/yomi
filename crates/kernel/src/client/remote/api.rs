@@ -779,6 +779,28 @@ impl KernelApi for RemoteKernel {
         .await
     }
 
+    async fn get_session_context_window(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<crate::kernel::ContextWindowInfo> {
+        self.call_json(ReqMethod::GetSessionContextWindow {
+            session_id: session_id.0.to_string(),
+        })
+        .await
+    }
+
+    async fn set_session_context_window(
+        &self,
+        session_id: &SessionId,
+        tokens: Option<u32>,
+    ) -> Result<()> {
+        self.call_unit(ReqMethod::SetSessionContextWindow {
+            session_id: session_id.0.to_string(),
+            tokens,
+        })
+        .await
+    }
+
     async fn list_agent_templates(
         &self,
         session_id: Option<&SessionId>,

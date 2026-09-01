@@ -590,13 +590,18 @@ impl AgentShared {
     /// Reads `model_key` from the session store, falls back to `default_model`
     /// (also when the stored key no longer exists in the registry).
     /// Errors only if even the fallback key is not found in the registry.
+    /// A `settings.context_window` override on the session replaces the
+    /// model's configured window (per-session 覆盖，设计见
+    /// docs/design/session-context-window.md)。
     pub async fn resolve_model(
         &self,
         session_id: &crate::types::SessionId,
     ) -> Result<(Arc<dyn crate::provider::Provider>, Arc<ModelConfig>), AgentError> {
-        let stored_key = match &self.session_store {
+        let (stored_key, ctx_override) = match &self.session_store {
             Some(store) => match store.get(session_id).await {
-                Ok(info) => info.and_then(|i| i.model_key),
+                Ok(info) => info.map_or((None, None), |i| {
+                    (i.model_key, i.settings.and_then(|s| s.context_window))
+                }),
                 Err(e) => {
                     tracing::warn!(
                         "Failed to read session {} from store while resolving model \
@@ -605,10 +610,10 @@ impl AgentShared {
                         self.default_model,
                         e
                     );
-                    None
+                    (None, None)
                 }
             },
-            None => None,
+            None => (None, None),
         };
 
         let mut key = stored_key.unwrap_or_else(|| self.default_model.clone());
@@ -626,7 +631,7 @@ impl AgentShared {
             key.clone_from(&self.default_model);
         }
 
-        let model_config = self.models.get(&key).cloned().ok_or_else(|| {
+        let mut model_config = self.models.get(&key).cloned().ok_or_else(|| {
             tracing::error!(
                 "Model '{}' not found in registry for session {}. Available: {:?}",
                 key,
@@ -639,6 +644,13 @@ impl AgentShared {
                 self.models.keys().cloned().collect::<Vec<_>>().join(", ")
             ))
         })?;
+
+        // Per-session context-window override: compactor 阈值、provider
+        // 输入自检、ctx% 展示都吃这一个值。0 值（只可能来自手工改库）
+        // 会让压缩阈值归零，直接无视。
+        if let Some(cw) = ctx_override.filter(|&cw| cw > 0) {
+            model_config.context_window = cw;
+        }
 
         let provider = crate::create_provider_for_model(&model_config).map_err(|e| {
             AgentError::Other(format!("Failed to create provider for model '{key}': {e}"))

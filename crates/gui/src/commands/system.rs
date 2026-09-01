@@ -305,6 +305,33 @@ pub async fn set_session_model(
         .map_err(GuiError::kernel)
 }
 
+#[tauri::command(rename_all = "snake_case")]
+pub async fn get_session_context_window(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<kernel::kernel::ContextWindowInfo, GuiError> {
+    let sid = kernel::SessionId::from(session_id);
+    state
+        .kernel_snapshot()
+        .get_session_context_window(&sid)
+        .await
+        .map_err(GuiError::kernel)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn set_session_context_window(
+    state: State<'_, AppState>,
+    session_id: String,
+    tokens: Option<u32>,
+) -> Result<(), GuiError> {
+    let sid = kernel::SessionId::from(session_id);
+    state
+        .kernel_snapshot()
+        .set_session_context_window(&sid, tokens)
+        .await
+        .map_err(GuiError::kernel)
+}
+
 /// Open a URL or file path in its default application.
 /// Uses `open_url` for web URLs (http/https/mailto), `open_path` for everything else.
 #[tauri::command(rename_all = "snake_case")]

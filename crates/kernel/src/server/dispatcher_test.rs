@@ -342,3 +342,41 @@ async fn test_set_channel_watch_without_channels() {
     );
     shutdown.cancel();
 }
+
+#[tokio::test]
+async fn test_session_context_window_wire_round_trip() {
+    let (client, _tmp, shutdown) = setup().await;
+    let sid = client
+        .create_session(crate::kernel::CreateSessionInput {
+            project_id: None,
+            working_dir: None,
+            auto_approve_level: None,
+            tool_blocklist: vec![],
+            model_key: None,
+            context_window: None,
+        })
+        .await
+        .unwrap();
+
+    // 默认：无覆盖，生效值 == 模型默认。
+    let info = client.get_session_context_window(&sid).await.unwrap();
+    assert_eq!(info.override_, None);
+    assert_eq!(info.effective, info.model_default);
+
+    // 设置 → 读回 override；`override` 字段名经 JSON rename 往返无损。
+    client
+        .set_session_context_window(&sid, Some(400_000))
+        .await
+        .unwrap();
+    let info = client.get_session_context_window(&sid).await.unwrap();
+    assert_eq!(info.override_, Some(400_000));
+    assert_eq!(info.effective, 400_000);
+
+    // 清除 → 回落默认。
+    client.set_session_context_window(&sid, None).await.unwrap();
+    let info = client.get_session_context_window(&sid).await.unwrap();
+    assert_eq!(info.override_, None);
+    assert_eq!(info.effective, info.model_default);
+
+    shutdown.cancel();
+}

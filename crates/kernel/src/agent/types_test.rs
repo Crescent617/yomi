@@ -68,6 +68,36 @@ async fn test_resolve_model_uses_session_model_key() {
 }
 
 #[tokio::test]
+async fn test_resolve_model_applies_context_window_override() {
+    let store = test_session_store().await;
+    let sid = SessionId::new();
+    store
+        .create(NewSession {
+            settings: Some(crate::storage::SessionOverrides {
+                context_window: Some(400_000),
+            }),
+            ..NewSession::new(sid.clone())
+        })
+        .await
+        .unwrap();
+
+    let mut models = BTreeMap::new();
+    models.insert("default".to_string(), model("default"));
+    let shared = shared_with(models, "default", Some(store.clone()));
+
+    let (_, cfg) = shared.resolve_model(&sid).await.unwrap();
+    assert_eq!(
+        cfg.context_window, 400_000,
+        "session override wins over the model's configured window"
+    );
+
+    // 清除后回落模型配置。
+    store.remove_setting(&sid, "context_window").await.unwrap();
+    let (_, cfg) = shared.resolve_model(&sid).await.unwrap();
+    assert_eq!(cfg.context_window, ModelConfig::default().context_window);
+}
+
+#[tokio::test]
 async fn test_resolve_model_falls_back_on_stale_key() {
     let store = test_session_store().await;
     let sid = SessionId::new();

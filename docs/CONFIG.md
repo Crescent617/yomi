@@ -173,6 +173,7 @@ app_secret = "..."
 | `blocked_chats` / `blocked_users` | 屏蔽名单；完全静默 | `[]` |
 | `require_mention` | 群聊需 @ 触发（斜杠命令任何模式下都要 @，不受此开关影响） | `true` |
 | `reply_in_thread` | 群聊回复锚定触发消息的 thread（飞书话题 / Telegram 引用） | `false` |
+| `context_window`（`[[models]]` 内） | 模型上下文窗口（压缩触发点等）；session 级覆盖：GUI ctx 仪表 / TUI `/ctx` / `yomi session ctx` / channel `/settings` 卡 | 必填 |
 | `auto_approve_level` | 通道级自动批准：`safe`/`caution`/`dangerous` | `safe` |
 | `observability` | 状态卡片 + 运行回执 | `true` |
 | `tool_trace` | 最终回复附运行轨迹（飞书可折叠面板，其他平台纯文本行） | `true` |

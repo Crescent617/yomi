@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- 每个 session 可覆盖模型的 context window（压缩触发点、ctx% 展示随之生效）：GUI 点 input 工具条的 ctx 仪表弹层设置、信息面板只读展示；TUI 新增 `/ctx [值|reset]`；CLI 新增 `yomi session ctx`；channel `/settings` 卡新增 Context window 行（25/50/75/100% 档位 + default 复位，chat 范围生效）；thread 会话继承 chat 的显式覆盖，`/model` 换模型不清除覆盖。
+
 ## [0.10.9] - 2026-09-01
 
 ### Changed

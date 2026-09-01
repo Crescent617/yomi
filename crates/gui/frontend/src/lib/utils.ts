@@ -150,6 +150,23 @@ export function formatTokens(n: number): string {
   return `${n}`;
 }
 
+/**
+ * Parse a token count with an optional k/m suffix (`512k`, `1m`, `200000`).
+ * Returns null for malformed input, zero/negative, and anything above
+ * u32::MAX (the IPC payload type) — callers must surface a clear error
+ * instead of a bare deserialization failure.
+ */
+export function parseTokenCount(s: string): number | null {
+  const m = s.trim().toLowerCase().match(/^(\d+(?:\.\d+)?)([km])?$/);
+  if (!m) return null;
+  const n = Number.parseFloat(m[1]);
+  if (!Number.isFinite(n)) return null;
+  const tokens = Math.round(
+    m[2] === "k" ? n * 1000 : m[2] === "m" ? n * 1_000_000 : n,
+  );
+  return tokens > 0 && tokens <= 0xffffffff ? tokens : null;
+}
+
 // Count UTF-8 bytes to match Rust's text.len() for token estimation.
 export function utf8ByteLength(text: string): number {
   return new TextEncoder().encode(text).length;

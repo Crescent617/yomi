@@ -31,6 +31,22 @@ fn test_parse_models_command_with_key() {
 }
 
 #[test]
+fn test_parse_ctx_command() {
+    assert_eq!(
+        InputComponent::parse_command("/ctx"),
+        Some(Msg::CommandCtx(None))
+    );
+    assert_eq!(
+        InputComponent::parse_command("/ctx 512k"),
+        Some(Msg::CommandCtx(Some("512k".to_string())))
+    );
+    assert_eq!(
+        InputComponent::parse_command("/ctx reset"),
+        Some(Msg::CommandCtx(Some("reset".to_string())))
+    );
+}
+
+#[test]
 fn test_parse_non_command_returns_none() {
     assert_eq!(InputComponent::parse_command("hello world"), None);
     assert_eq!(InputComponent::parse_command("/unknown"), None);

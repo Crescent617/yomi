@@ -466,6 +466,21 @@ impl KernelApi for Kernel {
         Self::set_session_model(self, session_id, key).await
     }
 
+    async fn get_session_context_window(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<crate::kernel::ContextWindowInfo> {
+        Self::get_session_context_window(self, session_id).await
+    }
+
+    async fn set_session_context_window(
+        &self,
+        session_id: &SessionId,
+        tokens: Option<u32>,
+    ) -> Result<()> {
+        Self::set_session_context_window(self, session_id, tokens).await
+    }
+
     async fn list_agent_templates(
         &self,
         session_id: Option<&SessionId>,
