@@ -15,9 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.10] - 2026-09-01
+
 ### Added
 
 - 每个 session 可覆盖模型的 context window（压缩触发点、ctx% 展示随之生效）：GUI 点 input 工具条的 ctx 仪表弹层设置、信息面板只读展示；TUI 新增 `/ctx [值|reset]`；CLI 新增 `yomi session ctx`；channel `/settings` 卡新增 Context window 行（25/50/75/100% 档位 + default 复位，chat 范围生效）；thread 会话继承 chat 的显式覆盖，`/model` 换模型不清除覆盖。
+
+### Fixed
+
+- `/settings` 卡与 `/model` 的 chat 级扇出遇到已删除的 thread 会话时不再中断报错，跳过并继续写入其余会话。
+- 飞书合并转发（merge_forward）消息现在展开子消息进上下文：此前事件解析失败整条丢弃，引用与历史里只剩 `[merge_forward]` 占位。
+- 飞书 sticker 消息拼进上下文时保留 file_key（`[sticker: <file_key>]`）：此前整条按无内容丢弃；agent 现可据此回发同一表情或下载查看。
 
 ## [0.10.9] - 2026-09-01
 
