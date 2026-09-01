@@ -1512,6 +1512,8 @@ async fn rules_command_shows_both_layers() {
     assert!(text.contains("用中文回答。"), "{text}");
     assert!(text.contains("只答本话题。"), "{text}");
     assert!(text.contains("wins conflicts"), "{text}");
+    // The session layer names the bound session id (scoped claim).
+    assert!(text.contains(&format!("(`{sid}`)")), "{text}");
 
     // A chat without any rules gets explicit "(none)" markers.
     let mut other = chat_level_cmd("/rules");
@@ -1520,6 +1522,43 @@ async fn rules_command_shows_both_layers() {
     rig.call(other).await.unwrap();
     let text = last_outgoing_text(&rig.mock).await;
     assert!(text.contains("(none)"), "{text}");
+}
+
+/// `/rules` in a watch-on chat answers with the observer session's
+/// rules even from inside a thread — every message there is mirrored to
+/// the chat-keyed observer, so that is the session whose rules are in
+/// effect; a thread-scope lookup would falsely claim "no session yet".
+#[tokio::test]
+async fn rules_command_in_watched_chat_shows_observer_rules() {
+    let rig = ChatLevelRig::new().await;
+    let data_dir = rig._tmp.path().to_path_buf();
+
+    let observer = rig.new_session().await;
+    rig.store
+        .save_mapping(
+            "mock",
+            "chat-1",
+            &observer,
+            "chat-1",
+            None,
+            MappingKind::Watch,
+        )
+        .await
+        .unwrap();
+    let session_dir = data_dir.join("sessions").join("rules");
+    std::fs::create_dir_all(&session_dir).unwrap();
+    std::fs::write(
+        session_dir.join(format!("{}.md", observer.0)),
+        "观察者规则：只在被问到时说话。",
+    )
+    .unwrap();
+
+    let mut threaded = chat_level_cmd("/rules");
+    threaded.thread_id = Some("t1".to_string());
+    rig.call(threaded).await.unwrap();
+    let text = last_outgoing_text(&rig.mock).await;
+    assert!(text.contains("观察者规则：只在被问到时说话。"), "{text}");
+    assert!(!text.contains("no session here yet"), "{text}");
 }
 
 /// `/compact` at chat level addresses the chat session (same scope
@@ -3413,23 +3452,24 @@ fn test_format_watch_line() {
 
 #[test]
 fn test_format_rules() {
-    // Both layers present: both bodies appear under their headers.
-    let body = format_rules(Some("说中文"), Some("只答本话题"), true);
+    // Both layers present: both bodies appear under their headers, the
+    // session layer naming its session id.
+    let body = format_rules(Some("说中文"), Some("只答本话题"), Some("sess_1"));
     assert!(body.contains("**Channel rules**"));
     assert!(body.contains("说中文"));
-    assert!(body.contains("**Session rules**"));
+    assert!(body.contains("**Session rules** (`sess_1`)"));
     assert!(body.contains("只答本话题"));
 
     // Absent layers are explicit ("(none)"), never silently dropped.
-    let body = format_rules(None, None, true);
+    let body = format_rules(None, None, Some("sess_1"));
     assert_eq!(body.matches("(none)").count(), 2);
 
     // No session in this scope: called out instead of "(none)".
-    let body = format_rules(Some("说中文"), None, false);
+    let body = format_rules(Some("说中文"), None, None);
     assert!(body.contains("no session here yet"));
 
     // A session-less reply never shows session rules.
-    let body = format_rules(None, Some("orphaned"), false);
+    let body = format_rules(None, Some("orphaned"), None);
     assert!(!body.contains("orphaned"));
 }
 

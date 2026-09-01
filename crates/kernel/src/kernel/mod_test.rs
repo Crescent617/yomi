@@ -475,11 +475,28 @@ async fn get_session_rules_layers_and_sub_agent_exclusion() {
     assert_eq!(rules.channel_rules.as_deref(), Some("用中文回答。"));
     assert_eq!(rules.session_rules.as_deref(), Some("只答本话题。"));
 
-    // Sub-agent：即使存在同名 rules 文件也不返回 session 层。
+    // Sub-agent：即使存在同名 rules 文件、甚至存在 routing 行，两层都不
+    // 返回（conductor 的 !is_sub_agent 哨兵在此同构）。
     let sub = crate::types::SessionId::from(format!("{}xyz", crate::types::SUB_PREFIX));
     std::fs::write(session_dir.join(format!("{sub}.md")), "不该显示").unwrap();
+    kernel
+        .channel_manager()
+        .expect("channel hub")
+        .store()
+        .save_mapping(
+            "mock",
+            "omt_sub",
+            &sub,
+            "oc_1",
+            None,
+            crate::channels::MappingKind::Normal,
+        )
+        .await
+        .unwrap();
     let rules = kernel.get_session_rules(&sub).await.unwrap();
     assert_eq!(rules.session_rules, None);
+    assert_eq!(rules.chat_id, None);
+    assert_eq!(rules.channel_rules, None);
 
     kernel.stop().await;
 }

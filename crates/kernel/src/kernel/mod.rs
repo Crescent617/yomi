@@ -1312,15 +1312,17 @@ impl Kernel {
     ) -> Result<crate::types::SessionRulesResponse> {
         // Channel routing supplies the chat id (thread rows denormalize
         // it), mirroring the spawn-time rules resolution in the
-        // conductor; local/GUI sessions have no routing row.
+        // conductor — sub-agent guard included (a sub-agent is a tool,
+        // not a chat voice: no mapping, no rules of either layer);
+        // local/GUI sessions have no routing row.
         let routing = match &self.channel_manager {
-            Some(hub) => hub
+            Some(hub) if !sid.starts_with(crate::types::SUB_PREFIX) => hub
                 .store()
                 .find_routing_by_session(sid)
                 .await
                 .ok()
                 .flatten(),
-            None => None,
+            _ => None,
         };
         let chat_id = routing.map(|r| r.external_chat_id);
         let data_dir = self.data_dir().await;

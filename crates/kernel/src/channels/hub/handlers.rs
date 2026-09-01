@@ -614,10 +614,27 @@ pub(crate) async fn handle_incoming_message(
         }
         ChannelCommand::Rules => {
             // Read-only: the same bounded reads the prompt assembly
-            // uses, so the reply shows exactly what the next spawn
-            // would inject. Never creates a session or mapping.
+            // uses, so the reply shows what a spawn of the addressed
+            // session would inject. Never creates a session or mapping.
+            //
+            // Watch-on chats are the exception to scope keying: every
+            // message (threaded or not) is mirrored to the chat-keyed
+            // observer session, so that is the session whose rules are
+            // in effect — a thread-scope lookup would falsely claim
+            // "no session here yet".
             let key = command_session_key(&msg, rit, &chat_id, &mapping_key);
-            let sid = store.find_mapping(channel_name, key).await?;
+            let mut sid = store.find_mapping(channel_name, key).await?;
+            if let Ok(status) = crate::channels::hub::watch::get_channel_watch_by_name(
+                &store,
+                channel_name,
+                &chat_id,
+            )
+            .await
+            {
+                if status.on {
+                    sid = status.session_id.map(crate::types::SessionId::from);
+                }
+            }
             let data_dir = kernel.data_dir().await;
             let channel_rules = crate::prompt::channel_rules_section(&data_dir, &chat_id).await;
             let session_rules = match &sid {
@@ -627,7 +644,7 @@ pub(crate) async fn handle_incoming_message(
             let body = format_rules(
                 channel_rules.as_deref(),
                 session_rules.as_deref(),
-                sid.is_some(),
+                sid.as_deref(),
             );
             send_info_reply(adapter, &msg, reply_msg_id, "📜 Rules", body).await?;
             Ok(None)

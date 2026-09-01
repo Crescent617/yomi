@@ -681,27 +681,36 @@ pub(crate) fn format_session_info(
     .join("\n")
 }
 
-/// `/rules` body: both rules layers exactly as the next spawn would
-/// inject them (the same bounded reads the prompt assembly uses) —
-/// channel rules shared by every session of the chat, session rules
-/// applying to this session only and winning conflicts. `(none)` marks
-/// an absent layer so "no rules" is distinguishable from "not shown".
+/// `/rules` body: both rules layers exactly as a spawn of the addressed
+/// session would inject them (the same bounded reads the prompt assembly
+/// uses) — channel rules shared by every session of the chat, session
+/// rules applying to the addressed session only and winning conflicts.
+/// The session layer names its session id so the claim stays scoped:
+/// in `reply_in_thread` chats the chat-keyed session is addressable
+/// (steer/queue) but is not what answers the next top-level message.
+/// `(none)` marks an absent layer so "no rules" is distinguishable from
+/// "not shown".
 pub(crate) fn format_rules(
     channel: Option<&str>,
     session: Option<&str>,
-    has_session: bool,
+    session_id: Option<&str>,
 ) -> String {
-    let session_body = if has_session {
-        session.unwrap_or("(none)")
-    } else {
-        "(no session here yet — the first message starts one)"
+    let (session_head, session_body) = match session_id {
+        Some(id) => (
+            format!("**Session rules** (`{id}`) — this session only, wins conflicts"),
+            session.unwrap_or("(none)"),
+        ),
+        None => (
+            "**Session rules** — this session only, wins conflicts".to_string(),
+            "(no session here yet — the first message starts one)",
+        ),
     };
     [
         format!(
             "**Channel rules** — every session in this chat\n{}",
             channel.unwrap_or("(none)")
         ),
-        format!("**Session rules** — this session only, wins conflicts\n{session_body}"),
+        format!("{session_head}\n{session_body}"),
         format!(
             "Injected verbatim into the system prompt at spawn; capped at {} bytes per layer.",
             crate::prompt::SESSION_RULES_MAX_BYTES
