@@ -171,7 +171,7 @@ app_secret = "..."
 | `platform` | 平台配置：`telegram` 需 `token`；`feishu` 需 `app_id` + `app_secret` | 必填 |
 | `allowed_chats` / `allowed_users` | 允许名单；名单外 @ 机器人收到 🙏 婉拒，无回复 | `[]` |
 | `blocked_chats` / `blocked_users` | 屏蔽名单；完全静默 | `[]` |
-| `require_mention` | 群聊需 @ 触发 | `true` |
+| `require_mention` | 群聊需 @ 触发（斜杠命令任何模式下都要 @，不受此开关影响） | `true` |
 | `reply_in_thread` | 群聊回复锚定触发消息的 thread（飞书话题 / Telegram 引用） | `false` |
 | `auto_approve_level` | 通道级自动批准：`safe`/`caution`/`dangerous` | `safe` |
 | `observability` | 状态卡片 + 运行回执 | `true` |

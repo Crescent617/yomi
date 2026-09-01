@@ -11,10 +11,13 @@ receipt），bot 对群里的讨论完全无感。想要的是 bot 作为群的*
 **一行制：一个 chat 一个 session，mapping 的 `kind` 就是模式开关。**
 
 - `/watch on` 把该 chat mapping 的 `kind` 翻成 `watch`（没有 session 就建）：
-  此后每条过 access control 的普通消息（**含 @**）原样镜像（steer）进这个
+  此后每条普通消息（**含 @**）原样镜像（steer）进这个
   session——它是群里唯一的消息消费者，自己决定何时回复（经自己 skill 列表里
   覆盖该平台的 skill，按消息头 `[msg_id: …]` / `[thread: …]` 锚定），没有
-  匹配 skill 即纯只读。
+  匹配 skill 即纯只读。镜像不过 user allowlist——观察者看的是整场对话，
+  谁说话都进（豁免范围 = 镜像范围：仅普通消息；未知斜杠词可能是别的
+  bot 的，不豁免也不镜像；已知命令同样不豁免，访问控制照全。显式
+  block、chat allowlist、channel disabled 永远拒）。
 - `/watch off` 把 `kind` 翻回 `normal`：**同一个 session** 恢复应答 mention，
   watch 期间的记忆原样保留。没有第三态，没有独立观察者 session，没有
   `watch:` key 前缀——状态就是 `normal` / `watch` 两态。
@@ -58,8 +61,10 @@ receipt），bot 对群里的讨论完全无感。想要的是 bot 作为群的*
 ## 行为
 
 - `/watch`（群聊顶层；DM 与话题内拒绝）查状态；`/watch on|off`（admin）
-  切换。watch-on 期间已知命令免 @ 执行（gate 放行，命令回复是 hub 自己的
-  声音）；off 后恢复 mention 门控（再开要 @）。
+  切换。**群聊命令一律要 @**——任何 mode 下（watch-on、`/mention off`
+  override、mention-off 的 channel 配置）不 @ 的已知命令静默不执行
+  （gate `NotAddressed`，不镜像、不计 ack）；DM 命令免 @。off 后恢复
+  mention 门控。
 - watch-on 群里：普通消息与 @ 一律无 ack、无状态卡，全部静默 steer 进
   chat 会话；话题消息同样进它（不按 thread key 路由），它按消息头里的
   `[thread: …]` 锚定自己决定要不要经 skill 回进话题。
@@ -82,8 +87,9 @@ receipt），bot 对群里的讨论完全无感。想要的是 bot 作为群的*
 - **token 量级**：空闲时每条消息一个「看一眼决定说/不说」的 run（prompt
   cache 压住单价）。中低流量群适用；高流量群熔断（每小时 run 上限）留作
   后续。
-- **注入面**：触发面 = 群里每句话；watch 会话以 Dangerous 自动批准 + 平台
-  skill 在手（能以 bot 身份发言）。blocked_users 与 access control 是硬
+- **注入面**：触发面 = 群里每句话（含不在 user allowlist 里的成员——观察者
+  要看整场对话）；watch 会话以 Dangerous 自动批准 + 平台
+  skill 在手（能以 bot 身份发言）。blocked_users 与 chat allowlist 是硬
   防线；「channel 不代发」是硬边界，「只用 skill」是 prompt 级约束。
 - **gc 边界**：watch 会话被 gc（默认 90 天静默）后 mapping 行随之删除，
   watch 静默关闭，需要重新 `/watch on`。
@@ -93,6 +99,9 @@ receipt），bot 对群里的讨论完全无感。想要的是 bot 作为群的*
   已知边界。
 - **`/watch on` 时若有进行中的对话 run**：flip 即 cancel（对称 off），已
   发出的状态卡可能停在半更新态——cosmetic 边界，flip 是低频管理操作。
+- **watch 状态可被试探**：配置 allowed_users 的群里，陌生人 @bot 普通
+  消息在 watch-off 时吃 🙏、watch-on 时静默——反应差异泄露该群是否被
+  watch。影响低，接受。
 - **观察者看不到自己经 skill 说的话之外 bot 的消息**：bot 消息不回推本
   bot——off 期间由它自己应答 mention，此洞不存在。
 
@@ -113,7 +122,10 @@ receipt），bot 对群里的讨论完全无感。想要的是 bot 作为群的*
   `rpc_set_channel_watch`（`on` 缺省 = 查询，Vim `:set` 风格）。wire
   `SetChannelWatch`（proto 维持 28）。
 - `channels/hub/gate.rs`：watch-on 群普通消息与 @ 全 `NotAddressed`（静默），
-  已知命令放行；watch 快照随消息进 dispatch（单一读取，无 toggle 竞态）。
+  普通消息豁免 user allowlist（`UserNotAllowed` 且 kind=watch → 照样镜像；
+  block/chat allowlist/disabled 不豁免，命令不豁免）；**群聊已知命令不 @
+  即 `NotAddressed`，任何 mode 同规**；watch 快照随消息进 dispatch（单一
+  读取，无 toggle 竞态）。
 - `channels/hub/mod.rs`：dispatch 循环 tee（gate 快照 && `Command::None`
   → `mirror_message`）；事件转发器 `routing.is_watch() → continue`（投递
   抑制单点）。

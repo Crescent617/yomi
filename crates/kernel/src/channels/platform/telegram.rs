@@ -169,7 +169,7 @@ impl TelegramAdapter {
         let raw_text = (msgs.len() == 1)
             .then(|| msgs[0].text().or_else(|| msgs[0].caption()))
             .flatten()
-            .map(str::to_string);
+            .map(|text| strip_bot_mention(text, bot_username));
 
         let is_group = msgs.last().is_some_and(|m| !m.chat.is_private());
 
@@ -219,6 +219,9 @@ impl TelegramAdapter {
         }
 
         if let Some(text) = msg.text() {
+            if directed_at_bot(text, bot_username) {
+                return true;
+            }
             if let Some(entities) = msg.entities() {
                 if check_entities(entities, text) {
                     return true;
@@ -226,6 +229,9 @@ impl TelegramAdapter {
             }
         }
         if let Some(caption) = msg.caption() {
+            if directed_at_bot(caption, bot_username) {
+                return true;
+            }
             if let Some(entities) = msg.caption_entities() {
                 if check_entities(entities, caption) {
                     return true;
@@ -234,6 +240,57 @@ impl TelegramAdapter {
         }
         false
     }
+}
+
+/// `@my_bot /help` keeps the mention in the raw text — strip it (Feishu
+/// does the same in `feishu_text::strip_bot_mention`) so command parsing
+/// sees the bare command. Case-insensitive (Telegram usernames are), and
+/// a longer handle sharing the prefix (`@my_bot2`) is left alone.
+fn strip_bot_mention(text: &str, bot_username: &str) -> String {
+    if bot_username.is_empty() {
+        return text.trim().to_string();
+    }
+    let handle = format!("@{bot_username}");
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(pos) = rest.find('@') {
+        let candidate = &rest[pos..];
+        let is_bot = candidate.len() >= handle.len()
+            && candidate.is_char_boundary(handle.len())
+            && candidate[..handle.len()].eq_ignore_ascii_case(&handle)
+            && candidate[handle.len()..]
+                .chars()
+                .next()
+                .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+        if is_bot {
+            out.push_str(&rest[..pos]);
+            rest = &candidate[handle.len()..];
+        } else {
+            out.push_str(&rest[..=pos]);
+            rest = &rest[pos + 1..];
+        }
+    }
+    out.push_str(rest);
+    out.trim().to_string()
+}
+
+/// Telegram's native directed-command form `/cmd@my_bot`: the
+/// `BotCommand` entity carries no Mention, but the @-suffix addresses the bot
+/// directly. Checked on whitespace tokens — entity spans are UTF-16
+/// offsets, which misalign with Rust's byte indices on CJK text.
+fn directed_at_bot(text: &str, bot_username: &str) -> bool {
+    if bot_username.is_empty() {
+        return false;
+    }
+    text.split_whitespace().any(|tok| {
+        tok.strip_prefix('/')
+            .and_then(|rest| rest.split_once('@'))
+            .is_some_and(|(cmd, user)| {
+                !cmd.is_empty()
+                    && cmd.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    && user.eq_ignore_ascii_case(bot_username)
+            })
+    })
 }
 
 #[cfg(test)]
@@ -413,7 +470,14 @@ impl PlatformAdapter for TelegramAdapter {
                             |msg| {
                                 let raw_text =
                                     msg.text().or_else(|| msg.caption()).unwrap_or_default();
-                                crate::channels::hub_command::has_channel_command_prefix(raw_text)
+                                // Strip the bot's own handle first so
+                                // `@bot /cmd` isolates like `/cmd` —
+                                // an unstripped batch would merge and
+                                // lose the command (raw_text is None for
+                                // multi-message batches).
+                                crate::channels::hub_command::has_channel_command_prefix(
+                                    &strip_bot_mention(raw_text, bot_username),
+                                )
                             },
                             |msg| msg.from.as_ref().map_or(0, |u| u.id.0),
                         );

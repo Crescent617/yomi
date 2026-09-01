@@ -135,6 +135,8 @@ pub(crate) const HELP_TEXT: &str = "\
 `/deny <id>` — deny a doc-permission request
 `/restart` — restart the daemon
 
+In groups, every command needs an @mention of the bot — whatever the mode.
+
 Anything else is sent to the agent as a message.";
 
 /// Parsed channel command from an incoming message.

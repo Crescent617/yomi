@@ -991,8 +991,15 @@ pub(crate) async fn handle_mention_command(
             store
                 .set_mention_override(&config.name, container.id(), value)
                 .await?;
+            // The override governs conversation triggers only — commands
+            // are control-plane and keep their own @ rule.
+            let note = if value {
+                ""
+            } else {
+                " Slash commands still need an @ in groups."
+            };
             Ok(Some(format!(
-                "✅ Mention requirement set to `{}` for this {scope} (channel default: `{}`).",
+                "✅ Mention requirement set to `{}` for this {scope} (channel default: `{}`).{note}",
                 on_off(value),
                 on_off(config.require_mention),
             )))
@@ -1144,7 +1151,7 @@ pub(crate) async fn handle_watch_command(
             "👁 Watch on — every non-command message here goes to this chat's session as its observer. \
              It decides for itself when to speak (via skill) or stay silent; \
              @-mentions no longer trigger conversation replies while watch is on. \
-             `/watch off` to stop."
+             In groups commands always need an @: `@bot /watch off` to stop."
                 .to_string(),
         ))
     } else {
@@ -1164,7 +1171,7 @@ pub(crate) async fn handle_watch_command(
         }
         Ok(Some(
             "⏹ Watch off — the same session answers @-mentions here again, \
-             its watch-period memory intact. `/watch on` to resume watching."
+             its watch-period memory intact. `@bot /watch on` to resume watching."
                 .to_string(),
         ))
     }

@@ -5973,8 +5973,8 @@ fn watch_command_parse() {
 
 /// In a watch-on chat every plain message — @-mention or not — is
 /// `NotAddressed` (no conversation trigger, no ack reaction): the
-/// observer agent decides when to reply. Known commands execute without
-/// an @; unknown slash-words stay silent.
+/// observer agent decides when to reply. Group commands still need an @;
+/// unknown slash-words stay silent.
 #[tokio::test]
 async fn gate_watch_on_routes_everything_to_observer() {
     let (_pool, store) = create_test_pool().await;
@@ -6017,7 +6017,8 @@ async fn gate_watch_on_routes_everything_to_observer() {
         "no ack may promise a reply"
     );
 
-    // Known commands execute without an @ (and get the usual ack).
+    // Group commands need an @ even in watch mode: un-addressed ones are
+    // silent no-ops, addressed ones execute (with the usual ack).
     for raw in ["/help", "/watch off", "/model k3"] {
         let (gate, watch_on) = gate_with_snapshot(
             &adapter,
@@ -6026,17 +6027,33 @@ async fn gate_watch_on_routes_everything_to_observer() {
             &msg_with(Some(raw), false),
         )
         .await;
+        assert_eq!(gate, Gate::NotAddressed, "raw: {raw}");
+        assert!(watch_on);
+        let (gate, watch_on) = gate_with_snapshot(
+            &adapter,
+            &feishu_gate_config(),
+            &store,
+            &msg_with(Some(raw), true),
+        )
+        .await;
         assert_eq!(gate, Gate::Allow, "raw: {raw}");
         assert!(watch_on);
     }
     assert_eq!(mock.reactions.lock().await.len(), 3);
 
-    // DM 同样遵守 watch：watch-on 的私聊静默镜像，不成黑洞。
+    // DM 同样遵守 watch：watch-on 的私聊静默镜像，不成黑洞；DM 命令免 @。
     let mut dm = channel_message(None, false, true);
     dm.raw_text = Some("悄悄话".to_string());
     let (gate, watch_on) = gate_with_snapshot(&adapter, &feishu_gate_config(), &store, &dm).await;
     assert_eq!(gate, Gate::NotAddressed, "watched DM stays silent");
     assert!(watch_on, "snapshot marks the watched DM too");
+    let mut dm_cmd = channel_message(None, false, true);
+    dm_cmd.is_mention = false;
+    dm_cmd.raw_text = Some("/help".to_string());
+    let (gate, watch_on) =
+        gate_with_snapshot(&adapter, &feishu_gate_config(), &store, &dm_cmd).await;
+    assert_eq!(gate, Gate::Allow, "DM commands stay @-free");
+    assert!(watch_on);
 
     // Unwatched chat: the same message is NotAddressed with snapshot off.
     let (gate, watch_on) = gate_with_snapshot(
@@ -6048,6 +6065,183 @@ async fn gate_watch_on_routes_everything_to_observer() {
     .await;
     assert_eq!(gate, Gate::NotAddressed);
     assert!(!watch_on);
+}
+
+/// Watch-on chats mirror the WHOLE conversation: a plain message from a
+/// user missing the allowlist skips that filter and steers to the
+/// observer. Commands keep full access control; explicit blocks still
+/// deny.
+#[tokio::test]
+async fn gate_watch_on_bypasses_user_allowlist_for_plain_messages() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let sid = SessionId::new();
+    store
+        .save_mapping("gate", "chat-1", &sid, "chat-1", None, MappingKind::Watch)
+        .await
+        .unwrap();
+
+    let mock = Arc::new(MockAdapter::new("gate"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+
+    let stranger = |raw: Option<&str>, mention: bool| {
+        let mut msg = channel_message(None, true, true);
+        msg.external_user_id = "stranger".to_string();
+        msg.is_mention = mention;
+        msg.raw_text = raw.map(str::to_string);
+        msg
+    };
+
+    // Plain messages from an unlisted user: mirrored like anyone else's —
+    // silent (no access-denied reaction), snapshot on.
+    for (raw, mention) in [
+        (Some("路过说一句"), false),
+        (Some("@bot 陌生人问你"), true),
+        (None, false),
+    ] {
+        let (gate, watch_on) = gate_with_snapshot(
+            &adapter,
+            &feishu_gate_config(),
+            &store,
+            &stranger(raw, mention),
+        )
+        .await;
+        assert_eq!(gate, Gate::NotAddressed, "raw: {raw:?} mention: {mention}");
+        assert!(watch_on, "snapshot must mark the watch-on chat");
+    }
+    assert!(
+        mock.reactions.lock().await.is_empty(),
+        "mirrored strangers stay silent"
+    );
+
+    // Unknown slash-words are NOT bypassed (they may be another bot's):
+    // silent without a mention, the usual denied reaction with one.
+    for (mention, want_reactions) in [(false, 0), (true, 1)] {
+        let (gate, _) = gate_with_snapshot(
+            &adapter,
+            &feishu_gate_config(),
+            &store,
+            &stranger(Some("/infp"), mention),
+        )
+        .await;
+        assert_eq!(gate, Gate::Denied, "mention: {mention}");
+        assert_eq!(
+            mock.reactions.lock().await.len(),
+            want_reactions,
+            "mention: {mention}"
+        );
+    }
+
+    // …and an unlisted user's known COMMAND is still access-denied (with
+    // the usual denied reaction, since it addresses the bot).
+    let (gate, watch_on) = gate_with_snapshot(
+        &adapter,
+        &feishu_gate_config(),
+        &store,
+        &stranger(Some("/help"), true),
+    )
+    .await;
+    assert_eq!(gate, Gate::Denied);
+    assert!(!watch_on);
+    assert_eq!(mock.reactions.lock().await.len(), 2, "denied reaction");
+
+    // The bypass never covers the chat allowlist, explicit blocks, or a
+    // disabled channel.
+    for config in [
+        ChannelConfig {
+            allowed_chats: vec!["other-chat".to_string()],
+            ..feishu_gate_config()
+        },
+        ChannelConfig {
+            blocked_chats: vec!["chat-1".to_string()],
+            ..feishu_gate_config()
+        },
+        ChannelConfig {
+            enabled: false,
+            ..feishu_gate_config()
+        },
+        ChannelConfig {
+            blocked_users: vec!["user-1".to_string()],
+            ..feishu_gate_config()
+        },
+    ] {
+        assert_eq!(
+            gate_with_reaction(
+                &adapter,
+                &config,
+                &store,
+                &channel_message(None, true, true)
+            )
+            .await,
+            Gate::Denied
+        );
+    }
+}
+
+/// Group commands always require an @ — watch mode, mention-off
+/// overrides, and mention-off channel configs alike.
+#[tokio::test]
+async fn gate_group_command_requires_mention_in_every_mode() {
+    let mock = Arc::new(MockAdapter::new("fs"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+
+    let group_cmd = |mention: bool| {
+        let mut msg = channel_message(None, true, true);
+        msg.is_mention = mention;
+        msg.raw_text = Some("/help".to_string());
+        msg
+    };
+
+    // Mention-off channel config: plain chatter passes, the command does
+    // not.
+    let config = ChannelConfig {
+        require_mention: false,
+        ..feishu_gate_config()
+    };
+    assert_eq!(
+        gate_with_reaction(&adapter, &config, &gate_store().await, &group_cmd(false)).await,
+        Gate::NotAddressed
+    );
+    assert_eq!(
+        gate_with_reaction(&adapter, &config, &gate_store().await, &group_cmd(true)).await,
+        Gate::Allow
+    );
+
+    // Mention-off chat override: same tightening.
+    let store = gate_store().await;
+    store
+        .set_mention_override("gate", "chat-1", false)
+        .await
+        .unwrap();
+    assert_eq!(
+        gate_with_reaction(&adapter, &feishu_gate_config(), &store, &group_cmd(false)).await,
+        Gate::NotAddressed
+    );
+
+    // Inside a thread the same rule applies (a thread is still the group).
+    let mut thread_cmd = channel_message(Some("thread-1"), true, true);
+    thread_cmd.is_mention = false;
+    thread_cmd.raw_text = Some("/help".to_string());
+    assert_eq!(
+        gate_with_reaction(
+            &adapter,
+            &feishu_gate_config(),
+            &gate_store().await,
+            &thread_cmd
+        )
+        .await,
+        Gate::NotAddressed
+    );
+
+    // A DM command never needs an @ — the group-only rule can't bite
+    // (is_group=false skips it), even under a mention-off config.
+    let mut dm_cmd = channel_message(None, false, true);
+    dm_cmd.is_mention = false;
+    dm_cmd.raw_text = Some("/help".to_string());
+    assert_eq!(
+        gate_with_reaction(&adapter, &config, &gate_store().await, &dm_cmd).await,
+        Gate::Allow
+    );
 }
 
 /// Without watch the same non-mention command is not addressed.

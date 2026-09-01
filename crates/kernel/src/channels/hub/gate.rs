@@ -7,7 +7,9 @@ use crate::channels::hub_command::{parse_channel_command, ChannelCommand};
 
 use crate::channels::hub_routing::resolve_require_mention;
 
-use crate::channels::{ChannelConfig, ChannelMessage, ChannelStore, PlatformAdapter};
+use crate::channels::{
+    AccessDeniedReason, ChannelConfig, ChannelError, ChannelMessage, ChannelStore, PlatformAdapter,
+};
 
 /// Outcome of gating one incoming message (see `gate_message`).
 /// `comment.rs` hands assembled doc-comment triggers to the dispatch
@@ -45,11 +47,33 @@ pub(crate) async fn gate_message(
     store: &Arc<dyn ChannelStore>,
     msg: &ChannelMessage,
 ) -> (Gate, Option<&'static str>, bool) {
+    let cmd = parse_channel_command(msg.raw_text.as_deref());
+    // Known commands vs. everything else: unknown slash-words may be
+    // another bot's — they follow plain-message rules everywhere, never
+    // command rules.
+    let known_command = !matches!(cmd, ChannelCommand::None | ChannelCommand::Unknown(_));
     // Access control first: denied messages (blocked users, disabled
-    // channels) never cost a store read. The mention requirement only
-    // decides the denied reaction for an allowlist miss — resolved
-    // lazily on that rare path.
+    // channels) never cost a store read — with one exception: a watched
+    // chat's observer mirrors the WHOLE conversation, so a plain message
+    // missing only the USER allowlist skips it and steers to the
+    // observer like anyone else's (one store read on that path alone).
+    // The bypass covers exactly what the dispatch tee mirrors
+    // (`Command::None`) — unknown slash-words (another bot's?) and known
+    // commands keep full access control. Explicit blocks, the chat
+    // allowlist, and a disabled channel always deny.
     if let Err(e) = config.check_access(&msg.external_chat_id, &msg.external_user_id) {
+        if matches!(cmd, ChannelCommand::None)
+            && matches!(
+                e,
+                ChannelError::AccessDenied {
+                    reason: AccessDeniedReason::UserNotAllowed,
+                    ..
+                }
+            )
+            && read_watch_on(store, config, &msg.external_chat_id).await
+        {
+            return (Gate::NotAddressed, None, true);
+        }
         info!(channel = %config.name, error = %e, "access denied");
         if e.is_allowlist_miss() {
             let (require_mention, _) = resolve_require_mention(store, config, msg).await;
@@ -72,27 +96,22 @@ pub(crate) async fn gate_message(
     // dispatch loop's tee mirrors them. Known commands stay control-plane
     // and execute as usual; unknown slash-words stay silent (they may be
     // another bot's).
-    let cmd = parse_channel_command(msg.raw_text.as_deref());
+    //
     // Watch-on chats (DM included — a watched DM is a silent observer):
     // every plain message is mirrored, conversation triggers suspended.
     // A store read failure falls back to normal gating — a transient
     // sqlite error must not crash message intake, but the degradation
     // (watch-on chat answered like a normal one) must be visible.
-    let watch_on = match store
-        .find_mapping_kind(&config.name, &msg.external_chat_id)
-        .await
-    {
-        Ok(row) => row.is_some_and(|(_, kind)| kind == crate::channels::MappingKind::Watch),
-        Err(e) => {
-            warn!(
-                channel = %config.name,
-                chat_id = %msg.external_chat_id,
-                error = %e,
-                "watch state read failed; falling back to normal gating"
-            );
-            false
-        }
-    };
+    let watch_on = read_watch_on(store, config, &msg.external_chat_id).await;
+    // A group command must @ the bot — in EVERY mode: watch-on, a
+    // mention-off override, a mention-off channel config. An
+    // un-addressed slash word in a group was not spoken to this bot and
+    // stays silent (mirroring never applies to commands). DMs keep
+    // @-free commands.
+    if msg.is_group && known_command && !msg.is_mention {
+        info!(channel = %config.name, chat_id = %msg.external_chat_id, "ignoring group command without mention");
+        return (Gate::NotAddressed, None, watch_on);
+    }
     if watch_on {
         return match cmd {
             ChannelCommand::None | ChannelCommand::Unknown(_) => (Gate::NotAddressed, None, true),
@@ -105,7 +124,31 @@ pub(crate) async fn gate_message(
         info!(channel = %config.name, chat_id = %msg.external_chat_id, "ignoring non-mention message");
         return (Gate::NotAddressed, None, false);
     }
-    (Gate::Allow, Some(ack_reaction_for(config, &msg)), false)
+    (Gate::Allow, Some(ack_reaction_for(config, msg)), false)
+}
+
+/// Whether the chat is currently watch-on (`/watch on`): its mapping row
+/// carries kind `watch`. A store read failure falls back to `false`
+/// (normal gating) — a transient sqlite error must not crash message
+/// intake, but the degradation (a watch-on chat answered like a normal
+/// one) must be visible.
+async fn read_watch_on(
+    store: &Arc<dyn ChannelStore>,
+    config: &ChannelConfig,
+    chat_id: &str,
+) -> bool {
+    match store.find_mapping_kind(&config.name, chat_id).await {
+        Ok(row) => row.is_some_and(|(_, kind)| kind == crate::channels::MappingKind::Watch),
+        Err(e) => {
+            warn!(
+                channel = %config.name,
+                chat_id = %chat_id,
+                error = %e,
+                "watch state read failed; falling back to normal gating"
+            );
+            false
+        }
+    }
 }
 
 /// Pick the gate ack reaction: `/queue` messages get their own ("noted,

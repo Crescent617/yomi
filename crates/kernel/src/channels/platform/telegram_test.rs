@@ -78,6 +78,38 @@ fn cap_message_length_truncates_utf16_safely() {
 }
 
 #[test]
+fn strip_bot_mention_removes_the_handle() {
+    use super::strip_bot_mention as strip;
+    assert_eq!(strip("@yomi_bot /help", "yomi_bot"), "/help");
+    // Telegram usernames are case-insensitive; the handle may arrive in
+    // any case.
+    assert_eq!(strip("@Yomi_Bot /help", "yomi_bot"), "/help");
+    assert_eq!(strip("hey @yomi_bot look", "yomi_bot"), "hey  look");
+    // A longer handle sharing the prefix is someone/something else.
+    assert_eq!(strip("@yomi_bot2 hi", "yomi_bot"), "@yomi_bot2 hi");
+    // Unknown bot identity: leave the text alone.
+    assert_eq!(strip("@yomi_bot /help", ""), "@yomi_bot /help");
+    // CJK around the handle must not trip byte slicing.
+    assert_eq!(strip("你好 @yomi_bot 在吗", "yomi_bot"), "你好  在吗");
+    assert_eq!(strip("@yomi_bot", "yomi_bot"), "");
+}
+
+#[test]
+fn directed_at_bot_recognizes_native_command_form() {
+    use super::directed_at_bot as directed;
+    assert!(directed("/help@yomi_bot", "yomi_bot"));
+    assert!(directed("/watch@Yomi_Bot off", "yomi_bot"));
+    // Mid-text directed commands still address the bot (same stance as a
+    // mid-text @mention).
+    assert!(directed("看这个 /help@yomi_bot", "yomi_bot"));
+    // Directed at ANOTHER bot, bare commands, and prose do not count.
+    assert!(!directed("/help@other_bot", "yomi_bot"));
+    assert!(!directed("/help", "yomi_bot"));
+    assert!(!directed("@yomi_bot /help", "yomi_bot"));
+    assert!(!directed("/help@yomi_bot", ""));
+}
+
+#[test]
 fn telegram_mention_renders_numeric_id_as_link() {
     assert_eq!(
         super::telegram_mention("123456"),

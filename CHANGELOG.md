@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `/watch on` 的群现在镜像**所有成员**的普通消息：不再按 user allowlist 过滤发言者（显式 block、chat allowlist、频道禁用仍拦截；斜杠命令与疑似其他 bot 的未知斜杠词不豁免，访问控制照全）。
+- 群聊里的斜杠命令一律需要 @ 机器人：watch 模式、`/mention off` 群、mention-off 的频道配置下，不 @ 的命令静默忽略（不执行、不镜像）；私聊命令维持免 @。
+
+### Fixed
+
+- 修复 Telegram 群里 `@bot /cmd` 形式命令不被识别的问题：@ 未剥离，命令被当普通消息（并批后甚至整批丢失命令语义）。
+- Telegram 原生定向命令 `/cmd@bot` 现在计为 @ 机器人，与 `@bot /cmd` 等效。
+
 ## [0.10.8] - 2026-09-01
 
 ### Added
