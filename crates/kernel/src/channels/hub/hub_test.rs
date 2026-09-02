@@ -424,13 +424,20 @@ async fn settings_card_cfg_watch_callback() {
         .await
         .unwrap();
     store
-        .save_mapping("mock", "oc_1", &chat_sid, "oc_1", None, MappingKind::Normal)
+        .save_mapping(
+            "mock",
+            "oc_cfgw",
+            &chat_sid,
+            "oc_cfgw",
+            None,
+            MappingKind::Normal,
+        )
         .await
         .unwrap();
 
     let action = |value: serde_json::Value| crate::channels::CardAction {
         operator_open_id: "admin-1".to_string(),
-        chat_id: Some("oc_1".to_string()),
+        chat_id: Some("oc_cfgw".to_string()),
         message_id: None,
         value,
     };
@@ -443,12 +450,12 @@ async fn settings_card_cfg_watch_callback() {
         &store,
         &adapter,
         action(
-            serde_json::json!({"action": "cfg_watch", "scope": "oc_1", "dm": false, "option": "on"}),
+            serde_json::json!({"action": "cfg_watch", "scope": "oc_cfgw", "dm": false, "option": "on"}),
         ),
     )
     .await;
     let kind = store
-        .find_mapping_kind("mock", "oc_1")
+        .find_mapping_kind("mock", "oc_cfgw")
         .await
         .unwrap()
         .map(|(_, k)| k);
@@ -470,12 +477,12 @@ async fn settings_card_cfg_watch_callback() {
         &store,
         &adapter,
         action(
-            serde_json::json!({"action": "cfg_watch", "scope": "oc_1", "dm": false, "option": "on"}),
+            serde_json::json!({"action": "cfg_watch", "scope": "oc_cfgw", "dm": false, "option": "on"}),
         ),
     )
     .await;
     let kind = store
-        .find_mapping_kind("mock", "oc_1")
+        .find_mapping_kind("mock", "oc_cfgw")
         .await
         .unwrap()
         .map(|(_, k)| k);
@@ -492,11 +499,11 @@ async fn settings_card_cfg_watch_callback() {
         &kernel,
         &store,
         &adapter,
-        action(serde_json::json!({"action": "cfg_reset_all", "scope": "oc_1", "dm": false})),
+        action(serde_json::json!({"action": "cfg_reset_all", "scope": "oc_cfgw", "dm": false})),
     )
     .await;
     let kind = store
-        .find_mapping_kind("mock", "oc_1")
+        .find_mapping_kind("mock", "oc_cfgw")
         .await
         .unwrap()
         .map(|(_, k)| k);
@@ -514,12 +521,12 @@ async fn settings_card_cfg_watch_callback() {
         &store,
         &adapter,
         action(
-            serde_json::json!({"action": "cfg_watch", "scope": "oc_1", "dm": false, "option": "off"}),
+            serde_json::json!({"action": "cfg_watch", "scope": "oc_cfgw", "dm": false, "option": "off"}),
         ),
     )
     .await;
     let kind = store
-        .find_mapping_kind("mock", "oc_1")
+        .find_mapping_kind("mock", "oc_cfgw")
         .await
         .unwrap()
         .map(|(_, k)| k);
@@ -537,12 +544,12 @@ async fn settings_card_cfg_watch_callback() {
         &store,
         &adapter,
         action(
-            serde_json::json!({"action": "cfg_watch", "scope": "oc_1", "dm": false, "option": "maybe"}),
+            serde_json::json!({"action": "cfg_watch", "scope": "oc_cfgw", "dm": false, "option": "maybe"}),
         ),
     )
     .await;
     let kind = store
-        .find_mapping_kind("mock", "oc_1")
+        .find_mapping_kind("mock", "oc_cfgw")
         .await
         .unwrap()
         .map(|(_, k)| k);
@@ -557,14 +564,14 @@ async fn settings_card_cfg_watch_callback() {
         &adapter,
         crate::channels::CardAction {
             operator_open_id: "user-1".to_string(),
-            chat_id: Some("oc_1".to_string()),
+            chat_id: Some("oc_cfgw".to_string()),
             message_id: None,
-            value: serde_json::json!({"action": "cfg_watch", "scope": "oc_1", "dm": false, "option": "on"}),
+            value: serde_json::json!({"action": "cfg_watch", "scope": "oc_cfgw", "dm": false, "option": "on"}),
         },
     )
     .await;
     let kind = store
-        .find_mapping_kind("mock", "oc_1")
+        .find_mapping_kind("mock", "oc_cfgw")
         .await
         .unwrap()
         .map(|(_, k)| k);
@@ -572,8 +579,8 @@ async fn settings_card_cfg_watch_callback() {
 
     // DM 卡拒绝翻转：dm:true 与标志缺失（旧卡）同样。
     for value in [
-        serde_json::json!({"action": "cfg_watch", "scope": "oc_1", "dm": true, "option": "on"}),
-        serde_json::json!({"action": "cfg_watch", "scope": "oc_1", "option": "on"}),
+        serde_json::json!({"action": "cfg_watch", "scope": "oc_cfgw", "dm": true, "option": "on"}),
+        serde_json::json!({"action": "cfg_watch", "scope": "oc_cfgw", "option": "on"}),
     ] {
         crate::channels::cards::settings::handle_card_action(
             "mock",
@@ -585,7 +592,7 @@ async fn settings_card_cfg_watch_callback() {
         )
         .await;
         let kind = store
-            .find_mapping_kind("mock", "oc_1")
+            .find_mapping_kind("mock", "oc_cfgw")
             .await
             .unwrap()
             .map(|(_, k)| k);
@@ -7098,7 +7105,8 @@ async fn watch_off_without_watch_is_noop() {
 
 /// The tee itself: mirrored messages land in the observer session
 /// (created lazily on first mirror), with no per-message mapping writes
-/// and no duplicate session.
+/// and no duplicate session. （攒批窗口走 `mirror_enqueue` 测试接缝：
+/// 全量并行压测时，3s 真实窗口 + flush 持久化会超出轮询期限。）
 #[tokio::test]
 async fn watch_mirror_integration() {
     let (_pool, store) = create_test_pool().await;
@@ -7150,7 +7158,9 @@ async fn watch_mirror_integration() {
     // No mapping row: the tee must NOT create one — a missing row means
     // watch is off (or gc already ended it); mirroring would resurrect
     // it (or steer into a normal session, answering publicly).
-    crate::channels::hub_watch::mirror_message("mock", &store, &kernel, &msg("零", "om_0")).await;
+    let w = std::time::Duration::from_millis(200);
+    crate::channels::hub::watch::mirror_enqueue("mock", &store, &kernel, &msg("零", "om_0"), w)
+        .await;
     assert_eq!(
         store.find_mapping("mock", "oc_1").await.unwrap(),
         None,
@@ -7161,7 +7171,7 @@ async fn watch_mirror_integration() {
     crate::channels::hub::watch::set_channel_watch_by_name(&store, &kernel, "mock", "oc_1", true)
         .await
         .unwrap();
-    crate::channels::hub_watch::mirror_message("mock", &store, &kernel, &msg("第一条", "om_1"))
+    crate::channels::hub::watch::mirror_enqueue("mock", &store, &kernel, &msg("第一条", "om_1"), w)
         .await;
     let sid = store
         .find_mapping("mock", "oc_1")
@@ -7176,7 +7186,7 @@ async fn watch_mirror_integration() {
     );
 
     // Second mirror: same session, both messages present.
-    crate::channels::hub_watch::mirror_message("mock", &store, &kernel, &msg("第二条", "om_2"))
+    crate::channels::hub::watch::mirror_enqueue("mock", &store, &kernel, &msg("第二条", "om_2"), w)
         .await;
     assert_eq!(
         store.find_mapping("mock", "oc_1").await.unwrap(),
@@ -7202,8 +7212,14 @@ async fn watch_mirror_integration() {
     crate::channels::hub::watch::set_channel_watch_by_name(&store, &kernel, "mock", "oc_1", false)
         .await
         .unwrap();
-    crate::channels::hub_watch::mirror_message("mock", &store, &kernel, &msg("off 后", "om_2b"))
-        .await;
+    crate::channels::hub::watch::mirror_enqueue(
+        "mock",
+        &store,
+        &kernel,
+        &msg("off 后", "om_2b"),
+        w,
+    )
+    .await;
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     let blob = format!("{:?}", kernel.list_messages(&sid).await.unwrap_or_default());
     assert!(
@@ -7225,14 +7241,330 @@ async fn watch_mirror_integration() {
         .save_mapping("mock", "oc_1", &sid, "oc_1", None, MappingKind::Watch)
         .await
         .unwrap();
-    crate::channels::hub_watch::mirror_message("mock", &store, &kernel, &msg("第三条", "om_3"))
+    crate::channels::hub::watch::mirror_enqueue("mock", &store, &kernel, &msg("第三条", "om_3"), w)
         .await;
-    let new_sid = store
-        .find_mapping("mock", "oc_1")
+    // 攒批时代：heal 发生在窗口 flush（路由锁内 get-or-create），
+    // mirror_message 返回时只完成入队——轮询等 mapping 换锚。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let new_sid = loop {
+        let current = store.find_mapping("mock", "oc_1").await.unwrap();
+        if let Some(candidate) = current {
+            if candidate != sid {
+                break candidate;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "self-heal never recreated the session"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    };
+    assert_ne!(new_sid, sid, "a fresh session replaces the dead one");
+}
+
+/// 黑洞模型 kernel（与 `watch_mirror_integration` 同款）：run 挂在模型
+/// 调用上，被 steer 的 user 消息照常消费落盘。各用例以不同 chat id
+/// 隔离全局 pending 注册表（同进程并行测试）。
+async fn watch_batch_harness() -> (Arc<dyn ChannelStore>, Arc<Kernel>, tempfile::TempDir) {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((s, _)) = listener.accept().await {
+            held.push(s);
+        }
+    });
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        models: vec![crate::provider::ModelConfig {
+            name: "blackhole".into(),
+            endpoint: format!("http://{addr}"),
+            ..Default::default()
+        }],
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+    kernel.start();
+    (store, kernel, tmp)
+}
+
+/// watch 攒批测试的消息构造。
+fn batch_msg(chat: &str, text: &str, mid: &str) -> ChannelMessage {
+    ChannelMessage {
+        external_chat_id: chat.to_string(),
+        external_user_id: "ou_1".to_string(),
+        external_message_id: Some(mid.to_string()),
+        is_mention: false,
+        raw_text: Some(text.to_string()),
+        content: vec![ContentBlock::Text {
+            text: format!(
+                "[ts][from_user_id: ou_1][chat_id: {chat}][msg_id: {mid}][platform: feishu]\n{text}"
+            ),
+        }],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: true,
+        create_time: Some(1000),
+        doc_comment: None,
+    }
+}
+
+/// 攒批：窗口内多条镜像合并为一次 steer——单条 user 消息按到达序含
+/// 全部内容。窗口参数走 `mirror_enqueue` 测试接缝。
+#[tokio::test]
+async fn watch_mirror_batches_within_window() {
+    let (store, kernel, _tmp) = watch_batch_harness().await;
+    crate::channels::hub::watch::set_channel_watch_by_name(
+        &store, &kernel, "mock", "oc_batch", true,
+    )
+    .await
+    .unwrap();
+    let sid = store
+        .find_mapping("mock", "oc_batch")
         .await
         .unwrap()
-        .expect("self-heal must recreate the session");
-    assert_ne!(new_sid, sid, "a fresh session replaces the dead one");
+        .expect("watch on created the session");
+
+    let w = std::time::Duration::from_millis(200);
+    crate::channels::hub::watch::mirror_enqueue(
+        "mock",
+        &store,
+        &kernel,
+        &batch_msg("oc_batch", "批一", "om_b1"),
+        w,
+    )
+    .await;
+    crate::channels::hub::watch::mirror_enqueue(
+        "mock",
+        &store,
+        &kernel,
+        &batch_msg("oc_batch", "批二", "om_b2"),
+        w,
+    )
+    .await;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let msgs = kernel.list_messages(&sid).await.unwrap_or_default();
+        let hits: Vec<_> = msgs
+            .iter()
+            .filter(|m| format!("{m:?}").contains("批一"))
+            .collect();
+        if !hits.is_empty() {
+            assert_eq!(hits.len(), 1, "批一只随一次 steer 落盘");
+            let blob = format!("{:?}", hits[0]);
+            assert!(blob.contains("批二"), "同一批含第二条消息（合并 steer）");
+            let (p1, p2) = (blob.find("批一").unwrap(), blob.find("批二").unwrap());
+            assert!(p1 < p2, "批内保持到达序: {blob}");
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "batch never landed");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    kernel.stop().await;
+}
+
+/// 翻转排空：窗口未到时 /watch off，pending 批随翻转 drain 排空——
+/// off 期间的镜像绝不漏进新模式（与 mailbox drain 同规）。
+#[tokio::test]
+async fn watch_mirror_pending_drained_on_flip_off() {
+    let (store, kernel, _tmp) = watch_batch_harness().await;
+    crate::channels::hub::watch::set_channel_watch_by_name(&store, &kernel, "mock", "oc_off", true)
+        .await
+        .unwrap();
+    let sid = store
+        .find_mapping("mock", "oc_off")
+        .await
+        .unwrap()
+        .expect("watch on created the session");
+
+    crate::channels::hub::watch::mirror_enqueue(
+        "mock",
+        &store,
+        &kernel,
+        &batch_msg("oc_off", "off 前排", "om_c1"),
+        std::time::Duration::from_millis(300),
+    )
+    .await;
+    crate::channels::hub::watch::set_channel_watch_by_name(
+        &store, &kernel, "mock", "oc_off", false,
+    )
+    .await
+    .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+    let blob = format!("{:?}", kernel.list_messages(&sid).await.unwrap_or_default());
+    assert!(
+        !blob.contains("off 前排"),
+        "flip must drain the pending batch: {blob}"
+    );
+    kernel.stop().await;
+}
+
+/// 洪峰交接：提前 flush 后到达的消息搭仍在睡的窗口任务便车（或其
+/// 完成后经 `is_finished` 自愈的新任务）——无论如何准点落盘、
+/// exactly-once。
+#[tokio::test]
+async fn watch_mirror_post_cap_message_rides_sleeping_task() {
+    let (store, kernel, _tmp) = watch_batch_harness().await;
+    crate::channels::hub::watch::set_channel_watch_by_name(
+        &store, &kernel, "mock", "oc_hand", true,
+    )
+    .await
+    .unwrap();
+    let sid = store
+        .find_mapping("mock", "oc_hand")
+        .await
+        .unwrap()
+        .expect("watch on created the session");
+
+    let w = std::time::Duration::from_millis(300);
+    for i in 0..crate::channels::hub::watch::BATCH_CAP {
+        crate::channels::hub::watch::mirror_enqueue(
+            "mock",
+            &store,
+            &kernel,
+            &batch_msg("oc_hand", &format!("潮头{i:02}"), &format!("om_h{i:02}")),
+            w,
+        )
+        .await;
+    }
+    // 第 50 条已内联提前 flush；下一条只能搭窗口任务的便车。
+    crate::channels::hub::watch::mirror_enqueue(
+        "mock",
+        &store,
+        &kernel,
+        &batch_msg("oc_hand", "尾班", "om_h50"),
+        w,
+    )
+    .await;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let msgs = kernel.list_messages(&sid).await.unwrap_or_default();
+        let hits: Vec<_> = msgs
+            .iter()
+            .filter(|m| format!("{m:?}").contains("尾班"))
+            .collect();
+        if !hits.is_empty() {
+            assert_eq!(hits.len(), 1, "尾班 exactly-once");
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "尾班 never landed");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    kernel.stop().await;
+}
+
+/// flush 中到达的消息不搁浅：窗口任务 take 后自清句柄，flush 期间
+/// 的入队另起新任务——闲聊收尾的一条也必须到达观察者。
+#[tokio::test]
+async fn watch_mirror_enqueue_during_flush_is_not_stranded() {
+    let (store, kernel, _tmp) = watch_batch_harness().await;
+    crate::channels::hub::watch::set_channel_watch_by_name(&store, &kernel, "mock", "oc_mid", true)
+        .await
+        .unwrap();
+    let sid = store
+        .find_mapping("mock", "oc_mid")
+        .await
+        .unwrap()
+        .expect("watch on created the session");
+
+    // 测试攥住路由锁：W1 的 flush 必阻塞其上（彼时 take 已完成）。
+    let guard = crate::utils::g_lock::g_lock("channel_route:mock:oc_mid").await;
+    let w = std::time::Duration::from_millis(100);
+    crate::channels::hub::watch::mirror_enqueue(
+        "mock",
+        &store,
+        &kernel,
+        &batch_msg("oc_mid", "首条", "om_m1"),
+        w,
+    )
+    .await;
+    // 等 W1 醒来 take（批已取、flush 堵在锁上），再入队第二条——
+    // take 自清句柄后这里必须另起 W2，否则"尾条"搁浅到下一条消息。
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    crate::channels::hub::watch::mirror_enqueue(
+        "mock",
+        &store,
+        &kernel,
+        &batch_msg("oc_mid", "尾条", "om_m2"),
+        w,
+    )
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    drop(guard);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let msgs = kernel.list_messages(&sid).await.unwrap_or_default();
+        let h1 = msgs
+            .iter()
+            .filter(|m| format!("{m:?}").contains("首条"))
+            .count();
+        let h2 = msgs
+            .iter()
+            .filter(|m| format!("{m:?}").contains("尾条"))
+            .count();
+        if h1 >= 1 && h2 >= 1 {
+            assert_eq!((h1, h2), (1, 1), "both exactly-once");
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "enqueue during flush must not strand: {msgs:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    kernel.stop().await;
+}
+
+/// 洪峰提前 flush：pending 满 `BATCH_CAP` 不等窗口即 flush（观察者更
+/// 该早看，且批大小有界）。
+#[tokio::test]
+async fn watch_mirror_early_flush_at_batch_cap() {
+    let (store, kernel, _tmp) = watch_batch_harness().await;
+    crate::channels::hub::watch::set_channel_watch_by_name(
+        &store, &kernel, "mock", "oc_flood", true,
+    )
+    .await
+    .unwrap();
+    let sid = store
+        .find_mapping("mock", "oc_flood")
+        .await
+        .unwrap()
+        .expect("watch on created the session");
+
+    let long_window = std::time::Duration::from_secs(30);
+    for i in 0..crate::channels::hub::watch::BATCH_CAP {
+        crate::channels::hub::watch::mirror_enqueue(
+            "mock",
+            &store,
+            &kernel,
+            &batch_msg("oc_flood", &format!("flood{i:02}"), &format!("om_f{i:02}")),
+            long_window,
+        )
+        .await;
+    }
+    // 第 50 条触发内联提前 flush：窗口（30s）远没到，5s 内落盘即证。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let blob = format!("{:?}", kernel.list_messages(&sid).await.unwrap_or_default());
+        if blob.contains("flood49") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "early flush never fired"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    kernel.stop().await;
 }
 
 /// `Kernel::delete_session` cascades the channel routing rows with the
