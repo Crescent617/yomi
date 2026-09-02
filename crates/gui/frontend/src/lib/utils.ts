@@ -157,7 +157,10 @@ export function formatTokens(n: number): string {
  * instead of a bare deserialization failure.
  */
 export function parseTokenCount(s: string): number | null {
-  const m = s.trim().toLowerCase().match(/^(\d+(?:\.\d+)?)([km])?$/);
+  const m = s
+    .trim()
+    .toLowerCase()
+    .match(/^(\d+(?:\.\d+)?)([km])?$/);
   if (!m) return null;
   const n = Number.parseFloat(m[1]);
   if (!Number.isFinite(n)) return null;

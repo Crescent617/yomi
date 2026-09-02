@@ -132,8 +132,7 @@
             >{formatTokens(info.effective)} ctx</span
           >
           <span
-            class="rounded-sm px-1.5 py-0.5 text-[10px] {info.override !==
-            null
+            class="rounded-sm px-1.5 py-0.5 text-[10px] {info.override !== null
               ? 'bg-secondary text-foreground'
               : 'text-muted-foreground'}"
           >
