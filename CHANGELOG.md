@@ -15,6 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.11] - 2026-09-02
+
+### Added
+
+- 群聊 `/settings` 卡新增 Watch 开关：直接在卡片上开/关 watch 模式；开启时卡片显示说明行——watch 期间 Mention 与 Reply-in-thread 设置挂起（观察者自行决定何时发言），Model 与 Context window 设置仍生效；私聊卡片不显示该开关（与 `/watch` 命令的私聊拒绝一致）。
+
+### Changed
+
+- 在 `/settings` 卡上开关 watch 不再向群里发送提示消息，改为卡片原地刷新反馈；`/watch on|off` 命令的说明回复保留。
+- `/settings` 卡 Context window 行标签去掉冗余的 "now X" 后缀（当前生效值即下拉选中项）。
+
 ## [0.10.10] - 2026-09-01
 
 ### Added
