@@ -86,7 +86,9 @@ receipt），bot 对群里的讨论完全无感。想要的是 bot 作为群的*
   观察者。
 - 镜像内容：消息原始 content（adapter 头含 ts/from/chat/**msg_id**/thread/root）
   + 图片 image_key 文本引用（不下载，要用经 skill 自取）。
-- daemon 重启：mapping 行在 sqlite，状态自恢复。
+- daemon 重启：mapping 行在 sqlite，状态自恢复；攒批在内存（≤3s
+  窗口），重启丢未 flush 的一批——observer 缺这几条，可凭 lark
+  skill 翻群历史补。
 - bot 自己（或其它 bot）经 skill 发出的消息会作为事件回推——实测能识别
   自回显并保持沉默（防 loop 靠 agent 判断 + blocked_users）。
 
@@ -107,8 +109,14 @@ receipt），bot 对群里的讨论完全无感。想要的是 bot 作为群的*
   被抑制——影响仅限 2s 窗口（缓存过期后首个事件重读 routing），记为
   已知边界。
 - **`/watch on` 时若有进行中的对话 run**：flip 不 cancel（纯 kind 切
-  换），run 烧完但输出被 kind=watch 抑制；已发出的状态卡可能停在半
-  更新态——cosmetic 边界，flip 是低频管理操作。
+  换），run 烧完。输出是否沉默取决于它挂在哪条路由行：DM/非 rit
+  群的对话与 watch 共用群 mapping 行，输出随 kind=watch 被抑制
+  （已发出的状态卡可能停在半更新态）；**rit 群顶层 mention 的锚
+  session（mapping_key=msg_id，独立行，永远 normal）不受 watch 管
+  辖——烧完照常公开投递**（2026-09-02 e2e 实证：状态卡跨 flip 更
+  新到完成）。fail-open 多说一句、窗口=run 剩余时长；on 期间新
+  mention 在入口已被 gate 静默镜像，不会新增对话 run——暴露面收
+  敛。flip 是低频管理操作，接受。
 - **watch 状态可被试探**：配置 allowed_users 的群里，陌生人 @bot 普通
   消息在 watch-off 时吃 🙏、watch-on 时静默——反应差异泄露该群是否被
   watch。影响低，接受。
