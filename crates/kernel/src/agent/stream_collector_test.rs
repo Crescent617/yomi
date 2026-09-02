@@ -156,3 +156,36 @@ fn empty_first_delta_head_filled_by_later_deltas() {
         .expect("summary after crossing threshold");
     assert!(summary.contains(r#"head: "{\"cmd\":\"ls\"}"#));
 }
+
+#[test]
+fn metadata_alone_is_not_persistable_payload() {
+    // The 03:57 incident shape: model hiccups an empty completion — no
+    // content, no tool calls, only usage + response id + a weird finish
+    // reason. This must never become a persisted assistant message.
+    let result = StreamCollectionResult {
+        token_usage: Some(crate::provider::TokenUsage::new(500, 1, None)),
+        response_id: Some("chatcmpl-poison".into()),
+        finish_reason: Some(FinishReason::Unknown),
+        ..StreamCollectionResult::default()
+    };
+    assert!(!result.has_persistable_payload());
+}
+
+#[test]
+fn content_or_tool_calls_are_persistable_payload() {
+    let text_only = StreamCollectionResult {
+        content_blocks: vec![ContentBlock::Text { text: "hi".into() }],
+        ..StreamCollectionResult::default()
+    };
+    assert!(text_only.has_persistable_payload());
+
+    let calls_only = StreamCollectionResult {
+        tool_calls: vec![ToolCall {
+            id: "call_1".into(),
+            name: "bash".into(),
+            arguments: serde_json::json!({}),
+        }],
+        ..StreamCollectionResult::default()
+    };
+    assert!(calls_only.has_persistable_payload());
+}

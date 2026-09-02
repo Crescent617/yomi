@@ -1201,3 +1201,157 @@ mod rewind_tests {
             .expect_err("err result");
     }
 }
+
+/// 空 completion 毒化回归：模型抽风返回零内容（只有 usage + 无法映射的
+/// finish_reason）时，回合以 Failed 干净收场，且**不落盘**空 assistant
+/// 消息——否则它随每次后续请求重放，被严格网关以 400 "assistant must not
+/// be empty" 拒绝，session 被永久毒化。
+#[tokio::test]
+async fn empty_completion_is_not_persisted_and_fails_turn_cleanly() {
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs};
+    use crate::provider::ModelConfig;
+    use crate::types::{Role, SessionId};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // Stub model endpoint: read the full request, then answer with an empty
+    // completion — no content deltas, only usage and an unmappable
+    // finish_reason (=> FinishReason::Unknown).
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                let header_end = loop {
+                    let n = sock.read(&mut chunk).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
+                    {
+                        break pos;
+                    }
+                };
+                let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
+                let content_length: usize = headers
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .and_then(|v| v.trim().parse().ok())
+                    })
+                    .unwrap_or(0);
+                while buf.len() - header_end < content_length {
+                    let n = sock.read(&mut chunk).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                }
+                let body = concat!(
+                    "data: {\"id\":\"chatcmpl-poison\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n",
+                    "data: {\"id\":\"chatcmpl-poison\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"mystery_hiccup\"}],\"usage\":{\"prompt_tokens\":500,\"completion_tokens\":1,\"total_tokens\":501}}\n\n",
+                    "data: [DONE]\n\n",
+                );
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+            });
+        }
+    });
+
+    let model_config = ModelConfig {
+        name: "test".to_string(),
+        model_id: "stub-model".to_string(),
+        endpoint: format!("http://{addr}"),
+        api_key: "stub-key".to_string(),
+        context_window: 128_000,
+        ..ModelConfig::default()
+    };
+    let mut models = BTreeMap::new();
+    models.insert("test".to_string(), model_config);
+    let event_bus = crate::comms::EventBus::new();
+    let mut shared = AgentShared::new(
+        Arc::new(models),
+        "test".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+        None,
+    );
+    shared.event_bus = Some(event_bus.clone());
+    let shared = Arc::new(shared);
+
+    let working_dir = tempfile::tempdir().unwrap();
+    let session_id = SessionId::new();
+    let args = AgentSpawnArgs {
+        base_prompt: "test".to_string(),
+        skills: Vec::new(),
+        history: Vec::new(),
+        session_id: session_id.to_string(),
+        parent_session_id: None,
+        max_iterations: 1,
+        working_dir: working_dir.path().to_path_buf(),
+        cancel_token: None,
+        tool_flags: crate::tools::ToolFlags::new(false),
+        file_state_store: None,
+        tool_blocklist: Vec::new(),
+        max_tool_output_length: 1024,
+        mailbox: Arc::new(crate::comms::Mailbox::new()),
+        input_bus: None,
+        ext_tools: Vec::new(),
+    };
+    let mut subscriber = event_bus.subscribe(session_id.clone());
+    let mut agent = Agent::new(&shared, args).await;
+
+    let result = agent.handle_streaming_with_retry().await;
+    assert!(
+        result.is_ok(),
+        "turn must fail gracefully, not with an error: {result:?}"
+    );
+
+    // The poison: nothing may be persisted for the empty completion.
+    assert!(
+        !agent
+            .message_buffer
+            .messages()
+            .iter()
+            .any(|m| m.role == Role::Assistant),
+        "empty completion must not persist an assistant message"
+    );
+
+    // ...but the turn must surface as Failed, not silently Completed.
+    let mut failed_error = None;
+    while let Ok(Some((_, envelope))) =
+        tokio::time::timeout(Duration::from_secs(2), subscriber.recv()).await
+    {
+        if let crate::event::Event::Agent(crate::event::AgentEvent::Lifecycle {
+            state:
+                crate::event::AgentStatus::Stopped {
+                    reason: crate::event::StopReason::Failed { error },
+                },
+        }) = &envelope.event
+        {
+            failed_error = Some(error.clone());
+            break;
+        }
+    }
+    let error = failed_error.expect("turn must end with a Failed lifecycle event");
+    assert!(
+        error.contains("inconsistent model stream completion"),
+        "error: {error}"
+    );
+}

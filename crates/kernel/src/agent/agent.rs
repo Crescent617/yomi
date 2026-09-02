@@ -916,13 +916,9 @@ impl Agent {
             .await?;
 
         let end_content = result.content_blocks.clone();
+        let has_tool_calls = !result.tool_calls.is_empty();
 
-        let has_assistant_result = !result.content_blocks.is_empty()
-            || !result.tool_calls.is_empty()
-            || result.token_usage.is_some()
-            || result.response_id.is_some()
-            || result.finish_reason.is_some();
-        if has_assistant_result {
+        if result.has_persistable_payload() {
             let mut msg = Message::with_blocks(Role::Assistant, result.content_blocks);
             msg.id = assistant_msg_id.clone();
             if !result.tool_calls.is_empty() {
@@ -951,7 +947,8 @@ impl Agent {
             content: end_content,
         }));
 
-        self.transition_after_streaming(result.finish_reason).await
+        self.transition_after_streaming(result.finish_reason, has_tool_calls)
+            .await
     }
 
     /// Collect all output from the stream until completion
@@ -1321,18 +1318,15 @@ impl Agent {
         }
     }
 
-    /// Transition to appropriate state after streaming completes
+    /// Transition to appropriate state after streaming completes.
+    /// `has_tool_calls` describes the completion just collected — never
+    /// sniff the buffer tail, which may be a stale earlier message when an
+    /// empty completion persisted nothing.
     async fn transition_after_streaming(
         &mut self,
         finish_reason: Option<crate::types::FinishReason>,
+        has_tool_calls: bool,
     ) -> Result<(), AgentError> {
-        let has_tool_calls = self
-            .message_buffer
-            .messages()
-            .last()
-            .and_then(|m| m.tool_calls.as_ref())
-            .is_some();
-
         let is_consistent = is_stream_completion_consistent(finish_reason, has_tool_calls);
 
         if !is_consistent {

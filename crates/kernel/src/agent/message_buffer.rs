@@ -102,6 +102,10 @@ impl MessageBuffer {
     /// Sanitize the message buffer by removing inconsistent tool call/response pairs.
     /// Removes assistant messages with `tool_calls` that don't have corresponding tool responses,
     /// and removes tool responses that are not immediately after their corresponding assistant.
+    /// Also removes empty assistant messages (no content, no tool calls) — poison
+    /// persisted by a model hiccup (empty completion); replaying them makes strict
+    /// gateways 400 every request. Dropping them here lets already-poisoned
+    /// sessions self-heal on the next turn.
     /// Time: O(n), Space: O(k) where k = number of pending tool calls
     pub fn sanitize(&mut self) {
         use crate::types::Role;
@@ -127,8 +131,12 @@ impl MessageBuffer {
                 continue;
             };
 
-            // Assistant without tool_calls: skip
+            // Assistant without tool_calls: keep it unless it carries no
+            // content at all — that shape is empty-completion poison.
             let Some(calls) = msg.tool_calls.as_ref() else {
+                if msg.content.is_empty() {
+                    to_remove.insert(i);
+                }
                 i += 1;
                 continue;
             };

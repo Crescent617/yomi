@@ -55,6 +55,18 @@ pub struct StreamCollectionResult {
     pub finish_reason: Option<FinishReason>,
 }
 
+impl StreamCollectionResult {
+    /// Whether this result carries payload worth persisting as an assistant
+    /// message. Only content blocks or tool calls make a message — metadata
+    /// alone (usage / response id / finish reason) must not: an empty
+    /// assistant message replayed to strict gateways fails every subsequent
+    /// request ("assistant must not be empty"), permanently poisoning the
+    /// session.
+    pub(crate) fn has_persistable_payload(&self) -> bool {
+        !self.content_blocks.is_empty() || !self.tool_calls.is_empty()
+    }
+}
+
 /// Internal state for stream collection
 #[derive(Default)]
 pub struct StreamCollectorState {
