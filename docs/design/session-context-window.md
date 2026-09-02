@@ -91,8 +91,9 @@ fork 整袋复制（settings 是一列，天然跟随 fork 的元数据复制）
 当前会话模型窗口的 **25% / 50% / 75% / 100%** + 伪选项
 `default (Nk)`（清除覆盖）。回调 `cfg_ctx` 走 `set_chat_context_window`
 （新，镜像 `set_chat_model` 扇出：写 chat session + 该 chat 现存全部
-thread session）。♻️ Reset all 一并清除。行 label 带当前生效值
-（`Context window (now 400k)`）。
+thread session）。♻️ Reset all 一并清除。行 label 即 `Context window`
+（生效值由选中项表达——档位/`custom (Nk)`/`default (Nk)` 与之恒等价，
+不再挂 `now` 后缀）。
 
 任意精确值走 GUI/TUI/CLI（卡片只做档位，不为卡片造输入框）。
 

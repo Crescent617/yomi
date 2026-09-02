@@ -127,7 +127,7 @@ pub(crate) const HELP_TEXT: &str = "\
 `/mention` — show the @-requirement here; `/mention on|off|reset` to override it
 `/threads` — show reply-in-thread mode for this chat; `/threads on|off|reset` to override it
 `/watch` — show watch mode for this chat; `/watch on|off` to route every message to a single agent session that decides when to reply (admin)
-`/settings` — settings panel card: mention / reply-in-thread / model overrides as dropdowns
+`/settings` — settings panel card: mention / reply-in-thread / model / context window / watch as dropdowns
 `/cron` — cron panel card: pause / resume / delete scheduled jobs (admin; **all** jobs, any chat)
 `/bind` — show this conversation's session id; `/bind <session_id>` to retarget it
 `/permits` — list pending doc-permission requests

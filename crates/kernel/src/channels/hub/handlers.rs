@@ -1147,13 +1147,7 @@ pub(crate) async fn handle_watch_command(
             true,
         )
         .await?;
-        Ok(Some(
-            "👁 Watch on — every non-command message here goes to this chat's session as its observer. \
-             It decides for itself when to speak (via skill) or stay silent; \
-             @-mentions no longer trigger conversation replies while watch is on. \
-             In groups commands always need an @: `@bot /watch off` to stop."
-                .to_string(),
-        ))
+        Ok(Some(crate::channels::hub::watch::flip_ack_text(true)))
     } else {
         // Flip back to `normal`, stop the in-flight run, and drain the
         // mailbox: messages already mirrored must not wake the session
@@ -1169,11 +1163,7 @@ pub(crate) async fn handle_watch_command(
         if status.session_id.is_none() {
             return Ok(Some("Watch is not on for this chat.".to_string()));
         }
-        Ok(Some(
-            "⏹ Watch off — the same session answers @-mentions here again, \
-             its watch-period memory intact. `@bot /watch on` to resume watching."
-                .to_string(),
-        ))
+        Ok(Some(crate::channels::hub::watch::flip_ack_text(false)))
     }
 }
 

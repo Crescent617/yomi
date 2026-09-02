@@ -1,9 +1,18 @@
 //! `/settings` — chat-scope 配置面板卡：mention / reply-in-thread /
-//! model 三行 `select_static`（on/off/default(x) 或模型 key 列表，
-//! auto 列宽自适应），底部 ♻️ Reset all / 🔄 Refresh。`cfg_*` 回调执行
-//! 后原地刷新（"点击即切换"的实质：执行 → 重读状态 → update_card）。
+//! model / context-window 四行覆盖型 `select_static`（on/off/default(x)、
+//! 模型 key 列表、25–100% 窗口档位；auto 列宽自适应）+ watch 两态行
+//! （on/off，无 default——watched set 即全部状态；仅群聊渲染，on 时附
+//! 一行 notation 说明 mention/rit 挂起中），底部 ♻️ Reset all（只清四个
+//! 覆盖，不动 watch 模式）/ 🔄 Refresh。`cfg_*` 回调执行后原地刷新
+//! （"点击即切换"的实质：执行 → 重读状态 → update_card）。
 //! 配置修改限 admin（与 `/mention` `/threads` 命令同档）；路由层
 //! user 门限对所有按钮生效。
+//!
+//! 群/私判定随卡往返：卡片无法从 `chat_id` 推回群聊/私聊，回调值一律带
+//! `dm` 标志供重渲染与 `cfg_watch` 拒绝私聊翻转（`/watch` 命令在私聊
+//! 同样拒绝——私聊开了 watch，连唯一的关闭入口都没了）。缺失按私聊处理
+//! （保守方向：旧卡最多少一行，绝不给私聊开出 watch）。标志可被伪造，
+//! 但 admin 本就有 RPC 直达路径——它是 UI 保护，不是安全边界。
 
 use std::sync::Arc;
 
@@ -11,11 +20,14 @@ use serde_json::json;
 use tracing::warn;
 
 use crate::kernel::Kernel;
+use crate::types::ContentBlock;
 use crate::types::Result as KernelResult;
 
 use crate::channels::hub_deliver::info_card_envelope;
 use crate::channels::hub_routing::read_mention_override;
-use crate::channels::{CardAction, ChannelConfig, ChannelMessage, ChannelStore, PlatformAdapter};
+use crate::channels::{
+    CardAction, ChannelConfig, ChannelMessage, ChannelStore, MappingKind, PlatformAdapter,
+};
 
 /// 面板管理的配置项的当前状态（chat scope；`None` = 跟随 channel
 /// default）。
@@ -31,6 +43,9 @@ struct SettingsState {
     ctx_override: Option<u32>,
     /// 解析到当前模型（覆盖或默认）的配置窗口，预设档位的基准。
     model_context_window: u32,
+    /// 当前 chat 的 watch 模式（mapping kind 直读，两态无 default）；
+    /// 是否渲染成行由卡片按 `is_group` 决定。
+    watch_on: bool,
 }
 
 async fn read_state(
@@ -68,6 +83,10 @@ async fn read_state(
             m.context_window
         });
     let models = models_info.into_iter().map(|m| m.name).collect();
+    let watch_on = matches!(
+        store.find_mapping_kind(channel_name, chat_id).await?,
+        Some((_, MappingKind::Watch))
+    );
     Ok(SettingsState {
         mention_override,
         rit_override,
@@ -78,6 +97,7 @@ async fn read_state(
         models,
         ctx_override,
         model_context_window,
+        watch_on,
     })
 }
 
@@ -139,7 +159,7 @@ fn select_row(
     })
 }
 
-fn settings_card(chat_id: &str, state: &SettingsState) -> String {
+fn settings_card(chat_id: &str, is_group: bool, state: &SettingsState) -> String {
     let tri_options = |default_val: bool| {
         vec![
             "on".to_string(),
@@ -158,14 +178,14 @@ fn settings_card(chat_id: &str, state: &SettingsState) -> String {
             "Mention required",
             &tri_options(state.default_mention),
             tri_initial(state.mention_override),
-            json!({ "action": "cfg_set", "key": "mention", "scope": chat_id }),
+            json!({ "action": "cfg_set", "key": "mention", "scope": chat_id, "dm": !is_group }),
         ),
         select_row(
             "cfg_threads",
             "Reply in thread",
             &tri_options(state.default_rit),
             tri_initial(state.rit_override),
-            json!({ "action": "cfg_set", "key": "threads", "scope": chat_id }),
+            json!({ "action": "cfg_set", "key": "threads", "scope": chat_id, "dm": !is_group }),
         ),
     ];
     // Model row: every configured key + the reset pseudo-option.
@@ -184,7 +204,7 @@ fn settings_card(chat_id: &str, state: &SettingsState) -> String {
         "Model",
         &model_options,
         model_initial,
-        json!({ "action": "cfg_model", "scope": chat_id }),
+        json!({ "action": "cfg_model", "scope": chat_id, "dm": !is_group }),
     ));
     // Context window row: presets keyed to the resolved model's
     // configured window — 25/50/75/100% + the reset pseudo-option.
@@ -230,16 +250,35 @@ fn settings_card(chat_id: &str, state: &SettingsState) -> String {
     }
     elements.push(select_row(
         "cfg_ctx",
-        &format!(
-            "Context window (now {})",
-            fmt_k(u64::from(
-                state.ctx_override.unwrap_or(state.model_context_window)
-            ))
-        ),
+        "Context window",
         &ctx_labels,
         ctx_initial,
-        json!({ "action": "cfg_ctx", "scope": chat_id }),
+        json!({ "action": "cfg_ctx", "scope": chat_id, "dm": !is_group }),
     ));
+    // Watch row: two-state, no `default` pseudo-option — the watched set
+    // is the whole state (see `/watch`). Groups only: the command
+    // refuses DMs, so the card must not open a flip there either (in a
+    // DM the off switch would vanish with it). While on, a notation line
+    // names the rows watch suspends: mention/rit gate conversation
+    // replies, which watch replaces with the observer's own voice
+    // (model/ctx stay live — the observer is a real session).
+    if is_group {
+        elements.push(select_row(
+            "cfg_watch",
+            "Watch",
+            &["on".to_string(), "off".to_string()],
+            // off → index 1, on → index 0 (options are ["on", "off"]).
+            usize::from(!state.watch_on),
+            json!({ "action": "cfg_watch", "scope": chat_id, "dm": false }),
+        ));
+        if state.watch_on {
+            elements.push(json!({
+                "tag": "markdown",
+                "text_size": "notation",
+                "content": "👁 Watching — non-command messages are mirrored to the observer session; **Mention required** and **Reply in thread** don't apply until watch is off.",
+            }));
+        }
+    }
     // Footer: global actions, mailbox-style small bordered buttons.
     elements.push(json!({
         "tag": "column_set",
@@ -251,7 +290,7 @@ fn settings_card(chat_id: &str, state: &SettingsState) -> String {
                     "text": { "tag": "plain_text", "content": "♻️ Reset all" },
                     "type": "default",
                     "size": "small",
-                    "behaviors": [{ "type": "callback", "value": { "action": "cfg_reset_all", "scope": chat_id } }],
+                    "behaviors": [{ "type": "callback", "value": { "action": "cfg_reset_all", "scope": chat_id, "dm": !is_group } }],
                 }],
             },
             {
@@ -261,7 +300,7 @@ fn settings_card(chat_id: &str, state: &SettingsState) -> String {
                     "text": { "tag": "plain_text", "content": "🔄 Refresh" },
                     "type": "default",
                     "size": "small",
-                    "behaviors": [{ "type": "callback", "value": { "action": "cfg_refresh", "scope": chat_id } }],
+                    "behaviors": [{ "type": "callback", "value": { "action": "cfg_refresh", "scope": chat_id, "dm": !is_group } }],
                 }],
             },
         ],
@@ -284,7 +323,7 @@ pub(crate) async fn handle_settings_command(
     adapter
         .send_card(
             chat_id,
-            &settings_card(chat_id, &state),
+            &settings_card(chat_id, msg.is_group, &state),
             reply_msg_id.as_deref(),
         )
         .await?;
@@ -322,6 +361,8 @@ async fn handle_card_action_inner(
         warn!(value = %value, "settings card action missing scope");
         return Ok(());
     }
+    // 群/私判定随卡往返（见模块 doc）：缺失按私聊处理（保守方向）。
+    let dm = value["dm"].as_bool().unwrap_or(true);
     if let Some(deny) = crate::channels::approval::check_admin(config, &action.operator_open_id) {
         crate::channels::approval::send_action_denial(adapter, action, deny).await;
         return Ok(());
@@ -408,6 +449,54 @@ async fn handle_card_action_inner(
                 CtxOp::Noop => {}
             }
         }
+        Some("cfg_watch") => {
+            // 私聊卡（或 dm 标志缺失的旧卡）拒绝翻转——与 `/watch`
+            // 命令的私聊拒绝同规。
+            if dm {
+                warn!("cfg_watch ignored: DM scope");
+                return Ok(());
+            }
+            let opt = value["option"].as_str().unwrap_or_default();
+            match map_cfg_watch(opt) {
+                Some(on) => {
+                    // 陈旧卡可能重发当前态：真翻转才执行、才留 ack。
+                    // （残余竞态，接受：并发翻转若恰好插进预读与
+                    // set_channel_watch_by_name 的路由锁之间，set 幂等
+                    // 收敛、状态永不分叉，但 ack 可能重复一条——让
+                    // setter 上报 flipped 得动 wire 可见的
+                    // ChannelWatchStatus，为装饰性重复不值。）
+                    let current = matches!(
+                        store.find_mapping_kind(channel_name, chat_id).await?,
+                        Some((_, MappingKind::Watch))
+                    );
+                    if current != on {
+                        crate::channels::hub::watch::set_channel_watch_by_name(
+                            store,
+                            kernel,
+                            channel_name,
+                            chat_id,
+                            on,
+                        )
+                        .await?;
+                        // 翻转决定 bot 在本群沉默与否——必须留群里可见
+                        // 的痕迹（与 `/watch` 命令同一文案）。
+                        adapter
+                            .send_message(
+                                chat_id,
+                                vec![ContentBlock::Text {
+                                    text: crate::channels::hub::watch::flip_ack_text(on),
+                                }],
+                                None,
+                            )
+                            .await?;
+                    }
+                }
+                None => {
+                    warn!(opt, "unknown cfg_watch option, watch untouched");
+                    return Ok(());
+                }
+            }
+        }
         Some("cfg_reset_all") => {
             store.clear_mention_override(channel_name, chat_id).await?;
             store.clear_rit_override(channel_name, chat_id).await?;
@@ -437,7 +526,7 @@ async fn handle_card_action_inner(
     if let Some(message_id) = &action.message_id {
         let state = read_state(channel_name, config, kernel, store, chat_id).await?;
         adapter
-            .update_card(message_id, &settings_card(chat_id, &state))
+            .update_card(message_id, &settings_card(chat_id, !dm, &state))
             .await?;
     }
     Ok(())
@@ -472,6 +561,17 @@ fn map_cfg_model<'a>(models: &[String], opt: &'a str) -> Option<Option<&'a str>>
         Some(Some(opt))
     } else {
         None
+    }
+}
+
+/// `cfg_watch` mapping: `on`/`off` flip, anything else is a no-op — never
+/// an accidental mode flip. Two-state by design: watch has no channel
+/// default, so there is no reset pseudo-option to map.
+fn map_cfg_watch(opt: &str) -> Option<bool> {
+    match opt {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
     }
 }
 
@@ -525,6 +625,7 @@ mod tests {
             models: vec!["k3-hs".to_string(), "opus-4-6".to_string()],
             ctx_override: None,
             model_context_window: 800_000,
+            watch_on: false,
         }
     }
 
@@ -564,11 +665,34 @@ mod tests {
         out
     }
 
+    /// Collect every button in the card: (text, callback value) —
+    /// parsed-field assertions, never substring matching on serialized
+    /// key order (`serde_json` flips to insertion order if any dep ever
+    /// enables `preserve_order`).
+    fn buttons_of(v: &serde_json::Value, out: &mut Vec<(String, serde_json::Value)>) {
+        if v["tag"] == "button" {
+            out.push((
+                v["text"]["content"].as_str().unwrap().to_string(),
+                v["behaviors"][0]["value"].clone(),
+            ));
+        }
+        if let Some(arr) = v.as_array() {
+            for e in arr {
+                buttons_of(e, out);
+            }
+        }
+        if let Some(obj) = v.as_object() {
+            for e in obj.values() {
+                buttons_of(e, out);
+            }
+        }
+    }
+
     #[test]
     fn card_renders_tri_state_and_model_selection() {
-        let card = settings_card("oc_1", &state(Some(false), None, Some("opus-4-6")));
+        let card = settings_card("oc_1", true, &state(Some(false), None, Some("opus-4-6")));
         let s = selects_of(&card);
-        assert_eq!(s.len(), 4, "{card}");
+        assert_eq!(s.len(), 5, "{card}");
 
         // Mention overridden off → selects "off".
         assert_eq!(s[0].0, "off");
@@ -604,6 +728,20 @@ mod tests {
         );
         assert_eq!(s[3].2, "default (800k)");
         assert_eq!(s[3].3["action"], "cfg_ctx");
+
+        // Label carries no baked "now" — the selection (preset / custom /
+        // default pseudo) already states the effective value, and the
+        // card is stale-tolerant by contract (🔄 Refresh).
+        assert!(card.contains("Context window"), "{card}");
+        assert!(!card.contains("(now"), "{card}");
+
+        // Watch row: two-state, no default pseudo-option, dm flag rides.
+        assert_eq!(s[4].0, "off");
+        assert_eq!(s[4].1, ["on", "off"]);
+        assert_eq!(s[4].2, "off");
+        assert_eq!(s[4].3["action"], "cfg_watch");
+        assert_eq!(s[4].3["dm"], false);
+        assert!(!card.contains("👁 Watching"), "{card}");
     }
 
     #[test]
@@ -611,7 +749,7 @@ mod tests {
         // Override exactly on a preset → that preset is the selection.
         let mut st = state(None, None, None);
         st.ctx_override = Some(400_000);
-        let card = settings_card("oc_1", &st);
+        let card = settings_card("oc_1", true, &st);
         let s = selects_of(&card);
         assert_eq!(s[3].0, "400k (50%)");
         assert_eq!(s[3].2, "400k (50%)");
@@ -619,11 +757,43 @@ mod tests {
 
         // Off-preset override (set via TUI/GUI/CLI) → honest custom option.
         st.ctx_override = Some(320_000);
-        let card = settings_card("oc_1", &st);
+        let card = settings_card("oc_1", true, &st);
         let s = selects_of(&card);
         assert_eq!(s[3].0, "custom (320k)");
         assert_eq!(s[3].1[0], "custom (320k)");
         assert_eq!(s[3].2, "custom (320k)");
+    }
+
+    #[test]
+    fn card_watch_row_marks_on_and_explains_suspension() {
+        let mut st = state(None, None, None);
+        st.watch_on = true;
+        let card = settings_card("oc_1", true, &st);
+        let s = selects_of(&card);
+        assert_eq!(s[4].0, "on");
+        assert_eq!(s[4].2, "on");
+        // The mutex note appears only while watching, naming the two
+        // rows watch suspends by their label.
+        assert!(card.contains("👁 Watching"), "{card}");
+        assert!(card.contains("**Mention required**"), "{card}");
+        assert!(card.contains("**Reply in thread**"), "{card}");
+    }
+
+    #[test]
+    fn dm_card_hides_watch_row_and_flags_callbacks() {
+        // Even a watched chat (reachable via RPC) renders no watch row
+        // in DM scope — the off switch must not be offered there.
+        let mut st = state(None, None, None);
+        st.watch_on = true;
+        let card = settings_card("oc_1", false, &st);
+        let s = selects_of(&card);
+        assert_eq!(s.len(), 4, "{card}");
+        assert!(!card.contains("cfg_watch"), "{card}");
+        assert!(!card.contains("👁 Watching"), "{card}");
+        assert!(
+            s.iter().all(|sel| sel.3["dm"] == true),
+            "every callback value carries dm:true for re-render, {card}"
+        );
     }
 
     #[test]
@@ -643,7 +813,7 @@ mod tests {
 
     #[test]
     fn card_defaults_point_at_reset_pseudo_option() {
-        let card = settings_card("oc_1", &state(None, None, None));
+        let card = settings_card("oc_1", true, &state(None, None, None));
         let s = selects_of(&card);
         assert_eq!(s[0].0, "default (on)");
         assert_eq!(s[1].0, "default (off)");
@@ -654,19 +824,22 @@ mod tests {
 
     #[test]
     fn footer_buttons_carry_scope_and_small_size() {
-        let card = settings_card("oc_1", &state(None, None, None));
+        let card = settings_card("oc_1", true, &state(None, None, None));
         let v: serde_json::Value = serde_json::from_str(&card).unwrap();
+        let mut buttons = Vec::new();
+        buttons_of(&v, &mut buttons);
+        assert_eq!(buttons.len(), 2, "{card}");
+        assert_eq!(buttons[0].0, "♻️ Reset all");
+        assert_eq!(
+            buttons[0].1,
+            serde_json::json!({"action": "cfg_reset_all", "scope": "oc_1", "dm": false})
+        );
+        assert_eq!(buttons[1].0, "🔄 Refresh");
+        assert_eq!(
+            buttons[1].1,
+            serde_json::json!({"action": "cfg_refresh", "scope": "oc_1", "dm": false})
+        );
         let json = v.to_string();
-        assert!(
-            json.contains("\"action\":\"cfg_reset_all\",\"scope\":\"oc_1\""),
-            "{json}"
-        );
-        assert!(
-            json.contains("\"action\":\"cfg_refresh\",\"scope\":\"oc_1\""),
-            "{json}"
-        );
-        assert!(json.contains("♻️ Reset all"), "{json}");
-        assert!(json.contains("🔄 Refresh"), "{json}");
         assert_eq!(json.matches("\"size\":\"small\"").count(), 2, "{json}");
     }
 
@@ -693,5 +866,15 @@ mod tests {
         );
         assert_eq!(map_cfg_model(&models, "no-such-model"), None);
         assert_eq!(map_cfg_model(&models, ""), None);
+    }
+
+    #[test]
+    fn cfg_watch_mapping_only_flips_on_exact_on_off() {
+        assert_eq!(map_cfg_watch("on"), Some(true));
+        assert_eq!(map_cfg_watch("off"), Some(false));
+        // 任何其他值（包括伪造的 default 伪选项）一律 no-op，绝不误翻转。
+        assert_eq!(map_cfg_watch(""), None);
+        assert_eq!(map_cfg_watch("default (off)"), None);
+        assert_eq!(map_cfg_watch("ON"), None);
     }
 }

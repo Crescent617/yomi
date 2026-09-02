@@ -113,6 +113,25 @@ mod tests;
 
 // ── Query / switch (shared by the `/watch` command and the RPC) ─────────
 
+/// The chat-visible ack posted after a watch flip, shared by the
+/// `/watch` command arm and the settings-card `cfg_watch` callback —
+/// single-sourced so both entries say the same thing. The flip decides
+/// whether the bot speaks in this chat at all, so it must leave a
+/// visible trace no matter where it was triggered from.
+pub(crate) fn flip_ack_text(on: bool) -> String {
+    if on {
+        "👁 Watch on — every non-command message here goes to this chat's session as its observer. \
+         It decides for itself when to speak (via skill) or stay silent; \
+         @-mentions no longer trigger conversation replies while watch is on. \
+         In groups commands always need an @: `@bot /watch off` to stop."
+            .to_string()
+    } else {
+        "⏹ Watch off — the same session answers @-mentions here again, \
+         its watch-period memory intact. `@bot /watch on` to resume watching."
+            .to_string()
+    }
+}
+
 /// Query a chat's watch mode by channel name.
 pub(crate) async fn get_channel_watch_by_name(
     store: &Arc<dyn ChannelStore>,

@@ -383,6 +383,220 @@ async fn settings_card_cfg_ctx_callback_and_reset_all() {
     kernel.stop().await;
 }
 
+/// settings 卡 `cfg_watch` 回调链路：下拉值 → `handle_card_action` →
+/// `set_channel_watch_by_name`（与 `/watch` 命令同核）；仅真实翻转发群里
+/// 可见 ack（命令同文案），陈旧卡重发当前态不重复 ack；Reset all 不动
+/// watch；非 admin / 畸形值 / DM 卡（dm:true 与缺失同样）一律 no-op。
+#[tokio::test]
+async fn settings_card_cfg_watch_callback() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram {
+            token: "fake".into(),
+        },
+        admin_users: vec!["admin-1".to_string()],
+        ..Default::default()
+    };
+
+    let chat_sid = kernel
+        .create_session(crate::kernel::CreateSessionInput {
+            project_id: None,
+            working_dir: None,
+            auto_approve_level: None,
+            tool_blocklist: vec![],
+            model_key: None,
+            context_window: None,
+        })
+        .await
+        .unwrap();
+    store
+        .save_mapping("mock", "oc_1", &chat_sid, "oc_1", None, MappingKind::Normal)
+        .await
+        .unwrap();
+
+    let action = |value: serde_json::Value| crate::channels::CardAction {
+        operator_open_id: "admin-1".to_string(),
+        chat_id: Some("oc_1".to_string()),
+        message_id: None,
+        value,
+    };
+
+    // on → kind 翻转 + 一条群里可见 ack（与 `/watch` 命令同文案）。
+    crate::channels::cards::settings::handle_card_action(
+        "mock",
+        &config,
+        &kernel,
+        &store,
+        &adapter,
+        action(
+            serde_json::json!({"action": "cfg_watch", "scope": "oc_1", "dm": false, "option": "on"}),
+        ),
+    )
+    .await;
+    let kind = store
+        .find_mapping_kind("mock", "oc_1")
+        .await
+        .unwrap()
+        .map(|(_, k)| k);
+    assert_eq!(
+        kind,
+        Some(MappingKind::Watch),
+        "cfg_watch on flips the kind"
+    );
+    {
+        let out = mock.outgoing.lock().await;
+        assert_eq!(out.len(), 1, "exactly one ack message");
+        let ContentBlock::Text { text } = &out[0].1[0] else {
+            panic!("ack is a text block");
+        };
+        assert!(text.contains("Watch on"), "{text}");
+    }
+
+    // 幂等 on（陈旧卡重发当前态）→ 不重复翻转、不重复 ack。
+    crate::channels::cards::settings::handle_card_action(
+        "mock",
+        &config,
+        &kernel,
+        &store,
+        &adapter,
+        action(
+            serde_json::json!({"action": "cfg_watch", "scope": "oc_1", "dm": false, "option": "on"}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        mock.outgoing.lock().await.len(),
+        1,
+        "idempotent on sends no second ack"
+    );
+
+    // Reset all 只清四个覆盖，不动 watch 模式。
+    crate::channels::cards::settings::handle_card_action(
+        "mock",
+        &config,
+        &kernel,
+        &store,
+        &adapter,
+        action(serde_json::json!({"action": "cfg_reset_all", "scope": "oc_1", "dm": false})),
+    )
+    .await;
+    let kind = store
+        .find_mapping_kind("mock", "oc_1")
+        .await
+        .unwrap()
+        .map(|(_, k)| k);
+    assert_eq!(
+        kind,
+        Some(MappingKind::Watch),
+        "reset-all leaves watch mode alone"
+    );
+
+    // off → kind 回 normal + 第二条 ack。
+    crate::channels::cards::settings::handle_card_action(
+        "mock",
+        &config,
+        &kernel,
+        &store,
+        &adapter,
+        action(
+            serde_json::json!({"action": "cfg_watch", "scope": "oc_1", "dm": false, "option": "off"}),
+        ),
+    )
+    .await;
+    let kind = store
+        .find_mapping_kind("mock", "oc_1")
+        .await
+        .unwrap()
+        .map(|(_, k)| k);
+    assert_eq!(kind, Some(MappingKind::Normal), "cfg_watch off flips back");
+    {
+        let out = mock.outgoing.lock().await;
+        assert_eq!(out.len(), 2, "flip off posts its own ack");
+        let ContentBlock::Text { text } = &out[1].1[0] else {
+            panic!("ack is a text block");
+        };
+        assert!(text.contains("Watch off"), "{text}");
+    }
+
+    // 畸形 option → no-op。
+    crate::channels::cards::settings::handle_card_action(
+        "mock",
+        &config,
+        &kernel,
+        &store,
+        &adapter,
+        action(
+            serde_json::json!({"action": "cfg_watch", "scope": "oc_1", "dm": false, "option": "maybe"}),
+        ),
+    )
+    .await;
+    let kind = store
+        .find_mapping_kind("mock", "oc_1")
+        .await
+        .unwrap()
+        .map(|(_, k)| k);
+    assert_eq!(kind, Some(MappingKind::Normal), "garbage option is a no-op");
+
+    // 非 admin → no-op。
+    crate::channels::cards::settings::handle_card_action(
+        "mock",
+        &config,
+        &kernel,
+        &store,
+        &adapter,
+        crate::channels::CardAction {
+            operator_open_id: "user-1".to_string(),
+            chat_id: Some("oc_1".to_string()),
+            message_id: None,
+            value: serde_json::json!({"action": "cfg_watch", "scope": "oc_1", "dm": false, "option": "on"}),
+        },
+    )
+    .await;
+    let kind = store
+        .find_mapping_kind("mock", "oc_1")
+        .await
+        .unwrap()
+        .map(|(_, k)| k);
+    assert_eq!(kind, Some(MappingKind::Normal), "non-admin is a no-op");
+
+    // DM 卡拒绝翻转：dm:true 与标志缺失（旧卡）同样。
+    for value in [
+        serde_json::json!({"action": "cfg_watch", "scope": "oc_1", "dm": true, "option": "on"}),
+        serde_json::json!({"action": "cfg_watch", "scope": "oc_1", "option": "on"}),
+    ] {
+        crate::channels::cards::settings::handle_card_action(
+            "mock",
+            &config,
+            &kernel,
+            &store,
+            &adapter,
+            action(value),
+        )
+        .await;
+        let kind = store
+            .find_mapping_kind("mock", "oc_1")
+            .await
+            .unwrap()
+            .map(|(_, k)| k);
+        assert_eq!(kind, Some(MappingKind::Normal), "DM-scope flip refused");
+    }
+
+    kernel.stop().await;
+}
+
 /// chat 级 model/ctx 扇出：个别 thread session 已删（陈旧 mapping，gc
 /// 中断窗口期的真实形态）不得中断整个扇出——存活者照常写入。
 #[tokio::test]
