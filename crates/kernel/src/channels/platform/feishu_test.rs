@@ -324,6 +324,12 @@ fn response_for(method: &str, path: &str) -> Vec<u8> {
             r#"{"code":0,"msg":"ok"}"#.into()
         }
         "DELETE" if p.contains("/reactions/") => r#"{"code":0,"msg":"ok"}"#.into(),
+        // Contact API: only ou_user resolves to a name; everyone else
+        // falls through to the 999 (no-permission deployments /
+        // strangers — both read as "no name").
+        "GET" if p == "/open-apis/contact/v3/users/ou_user" => {
+            r#"{"code":0,"msg":"ok","data":{"user":{"name":"测试用户"}}}"#.into()
+        }
         _ => r#"{"code":999,"msg":"unexpected request"}"#.into(),
     }
 }
@@ -1051,6 +1057,76 @@ async fn text_event_still_forwarded() {
 
     let msg = expect_message(rx.try_recv().expect("text message forwarded"));
     assert_eq!(msg.raw_text.as_deref(), Some("hello"));
+}
+
+#[tokio::test]
+async fn text_event_header_carries_display_name_and_caches() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+
+    adapter
+        .parse_event_json(&receive_event("text", &json!({ "text": "hello" })), &tx)
+        .await
+        .unwrap();
+    let msg = expect_message(rx.try_recv().expect("text message forwarded"));
+    let crate::types::ContentBlock::Text { text } = &msg.content[0] else {
+        panic!("expected text block");
+    };
+    assert!(
+        text.contains("[from: 测试用户 (ou_user)]"),
+        "named sender header: {text}"
+    );
+
+    // Same sender again: still named, contact API hit exactly once.
+    let mut again = receive_event("text", &json!({ "text": "again" }));
+    again["event"]["message"]["message_id"] = json!("om_2");
+    adapter.parse_event_json(&again, &tx).await.unwrap();
+    let msg = expect_message(rx.try_recv().expect("second message forwarded"));
+    let crate::types::ContentBlock::Text { text } = &msg.content[0] else {
+        panic!("expected text block");
+    };
+    assert!(text.contains("[from: 测试用户 (ou_user)]"), "{text}");
+    let contact_calls = stub
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, p, _)| m == "GET" && p.starts_with("/open-apis/contact/v3/users/"))
+        .count();
+    assert_eq!(contact_calls, 1, "display name cached after first fetch");
+}
+
+#[tokio::test]
+async fn text_event_header_falls_back_to_bare_id_and_negative_caches() {
+    // 查无名字（无 contact 权限/陌生人）→ 头保持裸 id，负结果同样
+    // 缓存（同一发送者 1h 内不再重复打 contact API）。
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+
+    let mut event = receive_event("text", &json!({ "text": "hi" }));
+    event["event"]["sender"]["sender_id"]["open_id"] = json!("ou_stranger");
+    adapter.parse_event_json(&event, &tx).await.unwrap();
+    let msg = expect_message(rx.try_recv().expect("stranger message forwarded"));
+    let crate::types::ContentBlock::Text { text } = &msg.content[0] else {
+        panic!("expected text block");
+    };
+    assert!(text.contains("[from_user_id: ou_stranger]"), "{text}");
+
+    let mut again = receive_event("text", &json!({ "text": "hi again" }));
+    again["event"]["sender"]["sender_id"]["open_id"] = json!("ou_stranger");
+    again["event"]["message"]["message_id"] = json!("om_2");
+    adapter.parse_event_json(&again, &tx).await.unwrap();
+    let _ = expect_message(rx.try_recv().expect("second message forwarded"));
+    let contact_calls = stub
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, p, _)| m == "GET" && p.starts_with("/open-apis/contact/v3/users/ou_stranger"))
+        .count();
+    assert_eq!(contact_calls, 1, "negative result cached too");
 }
 
 #[tokio::test]

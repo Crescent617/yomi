@@ -122,3 +122,37 @@ fn telegram_mention_leaves_foreign_id_as_is() {
     // feishu open_id 之类非数字 id 不重写（MarkdownV2 特殊字符会搞挂整条发送）
     assert_eq!(super::telegram_mention("ou_abc123"), "<@ou_abc123>");
 }
+
+#[test]
+fn tg_display_name_prefers_full_name_then_username() {
+    use teloxide_core::types::User;
+    let from = |v: serde_json::Value| serde_json::from_value::<User>(v).unwrap();
+
+    let named = from(serde_json::json!({
+        "id": 42, "is_bot": false, "first_name": "华儒", "last_name": "李",
+        "username": "crescent"
+    }));
+    assert_eq!(
+        super::tg_display_name(Some(&named)).as_deref(),
+        Some("华儒 李")
+    );
+
+    let first_only = from(serde_json::json!({
+        "id": 42, "is_bot": false, "first_name": "华儒"
+    }));
+    assert_eq!(
+        super::tg_display_name(Some(&first_only)).as_deref(),
+        Some("华儒")
+    );
+
+    // TG requires first_name but it can be empty → username fallback.
+    let username_only = from(serde_json::json!({
+        "id": 42, "is_bot": false, "first_name": "", "username": "crescent"
+    }));
+    assert_eq!(
+        super::tg_display_name(Some(&username_only)).as_deref(),
+        Some("crescent")
+    );
+
+    assert_eq!(super::tg_display_name(None), None);
+}

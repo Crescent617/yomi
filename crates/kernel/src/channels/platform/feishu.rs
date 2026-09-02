@@ -80,6 +80,10 @@ const DEDUP_CAP: NonZeroUsize = NonZeroUsize::new(4096).unwrap();
 /// are few and long-lived; a miss just costs one API re-fetch.
 const THREAD_ROOT_CAP: NonZeroUsize = DEDUP_CAP;
 
+/// Cap for the user display-name cache (`open_id` → name). Users are
+/// few and long-lived; a miss just costs one contact API re-fetch.
+const USER_NAME_CAP: NonZeroUsize = DEDUP_CAP;
+
 // ── Adapter ─────────────────────────────────────────────────────────
 
 pub struct FeishuAdapter {
@@ -93,6 +97,14 @@ pub struct FeishuAdapter {
     /// Thread id → root message id, filled by `thread_root_id`. Memory
     /// only: a cold cache after restart costs one refetch per thread.
     thread_roots: tokio::sync::Mutex<LruCache<String, String>>,
+    /// `open_id` → (`fetched_at`, display name), filled by `display_name`.
+    /// Positive entries never expire (names change rarely; a restart or
+    /// LRU eviction refreshes); negative ones (no contact permission,
+    /// bot sender, transient failure — the `fetch_user_name` shape
+    /// can't tell them apart) expire after an hour so a recovered API
+    /// self-heals. Memory only: a cold cache after restart costs one
+    /// contact call per user.
+    user_names: tokio::sync::Mutex<LruCache<String, (std::time::Instant, Option<String>)>>,
 }
 
 pub(crate) fn cached_token(cache: Option<&TokenCache>) -> Option<String> {
@@ -144,6 +156,7 @@ impl FeishuAdapter {
             bot_open_id: tokio::sync::Mutex::new(None),
             seen_messages: Mutex::new(LruCache::new(DEDUP_CAP)),
             thread_roots: tokio::sync::Mutex::new(LruCache::new(THREAD_ROOT_CAP)),
+            user_names: tokio::sync::Mutex::new(LruCache::new(USER_NAME_CAP)),
         }
     }
 
@@ -675,6 +688,30 @@ impl FeishuAdapter {
             }),
             replies,
         }))
+    }
+    /// Header display name: cached `fetch_user_name` (see `user_names`).
+    /// `None` keeps the bare `open_id` in the header — name resolution
+    /// must never block or lose a message.
+    pub(crate) async fn display_name(&self, open_id: &str) -> Option<String> {
+        /// Re-fetch interval for negative entries (see `user_names`).
+        const NEGATIVE_TTL: std::time::Duration = std::time::Duration::from_hours(1);
+        if open_id.is_empty() || open_id == "unknown" {
+            return None;
+        }
+        {
+            let mut cache = self.user_names.lock().await;
+            if let Some((fetched_at, name)) = cache.get(open_id) {
+                if name.is_some() || fetched_at.elapsed() < NEGATIVE_TTL {
+                    return name.clone();
+                }
+            }
+        }
+        let name = self.fetch_user_name(open_id).await;
+        self.user_names.lock().await.put(
+            open_id.to_string(),
+            (std::time::Instant::now(), name.clone()),
+        );
+        name
     }
 }
 

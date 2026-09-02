@@ -334,8 +334,12 @@ impl FeishuAdapter {
         let root_part = root_id
             .as_ref()
             .map_or(String::new(), |rid| format!("[root: {rid}]"));
+        let from_part = match self.display_name(user_id).await {
+            Some(name) => format!("[from: {name} ({user_id})]"),
+            None => format!("[from_user_id: {user_id}]"),
+        };
         let header = format!(
-            "[{ts}][from_user_id: {user_id}][chat_id: {chat_id}][msg_id: {msg_id}]{thread_part}{root_part}[platform: feishu]"
+            "[{ts}]{from_part}[chat_id: {chat_id}][msg_id: {msg_id}]{thread_part}{root_part}[platform: feishu]"
         );
         let formatted = if text.is_empty() {
             header

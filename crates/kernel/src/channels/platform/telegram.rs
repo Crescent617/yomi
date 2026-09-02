@@ -14,6 +14,20 @@ pub struct TelegramAdapter {
     bot_username: tokio::sync::OnceCell<String>,
 }
 
+/// Display name for a message header — Telegram carries it in the
+/// payload for free: "First Last", else the @username, else `None`
+/// (anonymous / channel posts) and the header keeps the bare id.
+fn tg_display_name(user: Option<&teloxide_core::types::User>) -> Option<String> {
+    let u = user?;
+    let full = format!("{} {}", u.first_name, u.last_name.as_deref().unwrap_or(""));
+    let full = full.trim();
+    if full.is_empty() {
+        u.username.clone()
+    } else {
+        Some(full.to_string())
+    }
+}
+
 impl TelegramAdapter {
     pub fn new(token: String) -> Self {
         let client = teloxide_core::net::default_reqwest_settings()
@@ -115,8 +129,12 @@ impl TelegramAdapter {
         }
         let ts = msg.date.format("%Y-%m-%d %H:%M:%S");
         let msg_id = msg.id.0;
+        let from_part = match tg_display_name(msg.from.as_ref()) {
+            Some(name) => format!("[from: {name} ({user_id})]"),
+            None => format!("[from_user_id: {user_id}]"),
+        };
         Some(format!(
-            "[{ts}][from_user_id: {user_id}][chat_id: {chat_id}][msg_id: {msg_id}][platform: telegram]\n{text}"
+            "[{ts}]{from_part}[chat_id: {chat_id}][msg_id: {msg_id}][platform: telegram]\n{text}"
         ))
     }
 
