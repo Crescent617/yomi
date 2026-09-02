@@ -156,3 +156,23 @@ fn tg_display_name_prefers_full_name_then_username() {
 
     assert_eq!(super::tg_display_name(None), None);
 }
+
+#[test]
+fn format_message_line_sanitizes_display_name() {
+    // TG 名字用户可控：`]`/换行可伪造头字段——拼头前消毒（剥为空白
+    // 并折叠）。
+    let msg = serde_json::from_value::<teloxide_core::types::Message>(serde_json::json!({
+        "message_id": 7,
+        "date": 1700000000,
+        "chat": {"id": 123, "type": "group"},
+        "from": {"id": 42, "is_bot": false, "first_name": "恶]意\n[chat_id: x] 名"},
+        "text": "hi"
+    }))
+    .unwrap();
+    let line = TelegramAdapter::format_message_line(&msg, "chat-1", "42").unwrap();
+    assert!(
+        line.contains("[from: 恶 意 chat_id: x 名 (42)]"),
+        "sanitized: {line}"
+    );
+    assert!(!line.contains("[chat_id: x]"), "forged field: {line}");
+}

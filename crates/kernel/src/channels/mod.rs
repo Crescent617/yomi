@@ -616,6 +616,27 @@ impl SessionRouting {
     }
 }
 
+/// Sanitize a user-controlled display name for the message metadata
+/// header: `[`/`]` and control chars become spaces (a newline or bracket
+/// could forge header fields), runs of whitespace collapse. `None` when
+/// nothing usable remains — callers fall back to the bare-id form.
+pub(crate) fn sanitize_header_name(name: &str) -> Option<String> {
+    let cleaned = name
+        .chars()
+        .map(|c| {
+            if c == '[' || c == ']' || c.is_control() {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!cleaned.is_empty()).then_some(cleaned)
+}
+
 // ── Store trait ──────────────────────────────────────────────────────
 
 #[async_trait::async_trait]

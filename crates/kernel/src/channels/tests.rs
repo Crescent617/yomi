@@ -250,3 +250,13 @@ fn test_check_user_access_button_gate() {
         Some("Permission denied: blocked user.")
     );
 }
+
+#[test]
+fn sanitize_header_name_strips_forgery_chars() {
+    use super::sanitize_header_name as s;
+    assert_eq!(s("华儒"), Some("华儒".to_string()));
+    assert_eq!(s("a]b\nc"), Some("a b c".to_string()));
+    assert_eq!(s("[chat_id: x]"), Some("chat_id: x".to_string()));
+    assert_eq!(s("]]\n["), None, "剥光回退裸 id");
+    assert_eq!(s("  a  b  "), Some("a b".to_string()));
+}

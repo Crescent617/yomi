@@ -324,7 +324,9 @@ pub(crate) async fn get_channel_watch_by_name(
 /// chat's own mapping row (DMs, non-rit groups). Anchored rows (a rit
 /// group's top-level mention session, kind always `Normal`) are outside
 /// watch's reach: an in-flight anchored run finishes talking regardless
-/// of the flip — fail-open, bounded by the run's remaining lifetime. The tee steers only when the live kind is `Watch` (kind as
+/// of the flip — fail-open, bounded by the run's remaining lifetime.
+///
+/// The tee steers only when the live kind is `Watch` (kind as
 /// input filter); whatever already passed the filter is plain session
 /// content — a mirrored batch still queued at off is consumed by the
 /// next normal run and answered publicly, accepted as continuity.

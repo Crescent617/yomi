@@ -334,7 +334,11 @@ impl FeishuAdapter {
         let root_part = root_id
             .as_ref()
             .map_or(String::new(), |rid| format!("[root: {rid}]"));
-        let from_part = match self.display_name(user_id).await {
+        let from_part = match self
+            .display_name(user_id)
+            .await
+            .and_then(|n| crate::channels::sanitize_header_name(&n))
+        {
             Some(name) => format!("[from: {name} ({user_id})]"),
             None => format!("[from_user_id: {user_id}]"),
         };

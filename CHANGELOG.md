@@ -15,6 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.12] - 2026-09-02
+
+### Added
+
+- 通道消息头携带发送者显示名：`[from: 名字 (ou_xxx)]`；拿不到名字保持 `[from_user_id: ou_xxx]`。飞书经 contact API 解析（LRU 缓存：正结果不过期、负结果 1h 自愈），Telegram 直接使用负载名字。显示名拼入消息头前做消毒（`[`/`]`/控制字符剥为空白），防止伪造头字段注入 agent 上下文。
+- watch 镜像兜底：单个 text block 超 2048 字符截断并附"…(已截断)"标记（原文凭 msg_id 经 skill 拉取）；多条镜像在 3 秒窗口内攒批合并为一次 steer（≥50 条提前 flush），喧闹群聊在 observer 眼里是一个回合而非碎片。
+
+### Changed
+
+- `/watch on|off` 翻转改为纯 kind 切换：不再取消进行中的 run、不再清空 mailbox——session 跨模式连续，说话的闸门是"开口那一刻的 kind"（watch 期间投递被抑制，off 后照常）。已知边界：off 时仍排队未消费的镜像批会被之后的普通 run 消费并公开回复（每 3 秒窗口至多一批）；`reply_in_thread` 群顶层 mention 的锚 session 对话不受 watch 管辖（进行中的 run 烧完照常公开回复）。
+
 ## [0.10.11] - 2026-09-02
 
 ### Added

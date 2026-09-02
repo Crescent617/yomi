@@ -800,8 +800,8 @@ pub(crate) async fn handle_incoming_message(
             )
             .await?;
             // Title from the user's bare text: msg.content carries the
-            // adapter's metadata header ([ts][from_user_id:…]), and
-            // context blocks merge ahead of it (see note_title_input).
+            // adapter's metadata header ([ts][from: …]/[from_user_id: …]),
+            // and context blocks merge ahead of it (see note_title_input).
             if let Some(raw) = msg.raw_text.as_deref() {
                 kernel.note_title_input(&sid, raw);
             }

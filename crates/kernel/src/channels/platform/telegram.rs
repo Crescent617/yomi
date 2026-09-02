@@ -129,7 +129,9 @@ impl TelegramAdapter {
         }
         let ts = msg.date.format("%Y-%m-%d %H:%M:%S");
         let msg_id = msg.id.0;
-        let from_part = match tg_display_name(msg.from.as_ref()) {
+        let from_part = match tg_display_name(msg.from.as_ref())
+            .and_then(|n| crate::channels::sanitize_header_name(&n))
+        {
             Some(name) => format!("[from: {name} ({user_id})]"),
             None => format!("[from_user_id: {user_id}]"),
         };

@@ -84,8 +84,11 @@ receipt），bot 对群里的讨论完全无感。想要的是 bot 作为群的*
 - `/bind` 重绑 watched chat 的会话时 kind 保留（`save_mapping` 只在
   建行时写 kind）：watch 跟行不跟 session，新绑定的 session 接任
   观察者。
-- 镜像内容：消息原始 content（adapter 头含 ts/from/chat/**msg_id**/thread/root）
-  + 图片 image_key 文本引用（不下载，要用经 skill 自取）。
+- 镜像内容：消息原始 content（adapter 头含 ts/from/chat/**msg_id**/thread/root——
+  from 为 `[from: 名字 (ou_xxx)]`，拿不到名字保持 `[from_user_id: ou_xxx]`；
+  单个 text block 超 2048 字符截断附"…(已截断)"，原文凭 msg_id 经 skill
+  拉取）+ 图片 image_key 文本引用（不下载，要用经 skill 自取）。多条镜像
+  在 3s 窗口内攒批合并为一次 steer（≥50 条提前 flush）。
 - daemon 重启：mapping 行在 sqlite，状态自恢复；攒批在内存（≤3s
   窗口），重启丢未 flush 的一批——observer 缺这几条，可凭 lark
   skill 翻群历史补。
