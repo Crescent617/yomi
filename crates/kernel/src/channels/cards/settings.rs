@@ -20,7 +20,6 @@ use serde_json::json;
 use tracing::warn;
 
 use crate::kernel::Kernel;
-use crate::types::ContentBlock;
 use crate::types::Result as KernelResult;
 
 use crate::channels::hub_deliver::info_card_envelope;
@@ -458,38 +457,21 @@ async fn handle_card_action_inner(
             }
             let opt = value["option"].as_str().unwrap_or_default();
             match map_cfg_watch(opt) {
+                // set_channel_watch_by_name 幂等收敛（路由锁 + no-change
+                // 纯 no-op），陈旧卡重发当前态无需预读。翻转结果由卡片
+                // 原地刷新表达（on 时说明行出现）——卡片改动从不在群里
+                // 另发消息（与 mention/rit/model/ctx 同行惯例）；群里可
+                // 见的解释由 `/watch` 命令的 ack 承担（命令回复是命令的
+                // 惯例），面板自身由说明行承担。
                 Some(on) => {
-                    // 陈旧卡可能重发当前态：真翻转才执行、才留 ack。
-                    // （残余竞态，接受：并发翻转若恰好插进预读与
-                    // set_channel_watch_by_name 的路由锁之间，set 幂等
-                    // 收敛、状态永不分叉，但 ack 可能重复一条——让
-                    // setter 上报 flipped 得动 wire 可见的
-                    // ChannelWatchStatus，为装饰性重复不值。）
-                    let current = matches!(
-                        store.find_mapping_kind(channel_name, chat_id).await?,
-                        Some((_, MappingKind::Watch))
-                    );
-                    if current != on {
-                        crate::channels::hub::watch::set_channel_watch_by_name(
-                            store,
-                            kernel,
-                            channel_name,
-                            chat_id,
-                            on,
-                        )
-                        .await?;
-                        // 翻转决定 bot 在本群沉默与否——必须留群里可见
-                        // 的痕迹（与 `/watch` 命令同一文案）。
-                        adapter
-                            .send_message(
-                                chat_id,
-                                vec![ContentBlock::Text {
-                                    text: crate::channels::hub::watch::flip_ack_text(on),
-                                }],
-                                None,
-                            )
-                            .await?;
-                    }
+                    crate::channels::hub::watch::set_channel_watch_by_name(
+                        store,
+                        kernel,
+                        channel_name,
+                        chat_id,
+                        on,
+                    )
+                    .await?;
                 }
                 None => {
                     warn!(opt, "unknown cfg_watch option, watch untouched");

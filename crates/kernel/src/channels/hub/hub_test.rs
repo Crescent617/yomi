@@ -384,9 +384,10 @@ async fn settings_card_cfg_ctx_callback_and_reset_all() {
 }
 
 /// settings 卡 `cfg_watch` 回调链路：下拉值 → `handle_card_action` →
-/// `set_channel_watch_by_name`（与 `/watch` 命令同核）；仅真实翻转发群里
-/// 可见 ack（命令同文案），陈旧卡重发当前态不重复 ack；Reset all 不动
-/// watch；非 admin / 畸形值 / DM 卡（dm:true 与缺失同样）一律 no-op。
+/// `set_channel_watch_by_name`（与 `/watch` 命令同核，幂等收敛——陈旧卡
+/// 重发当前态是纯 no-op）；卡片路径零消息（翻转结果由卡片原地刷新与
+/// 说明行表达，群里可见的解释是 `/watch` 命令 ack 的职责）；Reset all
+/// 不动 watch；非 admin / 畸形值 / DM 卡（dm:true 与缺失同样）拒绝。
 #[tokio::test]
 async fn settings_card_cfg_watch_callback() {
     let (_pool, store) = create_test_pool().await;
@@ -434,7 +435,7 @@ async fn settings_card_cfg_watch_callback() {
         value,
     };
 
-    // on → kind 翻转 + 一条群里可见 ack（与 `/watch` 命令同文案）。
+    // on → kind 翻转；卡片路径零消息（无 ack——说明由卡片刷新承担）。
     crate::channels::cards::settings::handle_card_action(
         "mock",
         &config,
@@ -456,16 +457,12 @@ async fn settings_card_cfg_watch_callback() {
         Some(MappingKind::Watch),
         "cfg_watch on flips the kind"
     );
-    {
-        let out = mock.outgoing.lock().await;
-        assert_eq!(out.len(), 1, "exactly one ack message");
-        let ContentBlock::Text { text } = &out[0].1[0] else {
-            panic!("ack is a text block");
-        };
-        assert!(text.contains("Watch on"), "{text}");
-    }
+    assert!(
+        mock.outgoing.lock().await.is_empty(),
+        "card flip posts no chat message"
+    );
 
-    // 幂等 on（陈旧卡重发当前态）→ 不重复翻转、不重复 ack。
+    // 幂等 on（陈旧卡重发当前态）→ 纯 no-op，仍零消息。
     crate::channels::cards::settings::handle_card_action(
         "mock",
         &config,
@@ -477,10 +474,15 @@ async fn settings_card_cfg_watch_callback() {
         ),
     )
     .await;
-    assert_eq!(
-        mock.outgoing.lock().await.len(),
-        1,
-        "idempotent on sends no second ack"
+    let kind = store
+        .find_mapping_kind("mock", "oc_1")
+        .await
+        .unwrap()
+        .map(|(_, k)| k);
+    assert_eq!(kind, Some(MappingKind::Watch), "idempotent on converges");
+    assert!(
+        mock.outgoing.lock().await.is_empty(),
+        "idempotent re-send still posts nothing"
     );
 
     // Reset all 只清四个覆盖，不动 watch 模式。
@@ -504,7 +506,7 @@ async fn settings_card_cfg_watch_callback() {
         "reset-all leaves watch mode alone"
     );
 
-    // off → kind 回 normal + 第二条 ack。
+    // off → kind 回 normal，仍零消息。
     crate::channels::cards::settings::handle_card_action(
         "mock",
         &config,
@@ -522,14 +524,10 @@ async fn settings_card_cfg_watch_callback() {
         .unwrap()
         .map(|(_, k)| k);
     assert_eq!(kind, Some(MappingKind::Normal), "cfg_watch off flips back");
-    {
-        let out = mock.outgoing.lock().await;
-        assert_eq!(out.len(), 2, "flip off posts its own ack");
-        let ContentBlock::Text { text } = &out[1].1[0] else {
-            panic!("ack is a text block");
-        };
-        assert!(text.contains("Watch off"), "{text}");
-    }
+    assert!(
+        mock.outgoing.lock().await.is_empty(),
+        "card path never messages (acks are the /watch command's job)"
+    );
 
     // 畸形 option → no-op。
     crate::channels::cards::settings::handle_card_action(
