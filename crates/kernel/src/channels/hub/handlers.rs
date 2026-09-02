@@ -1097,8 +1097,9 @@ pub(crate) async fn handle_threads_command(
 ///
 /// The mapping's kind IS the switch: `/watch on` flips it to `watch`
 /// (creating the session if absent); `/watch off` flips back to
-/// `normal` — same session, same memory, only the mode changes. A flip
-/// in either direction cancels the in-flight run and drains the mailbox.
+/// `normal` — same session, same memory, only the mode changes. The
+/// flip is a pure kind switch: nothing cancelled, nothing drained
+/// (session continuity — see `watch::set_channel_watch_by_name`).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_watch_command(
     config: &ChannelConfig,
@@ -1149,9 +1150,9 @@ pub(crate) async fn handle_watch_command(
         .await?;
         Ok(Some(crate::channels::hub::watch::flip_ack_text(true)))
     } else {
-        // Flip back to `normal`, stop the in-flight run, and drain the
-        // mailbox: messages already mirrored must not wake the session
-        // after the explicit off.
+        // Flip back to `normal` — a pure kind switch: the same session
+        // (with its in-flight run and queued work) answers mentions
+        // again, watch-period memory intact.
         let status = crate::channels::hub::watch::set_channel_watch_by_name(
             store,
             kernel,

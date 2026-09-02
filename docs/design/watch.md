@@ -21,9 +21,17 @@ receipt），bot 对群里的讨论完全无感。想要的是 bot 作为群的*
 - `/watch off` 把 `kind` 翻回 `normal`：**同一个 session** 恢复应答 mention，
   watch 期间的记忆原样保留。没有第三态，没有独立观察者 session，没有
   `watch:` key 前缀——状态就是 `normal` / `watch` 两态。
-- 两个方向的 flip 都 cancel 进行中 run + 排干 mailbox：上一模式的待办
-  I/O 不得漏进新模式（队列里的对话请求不得在 watch 期间被隐形应答；
-  已镜像的消息不得在 off 之后唤醒它）。
+- 两个方向的 flip 都是**纯 kind 切换**：不 cancel 进行中的 run，不清
+  mailbox——session 跨模式连续。说话的闸门是"开口那一刻的 kind"：
+  kind=watch 时投递被事件转发器单点抑制（进行中对话 run 跑完归于沉
+  默）；kind 回 normal 后未完成的 turn 照常投递（与正常回复无异）。
+  kind 只是输入过滤器：tee 只在路由锁内 live kind=watch 时 steer；
+  过了滤的就是普通会话内容——off 时仍排队未消费的镜像批会被下一个
+  normal run 消费并公开回复，按连续性接受（tee 限速每窗口至多一批；
+  run 忙跨窗口可积存多批）。
+  （2026-09-02 hrli 拍板：取代初版的 flip cancel+drain——消除 steer
+  与清场的排序竞态；watch/normal 只是输入 filter 不同，消费侧不加
+  业务逻辑，按最简单的设计。）
 - `kind='watch'` 期间 channel 不为它说话：无状态卡、无 streaming、无投递、
   无 reaction、无订阅通知（事件转发器 → delivery pool 一处挡下）。其最终
   文本只落 session transcript（可审计）。说话的唯一形式是 skill 发出的
@@ -94,11 +102,13 @@ receipt），bot 对群里的讨论完全无感。想要的是 bot 作为群的*
 - **gc 边界**：watch 会话被 gc（默认 90 天静默）后 mapping 行随之删除，
   watch 静默关闭，需要重新 `/watch on`。
 - **投递路由缓存 ≤2s**：事件转发器按 session 缓存 routing（含
-  kind）。flip 后 2s 内新 run 的输出可能沿旧 kind 被抑制（或放行）
-  ——flip 的 cancel+drain 已清在途，影响仅限 2s 内的新 run，记为
+  kind）。flip 后 2s 内**正在进行的 run** 的输出按旧 kind 处理：
+  post-on 时本会被抑制的回复可能公开说出，post-off 时本会投递的输出
+  被抑制——影响仅限 2s 窗口（缓存过期后首个事件重读 routing），记为
   已知边界。
-- **`/watch on` 时若有进行中的对话 run**：flip 即 cancel（对称 off），已
-  发出的状态卡可能停在半更新态——cosmetic 边界，flip 是低频管理操作。
+- **`/watch on` 时若有进行中的对话 run**：flip 不 cancel（纯 kind 切
+  换），run 烧完但输出被 kind=watch 抑制；已发出的状态卡可能停在半
+  更新态——cosmetic 边界，flip 是低频管理操作。
 - **watch 状态可被试探**：配置 allowed_users 的群里，陌生人 @bot 普通
   消息在 watch-off 时吃 🙏、watch-on 时静默——反应差异泄露该群是否被
   watch。影响低，接受。
@@ -113,10 +123,11 @@ receipt），bot 对群里的讨论完全无感。想要的是 bot 作为群的*
   `update_mapping`（anchor 刷新 / kind flip 的显式通道）、
   `list_watch_sessions`（👁）；`save_mapping` 的 upsert 不写 kind
   （insert-only，不变量由构造保证）。
-- `channels/hub/watch.rs`：`mirror_message`（tee 本体：单次 route 锁内
-  重读实时行 + steer——与 flip 的 read-flip-reset 同锁互斥，off/gc
-  不得插队；行 kind=watch 即走 `get_or_create_session_locked`（存活
-  =reuse，悬空=删+建，同临界区），行不在=丢弃不重建）；
+- `channels/hub/watch.rs`：`mirror_message`/`mirror_enqueue`（tee 入
+  队，攒批）+ `flush_batch`（窗口 flush：单次 route 锁内重读实时
+  行 + steer——与 flip 的 read-flip 同锁互斥，off/gc 不得插队；
+  行 kind=watch 即走 `get_or_create_session_locked`（存活=reuse，
+  悬空=删+建，同临界区），行不在=丢弃不重建）；
   `{get,set}_channel_watch_by_name`（查询/开关核心，slash 命令与 RPC
   共用；无状态变化=纯 no-op，off 绝不误杀普通会话）；hub 薄封装 +
   `rpc_set_channel_watch`（`on` 缺省 = 查询，Vim `:set` 风格）。wire

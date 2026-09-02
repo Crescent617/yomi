@@ -6747,13 +6747,14 @@ async fn gate_unwatched_command_without_mention_stays_not_addressed() {
 }
 
 /// `/watch on|off`: admin-gated mutations, chat-scoped refusals, eager
-/// create on on, kind flip + mailbox drain on off, and resume on re-on.
+/// create on on, pure kind flips (continuity: in-flight run and queued
+/// mailbox survive off), and resume on re-on.
 #[tokio::test]
 async fn watch_command_query_set_off() {
     let (_pool, store) = create_test_pool().await;
     let store: Arc<dyn ChannelStore> = store;
     // Blackhole model: the observer run hangs on the model call, so a
-    // steer stays pending in the mailbox until `/watch off` drains it
+    // steer stays pending in the mailbox across `/watch off`
     // (deterministic — same trick as the /mailbox test).
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -6858,8 +6859,8 @@ async fn watch_command_query_set_off() {
     ));
 
     // Occupy the observer with a hung run, then steer a mirrored note
-    // into its mailbox — the pending steer is what `/watch off` must
-    // drain (mirrored messages must not wake the observer after off).
+    // into its mailbox — the flip must NOT touch either (continuity:
+    // nothing cancelled, nothing drained).
     let watch_sid = store
         .find_mapping("mock", "oc_1")
         .await
@@ -6914,9 +6915,10 @@ async fn watch_command_query_set_off() {
         "off keeps the same observer session"
     );
     let snap = kernel.mailbox_snapshot(&watch_sid).await;
-    assert!(
-        snap.steer.is_empty() && snap.queue.is_empty(),
-        "watch off must drain the observer mailbox: {snap:?}"
+    assert_eq!(
+        snap.steer.len(),
+        1,
+        "continuity: the flip must not drain the observer mailbox: {snap:?}"
     );
 
     // Re-on resumes the SAME observer session (kind flips back).
@@ -6953,7 +6955,8 @@ async fn watch_command_query_set_off() {
     }
     kernel.send_steer(&watch_sid, text("note-2")).await;
     loop {
-        if kernel.mailbox_snapshot(&watch_sid).await.steer.len() == 1 {
+        // continuity：off 没清场，"mirrored note" 与 "note-2" 并存。
+        if kernel.mailbox_snapshot(&watch_sid).await.steer.len() == 2 {
             break;
         }
         assert!(
@@ -6973,7 +6976,7 @@ async fn watch_command_query_set_off() {
     );
     assert_eq!(
         kernel.mailbox_snapshot(&watch_sid).await.steer.len(),
-        1,
+        2,
         "idempotent on must not drain the mailbox"
     );
 
@@ -7370,10 +7373,10 @@ async fn watch_mirror_batches_within_window() {
     kernel.stop().await;
 }
 
-/// 翻转排空：窗口未到时 /watch off，pending 批随翻转 drain 排空——
-/// off 期间的镜像绝不漏进新模式（与 mailbox drain 同规）。
+/// 窗口内关 watch：pending 批在 flush 时被 kind 重读丢弃（steer 进
+/// normal 会话会公开回复——这是 tee 唯一必须守的方向）。
 #[tokio::test]
-async fn watch_mirror_pending_drained_on_flip_off() {
+async fn watch_mirror_pending_dropped_when_off_at_flush() {
     let (store, kernel, _tmp) = watch_batch_harness().await;
     crate::channels::hub::watch::set_channel_watch_by_name(&store, &kernel, "mock", "oc_off", true)
         .await
@@ -7401,8 +7404,60 @@ async fn watch_mirror_pending_drained_on_flip_off() {
     let blob = format!("{:?}", kernel.list_messages(&sid).await.unwrap_or_default());
     assert!(
         !blob.contains("off 前排"),
-        "flip must drain the pending batch: {blob}"
+        "off at flush must drop the batch: {blob}"
     );
+    kernel.stop().await;
+}
+
+/// 连续性语义：off→on 落在窗口内，批在 flush 时重读 kind=Watch → 照
+/// 常 steer（tee 时间可跨翻转抹——安全方向：flush 只在 kind=Watch
+/// 时 steer，与翻转同路由锁互斥，flush 动作本身不产生公开回复）。
+#[tokio::test]
+async fn watch_mirror_off_on_within_window_still_lands() {
+    let (store, kernel, _tmp) = watch_batch_harness().await;
+    crate::channels::hub::watch::set_channel_watch_by_name(
+        &store, &kernel, "mock", "oc_cont", true,
+    )
+    .await
+    .unwrap();
+    let sid = store
+        .find_mapping("mock", "oc_cont")
+        .await
+        .unwrap()
+        .expect("watch on created the session");
+
+    crate::channels::hub::watch::mirror_enqueue(
+        "mock",
+        &store,
+        &kernel,
+        &batch_msg("oc_cont", "窗口期", "om_k1"),
+        std::time::Duration::from_millis(300),
+    )
+    .await;
+    // 窗口内 off→on：翻转只切 kind，不清场。
+    crate::channels::hub::watch::set_channel_watch_by_name(
+        &store, &kernel, "mock", "oc_cont", false,
+    )
+    .await
+    .unwrap();
+    crate::channels::hub::watch::set_channel_watch_by_name(
+        &store, &kernel, "mock", "oc_cont", true,
+    )
+    .await
+    .unwrap();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let blob = format!("{:?}", kernel.list_messages(&sid).await.unwrap_or_default());
+        if blob.contains("窗口期") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "batch should land (kind Watch at flush): {blob}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
     kernel.stop().await;
 }
 
@@ -7564,6 +7619,89 @@ async fn watch_mirror_early_flush_at_batch_cap() {
         );
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
+    kernel.stop().await;
+}
+
+/// M1 连续性 pin（2026-09-02 hrli 拍板：kind 只是输入过滤器）：watch
+/// 期间攒批 flush 进 mailbox、run 忙未消费，随后 off——该批**保留**
+/// 在 mailbox（flip 绝不清场）。过了滤的就是普通会话内容：它将被下
+/// 一个（normal）run 消费并公开回复，按连续性接受（每窗口至多一批；
+/// run 忙跨窗口可积存多批）。
+#[tokio::test]
+async fn watch_mirror_queued_batch_survives_off() {
+    let (store, kernel, _tmp) = watch_batch_harness().await;
+    crate::channels::hub::watch::set_channel_watch_by_name(&store, &kernel, "mock", "oc_m1q", true)
+        .await
+        .unwrap();
+    let sid = store
+        .find_mapping("mock", "oc_m1q")
+        .await
+        .unwrap()
+        .expect("watch on created the session");
+
+    // 黑洞模型占住 run（streaming），随后的批只能排队不进 run。
+    kernel
+        .send_message(
+            &sid,
+            vec![ContentBlock::Text {
+                text: "blocker".to_string(),
+            }],
+        )
+        .await
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let phase = kernel.get_session(&sid).await.unwrap().phase;
+        if phase == "streaming" {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "observer run never blocked on the model"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    // Watch 期间镜像一条：窗口 flush 后批作为一条 steer 排进 mailbox。
+    crate::channels::hub::watch::mirror_enqueue(
+        "mock",
+        &store,
+        &kernel,
+        &batch_msg("oc_m1q", "排队批", "om_q1"),
+        std::time::Duration::from_millis(200),
+    )
+    .await;
+    loop {
+        if kernel.mailbox_snapshot(&sid).await.steer.len() == 1 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "mirrored batch never queued in the mailbox"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    // off：纯 kind 切换——排队的镜像批必须原样保留（不清场）。
+    crate::channels::hub::watch::set_channel_watch_by_name(
+        &store, &kernel, "mock", "oc_m1q", false,
+    )
+    .await
+    .unwrap();
+    assert!(!matches!(
+        store.find_mapping_kind("mock", "oc_m1q").await.unwrap(),
+        Some((_, MappingKind::Watch))
+    ));
+    let snap = kernel.mailbox_snapshot(&sid).await;
+    assert_eq!(
+        snap.steer.len(),
+        1,
+        "off 绝不清场：排队批保留待消费: {snap:?}"
+    );
+    assert!(
+        format!("{snap:?}").contains("排队批"),
+        "保留的正是那条镜像批: {snap:?}"
+    );
     kernel.stop().await;
 }
 

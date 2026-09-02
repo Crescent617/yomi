@@ -462,3 +462,139 @@ async fn watch_session_events_never_reach_delivery() {
     assert!(sent[0].contains("已送达"));
     token.cancel();
 }
+
+/// 闸门的另一面（2026-09-02 纯 kind 切换拍板后的 pin）：watched run
+/// 沉默之后，`/watch off` 让**同一个** session 恢复投递——说话闸门
+/// 是"开口那一刻的 kind"，session 跨模式连续（不 cancel、不新建）。
+/// 补 `watch_session_events_never_reach_delivery` 静态沉默之外的翻
+/// 转恢复方向。转发器按 session 缓存 routing（正结果 2s TTL，文档
+/// 化边界），off 后等缓存过期再发话。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn watch_delivery_gate_kind_at_speech() {
+    let addr = mock_llm_server().await;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    config.models.clear();
+    config.models.push(ModelConfig {
+        name: "stub".to_string(),
+        model_id: "stub".to_string(),
+        endpoint: format!("http://{addr}"),
+        api_key: "stub".to_string(),
+        context_window: 128_000,
+        ..ModelConfig::default()
+    });
+    config.agent.default_model = "stub".to_string();
+    config.channels.push(ChannelConfig {
+        name: "mock".to_string(),
+        enabled: false,
+        platform: PlatformConfig::Feishu {
+            app_id: "stub".to_string(),
+            app_secret: "stub".to_string(),
+        },
+        ..ChannelConfig::default()
+    });
+    config.finalize();
+
+    let kernel = crate::build_kernel(&config, false).await.unwrap();
+    kernel.start();
+    let hub = kernel.channel_manager().expect("channel hub must exist");
+    let token = CancellationToken::new();
+    hub.start_all(token.clone(), Vec::new(), Arc::downgrade(&kernel))
+        .await
+        .unwrap();
+    let adapter = Arc::new(StressAdapter {
+        sent: tokio::sync::Mutex::new(Vec::new()),
+        counter: std::sync::atomic::AtomicU64::new(0),
+    });
+    let ch_config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "stub".to_string(),
+            app_secret: "stub".to_string(),
+        },
+        ..ChannelConfig::default()
+    };
+    hub.instances.insert(
+        "mock".to_string(),
+        ChannelInstance::test_instance(ch_config, adapter.clone()),
+    );
+
+    // Watch on：观察者 session 就绪。
+    let store = hub.store();
+    crate::channels::hub::watch::set_channel_watch_by_name(
+        &store, &kernel, "mock", "oc_gate", true,
+    )
+    .await
+    .unwrap();
+    let sid = store
+        .find_mapping("mock", "oc_gate")
+        .await
+        .unwrap()
+        .expect("watch on created the session");
+
+    // watched run：模型秒回、回复落 transcript，channel 零流量。宽限
+    // 1s 再断言——若抑制回归（事件漏进投递池），投递发生在 run 结束
+    // 前后的 ms 级窗口，宽限后必现形。
+    kernel
+        .send_message(
+            &sid,
+            vec![ContentBlock::Text {
+                text: "看着就好".to_string(),
+            }],
+        )
+        .await
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let blob = format!("{:?}", kernel.list_messages(&sid).await.unwrap_or_default());
+        if blob.contains(MARKER) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "watched run never completed: {blob}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    assert!(
+        adapter.sent.lock().await.is_empty(),
+        "watched run must stay silent at the channel"
+    );
+
+    // off：纯 kind 切换；路由缓存 2s TTL 过期后同 session 的 turn 照
+    // 常投递。
+    crate::channels::hub::watch::set_channel_watch_by_name(
+        &store, &kernel, "mock", "oc_gate", false,
+    )
+    .await
+    .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(2200)).await;
+    kernel
+        .send_message(
+            &sid,
+            vec![ContentBlock::Text {
+                text: "现在可以说了".to_string(),
+            }],
+        )
+        .await
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if adapter.sent.lock().await.iter().any(|t| t.contains(MARKER)) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "post-off turn never delivered"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    token.cancel();
+    kernel.stop().await;
+}
