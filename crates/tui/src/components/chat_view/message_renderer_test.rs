@@ -471,3 +471,45 @@ fn edit_header_shows_diff_stats() {
     assert!(header.contains("+1"), "add stats: {header}");
     assert!(header.contains("\u{2212}1"), "del stats: {header}");
 }
+
+#[test]
+fn assistant_render_strips_trailing_end_turn_marker() {
+    let msg = HistoryMessage::Assistant {
+        content: "记一笔 __YOMI_END_TURN__".to_string(),
+        thinking: None,
+        thinking_folded: true,
+        thinking_elapsed_ms: None,
+    };
+    let lines = render_message(&msg, 80);
+    let text: String = lines
+        .iter()
+        .flat_map(|l| l.spans.iter().map(|s| s.content.clone()))
+        .collect();
+    assert!(text.contains("记一笔"));
+    assert!(
+        !text.contains("__YOMI_END_TURN__"),
+        "marker must be stripped, got: {text}"
+    );
+}
+
+#[test]
+fn assistant_render_keeps_mid_text_marker() {
+    let msg = HistoryMessage::Assistant {
+        content: "__YOMI_END_TURN__ 中间的惰性标记".to_string(),
+        thinking: None,
+        thinking_folded: true,
+        thinking_elapsed_ms: None,
+    };
+    let lines = render_message(&msg, 80);
+    let text: String = lines
+        .iter()
+        .flat_map(|l| l.spans.iter().map(|s| s.content.clone()))
+        .collect();
+    // markdown 渲染会吃掉成对下划线（bold），断言核心片段在场即可——
+    // 重点是"未被剥离"。
+    assert!(
+        text.contains("YOMI_END_TURN"),
+        "mid-text marker must stay, got: {text}"
+    );
+    assert!(text.contains("中间的惰性标记"));
+}

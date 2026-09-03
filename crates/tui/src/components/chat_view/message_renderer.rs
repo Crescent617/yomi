@@ -266,6 +266,9 @@ fn render_assistant(
 ) -> Vec<Arc<Line<'static>>> {
     let mut lines = Vec::new();
 
+    // 回合终止标记是状态机语法：存储保留（判定读原始消息），展示剥掉。
+    let content = kernel::prompt::strip_end_turn_marker(content);
+
     // Render thinking summary (folded) or detail (expanded)
     let thinking_lines = thinking
         .as_ref()

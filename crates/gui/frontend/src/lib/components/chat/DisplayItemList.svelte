@@ -1,6 +1,7 @@
 <script lang="ts">
   import { textFromBlocks, hasText } from "../../session";
   import { parseAttachments } from "../../attachments";
+  import { stripEndTurnMarker } from "../../end-turn-marker";
   import type { DisplayItem } from "./display-items";
   import { keyDisplayItems, liveActivityIndex } from "./display-items";
   import UserBubble from "./UserBubble.svelte";
@@ -106,7 +107,9 @@
       />
       {#each item.messages as m, messageIndex (`${m.type}-${m.id}-${messageIndex}`)}
         {#if m.type === "assistant" && hasText(m.content)}
-          {@const parsed = parseAttachments(textFromBlocks(m.content))}
+          {@const parsed = parseAttachments(
+            stripEndTurnMarker(textFromBlocks(m.content)),
+          )}
           <div class="group/ma relative" data-message-id={m.id}>
             <MessageActions
               {session_id}

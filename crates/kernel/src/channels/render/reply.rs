@@ -200,9 +200,11 @@ impl RunReplyBuffer {
     pub(crate) fn record_model_end(&mut self, text: &str) {
         self.steps += 1;
         let (text, paths) = crate::utils::attachments::parse_attachments(text);
+        // 回合终止标记是状态机语法：存储保留（判定读原始消息），展示剥掉。
+        let text = crate::prompt::strip_end_turn_marker(&text);
         self.attachments.extend(paths);
         if !text.is_empty() {
-            self.push_entry(TraceEntry::Narration(text));
+            self.push_entry(TraceEntry::Narration(text.to_string()));
         }
     }
 

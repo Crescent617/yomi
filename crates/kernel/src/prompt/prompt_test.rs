@@ -423,3 +423,19 @@ async fn compose_system_prompt_without_rules_session_ignores_session_file() {
 
     assert_eq!(prompt, "BASE");
 }
+
+#[test]
+fn strip_end_turn_marker_cases() {
+    use super::strip_end_turn_marker as strip;
+    // 末尾标记剥掉（含尾部空白容忍、剥离后再 trim）
+    assert_eq!(strip("记一笔 __YOMI_END_TURN__"), "记一笔");
+    assert_eq!(strip("done __YOMI_END_TURN__\n  \n"), "done");
+    assert_eq!(strip("__YOMI_END_TURN__"), "");
+    // 中间的惰性标记保持可见；无标记原文不动；半个标记不是标记
+    assert_eq!(
+        strip("__YOMI_END_TURN__ 后面还有正文"),
+        "__YOMI_END_TURN__ 后面还有正文"
+    );
+    assert_eq!(strip("普通收尾  \n"), "普通收尾  \n");
+    assert_eq!(strip("收尾 __YOMI_END_TU"), "收尾 __YOMI_END_TU");
+}

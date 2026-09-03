@@ -886,3 +886,27 @@ fn render_card_balances_fence_cut_by_cancellation() {
         "fence closed in the process panel: {card}"
     );
 }
+
+#[test]
+fn into_reply_strips_end_turn_marker_from_body() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("report done __YOMI_END_TURN__");
+    let reply = buf.into_reply();
+    assert_eq!(reply.text(), Some("report done"));
+}
+
+#[test]
+fn into_reply_marker_only_body_becomes_textless() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("__YOMI_END_TURN__");
+    let reply = buf.into_reply();
+    assert_eq!(reply.text(), None);
+}
+
+#[test]
+fn into_reply_keeps_mid_text_marker() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("__YOMI_END_TURN__ 出现在中间是惰性文本");
+    let reply = buf.into_reply();
+    assert_eq!(reply.text(), Some("__YOMI_END_TURN__ 出现在中间是惰性文本"));
+}

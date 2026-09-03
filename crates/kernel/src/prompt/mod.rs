@@ -38,6 +38,18 @@ pub(crate) const MENTIONS_SECTION: &str = "# Mentions\nTo mention a user in your
 /// turn.
 pub const END_TURN_MARKER: &str = "__YOMI_END_TURN__";
 
+/// 展示层剥离末尾的回合终止标记：标记是状态机语法，不给用户看。存储层
+/// 不动（状态机的判定读原始消息）；只剥末尾——trim 尾部空白后不以
+/// 标记结尾的文本原样返回（正文中间的惰性标记保持可见）。
+#[must_use]
+pub fn strip_end_turn_marker(text: &str) -> &str {
+    let trimmed = text.trim_end();
+    match trimmed.strip_suffix(END_TURN_MARKER) {
+        Some(head) => head.trim_end(),
+        None => text,
+    }
+}
+
 /// End-of-turn marker contract for non-sub-agent sessions (when the
 /// `end_turn_marker` feature is on): teaches the marker and its
 /// end-of-text anchor. Sub-agents never get it — a sub-agent's parent
