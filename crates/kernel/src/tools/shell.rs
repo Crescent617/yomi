@@ -29,14 +29,6 @@ fn strip_ansi(text: &str) -> Cow<'_, str> {
     ANSI_REGEX.replace_all(text, "")
 }
 
-// POSIX `setsid(2)`: put the calling process into a new session with no
-// controlling terminal. Declared manually to avoid a libc/nix dependency —
-// the symbol is always linked on unix targets.
-#[cfg(unix)]
-extern "C" {
-    fn setsid() -> i32;
-}
-
 pub const SHELL_TOOL_NAME: &str = "shell";
 
 #[derive(Clone)]
@@ -237,17 +229,8 @@ impl ShellTool {
             cmd.env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes");
         }
 
-        #[cfg(unix)]
-        // SAFETY: `pre_exec` runs in the forked child before exec, where only
-        // async-signal-safe operations are allowed; `setsid` qualifies.
-        unsafe {
-            cmd.pre_exec(|| {
-                if setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
+        // 子进程独立成新 session（setsid）：超时/强杀按进程组连后裔一起收。
+        crate::utils::process::pre_exec_new_session(&mut cmd);
 
         cmd
     }

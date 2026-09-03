@@ -14,11 +14,10 @@ use tokio::io::AsyncReadExt;
 
 use crate::types::{KernelError, Result};
 
-// POSIX `setsid(2)` / `kill(2)`：与子进程同 linker 命名空间，unix 上始终
-// 已链接，手动声明以避免 libc/nix 依赖（同 shell.rs 的做法）。
+// POSIX `kill(2)`：与子进程同 linker 命名空间，unix 上始终已链接，手动
+// 声明以避免 libc/nix 依赖。setsid 已收敛到 `utils::process`。
 #[cfg(unix)]
 extern "C" {
-    fn setsid() -> i32;
     fn kill(pid: i32, sig: i32) -> i32;
 }
 
@@ -182,17 +181,7 @@ pub async fn run(
     // unix: 子进程独立成 session（setsid），超时/收尾时按进程组
     // （pgid == 子 pid）发 SIGKILL——只杀直接子进程会让 `sleep 60 &`
     // 型后裔继续持有管道，drain 被拖到地老天荒。
-    #[cfg(unix)]
-    unsafe {
-        // SAFETY: `pre_exec` 在 fork 出的子进程中、exec 之前运行，只允许
-        // async-signal-safe 操作；setsid 符合（同 shell.rs）。
-        cmd.pre_exec(|| {
-            if setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    crate::utils::process::pre_exec_new_session(&mut cmd);
     let mut child = cmd.spawn()?;
     // 两管各自持续读空：管道不排空，写多的脚本会阻塞在 write 上。
     let buf = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));

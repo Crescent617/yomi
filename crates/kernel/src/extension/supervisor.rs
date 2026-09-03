@@ -54,23 +54,9 @@ async fn supervise(ext: ExtensionConfig, log_dir: std::path::PathBuf, shutdown: 
                 cmd.stderr(std::process::Stdio::null());
             }
         }
-        // POSIX `setsid(2)`：子进程自成进程组（pid 即 pgid），daemon 死时
-        // 组杀能连带其子孙（与 background shell 同语义；手工声明避免
-        // libc/nix 依赖）。
-        #[cfg(unix)]
-        unsafe {
-            cmd.pre_exec(|| {
-                extern "C" {
-                    fn setsid() -> i32;
-                }
-                // SAFETY: pre_exec 在 fork 后 exec 前执行，只调用
-                // async-signal-safe 的 setsid。
-                if setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
+        // 子进程自成进程组（pid 即 pgid），daemon 死时组杀能连带其子孙
+        // （与 background shell 同语义）。
+        crate::utils::process::pre_exec_new_session(&mut cmd);
 
         let child = cmd.spawn();
         let mut child = match child {
