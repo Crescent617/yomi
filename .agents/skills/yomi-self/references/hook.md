@@ -47,7 +47,7 @@ $YOMI_DATA_DIR/hooks/pre_tool_use/   # 一期唯一 hook point
 | `2` | 否决；stderr 即原因，以 `[hook:<文件名>]` 前缀回流为 tool error 喂回 agent |
 | 其他非零 / 超时 30s / spawn 失败 | hook 自身故障 → fail-open 放行 + warn 日志（否决必须是显式行为） |
 
-超时按进程组 SIGKILL（setsid，后裔连坐）。进程在闸与落盘之间被杀时恢复会重过 hook（at-least-once）——有副作用的 hook 须自行幂等。
+超时按进程组 SIGKILL（setsid，后裔连坐）。stderr 捕获上限 64KB，回流给 agent 的否决原因截断到 2000 字符。进程在闸与落盘之间被杀时恢复会重过 hook（at-least-once）——有副作用的 hook 须自行幂等。
 
 ## 工具过滤
 

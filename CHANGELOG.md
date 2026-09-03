@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.14] - 2026-09-03
+
+### Added
+
+- 新增 hook 闸门：把可执行脚本放进数据目录的 `hooks/pre_tool_use/` 即可在每次工具调用前拦截；脚本经标准输入收到会话与工具调用的 JSON 描述，退出码 0 放行、退出码 2 否决并把标准错误作为原因（带 `[hook:<文件名>]` 前缀）回给 agent 自我纠正；脚本异常或超时（30 秒）一律放行。启用/停用即加减执行位，即时生效无需重启。
+
 ## [0.10.13] - 2026-09-02
 
 ### Fixed
