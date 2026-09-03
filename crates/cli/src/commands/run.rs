@@ -258,7 +258,9 @@ impl RunState {
             }) if self.armed => Step::Done(self.finish(RunStatus::Failed, Some(error.clone()))),
             Event::Model(ModelEvent::End { content, .. }) if self.armed => {
                 self.num_turns += 1;
-                let text = blocks_text(content);
+                // 展示面剥离回合终止标记（存储与事件流仍保留原文——调试
+                // 要原文看 events/session cat；脚本消费的是干净结果）。
+                let text = kernel::prompt::strip_end_turn_marker(&blocks_text(content)).to_string();
                 if !text.trim().is_empty() {
                     self.result_text = text;
                 }

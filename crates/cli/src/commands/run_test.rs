@@ -274,6 +274,29 @@ fn empty_final_text_keeps_previous() {
 }
 
 #[test]
+fn end_turn_marker_stripped_from_result_text() {
+    let mut s = state("p");
+    s.on_event(&user_message("p"));
+    s.on_event(&model_end("收尾记录 __YOMI_END_TURN__"));
+    let Step::Done(outcome) = s.on_event(&stopped(StopReason::Completed {
+        finish_reason: None,
+    })) else {
+        panic!("expected Done");
+    };
+    assert_eq!(outcome.result_text, "收尾记录");
+    // 中间的惰性标记不剥。
+    let mut s = state("p");
+    s.on_event(&user_message("p"));
+    s.on_event(&model_end("__YOMI_END_TURN__ 在中间"));
+    let Step::Done(outcome) = s.on_event(&stopped(StopReason::Completed {
+        finish_reason: None,
+    })) else {
+        panic!("expected Done");
+    };
+    assert_eq!(outcome.result_text, "__YOMI_END_TURN__ 在中间");
+}
+
+#[test]
 fn maps_stop_reasons() {
     let cases = [
         (

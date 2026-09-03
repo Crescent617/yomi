@@ -20,8 +20,12 @@
 
 <div class="w-full space-y-2">
   {#if hasText(message.content)}
+    <!-- 终态才剥标记：流式中间帧若恰以标记结尾，剥了会让"正文中间的
+         惰性标记"瞬态消失再复现（闪烁）；流式尾帧的瞬时可见是与 TUI
+         一致的统一边界。 -->
+    {@const raw = textFromBlocks(message.content)}
     {@const parsed = parseAttachments(
-      stripEndTurnMarker(textFromBlocks(message.content)),
+      isStreaming ? raw : stripEndTurnMarker(raw),
     )}
     <MessageActions
       {session_id}

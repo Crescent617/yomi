@@ -107,8 +107,9 @@
       />
       {#each item.messages as m, messageIndex (`${m.type}-${m.id}-${messageIndex}`)}
         {#if m.type === "assistant" && hasText(m.content)}
+          {@const raw = textFromBlocks(m.content)}
           {@const parsed = parseAttachments(
-            stripEndTurnMarker(textFromBlocks(m.content)),
+            item.isStreaming ? raw : stripEndTurnMarker(raw),
           )}
           <div class="group/ma relative" data-message-id={m.id}>
             <MessageActions
