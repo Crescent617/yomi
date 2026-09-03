@@ -16,6 +16,7 @@ pub mod line_numbers;
 pub mod logging;
 pub mod markdown;
 pub mod path;
+pub mod process;
 pub mod rg_helper;
 #[cfg(feature = "websearch")]
 pub mod search;

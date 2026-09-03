@@ -9,6 +9,7 @@
 //!   └─ collect_pending_tool_calls()   — skip already-completed calls (resume)
 //!   └─ execute_tools()
 //!        ├─ emit ToolEvent::Start     — for every pending call
+//!        ├─ pre_tool_use hooks        — filesystem gate, first veto
 //!        ├─ permission check          — split into approved / denied
 //!        ├─ emit + save denied        — immediately persisted
 //!        └─ JoinSet (parallel exec)
@@ -118,8 +119,42 @@ impl Agent {
 
         self.emit_start_events(&pending_calls, &message_ids);
 
+        // Filesystem hooks (pre_tool_use) run before the permission prompt:
+        // a hook-denied call must not bother the user with an approval
+        // request. Hook denials share the denied-result channel (tool error
+        // fed back to the agent), no new event type.
+        let hook = crate::hook::run_pre_tool_use(
+            &self.data_dir,
+            self.session_id.as_str(),
+            &self.working_dir,
+            &pending_calls,
+            &self.create_runtime_token(),
+        )
+        .await;
+        let hook_denied: Vec<_> = hook
+            .denied
+            .into_iter()
+            .map(|(call, reason)| {
+                self.build_denied_result(&call.id, &call.name, reason, &message_ids)
+            })
+            .collect();
+
         // Permission check → approved / denied split.
-        let (approved, denied) = self.check_permissions(&pending_calls, &message_ids).await;
+        let (approved, mut denied) = self.check_permissions(&hook.approved, &message_ids).await;
+        denied.extend(hook_denied);
+        // 呈现序归并为 call 序（hook 否决在前、权限拒绝在后是闸次序，
+        // 不是 call 次序；provider 按 tool_call_id 匹配，纯 UI/transcript 序）。
+        let order: std::collections::HashMap<&str, usize> = pending_calls
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.id.as_str(), i))
+            .collect();
+        denied.sort_by_key(|r| {
+            order
+                .get(r.tool_call_id.as_str())
+                .copied()
+                .unwrap_or(usize::MAX)
+        });
 
         // Persist denied results immediately.
         self.emit_and_save_results(denied);
@@ -160,31 +195,43 @@ impl Agent {
             .denied
             .into_iter()
             .map(|(call_id, error_msg)| {
-                let message_id = message_ids[&call_id].clone();
                 let tool_name = calls
                     .iter()
                     .find(|c| c.id == call_id)
                     .map(|c| c.name.clone())
                     .unwrap_or_default();
-                let output = crate::types::ToolOutput::error(error_msg);
-                let (event, message) = build_tool_result(
-                    &call_id,
-                    &tool_name,
-                    &output,
-                    0,
-                    message_id.clone(),
-                    self.max_tool_output_length,
-                );
-                ToolExecutionResult {
-                    tool_call_id: call_id,
-                    message_id,
-                    event,
-                    message,
-                }
+                self.build_denied_result(&call_id, &tool_name, error_msg, message_ids)
             })
             .collect();
 
         (perm.approved, denied)
+    }
+
+    /// Build a denied tool result (permission- or hook-denied): an error
+    /// `ToolOutput` wrapped into the `End` event + persisted message pair.
+    fn build_denied_result(
+        &self,
+        call_id: &str,
+        tool_name: &str,
+        error_msg: String,
+        message_ids: &BTreeMap<String, MessageId>,
+    ) -> ToolExecutionResult {
+        let message_id = message_ids[call_id].clone();
+        let output = crate::types::ToolOutput::error(error_msg);
+        let (event, message) = build_tool_result(
+            call_id,
+            tool_name,
+            &output,
+            0,
+            message_id.clone(),
+            self.max_tool_output_length,
+        );
+        ToolExecutionResult {
+            tool_call_id: call_id.to_string(),
+            message_id,
+            event,
+            message,
+        }
     }
 
     /// Emit + persist a batch of results immediately.

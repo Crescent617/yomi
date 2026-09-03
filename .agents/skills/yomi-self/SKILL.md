@@ -1,6 +1,6 @@
 ---
 name: yomi-self
-description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话、cron 和数据。Use when 要健康自检（doctor）、检查/重启 daemon、看日志、检索或查看会话（search/cat/list/send/cancel/等待跑完）、管理 cron、管理 workflow 脚本、gc 清理、查 token 用量、跑 headless 任务，或用 events/rpc 调试。"
+description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话、cron 和数据。Use when 要健康自检（doctor）、检查/重启 daemon、看日志、检索或查看会话（search/cat/list/send/cancel/等待跑完）、管理 cron、管理 workflow/hook 脚本、gc 清理、查 token 用量、跑 headless 任务，或用 events/rpc 调试。"
 ---
 
 # yomi 自我管理
@@ -54,6 +54,10 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 ## workflow（全局脚本）
 
 用户自有的可执行脚本：`$YOMI_DATA_DIR/workflows/`（py / shell / node 均可，需 shebang + `chmod +x`，写入即生效）。shell 工具、cron shell 任务与 `/workflow run` 都会注入 `YOMI_DATA_DIR`（及有会话时的 `YOMI_SESSION_ID`），脚本里用 `"$YOMI_DATA_DIR"` 定位 yomi 数据目录。
+
+## hook（工具调用闸门）
+
+`$YOMI_DATA_DIR/hooks/pre_tool_use/` 下带执行位的脚本即注册（文件名字典序串行，`chmod ±x` 即时生效，无 reload）；每个工具调用执行前、权限审批前触发。退出码：`0`=放行、`2`=否决（stderr 以 `[hook:<文件名>]` 前缀回流给 agent）、其他非零/超时（30s）=故障放行（fail-open，仅 warn 日志）。写 hook 脚本前读 `references/hook.md`（stdin schema / env / 示例 / 与 Claude Code 差异）。
 
 ## 清理（自己的数据）
 

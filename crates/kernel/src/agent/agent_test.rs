@@ -935,6 +935,96 @@ async fn interrupted_marker_closes_pending_tool_batch() {
     assert!(agent.pending_tool_calls().is_none());
 }
 
+/// `pre_tool_use` hook 否决：工具不执行、不经权限检查，hook 的 stderr 作为
+/// tool error 结果直接落进消息缓冲（与权限否决同一通道，无新事件类型）。
+#[cfg(unix)]
+#[tokio::test]
+async fn pre_tool_use_hook_denies_tool_call() {
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs};
+    use crate::types::{ContentBlock, Message, Role, SessionId, ToolCall};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    let data_dir = tempfile::tempdir().unwrap();
+    // 硬编码路径是有意的契约钉死：hooks 目录契约改名必须炸测试。
+    let hook_dir = data_dir.path().join("hooks").join("pre_tool_use");
+    std::fs::create_dir_all(&hook_dir).unwrap();
+    let hook = hook_dir.join("10-guard");
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut f = std::fs::File::create(&hook).unwrap();
+        writeln!(f, "#!/bin/sh").unwrap();
+        writeln!(f, "echo 'blocked by test hook' >&2; exit 2").unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let shared = Arc::new(AgentShared::with_data_dir(
+        Arc::new(BTreeMap::new()),
+        "test".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+        None,
+        data_dir.path().to_path_buf(),
+    ));
+
+    let call = ToolCall {
+        id: "call-1".to_string(),
+        name: "shell".to_string(),
+        arguments: serde_json::json!({"command": "touch should_not_exist"}),
+    };
+    let history = vec![
+        Arc::new(Message::user("跑一下")),
+        Arc::new(Message {
+            role: Role::Assistant,
+            tool_calls: Some(vec![call]),
+            ..Default::default()
+        }),
+    ];
+
+    let working_dir = tempfile::tempdir().unwrap();
+    let args = AgentSpawnArgs {
+        base_prompt: "test".to_string(),
+        skills: Vec::new(),
+        history,
+        session_id: SessionId::new().to_string(),
+        parent_session_id: None,
+        max_iterations: 1,
+        working_dir: working_dir.path().to_path_buf(),
+        cancel_token: None,
+        tool_flags: crate::tools::ToolFlags::new(false),
+        file_state_store: None,
+        tool_blocklist: Vec::new(),
+        max_tool_output_length: 1024,
+        mailbox: Arc::new(crate::comms::Mailbox::new()),
+        input_bus: None,
+        ext_tools: Vec::new(),
+    };
+    let mut agent = Agent::new(&shared, args).await;
+
+    agent.handle_execute_tool().await.unwrap();
+
+    // 否决落成 tool error 结果（hook stderr 即原因），且 shell 未执行。
+    let messages = agent.message_buffer.messages();
+    let result = messages.last().unwrap();
+    assert_eq!(result.role, Role::Tool);
+    assert_eq!(result.tool_call_id.as_deref(), Some("call-1"));
+    match &result.content[0] {
+        ContentBlock::Text { text } => {
+            assert!(text.contains("blocked by test hook"), "got: {text}");
+        }
+        other => panic!("expected text block, got {other:?}"),
+    }
+    assert!(!working_dir.path().join("should_not_exist").exists());
+}
+
 /// Rewind 语义：以 message id 为准，上下文（buffer）和 checkpoint 两个存储
 /// 各自尽力处理——有哪边处理哪边，两边都没有才报 "not found"。
 /// 背景：compaction 会重写 buffer 但保留 checkpoint（旧 id 悬空）；
