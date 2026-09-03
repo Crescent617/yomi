@@ -52,9 +52,10 @@ pub fn strip_end_turn_marker(text: &str) -> &str {
 
 /// End-of-turn marker contract for non-sub-agent sessions (when the
 /// `end_turn_marker` feature is on): teaches the marker and its
-/// end-of-text anchor. Sub-agents never get it — a sub-agent's parent
-/// decides when the work is done.
-pub(crate) const END_TURN_SECTION: &str = "# End-of-turn marker\nWhen the work of this turn is done but you still have final tool calls to make (e.g. recording a note), write `__YOMI_END_TURN__` at the very end of your reply text in the same message that carries those tool calls: the tools run, then the turn ends without another model round. The marker only counts at the end of your text; anywhere else it is ignored.";
+/// end-of-text anchor. Lives under the `# Markers` family header so
+/// future control tokens share one category. Sub-agents never get it —
+/// a sub-agent's parent decides when the work is done.
+pub(crate) const END_TURN_SECTION: &str = "# Markers\n## End of turn\nWhen all the work of this turn is done but you still have final tool calls to make (e.g. recording a note), write `__YOMI_END_TURN__` at the very end of your reply text in the same message that carries those tool calls: the tools run, then the turn ends without another model round. The marker only counts at the end of your text; anywhere else it is ignored.";
 
 /// Watch-observer contract for a watched chat's session (`/watch`,
 /// mapping kind `watch`). Deliberately minimal: state the mode (every

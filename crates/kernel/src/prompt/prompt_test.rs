@@ -49,13 +49,13 @@ fn contract_sections_matrix() {
     let both = contract_sections(true, true, true);
     assert!(both.contains("# Attachments"));
     assert!(both.contains("# Mentions"));
-    assert!(both.contains("# End-of-turn marker"));
+    assert!(both.contains("# Markers"));
 
     // 本地会话：attachments + marker
     let local = contract_sections(true, false, true);
     assert!(local.contains("# Attachments"));
     assert!(!local.contains("# Mentions"));
-    assert!(local.contains("# End-of-turn marker"));
+    assert!(local.contains("# Markers"));
 
     // attachments feature 关闭：channel 会话 mentions + marker
     let no_attach = contract_sections(false, true, true);
@@ -64,7 +64,7 @@ fn contract_sections_matrix() {
 
     // marker feature 关闭：无 marker 段
     let no_marker = contract_sections(true, true, false);
-    assert!(!no_marker.contains("# End-of-turn marker"));
+    assert!(!no_marker.contains("# Markers"));
 
     // 全关：空
     assert_eq!(contract_sections(false, false, false), "");
@@ -76,7 +76,7 @@ fn contract_sections_append_verbatim() {
     let prompt = format!("base{}", contract_sections(true, true, true));
     assert!(prompt.starts_with("base\n\n# Attachments"));
     assert!(prompt.contains("\n\n# Mentions"));
-    assert!(prompt.contains("\n\n# End-of-turn marker"));
+    assert!(prompt.contains("\n\n# Markers"));
 }
 
 #[tokio::test]
