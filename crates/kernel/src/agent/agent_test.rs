@@ -249,6 +249,7 @@ async fn repeated_token_usage_events_are_recorded_once() {
         mailbox: Arc::new(crate::comms::Mailbox::new()),
         input_bus: None,
         ext_tools: Vec::new(),
+        end_turn_marker: true,
     };
     let mut agent = Agent::new(&shared, args).await;
     agent.current_model_config = Some(Arc::new(model_config));
@@ -317,6 +318,7 @@ async fn handle_clear_keeps_system_prompt() {
         mailbox: Arc::new(crate::comms::Mailbox::new()),
         input_bus: None,
         ext_tools: Vec::new(),
+        end_turn_marker: true,
     };
     let mut agent = Agent::new(&shared, args).await;
 
@@ -384,6 +386,7 @@ async fn apply_compacted_messages_keeps_system_prompt() {
         mailbox: Arc::new(crate::comms::Mailbox::new()),
         input_bus: None,
         ext_tools: Vec::new(),
+        end_turn_marker: true,
     };
     let mut agent = Agent::new(&shared, args).await;
 
@@ -458,6 +461,7 @@ async fn force_full_compact_emits_event_bracket_on_early_failure() {
         mailbox: Arc::new(crate::comms::Mailbox::new()),
         input_bus: None,
         ext_tools: Vec::new(),
+        end_turn_marker: true,
     };
     let mut subscriber = event_bus.subscribe(session_id.clone());
     let mut agent = Agent::new(&shared, args).await;
@@ -557,6 +561,7 @@ async fn compaction_result_emits_compacted_outcome() {
         mailbox: Arc::new(crate::comms::Mailbox::new()),
         input_bus: None,
         ext_tools: Vec::new(),
+        end_turn_marker: true,
     };
     let mut subscriber = event_bus.subscribe(session_id.clone());
     let mut agent = Agent::new(&shared, args).await;
@@ -638,6 +643,7 @@ async fn cancelled_agent_exits_loop() {
         mailbox: Arc::new(crate::comms::Mailbox::new()),
         input_bus: None,
         ext_tools: Vec::new(),
+        end_turn_marker: true,
     };
     let agent = Agent::new(&shared, args).await;
     agent.cancel_token.cancel();
@@ -758,6 +764,7 @@ async fn retrying_event_carries_retry_after_wait() {
         mailbox: Arc::new(crate::comms::Mailbox::new()),
         input_bus: None,
         ext_tools: Vec::new(),
+        end_turn_marker: true,
     };
     let mut subscriber = event_bus.subscribe(session_id.clone());
     let mut agent = Agent::new(&shared, args).await;
@@ -888,6 +895,7 @@ async fn interrupted_marker_closes_pending_tool_batch() {
         mailbox: Arc::new(crate::comms::Mailbox::new()),
         input_bus: None,
         ext_tools: Vec::new(),
+        end_turn_marker: true,
     };
     let mut agent = Agent::new(&shared, args).await;
 
@@ -1006,6 +1014,7 @@ async fn pre_tool_use_hook_denies_tool_call() {
         mailbox: Arc::new(crate::comms::Mailbox::new()),
         input_bus: None,
         ext_tools: Vec::new(),
+        end_turn_marker: true,
     };
     let mut agent = Agent::new(&shared, args).await;
 
@@ -1022,6 +1031,206 @@ async fn pre_tool_use_hook_denies_tool_call() {
         }
         other => panic!("expected text block, got {other:?}"),
     }
+    assert!(!working_dir.path().join("should_not_exist").exists());
+}
+
+/// 造一个带 user + assistant（正文 + 单个工具调用）历史的 agent，
+/// `end_turn_marker` 开关由参数控制。
+#[cfg(unix)]
+async fn marker_agent(text: &str, end_turn_marker: bool) -> crate::agent::Agent {
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs};
+    use crate::types::{ContentBlock, Message, Role, SessionId, ToolCall};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    let shared = Arc::new(AgentShared::new(
+        Arc::new(BTreeMap::new()),
+        "test".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+        None,
+    ));
+    let call = ToolCall {
+        id: "call-1".to_string(),
+        name: "shell".to_string(),
+        arguments: serde_json::json!({"command": "echo hi"}),
+    };
+    let history = vec![
+        Arc::new(Message::user("收个尾")),
+        Arc::new(Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Text {
+                text: text.to_string(),
+            }],
+            tool_calls: Some(vec![call]),
+            ..Default::default()
+        }),
+    ];
+    let working_dir = tempfile::tempdir().unwrap();
+    let args = AgentSpawnArgs {
+        base_prompt: "test".to_string(),
+        skills: Vec::new(),
+        history,
+        session_id: SessionId::new().to_string(),
+        parent_session_id: None,
+        max_iterations: 1,
+        working_dir: working_dir.path().to_path_buf(),
+        cancel_token: None,
+        tool_flags: crate::tools::ToolFlags::new(false),
+        file_state_store: None,
+        tool_blocklist: Vec::new(),
+        max_tool_output_length: 1024,
+        mailbox: Arc::new(crate::comms::Mailbox::new()),
+        input_bus: None,
+        ext_tools: Vec::new(),
+        end_turn_marker,
+    };
+    Agent::new(&shared, args).await
+}
+
+/// 正文末尾的标记：工具照跑，随后转 Idle，不再开新一轮。
+#[cfg(unix)]
+#[tokio::test]
+async fn end_turn_marker_at_end_ends_turn() {
+    use crate::agent::AgentState;
+
+    let mut agent = marker_agent("记一笔\n\n__YOMI_END_TURN__", true).await;
+    agent.handle_execute_tool().await.unwrap();
+    assert_eq!(agent.context.current_state(), AgentState::Idle);
+    // 工具结果已落盘（收尾动作确实执行了）。
+    let last = agent.message_buffer.messages().last().unwrap().clone();
+    assert_eq!(last.role, crate::types::Role::Tool);
+}
+
+/// 尾部空白不算"中间"：trim 后仍在末尾，生效。
+#[cfg(unix)]
+#[tokio::test]
+async fn end_turn_marker_tolerates_trailing_whitespace() {
+    use crate::agent::AgentState;
+
+    let mut agent = marker_agent("done __YOMI_END_TURN__\n  \n", true).await;
+    agent.handle_execute_tool().await.unwrap();
+    assert_eq!(agent.context.current_state(), AgentState::Idle);
+}
+
+/// 正文中间的标记不生效：照常转 Streaming。
+#[cfg(unix)]
+#[tokio::test]
+async fn end_turn_marker_mid_text_ignored() {
+    use crate::agent::AgentState;
+
+    let mut agent = marker_agent("__YOMI_END_TURN__ 后面还有正文", true).await;
+    agent.handle_execute_tool().await.unwrap();
+    assert_eq!(agent.context.current_state(), AgentState::Streaming);
+}
+
+/// 无标记：照常转 Streaming。
+#[cfg(unix)]
+#[tokio::test]
+async fn no_marker_continues_streaming() {
+    use crate::agent::AgentState;
+
+    let mut agent = marker_agent("普通收尾", true).await;
+    agent.handle_execute_tool().await.unwrap();
+    assert_eq!(agent.context.current_state(), AgentState::Streaming);
+}
+
+/// feature 开关关闭：标记是惰性文本，照常转 Streaming。
+#[cfg(unix)]
+#[tokio::test]
+async fn end_turn_marker_disabled_by_feature_flag() {
+    use crate::agent::AgentState;
+
+    let mut agent = marker_agent("记一笔 __YOMI_END_TURN__", false).await;
+    agent.handle_execute_tool().await.unwrap();
+    assert_eq!(agent.context.current_state(), AgentState::Streaming);
+}
+
+/// 无条件语义 pin：工具被 hook 否决（没执行），标记照样结束回合——
+/// 它是模型在正文里签的声明，不以工具成败为条件。
+#[cfg(unix)]
+#[tokio::test]
+async fn end_turn_marker_unconditional_when_tool_denied() {
+    use crate::agent::AgentState;
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs};
+    use crate::types::{ContentBlock, Message, Role, SessionId, ToolCall};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    let data_dir = tempfile::tempdir().unwrap();
+    let hook_dir = data_dir.path().join("hooks").join("pre_tool_use");
+    std::fs::create_dir_all(&hook_dir).unwrap();
+    let hook = hook_dir.join("10-guard");
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut f = std::fs::File::create(&hook).unwrap();
+        writeln!(f, "#!/bin/sh").unwrap();
+        writeln!(f, "exit 2").unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let shared = Arc::new(AgentShared::with_data_dir(
+        Arc::new(BTreeMap::new()),
+        "test".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+        None,
+        data_dir.path().to_path_buf(),
+    ));
+    let call = ToolCall {
+        id: "call-1".to_string(),
+        name: "shell".to_string(),
+        arguments: serde_json::json!({"command": "touch should_not_exist"}),
+    };
+    let history = vec![
+        Arc::new(Message::user("收尾")),
+        Arc::new(Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Text {
+                text: "记一笔 __YOMI_END_TURN__".to_string(),
+            }],
+            tool_calls: Some(vec![call]),
+            ..Default::default()
+        }),
+    ];
+    let working_dir = tempfile::tempdir().unwrap();
+    let args = AgentSpawnArgs {
+        base_prompt: "test".to_string(),
+        skills: Vec::new(),
+        history,
+        session_id: SessionId::new().to_string(),
+        parent_session_id: None,
+        max_iterations: 1,
+        working_dir: working_dir.path().to_path_buf(),
+        cancel_token: None,
+        tool_flags: crate::tools::ToolFlags::new(false),
+        file_state_store: None,
+        tool_blocklist: Vec::new(),
+        max_tool_output_length: 1024,
+        mailbox: Arc::new(crate::comms::Mailbox::new()),
+        input_bus: None,
+        ext_tools: Vec::new(),
+        end_turn_marker: true,
+    };
+    let mut agent = Agent::new(&shared, args).await;
+
+    agent.handle_execute_tool().await.unwrap();
+    assert_eq!(agent.context.current_state(), AgentState::Idle);
     assert!(!working_dir.path().join("should_not_exist").exists());
 }
 
@@ -1097,6 +1306,7 @@ mod rewind_tests {
             mailbox: Arc::new(crate::comms::Mailbox::new()),
             input_bus: None,
             ext_tools: Vec::new(),
+            end_turn_marker: true,
         };
         let agent = Agent::new(&shared, args).await;
         RewindHarness {
@@ -1403,6 +1613,7 @@ async fn empty_completion_is_not_persisted_and_fails_turn_cleanly() {
         mailbox: Arc::new(crate::comms::Mailbox::new()),
         input_bus: None,
         ext_tools: Vec::new(),
+        end_turn_marker: true,
     };
     let mut subscriber = event_bus.subscribe(session_id.clone());
     let mut agent = Agent::new(&shared, args).await;

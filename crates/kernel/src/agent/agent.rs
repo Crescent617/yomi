@@ -86,6 +86,9 @@ pub struct Agent {
     current_model_config: Option<Arc<crate::provider::ModelConfig>>,
     /// Whether the current user-initiated run already used its truncation recovery.
     auto_continue_used: bool,
+    /// Honor the end-of-turn marker (from spawn args, resolved from
+    /// `[features] end_turn_marker`).
+    end_turn_marker: bool,
 }
 
 impl Agent {
@@ -199,6 +202,7 @@ impl Agent {
             current_provider: None,
             current_model_config: None,
             auto_continue_used: false,
+            end_turn_marker: args.end_turn_marker,
         }
     }
 

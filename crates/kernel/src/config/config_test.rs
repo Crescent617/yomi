@@ -277,6 +277,38 @@ attachments = false
 }
 
 #[test]
+fn end_turn_marker_default_on_and_explicitly_disableable() {
+    // Same shape as attachments: a default capability, `all` has no say.
+    let parsed: Config = toml::from_str(
+        r"
+[features]
+all = true
+",
+    )
+    .unwrap();
+    assert!(parsed.features.end_turn_marker_enabled());
+
+    let parsed: Config = toml::from_str(
+        r"
+[features]
+all = true
+end_turn_marker = false
+",
+    )
+    .unwrap();
+    assert!(!parsed.features.end_turn_marker_enabled());
+
+    let parsed: Config = toml::from_str(
+        r"
+[features]
+end_turn_marker = false
+",
+    )
+    .unwrap();
+    assert!(!parsed.features.end_turn_marker_enabled());
+}
+
+#[test]
 fn features_inherit_all_and_allow_explicit_overrides() {
     let parsed: Config = toml::from_str(
         r"

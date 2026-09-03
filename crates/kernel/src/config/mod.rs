@@ -169,6 +169,12 @@ pub struct FeaturesConfig {
     /// in history still surface when disabled — the flag only gates what
     /// agents are taught.
     pub attachments: Option<bool>,
+    /// Teach agents the `__YOMI_END_TURN__` marker: written at the very
+    /// end of a reply that carries tool calls, the tools run and the turn
+    /// then ends without another model round (for terminal actions like a
+    /// final record command). **On by default** and ignores `all`; set
+    /// `false` to disable (markers in replies are then inert text).
+    pub end_turn_marker: Option<bool>,
 }
 
 impl FeaturesConfig {
@@ -190,6 +196,11 @@ impl FeaturesConfig {
     #[must_use]
     pub fn attachments_enabled(&self) -> bool {
         self.attachments.unwrap_or(true)
+    }
+
+    #[must_use]
+    pub fn end_turn_marker_enabled(&self) -> bool {
+        self.end_turn_marker.unwrap_or(true)
     }
 }
 
