@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.15] - 2026-09-03
+
+### Added
+
+- 新增回合终止标记 `__YOMI_END_TURN__`：回复正文末尾写上它并同批发出收尾工具调用，工具执行完毕后本轮即结束，不再开启新一轮模型调用（用于「顺带记录」型收尾，省一次模型往返）。开关 `[features] end_turn_marker`（默认开启，设为 `false` 关闭）；标记只在正文末尾生效，且不会显示在 TUI/GUI/飞书/CLI 的回复中（会话记录保留原文）。
+
 ## [0.10.14] - 2026-09-03
 
 ### Added
