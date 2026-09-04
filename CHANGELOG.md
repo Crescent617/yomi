@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **分类**：`Added` 新能力 / `Changed` 行为变化 / `Fixed` 问题修复 / `Removed` 移除能力。
 - **配置与命令必须点名**：新增或变更配置项、命令时，写出名称与默认值。
 
+## [Unreleased]
+
+### Added
+
+- GUI 聊天新增文本搜索：⌘F / Ctrl+F 打开搜索栏，实时显示匹配计数，Enter / Shift+Enter 在匹配间循环跳转并高亮当前匹配，Esc 关闭。
+
+### Fixed
+
+- 修复 `/clear` 与 `/compact` 后输入框右下角的上下文使用比例不立刻清零、要等下一条消息发出后才更新的问题（#4）。
+- 修复 macOS 输入法下方向键等功能键的键码可能经粘贴或组字提交漏进输入框、显示为方块的问题（#5）。
+- 修复侧边栏重命名会话或项目时，列表后台刷新会把编辑中的输入框打断收走的问题（#6）。
+
 ## [0.10.18] - 2026-09-04
 
 ### Removed

@@ -247,6 +247,13 @@ body.pet-window {
   text-transform: uppercase;
 }
 
+/* Find-in-chat active match (CSS Custom Highlight API, no DOM
+   mutation). Persimmon wash, readable in both palettes. */
+::highlight(yomi-search-active) {
+  background-color: hsl(var(--primary) / 0.4);
+  color: inherit;
+}
+
 /* Paper grain: a faint static film over the whole workspace. Purely
    decorative — it never intercepts input and is absent in the pet window. */
 body:not(.pet-window)::after {

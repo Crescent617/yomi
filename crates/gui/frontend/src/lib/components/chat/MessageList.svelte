@@ -14,7 +14,20 @@
   import { guiPreferences } from "../../settings.svelte";
   import QueryNavigator from "./QueryNavigator.svelte";
   import MessageListSkeleton from "./MessageListSkeleton.svelte";
+  import SearchBar from "./SearchBar.svelte";
   import { userQueryMarkers } from "./query-navigator";
+  import {
+    clampActiveIndex,
+    findMatches,
+    stepActiveIndex,
+    type SearchMatch,
+  } from "./message-search";
+  import {
+    clearSearchHighlight,
+    highlightOccurrence,
+  } from "./search-highlight";
+  import { hasOpenModal } from "../../modal-stack";
+  import { tick } from "svelte";
   import type { ActivityGroupOverride } from "./activity-expansion";
 
   const activeSession = $derived(getActiveSession());
@@ -201,6 +214,121 @@
     releaseSignature = null;
     releaseAfterLoad = false;
   }
+
+  // ── Find in chat (⌘F) ──────────────────────────────────────────────
+  // Data-level match counting over the session's message text (cheap,
+  // covers collapsed blocks); the active match is highlighted through
+  // the CSS Custom Highlight API — a Range registry, not DOM mutation —
+  // so streaming re-renders never fight wrapper elements. Navigation
+  // jumps are explicit user intent, so they release the bottom pin.
+  let searchOpen = $state(false);
+  let searchQuery = $state("");
+  let searchActiveIndex = $state(0);
+  let searchFocusTick = $state(0);
+  let searchRestoreFocus: HTMLElement | null = null;
+  const searchMatches = $derived(
+    findMatches(
+      [
+        ...(activeSession?.messages ?? []),
+        // 流式中的最新消息在 stop 前不入 messages，但屏上可见——
+        // 并入搜索，否则流式中最新回复计 0/0、run 结束计数突变。
+        ...(activeSession ? (streamingMessages[activeSession.id] ?? []) : []),
+      ],
+      searchQuery,
+    ),
+  );
+  const searchActiveClamped = $derived(
+    clampActiveIndex(searchActiveIndex, searchMatches.length),
+  );
+
+  function openSearch() {
+    if (!activeSession) return;
+    if (searchOpen) {
+      searchFocusTick += 1;
+      return;
+    }
+    searchRestoreFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    searchActiveIndex = 0;
+    searchOpen = true;
+  }
+
+  function closeSearch() {
+    searchOpen = false;
+    searchQuery = "";
+    searchActiveIndex = 0;
+    clearSearchHighlight();
+    searchRestoreFocus?.focus();
+    searchRestoreFocus = null;
+  }
+
+  function scrollToMatch(match: SearchMatch | undefined) {
+    if (!match || !messageContent || !scrollContainer) return;
+    const el = messageContent.querySelector<HTMLElement>(
+      `[data-message-id="${match.message_id}"]`,
+    );
+    if (!el) return;
+    handleQueryJump(); // a jump is deliberate navigation: release the pin
+    const containerTop = scrollContainer.getBoundingClientRect().top;
+    const offset =
+      el.getBoundingClientRect().top - containerTop + scrollContainer.scrollTop;
+    const reduceMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    scrollContainer.scrollTo({
+      top: Math.max(0, offset - 96),
+      behavior: reduceMotion ? "auto" : "smooth",
+    });
+    // The occurrence ordinal is data-level; the rendered DOM may hold
+    // fewer (collapsed details, markdown re-flow) — then the Range is
+    // null and the scroll alone carries the navigation. Raw query, not
+    // trimmed: counting (findMatches) and locating must agree.
+    highlightOccurrence(el, searchQuery, match.occurrence);
+  }
+
+  // Jump on query edits (reset to the first match) and on explicit
+  // next/previous steps — but NOT on match-count churn from streaming,
+  // which would yank the view mid-read. The reset lives apart from the
+  // jump effect so stepping never re-fires it.
+  let searchLastQuery = "";
+  $effect(() => {
+    if (searchQuery !== searchLastQuery) {
+      searchLastQuery = searchQuery;
+      searchActiveIndex = 0;
+    }
+  });
+  $effect(() => {
+    if (!searchOpen) return;
+    const query = searchQuery;
+    const index = searchActiveIndex;
+    const matches = untrack(() => searchMatches);
+    if (!query.trim() || matches.length === 0) {
+      clearSearchHighlight();
+      return;
+    }
+    const match = matches[clampActiveIndex(index, matches.length)];
+    void tick().then(() => scrollToMatch(match));
+  });
+
+  function stepSearch(delta: 1 | -1) {
+    searchActiveIndex = stepActiveIndex(
+      searchActiveClamped,
+      searchMatches.length,
+      delta,
+    );
+  }
+
+  // Switching sessions closes the find bar with the view it searched.
+  let searchSessionId: string | null = null;
+  $effect(() => {
+    const id = activeSession?.id ?? null;
+    if (id !== searchSessionId) {
+      searchSessionId = id;
+      if (searchOpen) closeSearch();
+    }
+  });
 
   function scrollToBottomNow(behavior: "instant" | "smooth" = "instant") {
     if (!scrollContainer) return;
@@ -495,6 +623,16 @@
     container.addEventListener("touchstart", onTouchStart, { passive: true });
     container.addEventListener("touchmove", onTouchMove, { passive: true });
     function onWindowKeydown(event: KeyboardEvent) {
+      // ⌘F / Ctrl+F: find in chat. Mirrors the palette's guards — never
+      // open behind a modal, where the bar would be invisible yet still
+      // capture typed text.
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+        if (!hasOpenModal() && activeSession) {
+          event.preventDefault();
+          openSearch();
+        }
+        return;
+      }
       // Scroll keys toward older content are user intent too — when they
       // target this list.
       if (
@@ -513,71 +651,90 @@
       container.removeEventListener("touchstart", onTouchStart);
       container.removeEventListener("touchmove", onTouchMove);
       window.removeEventListener("keydown", onWindowKeydown);
+      clearSearchHighlight();
       if (glueVerifyFrame !== null) cancelAnimationFrame(glueVerifyFrame);
     };
   });
 </script>
 
 {#if activeSession}
-  <div class="h-full relative">
-    <!-- Classic scrollbars (macOS w/ mouse, Windows) shrink the scroller's
-         content box, so the centered message column sits half a scrollbar
-         width off from the input column below. Symmetric gutters re-center
-         it — only once the max-w-4xl (56rem) column actually binds; below
-         that both columns are full-width and already aligned. -->
-    <div
-      bind:this={scrollContainer}
-      onscroll={onScroll}
-      class="h-full overflow-y-auto [overflow-anchor:none] @min-[56rem]:[scrollbar-gutter:stable_both-edges]"
-    >
-      <div
-        bind:this={messageContent}
-        class="mx-auto w-full max-w-4xl px-4 lg:px-6 pt-2 pb-4"
-      >
-        {#if messagesLoading}
-          <MessageListSkeleton />
-        {:else}
-          <div class="flex flex-col gap-3">
-            <DisplayItemList
-              items={displaySections.stableItems}
-              session_id={activeSession.id}
-              markLatest={!dynamicHasActivityGroup}
-              expansionOverrides={activityExpansionOverrides}
-            />
-            <DisplayItemList
-              items={displaySections.dynamicItems}
-              session_id={activeSession.id}
-              activityActive={isActiveSessionPhase(activeSession.phase)}
-              expansionOverrides={activityExpansionOverrides}
-            />
-            {#if isActiveSessionPhase(activeSession.phase)}
-              <StreamStatusLine
-                session={activeSession}
-                messages={displayMessages}
-              />
-            {/if}
-          </div>
-        {/if}
+  <div class="h-full flex flex-col">
+    {#if searchOpen}
+      <!-- 独立一行，不做浮层：浮层在顶居中会压 assistant 正文、在右
+           上会压右对齐的用户气泡；占一行零遮挡。右侧 QueryNavigator
+           滑轨在消息区垂直居中处，错开不冲突。 -->
+      <div class="flex shrink-0 justify-end px-3 pt-2">
+        <SearchBar
+          bind:query={searchQuery}
+          activeIndex={searchActiveClamped}
+          total={searchMatches.length}
+          focusTick={searchFocusTick}
+          onNext={() => stepSearch(1)}
+          onPrev={() => stepSearch(-1)}
+          onClose={closeSearch}
+        />
       </div>
-    </div>
-    <QueryNavigator
-      {scrollContainer}
-      {messageContent}
-      queries={queryMarkers}
-      onJump={handleQueryJump}
-    />
-    <ActivityBubbles />
-    {#if !isNearBottom}
-      <button
-        type="button"
-        onclick={scrollToBottom}
-        class="absolute bottom-3 left-1/2 z-10 inline-flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-md transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-        aria-label="Jump to latest message"
-        title="Jump to latest message"
-      >
-        <ArrowDown size={15} strokeWidth={2.25} />
-      </button>
     {/if}
+    <div class="relative min-h-0 flex-1">
+      <!-- Classic scrollbars (macOS w/ mouse, Windows) shrink the scroller's
+           content box, so the centered message column sits half a scrollbar
+           width off from the input column below. Symmetric gutters re-center
+           it — only once the max-w-4xl (56rem) column actually binds; below
+           that both columns are full-width and already aligned. -->
+      <div
+        bind:this={scrollContainer}
+        onscroll={onScroll}
+        class="h-full overflow-y-auto [overflow-anchor:none] @min-[56rem]:[scrollbar-gutter:stable_both-edges]"
+      >
+        <div
+          bind:this={messageContent}
+          class="mx-auto w-full max-w-4xl px-4 lg:px-6 pt-2 pb-4"
+        >
+          {#if messagesLoading}
+            <MessageListSkeleton />
+          {:else}
+            <div class="flex flex-col gap-3">
+              <DisplayItemList
+                items={displaySections.stableItems}
+                session_id={activeSession.id}
+                markLatest={!dynamicHasActivityGroup}
+                expansionOverrides={activityExpansionOverrides}
+              />
+              <DisplayItemList
+                items={displaySections.dynamicItems}
+                session_id={activeSession.id}
+                activityActive={isActiveSessionPhase(activeSession.phase)}
+                expansionOverrides={activityExpansionOverrides}
+              />
+              {#if isActiveSessionPhase(activeSession.phase)}
+                <StreamStatusLine
+                  session={activeSession}
+                  messages={displayMessages}
+                />
+              {/if}
+            </div>
+          {/if}
+        </div>
+      </div>
+      <QueryNavigator
+        {scrollContainer}
+        {messageContent}
+        queries={queryMarkers}
+        onJump={handleQueryJump}
+      />
+      <ActivityBubbles />
+      {#if !isNearBottom}
+        <button
+          type="button"
+          onclick={scrollToBottom}
+          class="absolute bottom-3 left-1/2 z-10 inline-flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-md transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+          aria-label="Jump to latest message"
+          title="Jump to latest message"
+        >
+          <ArrowDown size={15} strokeWidth={2.25} />
+        </button>
+      {/if}
+    </div>
   </div>
 {:else}
   <div class="flex items-center justify-center h-full text-muted-foreground">

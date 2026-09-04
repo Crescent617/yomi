@@ -253,18 +253,64 @@ export function focusAndSelect(node: HTMLInputElement) {
 }
 
 /**
- * 拦截输入框里的私用区字符（U+E000–U+F8FF）。
- * macOS 输入法怪癖：方向键/功能键的键码（U+F700–U+F704）可能经由
- * `insertText` 漏进 textarea，显示为豆腐块。私用区没有任何合法输入内容，
- * 直接拒掉。（输入法正常组字走 insertCompositionText，不受影响。）
+ * rename 输入框的 blur 是不是用户主动离开：Tab/点击造成的焦点转移
+ * （relatedTarget 非空）或已武装的外部 pointerdown。反之为 keyed 列表
+ * DOM 移动造成的幽灵 blur（Chromium 移焦触发、WebKit 焦点被夺）。
+ */
+export function isDeliberateRenameExit(
+  e: FocusEvent,
+  pointerDismiss: boolean,
+): boolean {
+  return e.relatedTarget !== null || pointerDismiss;
+}
+
+/**
+ * 私用区字符（U+E000–U+F8FF）匹配。macOS 输入法怪癖：方向键/功能键
+ * 的键码（U+F700–U+F704）可能经 `insertText` 漏进 textarea，显示为
+ * 豆腐块。私用区没有任何合法输入内容。
+ */
+const PUA_RE = /[\u{e000}-\u{f8ff}]/gu;
+
+export function containsPua(text: string): boolean {
+  PUA_RE.lastIndex = 0;
+  return PUA_RE.test(text);
+}
+
+export function stripPua(text: string): string {
+  return text.replace(PUA_RE, "");
+}
+
+/**
+ * 拦截输入框里的私用区字符。覆盖三条注入路径：逐键 insertText、
+ * 组字提交 insertCompositionText（组字中按方向键同样会漏）、以及
+ * 粘贴 insertFromPaste（整体拒掉会误伤长文本，改由
+ * `sanitizePuaPaste` 消毒后手动插入，这里放行）。
  */
 export function blockPuaInput(e: InputEvent) {
-  if (e.inputType !== "insertText" || !e.data) return;
-  for (const ch of e.data) {
-    const cp = ch.codePointAt(0)!;
-    if (cp >= 0xe000 && cp <= 0xf8ff) {
-      e.preventDefault();
-      return;
-    }
-  }
+  if (e.inputType === "insertFromPaste") return;
+  if (e.inputType !== "insertText" && e.inputType !== "insertCompositionText")
+    return;
+  if (e.data && containsPua(e.data)) e.preventDefault();
+}
+
+/**
+ * 粘贴消毒：剪贴板文本含私用区字符时，拦掉默认粘贴、把剥掉 PUA 的
+ * 文本手动插到光标处（dispatch input 事件让 Svelte 绑定同步；浏览器
+ * 撤销栈对 setRangeText 的支持各引擎不一，不作为语义保证）。无 PUA
+ * 时不动，走浏览器默认粘贴。
+ */
+export function sanitizePuaPaste(
+  e: ClipboardEvent,
+  textarea: HTMLTextAreaElement,
+) {
+  const text = e.clipboardData?.getData("text/plain");
+  if (!text || !containsPua(text)) return;
+  e.preventDefault();
+  textarea.setRangeText(
+    stripPua(text),
+    textarea.selectionStart,
+    textarea.selectionEnd,
+    "end",
+  );
+  textarea.dispatchEvent(new Event("input", { bubbles: true }));
 }

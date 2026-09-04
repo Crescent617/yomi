@@ -55,7 +55,11 @@
     forkSession as forkSessionState,
     activateSession as stateActivateSession,
   } from "../../session";
-  import { formatTimeAgo, focusAndSelect } from "../../utils";
+  import {
+    formatTimeAgo,
+    focusAndSelect,
+    isDeliberateRenameExit,
+  } from "../../utils";
   import { groupSessionsByTime } from "./session-time-groups";
   import { createFromSessionParams } from "./session-create";
   import { isActiveSessionPhase } from "../../session-phase";
@@ -160,7 +164,52 @@
       autoExpandRecent();
       loadPinnedSessions();
     }
+
+    // Rename blur guard, armed by pointer: a deliberate outside click is
+    // the only pointer-driven blur that should commit. Capture phase so
+    // the flag is set before the blur event follows the pointerdown.
+    // The arm lives only for the gesture — pointerup/pointercancel
+    // disarm — so a blur-free press (right-click, prevented mousedown)
+    // never leaves a stale arm for the next spurious blur.
+    const armRenameDismiss = (e: PointerEvent) => {
+      if (!renamingSessionId && !renamingProjectId) return;
+      renamePointerDismiss = !(
+        e.target instanceof HTMLElement && e.target.closest("[data-rename]")
+      );
+    };
+    const disarmRenameDismiss = () => {
+      renamePointerDismiss = false;
+    };
+    window.addEventListener("pointerdown", armRenameDismiss, true);
+    window.addEventListener("pointerup", disarmRenameDismiss, true);
+    window.addEventListener("pointercancel", disarmRenameDismiss, true);
+    return () => {
+      window.removeEventListener("pointerdown", armRenameDismiss, true);
+      window.removeEventListener("pointerup", disarmRenameDismiss, true);
+      window.removeEventListener("pointercancel", disarmRenameDismiss, true);
+    };
   });
+
+  // Session rows sort by updated_at and regroup on a 30 s clock: any
+  // background refresh mid-rename moves the focused row in the keyed
+  // each, which fires a spurious blur (Chromium) or steals focus
+  // (WebKit). Committing on that blur makes the input vanish mid-edit
+  // (issue #6). Only deliberate exits commit: Tab/click focus shift
+  // (relatedTarget), an armed outside pointerdown, Enter. Spurious
+  // blurs re-focus instead.
+  let renamePointerDismiss = false;
+  function renameBlur(e: FocusEvent, confirm: () => void) {
+    // Enter/Escape already settled the edit; the blur that the input's
+    // unmount may trigger must not commit a half-typed name.
+    if (!renamingSessionId && !renamingProjectId) return;
+    const deliberate = isDeliberateRenameExit(e, renamePointerDismiss);
+    renamePointerDismiss = false;
+    if (deliberate) {
+      confirm();
+    } else {
+      (e.currentTarget as HTMLElement).focus();
+    }
+  }
 
   /** Auto-expand the 3 most recently active projects after loading their sessions. */
   async function autoExpandRecent() {
@@ -564,10 +613,10 @@
 
   async function confirmRenameProject(project_id: string) {
     const name = renameValue.trim();
-    if (!name) {
-      renamingProjectId = null;
-      return;
-    }
+    // 先收尾编辑态：await 窗口内的 deliberate blur 不会再触发第二次
+    // 提交（同值虽幂等，但会重复 toast）。
+    renamingProjectId = null;
+    if (!name) return;
     try {
       await api.renameProject(project_id, name);
       const p = projectState.projects.find((x) => x.id === project_id);
@@ -580,15 +629,13 @@
       );
       showNotification("Failed to rename project", "error");
     }
-    renamingProjectId = null;
   }
 
   async function confirmRenameSession(session_id: string) {
     const name = renameValue.trim();
-    if (!name) {
-      renamingSessionId = null;
-      return;
-    }
+    // 同 confirmRenameProject：先收尾编辑态，挡住 await 窗口内的二次提交。
+    renamingSessionId = null;
+    if (!name) return;
     try {
       await api.renameSession(session_id, name);
       const s = sessionState.sessions.find((x) => x.id === session_id);
@@ -601,7 +648,6 @@
       );
       showNotification("Failed to rename session", "error");
     }
-    renamingSessionId = null;
   }
 
   async function forkSession(session_id: string) {
@@ -966,15 +1012,20 @@
                       <input
                         type="text"
                         use:focusAndSelect
+                        data-rename
                         bind:value={renameValue}
                         onkeydown={(e: KeyboardEvent) => {
                           e.stopPropagation();
                           if (e.key === "Enter")
                             confirmRenameSession(session.id);
                           if (e.key === "Escape") renamingSessionId = null;
+                          // WKWebView 的 blur.relatedTarget 不可靠：Tab
+                          // 离开主动武装，避免被当成幽灵 blur 反复抢焦。
+                          if (e.key === "Tab") renamePointerDismiss = true;
                         }}
                         onclick={(e: MouseEvent) => e.stopPropagation()}
-                        onblur={() => confirmRenameSession(session.id)}
+                        onblur={(e) =>
+                          renameBlur(e, () => confirmRenameSession(session.id))}
                         class="w-full min-w-0 rounded border border-border bg-background px-1 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
                       />
                     {:else}
@@ -1196,12 +1247,15 @@
                   <input
                     type="text"
                     use:focusAndSelect
+                    data-rename
                     bind:value={renameValue}
                     onkeydown={(e: KeyboardEvent) => {
                       if (e.key === "Enter") confirmRenameProject(project.id);
                       if (e.key === "Escape") renamingProjectId = null;
+                      if (e.key === "Tab") renamePointerDismiss = true;
                     }}
-                    onblur={() => confirmRenameProject(project.id)}
+                    onblur={(e) =>
+                      renameBlur(e, () => confirmRenameProject(project.id))}
                     class="flex-1 min-w-0 bg-background border border-border rounded px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
                   />
                 {:else}
@@ -1284,13 +1338,16 @@
                       <input
                         type="text"
                         use:focusAndSelect
+                        data-rename
                         bind:value={renameValue}
                         onkeydown={(e: KeyboardEvent) => {
                           if (e.key === "Enter")
                             confirmRenameSession(session.id);
                           if (e.key === "Escape") renamingSessionId = null;
+                          if (e.key === "Tab") renamePointerDismiss = true;
                         }}
-                        onblur={() => confirmRenameSession(session.id)}
+                        onblur={(e) =>
+                          renameBlur(e, () => confirmRenameSession(session.id))}
                         class="flex-1 min-w-0 bg-background border border-border rounded px-1 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
                       />
                     {:else}

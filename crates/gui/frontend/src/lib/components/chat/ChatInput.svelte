@@ -21,7 +21,7 @@
   import { forkSession, textFromBlocks } from "../../session";
   import { isActiveSessionPhase } from "../../session-phase";
   import { SLASH_COMMANDS } from "../../commands";
-  import { blockPuaInput } from "../../utils";
+  import { blockPuaInput, sanitizePuaPaste } from "../../utils";
   import { open } from "@tauri-apps/plugin-dialog";
 
   import ModelSelector from "./ModelSelector.svelte";
@@ -592,15 +592,21 @@
     const items = e.clipboardData?.items;
     if (!items) return;
 
+    let imageHandled = false;
     for (const item of items) {
       if (item.type.startsWith("image/")) {
-        e.preventDefault();
         const file = item.getAsFile();
+        // 取不出 file 时不接管——否则这次粘贴连文本部分也一起丢掉。
         if (file) {
+          e.preventDefault();
+          imageHandled = true;
           await handleClipboardImage(file);
         }
       }
     }
+    // 图片已接管这次粘贴（preventDefault 已调）—— 不再消毒文本，
+    // 否则剪贴板同带 image+PUA 文本时会在附件之外多插一段。
+    if (!imageHandled && textareaRef) sanitizePuaPaste(e, textareaRef);
   }
 
   function handleKeydown(e: KeyboardEvent) {

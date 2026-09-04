@@ -12,6 +12,7 @@ import {
   showNotification,
   streamingMessages,
   unreadSessions,
+  type BotMessage,
   type Message,
   type SessionState,
 } from "./state.svelte";
@@ -490,7 +491,13 @@ export function loadSessionMessages(
     }
   }
 
-  let latestTokenUsage = session.token_usage;
+  // The reloaded history is authoritative: when no assistant message
+  // carries token_usage (post-/clear the history is empty; post-/compact
+  // the compactor stripped stale per-message usage), fall back to
+  // "unknown" rather than preserving the pre-clear reading — otherwise
+  // the context gauge keeps showing the old percentage until the next
+  // turn's TokenUsage event lands.
+  let latestTokenUsage: BotMessage["token_usage"] = undefined;
   for (let i = parsedMessages.length - 1; i >= 0; i--) {
     const msg = parsedMessages[i];
     if (msg.type === "assistant" && msg.token_usage) {
@@ -511,9 +518,24 @@ export function loadSessionMessages(
         existing.id === parsedMessages[index].id &&
         existing.created_at === parsedMessages[index].created_at,
     );
+  // Persisted usage rows carry no context_window — inherit it from the
+  // live reading so adopting a reloaded value never hides the gauge.
+  const reloadedUsage: SessionState["token_usage"] = latestTokenUsage
+    ? {
+        ...latestTokenUsage,
+        context_window: session.token_usage?.context_window,
+      }
+    : undefined;
   if (!unchanged) {
     replaceSessionMessages(session, parsedMessages);
+    // The reload is authoritative only when it replaces: /clear and
+    // /compact both rewrite the history, so a missing usage reading
+    // there clears the stale pre-clear percentage (#4).
+    session.token_usage = reloadedUsage;
+  } else if (reloadedUsage !== undefined && session.token_usage === undefined) {
+    // Identical history fills an empty reading at most — never overwrite
+    // a live streaming value with an older persisted one.
+    session.token_usage = reloadedUsage;
   }
-  session.token_usage = latestTokenUsage;
   session.messages_loaded = true;
 }
