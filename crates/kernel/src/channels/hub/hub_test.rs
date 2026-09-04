@@ -3938,6 +3938,71 @@ fn test_format_watch_line() {
 }
 
 #[test]
+fn test_format_channel_line() {
+    let msg = ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: "ou_1".to_string(),
+        external_message_id: None,
+        is_mention: false,
+        raw_text: None,
+        content: vec![],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: true,
+        create_time: None,
+        doc_comment: None,
+    };
+    assert_eq!(
+        format_channel_line("feishu", "main", &msg),
+        "- **Channel**: feishu · `main` · chat `oc_1`"
+    );
+
+    // Inside a thread: the thread id rides along.
+    let msg = ChannelMessage {
+        thread_id: Some("omt_1".to_string()),
+        root_id: Some("omt_1".to_string()),
+        ..msg
+    };
+    assert_eq!(
+        format_channel_line("feishu", "main", &msg),
+        "- **Channel**: feishu · `main` · chat `oc_1` · thread `omt_1`"
+    );
+
+    // Doc comments name their document instead (chat-scoped ids are empty).
+    let msg = ChannelMessage {
+        external_chat_id: String::new(),
+        thread_id: None,
+        root_id: None,
+        doc_comment: Some(crate::channels::DocCommentRef {
+            file_token: "tok123".to_string(),
+            file_type: "docx".to_string(),
+            comment_id: "c_1".to_string(),
+        }),
+        ..msg
+    };
+    assert_eq!(
+        format_channel_line("feishu", "main", &msg),
+        "- **Channel**: feishu · `main` · doc `tok123` (docx) · comment `c_1`"
+    );
+
+    // The whole-doc sentinel renders as words, not the raw "whole" id.
+    let msg = ChannelMessage {
+        doc_comment: Some(crate::channels::DocCommentRef {
+            file_token: "tok123".to_string(),
+            file_type: "docx".to_string(),
+            comment_id: crate::channels::WHOLE_COMMENT_ID.to_string(),
+        }),
+        ..msg
+    };
+    assert_eq!(
+        format_channel_line("feishu", "main", &msg),
+        "- **Channel**: feishu · `main` · doc `tok123` (docx) · whole-doc comment"
+    );
+}
+
+#[test]
 fn test_format_rules() {
     // Both layers present: both bodies appear under their headers, the
     // session layer naming its session id.
@@ -10255,4 +10320,100 @@ async fn info_command_shows_watch_line_at_chat_level() {
     assert!(reply.is_none(), "info replies go to the card: {reply:?}");
     let card = mock.cards.lock().await.last().unwrap().1.clone();
     assert!(card.contains("- **Watch**: on · observer `sess_"), "{card}");
+}
+
+/// `/info` 的 channel 行接线：无会话文本分支与有会话卡片分支都带
+/// 平台/channel/chat id；话题内追加 thread id（doc 评论走另一格式，
+/// 由 `format_channel_line` 的单测覆盖）。
+#[tokio::test]
+async fn info_command_shows_channel_line() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        models: vec![crate::provider::ModelConfig {
+            name: "blackhole".into(),
+            endpoint: "http://127.0.0.1:1".into(),
+            ..Default::default()
+        }],
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+    kernel.start();
+
+    let mock = Arc::new(CardMockAdapter::new());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "app".into(),
+            app_secret: "secret".into(),
+        },
+        require_mention: true,
+        reply_in_thread: true,
+        admin_users: vec!["ou_admin".to_string()],
+        ..Default::default()
+    };
+    let msg = |text: &str| ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: "ou_admin".to_string(),
+        external_message_id: Some("m1".to_string()),
+        is_mention: true,
+        raw_text: Some(text.to_string()),
+        content: vec![ContentBlock::Text {
+            text: text.to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: true,
+        create_time: Some(1000),
+        doc_comment: None,
+    };
+    let handle = |m: ChannelMessage| {
+        handle_incoming_message(
+            "mock",
+            &config,
+            &store,
+            Arc::clone(&kernel),
+            m,
+            &obs,
+            &adapter,
+        )
+    };
+
+    // 无会话（chat 级文本分支）：平台 · channel · chat id。
+    let reply = handle(msg("/i")).await.unwrap().unwrap();
+    assert!(
+        reply.contains("- **Channel**: feishu · `mock` · chat `oc_1`"),
+        "{reply}"
+    );
+    assert!(!reply.contains("thread"), "{reply}");
+
+    // 无会话（话题内文本分支）：追加 thread id。
+    let mut m = msg("/i");
+    m.thread_id = Some("omt_1".to_string());
+    m.root_id = Some("omt_1".to_string());
+    let reply = handle(m).await.unwrap().unwrap();
+    assert!(
+        reply.contains("- **Channel**: feishu · `mock` · chat `oc_1` · thread `omt_1`"),
+        "{reply}"
+    );
+
+    // 有会话（卡片分支，借 watch-on 让 chat 会话存在）：卡片带同一行。
+    crate::channels::hub::watch::set_channel_watch_by_name(&store, &kernel, "mock", "oc_1", true)
+        .await
+        .unwrap();
+    let reply = handle(msg("/i")).await.unwrap();
+    assert!(reply.is_none(), "info replies go to the card: {reply:?}");
+    let card = mock.cards.lock().await.last().unwrap().1.clone();
+    assert!(
+        card.contains("- **Channel**: feishu · `mock` · chat `oc_1`"),
+        "{card}"
+    );
 }

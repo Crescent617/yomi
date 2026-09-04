@@ -9,10 +9,10 @@ use std::sync::Arc;
 use tracing::warn;
 
 use crate::channels::hub_command::{
-    format_current_model, format_model_list, format_rules, format_runtime_status,
-    format_session_info, format_unknown_model, format_usage, format_watch_line,
-    format_workflow_list, format_workflow_result, parse_channel_command, suggest_command,
-    ChannelCommand, OverrideMode, HELP_TEXT, WORKFLOW_USAGE,
+    format_channel_line, format_current_model, format_model_list, format_rules,
+    format_runtime_status, format_session_info, format_unknown_model, format_usage,
+    format_watch_line, format_workflow_list, format_workflow_result, parse_channel_command,
+    suggest_command, ChannelCommand, OverrideMode, HELP_TEXT, WORKFLOW_USAGE,
 };
 use crate::channels::hub_context::{append_message_images, prepare_trigger, TriggerKind};
 use crate::channels::hub_deliver::send_info_reply;
@@ -572,12 +572,16 @@ pub(crate) async fn handle_incoming_message(
                 None
             };
             let key = command_session_key(&msg, rit, &chat_id, &mapping_key);
+            // Channel line: the conversation's own ids (platform / chat /
+            // thread) — the reference values allowlists, rules files and
+            // subscriptions are written against. Shown in both branches.
+            let channel_line = format_channel_line(config.platform.name(), channel_name, &msg);
             let Some(sid) = store.find_mapping(channel_name, key).await? else {
                 let model_key =
                     session_model_key(channel_name, store, &kernel, &chat_id, key).await?;
                 let mut text = format!(
                     "No session yet in this {}. First message will use `{model_key}`.\n\
-                     - **Daemon**: yomi v{} · wire v{}",
+                     - **Daemon**: yomi v{} · wire v{}\n{channel_line}",
                     if chat_level { "chat" } else { "thread" },
                     env!("CARGO_PKG_VERSION"),
                     crate::wire::WIRE_PROTOCOL_VERSION,
@@ -606,6 +610,9 @@ pub(crate) async fn handle_incoming_message(
                 &shells,
                 context_tokens,
             );
+            // Meta block at the bottom: channel ids, then the (chat-scoped,
+            // conditional) watch line adjacent to them.
+            body = format!("{body}\n{channel_line}");
             if let Some(line) = watch_line {
                 body = format!("{body}\n{line}");
             }

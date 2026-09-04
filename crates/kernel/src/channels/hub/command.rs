@@ -102,7 +102,7 @@ pub(crate) const COMMANDS: &[(&str, &[&str])] = &[
 pub(crate) const HELP_TEXT: &str = "\
 **Info**
 `/help` (`/h`) — this help
-`/info` (`/i`) — current session info
+`/info` (`/i`) — current session + channel ids (platform / chat / thread)
 `/rules` — rules in effect here: the chat's channel rules + this session's own rules
 `/mailbox` (`/mb`) — pending steer/queued messages; `/mailbox retract <n>` · `/mailbox clear [steer|queue|all]` (admin)
 `/bg` — background tasks (shells + running subagents) with stop buttons (admin)
@@ -731,6 +731,37 @@ pub(crate) fn format_watch_line(status: &crate::channels::ChannelWatchStatus) ->
     }
     let sid = status.session_id.as_deref()?;
     Some(format!("- **Watch**: on · observer `{sid}`"))
+}
+
+/// The `/info` channel line: where this conversation lives — platform,
+/// channel instance, chat id, plus the thread id when inside one. Doc
+/// comments name their document instead (their chat-scoped ids are
+/// empty). Always shown: these ids are exactly what allowlists, channel
+/// rules files and `/subscribe <chat_id>` take.
+pub(crate) fn format_channel_line(
+    platform: &str,
+    channel: &str,
+    msg: &crate::channels::ChannelMessage,
+) -> String {
+    if let Some(dc) = &msg.doc_comment {
+        let what = if dc.comment_id == crate::channels::WHOLE_COMMENT_ID {
+            "whole-doc comment".to_string()
+        } else {
+            format!("comment `{}`", dc.comment_id)
+        };
+        return format!(
+            "- **Channel**: {platform} · `{channel}` · doc `{}` ({}) · {what}",
+            dc.file_token, dc.file_type
+        );
+    }
+    let mut line = format!(
+        "- **Channel**: {platform} · `{channel}` · chat `{}`",
+        msg.external_chat_id
+    );
+    if let Some(tid) = &msg.thread_id {
+        let _ = write!(line, " · thread `{tid}`");
+    }
+    line
 }
 
 pub(crate) fn format_unknown_model(key: &str, models: &[crate::kernel::ModelInfo]) -> String {
