@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.16] - 2026-09-04
+
+### Added
+
+- `/info`（`/i`）回复新增 Channel 行：所在平台、channel 名与 chat id，话题内回复时附 thread id；没有会话时同样展示，方便直接拿去配聊天白名单、channel rules 或 `/subscribe <chat_id>`。文档评论里的 `/info` 改为显示所属文档与评论 id。
+
 ## [0.10.15] - 2026-09-03
 
 ### Added
