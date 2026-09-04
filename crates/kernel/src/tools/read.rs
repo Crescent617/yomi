@@ -2,7 +2,10 @@ use crate::tools::helper::{maybe_truncate_output, FileStateStore, MAX_FILE_SIZE}
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
 use crate::utils::g_lock::{g_lock_timeout, DEFAULT_LOCK_TIMEOUT};
-use crate::utils::image::{image_to_data_url, is_image_extension, MAX_IMAGE_SIZE};
+use crate::utils::image::{
+    bytes_to_data_url, detect_mime_type, gif_first_frame_to_data_url, is_image_extension,
+    probe_gif_info, MAX_IMAGE_SIZE,
+};
 use crate::utils::line_numbers::add_line_numbers;
 use crate::utils::path::expand_tilde;
 use async_trait::async_trait;
@@ -27,37 +30,100 @@ impl ReadTool {
 }
 
 impl ReadTool {
-    /// Read an image file and return `ToolOutput` with image content
-    async fn read_image(&self, path: &Path, path_str: &str) -> Result<ToolOutput> {
+    /// Read an image file and return `ToolOutput` with image content.
+    ///
+    /// `strict` (extension-driven routing) reports undecodable data as an
+    /// explicit unsupported error; non-strict (magic-sniff routing)
+    /// returns `Ok(None)` so the caller can fall back to text/binary
+    /// handling — magic bytes are only a heuristic (a text file can
+    /// legitimately start with `GIF87a`).
+    ///
+    /// Animated GIFs are flattened to their first frame — vision APIs
+    /// discard every later frame anyway, and inlining multi-MB animations
+    /// bloats the request body into `HTTP 413` rejections.
+    async fn read_image(
+        &self,
+        path: &Path,
+        path_str: &str,
+        strict: bool,
+    ) -> Result<Option<ToolOutput>> {
         // Acquire lock before reading to coordinate with writers
         let _guard = g_lock_timeout(path.to_string_lossy(), DEFAULT_LOCK_TIMEOUT).await?;
 
-        // Check file size
+        // Check file size — independent of exec's MAX_FILE_SIZE gate: the
+        // two limits are equal today but can drift.
         let metadata = tokio::fs::metadata(path).await?;
         if metadata.len() > MAX_IMAGE_SIZE {
-            return Ok(ToolOutput::error(format!(
-                "Image file too large: {} bytes (max: {MAX_IMAGE_SIZE})",
+            return Ok(Some(ToolOutput::error(format!(
+                "[Unsupported image: too large | {path_str} | Size: {} bytes | limit: {MAX_IMAGE_SIZE} bytes] Shrink or inspect it with shell tools instead.",
                 metadata.len()
-            )));
+            ))));
         }
 
-        // Convert to data URL
-        match image_to_data_url(path).await? {
-            Some(data_url) => {
+        let data = tokio::fs::read(path).await?;
+        let size = data.len();
+
+        // Strict routing reports the failure; sniffed routing falls back.
+        let unsupported = |reason: &str| {
+            if strict {
+                Some(ToolOutput::error(format!(
+                    "[Unsupported image: {path_str} | Size: {size} bytes] {reason} Inspect it with shell tools instead (e.g. `file`, `magick identify`)."
+                )))
+            } else {
+                None
+            }
+        };
+
+        let Some(mime) = detect_mime_type(&data) else {
+            return Ok(unsupported("Unrecognized or corrupt image data."));
+        };
+
+        if mime == "image/gif" {
+            let info = probe_gif_info(&data);
+            // Flatten multi-frame GIFs — and structure-unreadable ones,
+            // which can't be trusted to be small and static.
+            if info.is_none_or(|i| i.frames > 1) {
+                let url = match gif_first_frame_to_data_url(&data) {
+                    Ok(url) => url,
+                    Err(e) => return Ok(unsupported(&e.to_string())),
+                };
                 // Track file mtime if store is available
                 if let Some(ref store) = self.file_state_store {
                     store.refresh(path).await;
                 }
-
-                // Create output with image and metadata text
-                let metadata_text =
-                    format!("[Image: {} | Size: {} bytes]", path_str, metadata.len());
-                Ok(ToolOutput::with_image_and_text(data_url, metadata_text))
+                let text = match info {
+                    Some(info) => {
+                        let secs = info.duration_ms;
+                        format!(
+                            "[Animated GIF: {}x{} | {} frames | {}.{}s | Size: {size} bytes — frame 1 shown. Extract more frames with shell tools, e.g. `magick '{path_str}[N]' frame.png` or `ffmpeg -i '{path_str}' -vframes 1 frame.png`]",
+                            info.width,
+                            info.height,
+                            info.frames,
+                            secs / 1000,
+                            secs % 1000 / 100,
+                        )
+                    }
+                    None => format!(
+                        "[GIF: Size: {size} bytes | structure unreadable — frame 1 shown. Extract more frames with shell tools, e.g. `magick '{path_str}[N]' frame.png`]"
+                    ),
+                };
+                return Ok(Some(ToolOutput::with_image_and_text(url, text)));
             }
-            None => Ok(ToolOutput::error(format!(
-                "Failed to read image file: {path_str}"
-            ))),
         }
+
+        let output = match bytes_to_data_url(&data) {
+            Ok(data_url) => {
+                let text = format!("[Image: {path_str} | Size: {size} bytes]");
+                ToolOutput::with_image_and_text(data_url, text)
+            }
+            Err(e) => return Ok(unsupported(&e.to_string())),
+        };
+
+        // Track file mtime if store is available
+        if let Some(ref store) = self.file_state_store {
+            store.refresh(path).await;
+        }
+        Ok(Some(output))
     }
 
     /// Read a text file and return `ToolOutput` with text content
@@ -120,7 +186,7 @@ impl Tool for ReadTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Read a file from the local filesystem. Use this instead of cat/head/tail. Supports reading specific line ranges with offset and limit. Also supports reading image files (PNG, JPEG, GIF, WebP) which will be displayed as images."
+        "Read a file from the local filesystem. Use this instead of cat/head/tail. Supports reading specific line ranges with offset and limit. Also supports reading image files (PNG, JPEG, GIF, WebP) which will be displayed as images; animated GIFs are flattened to their first frame (extract more frames with shell tools). Other binary files are unsupported - inspect them with shell tools instead."
     }
 
     fn schema(&self) -> Value {
@@ -188,13 +254,27 @@ impl Tool for ReadTool {
         let file_size = metadata.len();
         if file_size > MAX_FILE_SIZE {
             return Ok(ToolOutput::error(format!(
-                "File is too large to read: {path_str}"
+                "[Unsupported: file too large | {path_str} | Size: {file_size} bytes | limit: {MAX_FILE_SIZE} bytes] Shrink or inspect it with shell tools instead."
             )));
         }
 
-        // Check if this is an image file
-        if is_image_extension(&path) {
-            self.read_image(&path, path_str).await
+        // Route by content, not extension alone: sniff the head for image
+        // magic bytes, and refuse other binary content up front — reading
+        // it as text would dump garbage into context.
+        let head = read_sniff_head(&path).await?;
+        let ext_is_image = is_image_extension(&path);
+        if ext_is_image || detect_mime_type(&head).is_some() {
+            // Sniffed (non-strict) routing is a heuristic: data that turns
+            // out not to be a decodable image falls through to text/binary
+            // handling instead of erroring.
+            if let Some(output) = self.read_image(&path, path_str, ext_is_image).await? {
+                return Ok(output);
+            }
+        }
+        if looks_binary(&head) {
+            Ok(ToolOutput::error(format!(
+                "[Unsupported binary file: {path_str} | Size: {file_size} bytes] Inspect it with shell tools instead (e.g. `file`, `xxd`)."
+            )))
         } else {
             self.read_text(
                 &path,
@@ -206,6 +286,24 @@ impl Tool for ReadTool {
             .await
         }
     }
+}
+
+/// Head bytes sniffed for content-based routing (image magic, NUL check).
+const SNIFF_LEN: u64 = 8 * 1024;
+
+async fn read_sniff_head(path: &Path) -> std::io::Result<Vec<u8>> {
+    use tokio::io::AsyncReadExt as _;
+    let file = tokio::fs::File::open(path).await?;
+    let mut buf = Vec::new();
+    file.take(SNIFF_LEN).read_to_end(&mut buf).await?;
+    Ok(buf)
+}
+
+/// Cheap binary heuristic: NUL bytes never appear in the UTF-8 text this
+/// tool is meant for. (UTF-16 text already fails `read_to_string` today,
+/// so flagging it here only improves the error message.)
+fn looks_binary(data: &[u8]) -> bool {
+    data.contains(&0)
 }
 
 #[cfg(test)]

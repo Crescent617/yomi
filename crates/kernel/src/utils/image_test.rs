@@ -244,3 +244,178 @@ fn needs_compression_flags_both_triggers() {
         "compliant"
     );
 }
+
+/// Build an animated GIF from solid-color 64x48 frames (`delay_ms` each).
+fn animated_gif(colors: &[[u8; 4]], delay_ms: u32) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut enc = image::codecs::gif::GifEncoder::new(&mut buf);
+    let frames: Vec<image::Frame> = colors
+        .iter()
+        .map(|&rgba| {
+            image::Frame::from_parts(
+                image::ImageBuffer::from_pixel(64, 48, image::Rgba(rgba)),
+                0,
+                0,
+                image::Delay::from_numer_denom_ms(delay_ms, 1),
+            )
+        })
+        .collect();
+    enc.encode_frames(frames).unwrap();
+    drop(enc); // flush the trailer before reading buf
+    buf
+}
+
+#[test]
+fn probe_gif_info_counts_frames_and_delays() {
+    let gif = animated_gif(&[[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]], 120);
+
+    let info = probe_gif_info(&gif).unwrap();
+
+    assert_eq!((info.width, info.height), (64, 48));
+    assert_eq!(info.frames, 3);
+    assert_eq!(info.duration_ms, 360);
+
+    let single = animated_gif(&[[255, 0, 0, 255]], 120);
+    assert_eq!(probe_gif_info(&single).unwrap().frames, 1);
+}
+
+#[test]
+fn probe_gif_info_rejects_non_gif_and_truncated_data() {
+    assert_eq!(probe_gif_info(b"not a gif"), None);
+    assert_eq!(probe_gif_info(b"GIF89a"), None);
+    // Header + screen descriptor only: no image descriptor yet.
+    assert_eq!(probe_gif_info(b"GIF89a\x01\x00\x01\x00\x00\x00\x00"), None);
+    // Truncated after the first frame: keeps the frames counted so far.
+    let gif = animated_gif(&[[255, 0, 0, 255], [0, 0, 255, 255]], 100);
+    let cut = gif.len() * 3 / 4;
+    let info = probe_gif_info(&gif[..cut]);
+    assert!(info.is_none() || info.unwrap().frames >= 1);
+}
+
+#[test]
+fn gif_first_frame_flattens_animation() {
+    let gif = animated_gif(&[[255, 0, 0, 255], [0, 0, 255, 255]], 100);
+
+    let url = gif_first_frame_to_data_url(&gif).unwrap();
+
+    let (mime, bytes) = decode_data_url(&url);
+    assert_eq!(mime, "image/jpeg", "opaque frame -> jpeg");
+    let img = image::load_from_memory(&bytes).unwrap().to_rgb8();
+    let p = img.get_pixel(32, 24).0;
+    assert!(
+        p[0] > 200 && p[1] < 80 && p[2] < 80,
+        "first frame is red, not later blue: {p:?}"
+    );
+}
+
+#[test]
+fn gif_first_frame_downscales_to_model_resolution() {
+    let mut buf = Vec::new();
+    let mut enc = image::codecs::gif::GifEncoder::new(&mut buf);
+    let frames: Vec<image::Frame> = (0..2)
+        .map(|_| {
+            image::Frame::new(image::ImageBuffer::from_pixel(
+                3000,
+                2400,
+                image::Rgba([200, 10, 20, 255]),
+            ))
+        })
+        .collect();
+    enc.encode_frames(frames).unwrap();
+    drop(enc);
+
+    let url = gif_first_frame_to_data_url(&buf).unwrap();
+
+    let (mime, bytes) = decode_data_url(&url);
+    assert_eq!(mime, "image/jpeg");
+    let (w, h) = read_dimensions(&bytes).unwrap();
+    assert!(within_model_resolution(w, h), "{w}x{h}");
+}
+
+#[test]
+fn normalize_data_url_flattens_animated_gif() {
+    let gif = animated_gif(&[[255, 0, 0, 255], [0, 0, 255, 255]], 100);
+    let url = format!("data:image/gif;base64,{}", encode_base64(&gif));
+
+    let normalized = normalize_data_url(&url).expect("animated gif is normalized");
+
+    let (mime, bytes) = decode_data_url(&normalized);
+    assert_eq!(mime, "image/jpeg", "flattened to a static jpeg");
+    let img = image::load_from_memory(&bytes).unwrap().to_rgb8();
+    let p = img.get_pixel(32, 24).0;
+    assert!(
+        p[0] > 200 && p[2] < 80,
+        "frame 1 (red), not later blue: {p:?}"
+    );
+}
+
+#[test]
+fn needs_compression_flags_animated_gif() {
+    let anim = animated_gif(&[[255, 0, 0, 255], [0, 0, 255, 255]], 100);
+    assert!(needs_compression(&anim), "multi-frame needs flattening");
+    let still = animated_gif(&[[255, 0, 0, 255]], 100);
+    assert!(
+        !needs_compression(&still),
+        "single-frame gif passes through"
+    );
+}
+
+#[test]
+fn probe_gif_info_handles_extensions_and_local_color_tables() {
+    // Hand-built block layout — the walker never decodes LZW, so image
+    // data bytes are placeholders. Covers: NETSCAPE app ext, comment ext,
+    // GCE delays, LCT skip, trailer.
+    let mut gif = b"GIF89a".to_vec();
+    gif.extend_from_slice(&[2, 0, 2, 0, 0, 0, 0]); // LSD 2x2, no GCT
+                                                   // NETSCAPE application extension (looping)
+    gif.extend_from_slice(&[0x21, 0xFF, 0x0B]);
+    gif.extend_from_slice(b"NETSCAPE2.0");
+    gif.extend_from_slice(&[0x03, 0x01, 0x00, 0x00, 0x00]);
+    // Comment extension
+    gif.extend_from_slice(&[0x21, 0xFE, 0x05]);
+    gif.extend_from_slice(b"hello");
+    gif.push(0x00);
+    // GCE (delay 100cs) + image descriptor with a 16-entry LCT
+    gif.extend_from_slice(&[0x21, 0xF9, 0x04, 0x00, 0x64, 0x00, 0x00, 0x00]);
+    gif.extend_from_slice(&[0x2C, 0, 0, 0, 0, 2, 0, 2, 0, 0x83]);
+    gif.extend_from_slice(&[0u8; 48]); // local color table
+    gif.extend_from_slice(&[0x02, 0x01, 0xAA, 0x00]); // LZW min + data + terminator
+                                                      // GCE (delay 50cs) + plain image descriptor
+    gif.extend_from_slice(&[0x21, 0xF9, 0x04, 0x00, 0x32, 0x00, 0x00, 0x00]);
+    gif.extend_from_slice(&[0x2C, 0, 0, 0, 0, 2, 0, 2, 0, 0x00]);
+    gif.extend_from_slice(&[0x02, 0x01, 0xBB, 0x00]);
+    gif.push(0x3B); // trailer
+
+    let info = probe_gif_info(&gif).unwrap();
+
+    assert_eq!((info.width, info.height), (2, 2));
+    assert_eq!(info.frames, 2);
+    assert_eq!(info.duration_ms, 1500);
+}
+
+#[test]
+fn gif_first_frame_rejects_decode_bomb_canvas() {
+    // 60000x60000 canvas would need ~14GB RGBA — refused from the header.
+    let mut gif = b"GIF89a".to_vec();
+    gif.extend_from_slice(&[0x60, 0xEA, 0x60, 0xEA, 0, 0, 0]); // 60000x60000
+    gif.extend_from_slice(&[0u8; 16]);
+
+    let err = gif_first_frame_to_data_url(&gif).unwrap_err();
+
+    assert!(err.to_string().contains("canvas too large"), "{err}");
+}
+
+#[test]
+fn structure_corrupt_gif_flattens_instead_of_passing_through() {
+    // Valid header + LSD, then garbage: the walk finds no frames.
+    let mut gif = b"GIF89a\x01\x00\x01\x00\x00\x00\x00".to_vec();
+    gif.extend_from_slice(b"garbage-not-blocks");
+    assert!(probe_gif_info(&gif).is_none());
+
+    // Not trusted to be small and static — flattening is attempted…
+    assert!(needs_compression(&gif), "corrupt gif is not trusted");
+    // …decode fails here, so normalize gives up and the caller keeps the
+    // original (documented escape hatch, same as recompress exhaustion).
+    let url = format!("data:image/gif;base64,{}", encode_base64(&gif));
+    assert_eq!(normalize_data_url(&url), None);
+}

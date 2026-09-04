@@ -121,6 +121,13 @@ fn normalize_bytes(data: &[u8]) -> crate::types::Result<Option<String>> {
     let Some(mime) = detect_mime_type(data) else {
         return Err(KernelError::io("unrecognized image data"));
     };
+    // Animated or structure-unreadable GIFs flatten to frame 1 — later
+    // frames never reach the model anyway (see
+    // [`gif_first_frame_to_data_url`]), so inlining the whole animation
+    // only inflates the request body.
+    if gif_needs_flattening(data) {
+        return gif_first_frame_to_data_url(data).map(Some);
+    }
     let within_bytes = data.len() <= MAX_EMBED_IMAGE_BYTES;
     // Header-only dimension read — no pixel decode for compliant images.
     let within_res = read_dimensions(data).is_some_and(|(w, h)| within_model_resolution(w, h));
@@ -196,8 +203,18 @@ pub async fn bytes_to_data_url_async(
 /// Whether the image would be recompressed (bytes or resolution beyond
 /// the model thresholds).
 pub(crate) fn needs_compression(data: &[u8]) -> bool {
-    data.len() > MAX_EMBED_IMAGE_BYTES
+    gif_needs_flattening(data)
+        || data.len() > MAX_EMBED_IMAGE_BYTES
         || read_dimensions(data).is_none_or(|(w, h)| !within_model_resolution(w, h))
+}
+
+/// GIF that must be flattened rather than passed through: provably
+/// multi-frame, or structure unreadable (a corrupt walk means its true
+/// size/shape is unknown — don't trust it). Single-frame GIFs still
+/// pass through byte-identical.
+fn gif_needs_flattening(data: &[u8]) -> bool {
+    detect_mime_type(data) == Some("image/gif")
+        && probe_gif_info(data).is_none_or(|info| info.frames > 1)
 }
 
 /// Read image dimensions from the container header — no pixel decode.
@@ -213,6 +230,130 @@ fn read_dimensions(data: &[u8]) -> Option<(u32, u32)> {
 /// them the API downsamples server-side (extra tokens, no extra detail).
 fn within_model_resolution(w: u32, h: u32) -> bool {
     w.max(h) <= EMBED_MAX_DIMENSION && u64::from(w) * u64::from(h) <= u64::from(EMBED_MAX_PIXELS)
+}
+
+/// Animation info probed from GIF container bytes. Walking the block
+/// structure needs no pixel decode, so probing even a long animation is
+/// cheap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GifInfo {
+    pub width: u32,
+    pub height: u32,
+    /// Image descriptors found (≈ frames).
+    pub frames: u32,
+    /// Sum of Graphic Control Extension delays.
+    pub duration_ms: u64,
+}
+
+/// Probe GIF structure (dimensions, frame count, total delay) without
+/// decoding pixels. Returns `None` for non-GIF data or too-short headers;
+/// truncated block data just stops the count early.
+pub fn probe_gif_info(data: &[u8]) -> Option<GifInfo> {
+    if detect_mime_type(data) != Some("image/gif") || data.len() < 13 {
+        return None;
+    }
+    // Logical Screen Descriptor.
+    let width = u32::from(u16::from_le_bytes([data[6], data[7]]));
+    let height = u32::from(u16::from_le_bytes([data[8], data[9]]));
+    let mut pos = 13 + color_table_len(data[10]);
+    let mut frames = 0u32;
+    let mut duration_ms = 0u64;
+    while let Some(&marker) = data.get(pos) {
+        match marker {
+            0x21 => {
+                // Extension: label byte, then sub-blocks. The Graphic
+                // Control Extension (0xF9) carries the frame delay in a
+                // fixed 4-byte payload: size, packed, delay (LE), index.
+                if data.get(pos + 1) == Some(&0xF9) && data.get(pos + 2) == Some(&4) {
+                    if let (Some(&lo), Some(&hi)) = (data.get(pos + 4), data.get(pos + 5)) {
+                        duration_ms += u64::from(u16::from_le_bytes([lo, hi])) * 10;
+                    }
+                }
+                pos = skip_sub_blocks(data, pos + 2);
+            }
+            0x2C => {
+                // Image descriptor: 9 bytes, optional local color table,
+                // LZW minimum code size byte, then data sub-blocks.
+                let Some(&packed) = data.get(pos + 9) else {
+                    break;
+                };
+                pos = skip_sub_blocks(data, pos + 10 + color_table_len(packed) + 1);
+                frames = frames.saturating_add(1);
+            }
+            // 0x3B trailer or a corrupt marker: stop, keep the count so far.
+            _ => break,
+        }
+    }
+    (frames > 0).then_some(GifInfo {
+        width,
+        height,
+        frames,
+        duration_ms,
+    })
+}
+
+/// Color table length from a packed byte (bit 7 = present, bits 0-2 =
+/// log2(entry count) − 1, 3 bytes per entry).
+const fn color_table_len(packed: u8) -> usize {
+    if packed & 0x80 == 0 {
+        0
+    } else {
+        3 * (1usize << ((packed & 0x07) + 1))
+    }
+}
+
+/// Skip a run of data sub-blocks; returns the position after the 0-length
+/// terminator (or past the end for truncated data).
+fn skip_sub_blocks(data: &[u8], mut pos: usize) -> usize {
+    while let Some(&len) = data.get(pos) {
+        pos += 1 + usize::from(len);
+        if len == 0 {
+            break;
+        }
+    }
+    pos
+}
+
+/// Canvas pixel cap for first-frame decode. The logical screen size is
+/// read from the GIF header without decoding, so decode-bomb canvases
+/// (u16 dims — up to 65535², ~17GB RGBA) are refused before allocating;
+/// the image crate's own 512MB alloc limit stays as backstop.
+const GIF_MAX_CANVAS_PIXELS: u64 = 32_000_000;
+
+/// Logical screen size from the GIF header — no block walk, no decode.
+fn gif_canvas_size(data: &[u8]) -> Option<(u32, u32)> {
+    if detect_mime_type(data) != Some("image/gif") || data.len() < 10 {
+        return None;
+    }
+    Some((
+        u32::from(u16::from_le_bytes([data[6], data[7]])),
+        u32::from(u16::from_le_bytes([data[8], data[9]])),
+    ))
+}
+
+/// Flatten GIF bytes to the first frame, normalized for model input.
+/// Vision APIs only use the first frame anyway (Anthropic: "Animations
+/// are unsupported, and only the first frame is used"), so this loses
+/// nothing model-side and avoids inlining multi-MB animations.
+pub fn gif_first_frame_to_data_url(data: &[u8]) -> crate::types::Result<String> {
+    use crate::types::KernelError;
+    if let Some((w, h)) = gif_canvas_size(data) {
+        if u64::from(w) * u64::from(h) > GIF_MAX_CANVAS_PIXELS {
+            return Err(KernelError::io(format!(
+                "gif canvas too large to decode: {w}x{h}"
+            )));
+        }
+    }
+    let img = image::load_from_memory(data)
+        .map_err(|e| KernelError::io(format!("gif first-frame decode failed: {e}")))?;
+    // Transparency check comes before shrinking — interpolation blends alpha.
+    let has_alpha = img.to_rgba8().pixels().any(|p| p.0[3] < 255);
+    let img = shrink_to_model_resolution(img);
+    Ok(if has_alpha {
+        data_url("image/png", &encode_png(&img)?)
+    } else {
+        data_url("image/jpeg", &encode_jpeg(&img, 85)?)
+    })
 }
 
 fn encode_png(img: &image::DynamicImage) -> crate::types::Result<Vec<u8>> {

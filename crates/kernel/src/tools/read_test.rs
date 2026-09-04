@@ -235,3 +235,223 @@ async fn test_read_truncation() {
     // Length should be close to limit (allowing for truncation notice overhead)
     assert!(text.len() <= DEFAULT_MAX_TOOL_OUTPUT_LENGTH + 100);
 }
+
+/// Build an animated GIF from solid-color 64x48 frames (100ms each).
+fn animated_gif_bytes(colors: &[[u8; 4]]) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut enc = image::codecs::gif::GifEncoder::new(&mut buf);
+    let frames: Vec<image::Frame> = colors
+        .iter()
+        .map(|&rgba| {
+            image::Frame::from_parts(
+                image::ImageBuffer::from_pixel(64, 48, image::Rgba(rgba)),
+                0,
+                0,
+                image::Delay::from_numer_denom_ms(100, 1),
+            )
+        })
+        .collect();
+    enc.encode_frames(frames).unwrap();
+    drop(enc); // flush the trailer before reading buf
+    buf
+}
+
+fn solid_image_bytes(format: image::ImageFormat) -> Vec<u8> {
+    let mut buf = Vec::new();
+    image::DynamicImage::ImageRgba8(image::ImageBuffer::from_pixel(
+        16,
+        16,
+        image::Rgba([255, 0, 0, 255]),
+    ))
+    .write_to(&mut std::io::Cursor::new(&mut buf), format)
+    .unwrap();
+    buf
+}
+
+fn has_image_block(result: &ToolOutput) -> bool {
+    result
+        .contents
+        .iter()
+        .any(|b| matches!(b, crate::types::ToolOutputBlock::Image { .. }))
+}
+
+#[tokio::test]
+async fn test_read_animated_gif_flattens_to_first_frame() {
+    let temp_dir = TempDir::new().unwrap();
+    let base_path = temp_dir.path();
+    let gif = animated_gif_bytes(&[[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]]);
+    tokio::fs::write(base_path.join("anim.gif"), &gif)
+        .await
+        .unwrap();
+
+    let tool = ReadTool::default();
+    let args = serde_json::json!({"path": "anim.gif"});
+
+    let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
+    let result = tool.exec(args, ctx).await.unwrap();
+
+    assert!(result.success());
+    assert!(has_image_block(&result));
+    let text = result.text_content();
+    assert!(text.contains("Animated GIF"), "{text}");
+    assert!(text.contains("64x48"), "{text}");
+    assert!(text.contains("3 frames"), "{text}");
+    assert!(text.contains("frame 1 shown"), "{text}");
+    assert!(text.contains("magick"), "{text}");
+    // First frame is inlined as a re-encoded still, never the raw animation.
+    let url = result
+        .contents
+        .iter()
+        .find_map(|b| match b {
+            crate::types::ToolOutputBlock::Image { url, .. } => Some(url.as_str()),
+            crate::types::ToolOutputBlock::Text { .. } => None,
+        })
+        .unwrap();
+    assert!(
+        url.starts_with("data:image/jpeg;base64,") || url.starts_with("data:image/png;base64,"),
+        "{url}"
+    );
+    assert!(
+        url.len() < 100_000,
+        "flattened frame stays small: {} chars",
+        url.len()
+    );
+}
+
+#[tokio::test]
+async fn test_read_static_gif_passes_through() {
+    let temp_dir = TempDir::new().unwrap();
+    let base_path = temp_dir.path();
+    tokio::fs::write(
+        base_path.join("still.gif"),
+        solid_image_bytes(image::ImageFormat::Gif),
+    )
+    .await
+    .unwrap();
+
+    let tool = ReadTool::default();
+    let args = serde_json::json!({"path": "still.gif"});
+
+    let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
+    let result = tool.exec(args, ctx).await.unwrap();
+
+    assert!(result.success());
+    let text = result.text_content();
+    assert!(text.contains("[Image:"), "{text}");
+    assert!(!text.contains("Animated GIF"), "{text}");
+    let url = result
+        .contents
+        .iter()
+        .find_map(|b| match b {
+            crate::types::ToolOutputBlock::Image { url, .. } => Some(url.as_str()),
+            crate::types::ToolOutputBlock::Text { .. } => None,
+        })
+        .unwrap();
+    assert!(url.starts_with("data:image/gif;base64,"), "{url}");
+}
+
+#[tokio::test]
+async fn test_read_image_detected_by_magic_bytes() {
+    let temp_dir = TempDir::new().unwrap();
+    let base_path = temp_dir.path();
+    tokio::fs::write(
+        base_path.join("mismatch.dat"),
+        solid_image_bytes(image::ImageFormat::Png),
+    )
+    .await
+    .unwrap();
+
+    let tool = ReadTool::default();
+    let args = serde_json::json!({"path": "mismatch.dat"});
+
+    let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
+    let result = tool.exec(args, ctx).await.unwrap();
+
+    assert!(result.success());
+    assert!(has_image_block(&result));
+    assert!(result.text_content().contains("[Image:"));
+}
+
+#[tokio::test]
+async fn test_read_unsupported_image_data() {
+    let temp_dir = TempDir::new().unwrap();
+    let base_path = temp_dir.path();
+    tokio::fs::write(base_path.join("fake.png"), "definitely not an image")
+        .await
+        .unwrap();
+
+    let tool = ReadTool::default();
+    let args = serde_json::json!({"path": "fake.png"});
+
+    let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
+    let result = tool.exec(args, ctx).await.unwrap();
+
+    assert!(result.is_error);
+    let text = result.error_text();
+    assert!(text.contains("Unsupported image"), "{text}");
+    assert!(text.contains("fake.png"), "{text}");
+}
+
+#[tokio::test]
+async fn test_read_binary_file_unsupported() {
+    let temp_dir = TempDir::new().unwrap();
+    let base_path = temp_dir.path();
+    tokio::fs::write(base_path.join("data.bin"), b"\x00\x01\x02\x03binary")
+        .await
+        .unwrap();
+
+    let tool = ReadTool::default();
+    let args = serde_json::json!({"path": "data.bin"});
+
+    let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
+    let result = tool.exec(args, ctx).await.unwrap();
+
+    assert!(result.is_error);
+    let text = result.error_text();
+    assert!(text.contains("Unsupported binary file"), "{text}");
+    assert!(text.contains("data.bin"), "{text}");
+}
+
+#[tokio::test]
+async fn test_read_text_starting_with_gif_magic() {
+    // Magic-byte sniffing is a heuristic: a text file that happens to
+    // start with "GIF89a" must still read as text.
+    let temp_dir = TempDir::new().unwrap();
+    let base_path = temp_dir.path();
+    tokio::fs::write(
+        base_path.join("notes.txt"),
+        "GIF89a is the 1989 revision of the format.\nSecond line stays readable.",
+    )
+    .await
+    .unwrap();
+
+    let tool = ReadTool::default();
+    let args = serde_json::json!({"path": "notes.txt"});
+
+    let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
+    let result = tool.exec(args, ctx).await.unwrap();
+
+    assert!(result.success());
+    assert!(result.text_content().contains("Second line stays readable"));
+}
+
+#[tokio::test]
+async fn test_read_corrupt_gif_strict_unsupported() {
+    // Image extension = strict routing: no text fallback, explicit error.
+    let temp_dir = TempDir::new().unwrap();
+    let base_path = temp_dir.path();
+    let mut gif = b"GIF89a\x01\x00\x01\x00\x00\x00\x00".to_vec();
+    gif.extend_from_slice(b"garbage-not-blocks");
+    tokio::fs::write(base_path.join("broken.gif"), &gif)
+        .await
+        .unwrap();
+
+    let tool = ReadTool::default();
+    let args = serde_json::json!({"path": "broken.gif"});
+
+    let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
+    let result = tool.exec(args, ctx).await.unwrap();
+
+    assert!(result.is_error);
+    assert!(result.error_text().contains("Unsupported image"));
+}
