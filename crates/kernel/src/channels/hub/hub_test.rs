@@ -1164,7 +1164,7 @@ async fn flush_reply_plain_platform_appends_trace_lines() {
     let ContentBlock::Text { text } = &out[0].1[0] else {
         panic!("expected text block");
     };
-    assert!(text.starts_with("final answer"));
+    assert!(text.starts_with("Let me check.\n\n---\n\nfinal answer"));
     assert!(text.contains("🐾 0s · 💬 2"));
     assert!(
         text.contains("Let me check."),
@@ -1192,7 +1192,7 @@ async fn flush_reply_tool_trace_disabled_sends_bare_text() {
     let ContentBlock::Text { text } = &out[0].1[0] else {
         panic!("expected text block");
     };
-    assert_eq!(text, "final answer");
+    assert_eq!(text, "Let me check.\n\n---\n\nfinal answer");
 }
 
 #[tokio::test]
@@ -9653,6 +9653,46 @@ async fn deliver_reply_with_mention_flushes_new_message_without_mid_run_posts() 
     let cards = mock.cards.lock().await;
     assert_eq!(cards.len(), 2, "materialize + reply card");
     assert!(cards[1].1.contains("cc <at id=ou_abc></at> 看一下"));
+}
+
+#[tokio::test]
+async fn deliver_reply_with_mention_in_older_body_text_flushes_new_message() {
+    let mock = Arc::new(CardMockAdapter::new());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(crate::channels::obs::ObsTracker::new());
+    let sid = SessionId::new();
+
+    obs.handle_event(&adapter, &sid, "chat-1", None, &running_event())
+        .await;
+    obs.handle_event(&adapter, &sid, "chat-1", None, &tool_start_event())
+        .await;
+    // mention 只在较早的那段 body 文本里 —— 最新文本没有 mention 也
+    // 必须沉底发新消息，否则这个 @ 永远不会 ping。
+
+    let mut buf = run_buffer();
+    buf.record_model_end("cc <@ou_abc> 先看这个");
+    buf.record_model_end("最终结论");
+    deliver_reply(
+        &obs,
+        &adapter,
+        &test_routing(),
+        Some(buf.into_reply()),
+        true,
+        true,
+        true,
+        &sid,
+        SettleKind::Stopped(&completed()),
+        &std::sync::Weak::new(),
+    )
+    .await;
+
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1, "frozen in place, no morph");
+    drop(patches);
+    let cards = mock.cards.lock().await;
+    assert_eq!(cards.len(), 2, "materialize + reply card");
+    assert!(cards[1].1.contains("cc <at id=ou_abc></at> 先看这个"));
+    assert!(cards[1].1.contains("最终结论"));
 }
 
 // ── /mailbox ─────────────────────────────────────────────────────────

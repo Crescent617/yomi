@@ -2060,17 +2060,15 @@ async fn stopped_morphs_status_card_into_final_reply() {
     let morphed: serde_json::Value = serde_json::from_str(&patches.last().unwrap().1).unwrap();
     assert!(morphed["header"].is_null(), "no header after morph");
     let elements = morphed["body"]["elements"].as_array().unwrap();
-    assert_eq!(elements[0]["content"], "the final answer");
-    // Process panel (collapsed like every panel on the final card):
-    // intermediate text full-size inside, tool run folded into a nested
-    // collapsed panel.
-    assert_eq!(elements[1]["tag"], "collapsible_panel");
-    assert_eq!(elements[1]["expanded"], false);
-    let body = elements[1]["elements"].as_array().unwrap();
-    assert_eq!(body[0]["content"], "intermediate thought");
-    assert_eq!(body[1]["tag"], "collapsible_panel");
-    assert_eq!(body[1]["expanded"], false);
-    let tools = body[1]["elements"][0]["content"].as_str().unwrap();
+    assert_eq!(elements.len(), 4);
+    assert_eq!(elements[0]["content"], "intermediate thought");
+    assert_eq!(elements[1]["tag"], "hr");
+    assert_eq!(elements[2]["content"], "the final answer");
+    // Both texts were promoted to the body; the trace panel is the classic
+    // folded tool panel.
+    assert_eq!(elements[3]["tag"], "collapsible_panel");
+    assert_eq!(elements[3]["expanded"], false);
+    let tools = elements[3]["elements"][0]["content"].as_str().unwrap();
     assert!(tools.contains("✅ **shell** · `cargo test`"));
 }
 
@@ -2104,7 +2102,10 @@ async fn stopped_without_card_sends_reply_as_new_message() {
     assert_eq!(cards.len(), 1);
     let card: serde_json::Value = serde_json::from_str(&cards[0].1).unwrap();
     assert!(card["header"].is_null());
-    assert_eq!(card["body"]["elements"][0]["content"], "plain answer");
+    let elements = card["body"]["elements"].as_array().unwrap();
+    assert_eq!(elements[0]["content"], "intermediate thought");
+    assert_eq!(elements[1]["tag"], "hr");
+    assert_eq!(elements[2]["content"], "plain answer");
     assert!(mock.patches.lock().await.is_empty());
 }
 
@@ -2136,7 +2137,9 @@ async fn stopped_failed_shows_error_notice_in_content() {
     assert!(morphed["header"].is_null(), "no red header after morph");
     let elements = morphed["body"]["elements"].as_array().unwrap();
     assert_eq!(elements[0]["content"], "❌ **Error**  provider exploded");
-    assert_eq!(elements[1]["content"], "partial answer");
+    assert_eq!(elements[1]["content"], "intermediate thought");
+    assert_eq!(elements[2]["tag"], "hr");
+    assert_eq!(elements[3]["content"], "partial answer");
 }
 
 #[tokio::test]
@@ -2193,7 +2196,9 @@ async fn timeout_morphs_card_and_late_stopped_clears_receipts() {
     let morphed: serde_json::Value = serde_json::from_str(&patches.last().unwrap().1).unwrap();
     let elements = morphed["body"]["elements"].as_array().unwrap();
     assert_eq!(elements[0]["content"], "⏰ Session lost (timed out)");
-    assert_eq!(elements[1]["content"], "partial output");
+    assert_eq!(elements[1]["content"], "intermediate thought");
+    assert_eq!(elements[2]["tag"], "hr");
+    assert_eq!(elements[3]["content"], "partial output");
     assert!(!tracker.has_mid_run_posts(&sid), "cleared by timeout");
     tracker.record_receipt(&sid, "mid-run".into());
     drop(patches);
@@ -2258,7 +2263,10 @@ async fn first_text_chunk_patches_card_without_tools() {
     assert_eq!(mock.cards.lock().await.len(), 1, "no extra message");
     let patches = mock.patches.lock().await;
     let morphed: serde_json::Value = serde_json::from_str(&patches.last().unwrap().1).unwrap();
-    assert_eq!(morphed["body"]["elements"][0]["content"], "Hello, done.");
+    let elements = morphed["body"]["elements"].as_array().unwrap();
+    assert_eq!(elements[0]["content"], "intermediate thought");
+    assert_eq!(elements[1]["tag"], "hr");
+    assert_eq!(elements[2]["content"], "Hello, done.");
 }
 
 #[tokio::test]

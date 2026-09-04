@@ -12,14 +12,22 @@ fn buffer_with_run() -> RunReplyBuffer {
 }
 
 #[test]
-fn into_reply_promotes_last_text_to_body() {
+fn into_reply_promotes_last_two_texts_to_body() {
     let reply = buffer_with_run().into_reply();
-    assert_eq!(reply.text.as_deref(), Some("All tests pass."));
-    // The earlier text stays in the trace, chronologically before the tools.
-    assert_eq!(reply.entries.len(), 3);
-    assert!(matches!(reply.entries[0], TraceEntry::Narration(_)));
-    assert!(matches!(reply.entries[1], TraceEntry::Tool(_)));
-    assert!(matches!(reply.entries[2], TraceEntry::Tool(_)));
+    assert_eq!(
+        reply.body_texts(),
+        &[
+            "Let me look at the code.".to_string(),
+            "All tests pass.".to_string()
+        ]
+    );
+    assert_eq!(reply.text(), Some("All tests pass."));
+    // Both texts left the trace; the tools stay chronological in the panel.
+    assert_eq!(reply.entries.len(), 2);
+    assert!(reply
+        .entries
+        .iter()
+        .all(|e| matches!(e, TraceEntry::Tool(_))));
     assert!(reply.attachments().is_empty());
 }
 
@@ -237,7 +245,7 @@ fn into_reply_after_cancel_mid_tool_uses_last_text() {
     buf.record_model_end("Working on it.");
     buf.record_tool_start("t1", "shell", Some(r#"{"command":"sleep 100"}"#));
     let reply = buf.into_reply();
-    assert_eq!(reply.text.as_deref(), Some("Working on it."));
+    assert_eq!(reply.text(), Some("Working on it."));
     let card = render_card(&reply, None).unwrap();
     assert!(card.contains("⏳"), "pending tool gets the hourglass icon");
 }
@@ -266,12 +274,15 @@ fn render_card_structure() {
 
     assert_eq!(card["schema"], "2.0");
     let elements = card["body"]["elements"].as_array().unwrap();
-    // final text → process panel (expanded: narrative + folded tool runs)
-    assert_eq!(elements.len(), 2);
+    // previous text → divider → latest text → tool-trace panel.
+    assert_eq!(elements.len(), 4);
     assert_eq!(elements[0]["tag"], "markdown");
-    assert_eq!(elements[0]["content"], "All tests pass.");
+    assert_eq!(elements[0]["content"], "Let me look at the code.");
+    assert_eq!(elements[1]["tag"], "hr");
+    assert_eq!(elements[2]["tag"], "markdown");
+    assert_eq!(elements[2]["content"], "All tests pass.");
 
-    let panel = &elements[1];
+    let panel = &elements[3];
     assert_eq!(panel["tag"], "collapsible_panel");
     // Every panel on the final card starts collapsed — the process
     // narrative is one click away.
@@ -279,20 +290,12 @@ fn render_card_structure() {
     let title = panel["header"]["title"]["content"].as_str().unwrap();
     assert!(title.contains("🐾 0s · 💬 2"), "title: {title}");
 
+    // No intermediate text left in the trace: the classic folded tool panel.
     let body = panel["elements"].as_array().unwrap();
-    assert_eq!(body.len(), 2);
-    // Intermediate text: full-size markdown, no snippet truncation.
-    assert_eq!(body[0]["tag"], "markdown");
-    assert_eq!(body[0]["content"], "Let me look at the code.");
-    // The tool run folds into a nested collapsed panel.
-    let tools = &body[1];
-    assert_eq!(tools["tag"], "collapsible_panel");
-    assert_eq!(tools["expanded"], false);
-    let ttitle = tools["header"]["title"]["content"].as_str().unwrap();
-    assert!(ttitle.starts_with("🔧 read · shell"), "title: {ttitle}");
-    let tbody = tools["elements"][0]["content"].as_str().unwrap();
-    assert!(tbody.contains("✅ **read** · `crates/kernel/src/hub.rs` · 120ms"));
-    assert!(tbody.contains("✅ **shell** · `cargo test -p kernel` · 1m05s"));
+    assert_eq!(body.len(), 1);
+    let tools = body[0]["content"].as_str().unwrap();
+    assert!(tools.contains("✅ **read** · `crates/kernel/src/hub.rs` · 120ms"));
+    assert!(tools.contains("✅ **shell** · `cargo test -p kernel` · 1m05s"));
 }
 
 #[test]
@@ -312,29 +315,28 @@ fn process_panel_keeps_chronology_and_folds_each_tool_run() {
     let card: serde_json::Value =
         serde_json::from_str(&render_card(&buf.into_reply(), None).unwrap()).unwrap();
     let elements = card["body"]["elements"].as_array().unwrap();
-    assert_eq!(elements.len(), 2);
-    assert_eq!(elements[0]["content"], "final answer");
+    assert_eq!(elements.len(), 4);
+    assert_eq!(elements[0]["content"], "second note");
+    assert_eq!(elements[1]["tag"], "hr");
+    assert_eq!(elements[2]["content"], "final answer");
 
-    let body = elements[1]["elements"].as_array().unwrap();
+    let body = elements[3]["elements"].as_array().unwrap();
     let tags: Vec<&str> = body.iter().map(|e| e["tag"].as_str().unwrap()).collect();
     assert_eq!(
         tags,
         [
             "collapsible_panel", // leading tool run (t0)
-            "markdown",          // first note
-            "collapsible_panel", // t1+t2 grouped
-            "markdown",          // second note
-            "collapsible_panel", // trailing tool run (t3)
+            "markdown",          // first note stays in the process panel
+            "collapsible_panel", // t1+t2+t3 became consecutive after the body split
         ]
     );
     assert_eq!(body[1]["content"], "first note");
-    assert_eq!(body[3]["content"], "second note");
     let t0 = body[0]["header"]["title"]["content"].as_str().unwrap();
     assert!(t0.starts_with("🔧 read"), "title: {t0}");
     let t12 = body[2]["header"]["title"]["content"].as_str().unwrap();
-    assert!(t12.starts_with("🔧 shell×2"), "title: {t12}");
+    assert!(t12.starts_with("🔧 shell×2 · edit"), "title: {t12}");
     let t12body = body[2]["elements"][0]["content"].as_str().unwrap();
-    assert_eq!(t12body.lines().count(), 2, "two tools in one panel");
+    assert_eq!(t12body.lines().count(), 3, "three tools in one panel");
 }
 
 #[test]
@@ -430,9 +432,9 @@ fn buffer_drops_oldest_entries_beyond_cap() {
         buf.record_model_end(&format!("text {i}"));
     }
     let reply = buf.into_reply();
-    // The latest text survives as the body even though old ones were dropped.
+    // The latest two texts survive as the body even though old ones were dropped.
     assert_eq!(
-        reply.text.as_deref(),
+        reply.text(),
         Some(format!("text {}", BUFFER_MAX_ENTRIES + 19)).as_deref()
     );
     assert!(reply.entries.len() <= BUFFER_MAX_ENTRIES);
@@ -440,7 +442,7 @@ fn buffer_drops_oldest_entries_beyond_cap() {
     let card = render_card(&reply, None).unwrap();
     assert!(card.contains("··· and 20 earlier entries"));
     let v: serde_json::Value = serde_json::from_str(&card).unwrap();
-    let body = v["body"]["elements"][1]["elements"].as_array().unwrap();
+    let body = v["body"]["elements"][3]["elements"].as_array().unwrap();
     assert_eq!(body[0]["tag"], "markdown");
     assert_eq!(body[0]["text_size"], "notation");
     assert_eq!(body[0]["content"], "··· and 20 earlier entries");
@@ -456,12 +458,10 @@ fn buffer_drops_oldest_entries_beyond_cap() {
 fn render_plain_appends_trace_without_markup() {
     let reply = buffer_with_run().into_reply();
     let out = render_plain(&reply);
-    // Final text first, then the title and the chronological transcript:
-    // intermediate text in full (no 💬 snippet), tools as plain lines.
-    assert!(out.starts_with("All tests pass."));
+    // Two body texts first (divider line between steps), then the title and
+    // the chronological transcript: tools as plain lines.
+    assert!(out.starts_with("Let me look at the code.\n\n---\n\nAll tests pass."));
     assert!(out.contains("🐾 0s · 💬 2"));
-    assert!(out.contains("\nLet me look at the code.\n"));
-    assert!(!out.contains("💬 Let me look at the code."));
     assert!(out.contains("✅ shell · cargo test -p kernel · 1m05s"));
     assert!(!out.contains("<font"), "no Feishu markup in plain fallback");
     assert!(!out.contains("**"), "no markdown bold in plain fallback");
@@ -482,7 +482,10 @@ fn render_plain_without_trace_returns_text_only() {
 #[test]
 fn into_text_returns_bare_body() {
     let reply = buffer_with_run().into_reply();
-    assert_eq!(reply.into_text().as_deref(), Some("All tests pass."));
+    assert_eq!(
+        reply.into_text().as_deref(),
+        Some("Let me look at the code.\n\n---\n\nAll tests pass.")
+    );
 }
 
 #[test]
@@ -491,9 +494,11 @@ fn render_card_with_notice_prepends_notice_line() {
     let card: serde_json::Value =
         serde_json::from_str(&render_card(&reply, Some("❌ **Error**  boom")).unwrap()).unwrap();
     let elements = card["body"]["elements"].as_array().unwrap();
-    assert_eq!(elements.len(), 3);
+    assert_eq!(elements.len(), 5);
     assert_eq!(elements[0]["content"], "❌ **Error**  boom");
-    assert_eq!(elements[1]["content"], "All tests pass.");
+    assert_eq!(elements[1]["content"], "Let me look at the code.");
+    assert_eq!(elements[2]["tag"], "hr");
+    assert_eq!(elements[3]["content"], "All tests pass.");
     // No card header — the final card is a pure content card.
     assert!(card["header"].is_null());
 }
@@ -864,27 +869,62 @@ fn narration_only_process_panel_has_no_tool_panels() {
     buf.record_model_end("final");
     let card: serde_json::Value =
         serde_json::from_str(&render_card(&buf.into_reply(), None).unwrap()).unwrap();
-    let body = card["body"]["elements"][1]["elements"].as_array().unwrap();
-    assert_eq!(body.len(), 2);
+    let elements = card["body"]["elements"].as_array().unwrap();
+    assert_eq!(elements.len(), 4);
+    assert_eq!(elements[0]["content"], "second");
+    assert_eq!(elements[1]["tag"], "hr");
+    assert_eq!(elements[2]["content"], "final");
+
+    let body = elements[3]["elements"].as_array().unwrap();
+    assert_eq!(body.len(), 1);
     assert!(
         body.iter().all(|e| e["tag"] == "markdown"),
         "texts only, no stray empty tool panel: {body:?}"
     );
     assert_eq!(body[0]["content"], "first");
-    assert_eq!(body[1]["content"], "second");
 }
 
 #[test]
 fn render_card_balances_fence_cut_by_cancellation() {
     let mut buf = RunReplyBuffer::new();
     buf.record_model_end("看这段代码：\n```rust\nfn broken(");
+    buf.record_model_end("second note");
     buf.record_model_end("done");
     let card = render_card(&buf.into_reply(), None).unwrap();
+    // Only the last two texts become the body; the broken-fence one
+    // stays in the trace panel, which must still close the fence.
     // (serialized JSON escapes newlines as \\n)
     assert!(
         card.contains(r"fn broken(\n```"),
         "fence closed in the process panel: {card}"
     );
+}
+
+#[test]
+fn render_card_splits_budget_across_two_body_texts() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end(&"a".repeat(FINAL_TEXT_MAX_BYTES));
+    buf.record_model_end(&"b".repeat(FINAL_TEXT_MAX_BYTES));
+    let card = render_card(&buf.into_reply(), None).unwrap();
+    let card: serde_json::Value = serde_json::from_str(&card).unwrap();
+    let elements = card["body"]["elements"].as_array().unwrap();
+    // [first text, hr, second text] — each capped at half the budget.
+    assert_eq!(elements[1]["tag"], "hr");
+    let first = elements[0]["content"].as_str().unwrap();
+    let second = elements[2]["content"].as_str().unwrap();
+    let per_text = FINAL_TEXT_MAX_BYTES / 2;
+    assert!(
+        first.len() <= per_text,
+        "first body capped: {}",
+        first.len()
+    );
+    assert!(
+        second.len() <= per_text,
+        "second body capped: {}",
+        second.len()
+    );
+    assert!(first.contains("...(truncated)"));
+    assert!(second.contains("...(truncated)"));
 }
 
 #[test]

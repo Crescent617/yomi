@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- 移除回合终止标记 `__YOMI_END_TURN__`：真实模型很难把标记稳定放在同一条工具调用消息的正文末尾，功能触发不可靠；配置项 `[features] end_turn_marker` 同步移除（已写在配置里的该键会被忽略）。
+
+### Changed
+
+- 频道回复正文改为展示最后两个有正文的模型 step：飞书卡片用 `hr` 分割线隔开，纯文本回落用 `---` 行隔开；只有一个 step 有正文时仍只展示一个，更早的正文继续收在折叠过程面板里。
+
 ## [0.10.17] - 2026-09-04
 
 ### Fixed

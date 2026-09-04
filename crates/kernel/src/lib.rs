@@ -142,7 +142,6 @@ pub async fn build_agent_config(config: &Config) -> AgentConfig {
     agent.enable_cron_tool = config.features.cron_tool_enabled();
     agent.enable_todo_tool = config.features.todo_tool_enabled();
     agent.enable_attachments = config.features.attachments_enabled();
-    agent.enable_end_turn_marker = config.features.end_turn_marker_enabled();
     agent
 }
 

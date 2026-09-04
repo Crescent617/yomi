@@ -16,7 +16,7 @@
 //!             └─ join_next() loop
 //!                  ├─ emit End event
 //!                  └─ push_message()  — immediately persisted
-//!   └─ finish_tool_batch()           — end-of-turn marker? → Idle : Streaming
+//!   └─ finish_tool_batch()           — back to Streaming for the next model round
 //! ```
 
 use crate::event::{Event, ToolEvent};
@@ -63,42 +63,9 @@ impl Agent {
         Ok(())
     }
 
-    /// 工具批收尾：发起批的 assistant 消息正文以 `END_TURN_MARKER` 结尾
-    /// （且开关开启）时发完成事件并转 Idle——工具已跑完，不再开新一轮
-    /// 模型调用（turn 级 stop sequence，用于"顺带记录"型收尾）；否则
-    /// 照常转 Streaming。标记是模型在正文里签的无条件声明：被否决或
-    /// 失败的工具不改变语义。
+    /// 工具批收尾：工具结果已喂回上下文，转 Streaming 开下一轮模型调用。
     fn finish_tool_batch(&mut self) {
-        if self.initiating_message_ends_with_marker() {
-            self.emit_stopped_completed(Some(crate::types::FinishReason::ToolCalls));
-            self.context.transition_to(AgentState::Idle);
-        } else {
-            self.context.transition_to(AgentState::Streaming);
-        }
-    }
-
-    /// 发起当前工具批的 assistant 消息正文是否以回合终止标记收尾。
-    /// 标记只在正文**末尾**生效（trim 尾部空白后 `ends_with`）——正文
-    /// 中间出现不生效。
-    fn initiating_message_ends_with_marker(&self) -> bool {
-        if !self.end_turn_marker {
-            return false;
-        }
-        let messages = self.message_buffer.messages();
-        let Some(msg) = messages.iter().rev().find(|m| {
-            m.role == Role::Assistant && m.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty())
-        }) else {
-            return false;
-        };
-        let text: String = msg
-            .content
-            .iter()
-            .filter_map(|b| match b {
-                crate::types::ContentBlock::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect();
-        text.trim_end().ends_with(crate::prompt::END_TURN_MARKER)
+        self.context.transition_to(AgentState::Streaming);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

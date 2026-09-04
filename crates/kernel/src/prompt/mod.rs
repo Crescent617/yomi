@@ -29,18 +29,14 @@ pub(crate) const ATTACHMENTS_SECTION: &str = "# Attachments\nTo attach files to 
 /// never get it — no platform is there to render it.
 pub(crate) const MENTIONS_SECTION: &str = "# Mentions\nTo mention a user in your reply, write `<@USER_ID>` — the platform renders it as a real mention with notification. Use it only when warranted: the user asked you to @ someone, or you are addressing a bot — in that case the mention is required (it won't receive your message otherwise). Never @ any human gratuitously.";
 
-/// Turn-level stop sequence: when the assistant message carrying tool
-/// calls ends its text with this marker, the tools run and the turn then
-/// ends (Idle) without another model round — for terminal actions like a
-/// final record command. Only the END of the text counts (checked after
-/// trimming trailing whitespace); a marker mid-text is ignored. The
-/// marker is unconditional: denied or failed tools do not resume the
-/// turn.
+/// Legacy control token from the removed end-of-turn marker feature. It is
+/// no longer taught in prompts nor honored by the agent loop; display layers
+/// still strip a trailing token so sessions recorded while the feature
+/// existed do not render control text.
 pub const END_TURN_MARKER: &str = "__YOMI_END_TURN__";
 
-/// 展示层剥离末尾的回合终止标记：标记是状态机语法，不给用户看。存储层
-/// 不动（状态机的判定读原始消息）；只剥末尾——trim 尾部空白后不以
-/// 标记结尾的文本原样返回（正文中间的惰性标记保持可见）。
+/// 展示层剥离末尾的旧回合终止标记：标记已退役，存储不动，只剥末尾——
+/// trim 尾部空白后不以标记结尾的文本原样返回（正文中间的惰性文本保持可见）。
 #[must_use]
 pub fn strip_end_turn_marker(text: &str) -> &str {
     let trimmed = text.trim_end();
@@ -49,13 +45,6 @@ pub fn strip_end_turn_marker(text: &str) -> &str {
         None => text,
     }
 }
-
-/// End-of-turn marker contract for non-sub-agent sessions (when the
-/// `end_turn_marker` feature is on): teaches the marker and its
-/// end-of-text anchor. Lives under the `# Markers` family header so
-/// future control tokens share one category. Sub-agents never get it —
-/// a sub-agent's parent decides when the work is done.
-pub(crate) const END_TURN_SECTION: &str = "# Markers\n## End of turn\nWhen all the work of this turn is done but you still have final tool calls to make (e.g. recording a note), write `__YOMI_END_TURN__` at the very end of your reply text in the same message that carries those tool calls: the tools run, then the turn ends without another model round. The marker only counts at the end of your text; anywhere else it is ignored.";
 
 /// Watch-observer contract for a watched chat's session (`/watch`,
 /// mapping kind `watch`). Deliberately minimal: state the mode (every
@@ -80,23 +69,15 @@ pub(crate) fn watch_section(channel_name: &str, chat_id: &str) -> String {
 /// Contract sections appended after the base prompt for non-sub-agent
 /// sessions (the caller owns that gate): attachment syntax when the
 /// feature is on, mention syntax when a platform is there to render it
-/// (channel-routed sessions), the end-of-turn marker when its feature is
-/// on. Each enabled section leads with a blank line, so the result
-/// appends to the base prompt verbatim.
-pub(crate) fn contract_sections(
-    enable_attachments: bool,
-    channel_routed: bool,
-    enable_end_turn_marker: bool,
-) -> String {
+/// (channel-routed sessions). Each enabled section leads with a blank
+/// line, so the result appends to the base prompt verbatim.
+pub(crate) fn contract_sections(enable_attachments: bool, channel_routed: bool) -> String {
     let mut sections = String::new();
     if enable_attachments {
         sections = format!("{sections}\n\n{ATTACHMENTS_SECTION}");
     }
     if channel_routed {
         sections = format!("{sections}\n\n{MENTIONS_SECTION}");
-    }
-    if enable_end_turn_marker {
-        sections = format!("{sections}\n\n{END_TURN_SECTION}");
     }
     sections
 }
@@ -238,8 +219,6 @@ pub(crate) struct SystemPromptParts<'a> {
     /// sessions have. `None` for sub-agents (a sub-agent is a tool,
     /// not a chat voice).
     pub rules_session: Option<&'a str>,
-    /// Teach the end-of-turn marker contract (feature `end_turn_marker`).
-    pub enable_end_turn_marker: bool,
     pub data_dir: &'a std::path::Path,
 }
 
@@ -259,7 +238,6 @@ pub(crate) async fn compose_system_prompt(parts: SystemPromptParts<'_>) -> Strin
             p.push_str(&contract_sections(
                 parts.enable_attachments,
                 parts.channel_routed,
-                parts.enable_end_turn_marker,
             ));
             if let Some((channel, chat_id)) = parts.watch {
                 p = format!("{p}\n\n{}", watch_section(channel, chat_id));

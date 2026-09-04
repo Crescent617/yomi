@@ -738,7 +738,6 @@ impl Conductor {
             } else {
                 Some(sid.0.as_str())
             },
-            enable_end_turn_marker: self.agent_config.enable_end_turn_marker,
             data_dir: &self.data_dir,
         })
         .await;
@@ -759,9 +758,6 @@ impl Conductor {
             .with_file_state_store(Arc::clone(&file_state_store))
             .with_tool_blocklist(tool_blocklist)
             .with_max_tool_output_length(self.agent_config.max_tool_output_length)
-            // 标记只对主会话生效：sub-agent 的 SP 不教这个契约（它的
-            // parent 决定工作何时算完），不能让一个没学过的标记有行为。
-            .with_end_turn_marker(self.agent_config.enable_end_turn_marker && !is_sub_agent)
             .with_cancel_token(cancel_token.clone())
             .with_input_bus(self.input_bus.clone())
             .with_ext_tools(

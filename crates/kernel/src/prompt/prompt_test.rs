@@ -45,38 +45,31 @@ async fn memory_pointer_absent_without_project_index() {
 
 #[test]
 fn contract_sections_matrix() {
-    // (attachments on, channel-routed, marker on) → 三段都在
-    let both = contract_sections(true, true, true);
+    // attachments on + channel-routed → 两段都在
+    let both = contract_sections(true, true);
     assert!(both.contains("# Attachments"));
     assert!(both.contains("# Mentions"));
-    assert!(both.contains("# Markers"));
 
-    // 本地会话：attachments + marker
-    let local = contract_sections(true, false, true);
+    // 本地会话：attachments only
+    let local = contract_sections(true, false);
     assert!(local.contains("# Attachments"));
     assert!(!local.contains("# Mentions"));
-    assert!(local.contains("# Markers"));
 
-    // attachments feature 关闭：channel 会话 mentions + marker
-    let no_attach = contract_sections(false, true, true);
+    // attachments feature 关闭：channel 会话 mentions only
+    let no_attach = contract_sections(false, true);
     assert!(!no_attach.contains("# Attachments"));
     assert!(no_attach.contains("# Mentions"));
 
-    // marker feature 关闭：无 marker 段
-    let no_marker = contract_sections(true, true, false);
-    assert!(!no_marker.contains("# Markers"));
-
     // 全关：空
-    assert_eq!(contract_sections(false, false, false), "");
+    assert_eq!(contract_sections(false, false), "");
 }
 
 #[test]
 fn contract_sections_append_verbatim() {
     // 每段自带前导空行，直接拼在 base 后即为合法 prompt
-    let prompt = format!("base{}", contract_sections(true, true, true));
+    let prompt = format!("base{}", contract_sections(true, true));
     assert!(prompt.starts_with("base\n\n# Attachments"));
     assert!(prompt.contains("\n\n# Mentions"));
-    assert!(prompt.contains("\n\n# Markers"));
 }
 
 #[tokio::test]
@@ -243,7 +236,6 @@ async fn compose_system_prompt_without_rules_chat_ignores_rules_file() {
         template_body: None,
         is_sub_agent: true,
         enable_attachments: true,
-        enable_end_turn_marker: true,
         channel_routed: false,
         watch: None,
         rules_chat: None,
@@ -267,7 +259,6 @@ async fn compose_system_prompt_main_session_full_stack() {
         template_body: None,
         is_sub_agent: false,
         enable_attachments: true,
-        enable_end_turn_marker: true,
         channel_routed: true,
         watch: Some(("feishu", "oc_1")),
         rules_chat: Some("oc_1"),
@@ -294,7 +285,6 @@ async fn compose_system_prompt_template_wins_rules_still_appended() {
         template_body: Some("TEMPLATE".into()),
         is_sub_agent: true,
         enable_attachments: true,
-        enable_end_turn_marker: true,
         channel_routed: false,
         watch: None,
         rules_chat: Some("oc_t"),
@@ -315,7 +305,6 @@ async fn compose_system_prompt_without_rules_file_leaves_prompt_untouched() {
         template_body: None,
         is_sub_agent: false,
         enable_attachments: false,
-        enable_end_turn_marker: false,
         channel_routed: false,
         watch: None,
         rules_chat: Some("oc_ghost"),
@@ -378,7 +367,6 @@ async fn compose_system_prompt_session_rules_speak_after_channel_rules() {
         template_body: None,
         is_sub_agent: false,
         enable_attachments: false,
-        enable_end_turn_marker: true,
         channel_routed: false,
         watch: None,
         rules_chat: Some("oc_1"),
@@ -412,7 +400,6 @@ async fn compose_system_prompt_without_rules_session_ignores_session_file() {
         template_body: None,
         is_sub_agent: true,
         enable_attachments: false,
-        enable_end_turn_marker: true,
         channel_routed: false,
         watch: None,
         rules_chat: None,

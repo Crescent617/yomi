@@ -45,11 +45,6 @@ pub struct AgentConfig {
     /// the `[agent]` section.
     #[serde(skip)]
     pub enable_attachments: bool,
-    /// Honor the end-of-turn marker and teach it in the prompt. Plumbed
-    /// from `[features] end_turn_marker` in `build_agent_config` (default:
-    /// on); not settable via the `[agent]` section.
-    #[serde(skip)]
-    pub enable_end_turn_marker: bool,
 }
 
 /// Configuration for spawning a new agent
@@ -78,10 +73,6 @@ pub struct AgentSpawnArgs {
     /// wire 外部扩展工具的代理（spawn 时快照；agent 生命周期内不刷新，
     /// 新注册的工具在下一次 agent respawn 时生效）。
     pub ext_tools: Vec<Arc<dyn crate::tools::Tool>>,
-    /// Honor the end-of-turn marker (`crate::prompt::END_TURN_MARKER`):
-    /// an assistant message carrying tool calls whose text ends with the
-    /// marker ends the turn after the tools run.
-    pub end_turn_marker: bool,
 }
 
 impl std::fmt::Debug for AgentSpawnArgs {
@@ -101,7 +92,6 @@ impl std::fmt::Debug for AgentSpawnArgs {
             .field("max_tool_output_length", &self.max_tool_output_length)
             .field("mailbox", &self.mailbox)
             .field("input_bus", &self.input_bus.is_some())
-            .field("end_turn_marker", &self.end_turn_marker)
             .finish()
     }
 }
@@ -130,15 +120,7 @@ impl AgentSpawnArgs {
             input_bus: None,
             mailbox: mailbox.into(),
             ext_tools: Vec::new(),
-            end_turn_marker: true,
         }
-    }
-
-    /// Set whether the end-of-turn marker is honored
-    #[must_use]
-    pub const fn with_end_turn_marker(mut self, enabled: bool) -> Self {
-        self.end_turn_marker = enabled;
-        self
     }
 
     /// Set wire extension tool proxies
@@ -242,7 +224,6 @@ impl Default for AgentConfig {
             enable_cron_tool: false,
             enable_todo_tool: false,
             enable_attachments: true,
-            enable_end_turn_marker: true,
         }
     }
 }

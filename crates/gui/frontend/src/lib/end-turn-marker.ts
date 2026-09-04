@@ -2,10 +2,10 @@
  * End-of-turn marker (`__YOMI_END_TURN__`).
  *
  * Port of `kernel::prompt::strip_end_turn_marker` — keep the two
- * implementations (and their test cases) in sync. The marker is state
- * machine syntax: stored messages keep the raw text (the kernel reads
- * it there), display strips it. Only the END of the text counts — a
- * marker mid-text is inert and stays visible.
+ * implementations (and their test cases) in sync. The marker feature is
+ * retired: the state machine no longer reads it, but old transcripts
+ * may still carry it, so display paths strip it. Only the END of the
+ * text counts — a marker mid-text is inert and stays visible.
  */
 
 export const END_TURN_MARKER = "__YOMI_END_TURN__";

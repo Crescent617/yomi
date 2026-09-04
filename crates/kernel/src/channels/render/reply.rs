@@ -1,18 +1,18 @@
 //! Final-reply buffering for external channels.
 //!
 //! A run (see `obs.rs` for the lifecycle definition) may produce several
-//! assistant texts. The **last** one is the reply body; the rest of the
-//! run renders as a **process panel** below it (Feishu card JSON 2.0
-//! `collapsible_panel`, requires Feishu client V7.9+): collapsed by
-//! default like every panel on the final card — one click reveals the
-//! full chronological narrative, each earlier text as a markdown
+//! assistant texts. The **last one or two** are the reply body (two render
+//! with a divider, so a final bookkeeping step cannot hide the previous
+//! answer); the rest of the run renders as a **process panel** below it
+//! (Feishu card JSON 2.0 `collapsible_panel`, requires Feishu client V7.9+):
+//! collapsed by default like every panel on the final card — one click
+//! reveals the full chronological narrative, each earlier text as a markdown
 //! element, each run of consecutive tool calls folded into a nested
-//! collapsed panel. Runs without intermediate texts keep the classic
-//! single collapsed tool-trace panel. On platforms without card support
-//! the trace appends as plain-text lines. With observability enabled
-//! the run's status card **morphs** into this final reply on settlement —
-//! one message per run; otherwise the reply is sent as a new message
-//! bubble.
+//! collapsed panel. Runs without intermediate texts keep the classic single
+//! collapsed tool-trace panel. On platforms without card support the trace
+//! appends as plain-text lines. With observability enabled the run's status
+//! card **morphs** into this final reply on settlement — one message per
+//! run; otherwise the reply is sent as a new message bubble.
 
 use serde_json::json;
 use std::fmt::Write as _;
@@ -74,7 +74,7 @@ const FALLBACK_ARG_KEYS: &[&str] = &[
 enum TraceEntry {
     /// One assistant text. Texts recorded during the run stay Narrations
     /// in the buffer (live preview, terminal receipt); at flush time
-    /// [`RunReplyBuffer::into_reply`] promotes the latest one to the
+    /// [`RunReplyBuffer::into_reply`] promotes the last one or two to the
     /// reply body, and the rest stay in the chronological trace — on the
     /// reply card they render full-size in the expanded process panel,
     /// with tool calls folded into nested panels between them.
@@ -192,15 +192,16 @@ impl RunReplyBuffer {
 
     /// Record a completed model response (`ModelEvent::End`) — one step of
     /// the run, whether or not it produced text (tool-call-only turns
-    /// count too). A non-empty text joins the trace: the most recent one
-    /// becomes the reply body at flush time, all earlier ones stay as
+    /// count too). A non-empty text joins the trace: the last one or two
+    /// become the reply body at flush time, all earlier ones stay as
     /// narrations. Each `<yomi_attachments>` block outside a fenced code
     /// block is stripped from the text and its paths collected for file
     /// delivery; a text that held only blocks leaves no narration.
     pub(crate) fn record_model_end(&mut self, text: &str) {
         self.steps += 1;
         let (text, paths) = crate::utils::attachments::parse_attachments(text);
-        // 回合终止标记是状态机语法：存储保留（判定读原始消息），展示剥掉。
+        // 旧转录里可能还留着已下线的回合终止标记：状态机早已不读，
+        // 这里仅在展示路径剥掉，避免控制文本泄漏到卡片/CLI。
         let text = crate::prompt::strip_end_turn_marker(&text);
         self.attachments.extend(paths);
         if !text.is_empty() {
@@ -251,25 +252,31 @@ impl RunReplyBuffer {
         self.entries.push(entry);
     }
 
-    /// Split into the reply body (the most recent assistant text, if any)
-    /// and the remaining trace — kept chronological (intermediate texts
-    /// interleaved with tool calls) so the reply card can render the
-    /// run's process narrative in order. Carries the attachment paths
-    /// collected from `<yomi_attachments>` blocks at record time.
+    /// Split into the reply body (the last one or two assistant texts) and
+    /// the remaining trace — kept chronological (intermediate texts
+    /// interleaved with tool calls) so the reply card can render the run's
+    /// process narrative in order. Two body texts render with a divider:
+    /// a final bookkeeping step must not hide the previous answer text.
+    /// Carries the attachment paths collected from `<yomi_attachments>`
+    /// blocks at record time.
     pub(crate) fn into_reply(self) -> FinalReply {
-        let body_idx = self
-            .entries
-            .iter()
-            .rposition(|e| matches!(e, TraceEntry::Narration(_)));
         let mut entries = self.entries;
-        let text = body_idx.map(|idx| {
+        let mut texts = Vec::new();
+        while texts.len() < 2 {
+            let Some(idx) = entries
+                .iter()
+                .rposition(|e| matches!(e, TraceEntry::Narration(_)))
+            else {
+                break;
+            };
             let TraceEntry::Narration(text) = entries.remove(idx) else {
                 unreachable!("rposition matched a Narration");
             };
-            text
-        });
+            texts.push(text);
+        }
+        texts.reverse();
         FinalReply {
-            text,
+            texts,
             steps: self.steps,
             failed: self.failed,
             model: self.model,
@@ -334,11 +341,12 @@ impl Default for RunReplyBuffer {
     }
 }
 
-/// The deliverable reply: optional final text + the run trace (may be
-/// empty). The trace stays chronological: intermediate texts interleaved
-/// with tool calls.
+/// The deliverable reply: the last one or two assistant texts + the run
+/// trace (may be empty). The trace stays chronological: intermediate texts
+/// interleaved with tool calls.
 pub(crate) struct FinalReply {
-    text: Option<String>,
+    /// Up to two body texts, chronological (older first, latest last).
+    texts: Vec<String>,
     /// Completed model responses this run (`ModelEvent::End` count) — the
     /// step count shown in the trace title.
     steps: usize,
@@ -368,14 +376,33 @@ impl FinalReply {
         !self.entries.is_empty()
     }
 
-    /// The final text, when the run produced any.
+    /// The latest body text, when the run produced any.
     pub(crate) fn text(&self) -> Option<&str> {
-        self.text.as_deref()
+        self.texts.last().map(String::as_str)
     }
 
-    /// The bare final text (used when the trace is disabled by config).
+    /// Body texts in display order (older first, latest last), at most two.
+    pub(crate) fn body_texts(&self) -> &[String] {
+        &self.texts
+    }
+
+    /// Body texts joined for plain/comment surfaces (divider line between
+    /// steps). `None` when the run produced no text.
+    pub(crate) fn body_text(&self) -> Option<String> {
+        if self.texts.is_empty() {
+            None
+        } else {
+            Some(self.texts.join("\n\n---\n\n"))
+        }
+    }
+
+    /// The bare body text (used when the trace is disabled by config).
     pub(crate) fn into_text(self) -> Option<String> {
-        self.text
+        if self.texts.is_empty() {
+            None
+        } else {
+            Some(self.texts.join("\n\n---\n\n"))
+        }
     }
 
     /// Attachment paths declared in the final text.
@@ -389,15 +416,15 @@ impl FinalReply {
         std::mem::take(&mut self.attachments)
     }
 
-    /// Append a delivery note (e.g. an attachment failure) to the reply
-    /// text, so it surfaces on the platform instead of vanishing.
+    /// Append a delivery note (e.g. an attachment failure) to the latest
+    /// reply text, so it surfaces on the platform instead of vanishing.
     pub(crate) fn push_note(&mut self, note: &str) {
-        match &mut self.text {
+        match self.texts.last_mut() {
             Some(text) => {
                 text.push_str("\n\n");
                 text.push_str(note);
             }
-            None => self.text = Some(note.to_string()),
+            None => self.texts.push(note.to_string()),
         }
     }
 
@@ -409,31 +436,39 @@ impl FinalReply {
 }
 
 /// Render the Feishu reply card (schema 2.0, no header): an optional notice
-/// line (e.g. error summary for abnormal endings), the final text, and the
-/// run trace — every panel collapsed by default on the final card. When
-/// the run produced intermediate texts the trace renders as a **process
-/// panel**: the full chronological narrative one click away — each
-/// intermediate text as a markdown element, each run of consecutive tool
-/// calls folded into a nested collapsed panel. Without intermediate texts
-/// it stays the classic collapsed tool-trace panel. Returns `None` when
-/// there is nothing to show.
+/// line (e.g. error summary for abnormal endings), the last one or two body
+/// texts (two are split by an `hr` divider), and the run trace — every panel
+/// collapsed by default on the final card. When the run produced earlier
+/// intermediate texts the trace renders as a **process panel**: the full
+/// chronological narrative one click away — each intermediate text as a
+/// markdown element, each run of consecutive tool calls folded into a nested
+/// collapsed panel. Without intermediate texts it stays the classic
+/// collapsed tool-trace panel. Returns `None` when there is nothing to show.
 pub(crate) fn render_card(reply: &FinalReply, notice: Option<&str>) -> Option<String> {
     let mut elements = Vec::new();
     if let Some(notice) = notice {
         elements.push(json!({ "tag": "markdown", "content": notice }));
     }
 
-    if let Some(text) = reply.text() {
-        // Platform-neutral `<@USER_ID>` contract → feishu <at> syntax.
+    let body_texts = reply.body_texts();
+    // Two body segments share the old single-body budget so the card stays
+    // under the platform payload cap.
+    let per_text_budget = FINAL_TEXT_MAX_BYTES / body_texts.len().max(1);
+    for (idx, text) in body_texts.iter().enumerate() {
+        if idx > 0 {
+            elements.push(json!({ "tag": "hr" }));
+        }
+        // Truncate before mention rewrite: `<@id>` → `<at id=..></at>`
+        // expands, and rewriting first would let the cut land mid-tag
+        // (an unclosed tag degrades the whole element to plain text on
+        // the platform side).
         let text =
-            crate::channels::utils::rewrite_mentions(text, &|id| format!("<at id={id}></at>"));
-        let text = crate::utils::strs::truncate_with_suffix(
-            &text,
-            FINAL_TEXT_MAX_BYTES,
-            "\n\n...(truncated)",
-        );
+            crate::utils::strs::truncate_with_suffix(text, per_text_budget, "\n\n...(truncated)");
         // Truncation can cut a fence pair — balance after capping.
         let text = balance_fences(&text);
+        // Platform-neutral `<@USER_ID>` contract → feishu <at> syntax.
+        let text =
+            crate::channels::utils::rewrite_mentions(&text, &|id| format!("<at id={id}></at>"));
         elements.push(json!({ "tag": "markdown", "content": text }));
     }
 
@@ -458,12 +493,13 @@ pub(crate) fn render_card(reply: &FinalReply, notice: Option<&str>) -> Option<St
 }
 
 /// Render the plain-text fallback (platforms without card support): the
-/// final text, then the trace title and the chronological transcript —
-/// intermediate texts in full, tool calls as plain lines.
+/// last one or two body texts (joined by a divider line), then the trace
+/// title and the chronological transcript — earlier intermediate texts in
+/// full, tool calls as plain lines.
 pub(crate) fn render_plain(reply: &FinalReply) -> String {
     let mut out = String::new();
-    if let Some(text) = reply.text() {
-        out.push_str(text);
+    if let Some(text) = reply.body_text() {
+        out.push_str(&text);
     }
     if !reply.entries.is_empty() {
         let title = reply_trace_title(reply);

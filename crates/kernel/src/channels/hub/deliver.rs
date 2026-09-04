@@ -432,7 +432,7 @@ pub(crate) async fn deliver_doc_comment_reply(
             "(this run produced {attachments} attachment(s), undeliverable to doc comments)"
         ));
     }
-    let text = reply.text()?.to_string();
+    let text = reply.body_text()?;
     let mut last_id = None;
     for chunk in crate::channels::comment::chunk_text(
         &text,
@@ -551,10 +551,11 @@ pub(crate) async fn deliver_reply(
         // A mention forces the split even in a quiet chat: card patches
         // never notify (feishu), so the only way an @ pings is a new
         // message carrying the reply — same landing path as mid-run posts.
-        let has_mention = reply
-            .as_ref()
-            .and_then(|r| r.text())
-            .is_some_and(crate::channels::utils::contains_mention);
+        let has_mention = reply.as_ref().is_some_and(|r| {
+            r.body_texts()
+                .iter()
+                .any(|text| crate::channels::utils::contains_mention(text))
+        });
         if (mid_run_split && obs.has_mid_run_posts(session_id)) || has_mention {
             // The reply lands as a new message below the user's mid-run
             // posts, carrying the run trace; the status card then freezes
