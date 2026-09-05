@@ -18,6 +18,7 @@
     startThemeListener,
     stopThemeListener,
   } from "../lib/settings.svelte";
+  import { installGlobalPuaGuard } from "../lib/utils";
   import * as api from "../lib/api";
   import { refreshConnectionInfo } from "../lib/connection.svelte";
   import "../app.css";
@@ -33,11 +34,13 @@
     isPetWindow = appWindow.label === "pet";
     document.documentElement.classList.toggle("pet-window", isPetWindow);
     document.body.classList.toggle("pet-window", isPetWindow);
+    const removePuaGuard = installGlobalPuaGuard();
 
     if (isPetWindow) {
       return () => {
         document.documentElement.classList.remove("pet-window");
         document.body.classList.remove("pet-window");
+        removePuaGuard();
       };
     }
 
@@ -121,6 +124,7 @@
       unlistenOpenSession.then((fn: () => void) => fn());
       unlistenClose();
       stopThemeListener();
+      removePuaGuard();
     };
   });
 </script>

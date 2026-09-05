@@ -4,7 +4,7 @@
     scrollToMessageRequest,
     clearScrollToMessageRequest,
   } from "../../state.svelte";
-  import { onMount, untrack } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import { ArrowDown } from "lucide-svelte";
   import ActivityBubbles from "./ActivityBubbles.svelte";
   import { isActiveSessionPhase } from "../../session-phase";
@@ -226,6 +226,12 @@
   let searchActiveIndex = $state(0);
   let searchFocusTick = $state(0);
   let searchRestoreFocus: HTMLElement | null = null;
+  // 销毁后置位：tick 回调落地时不再碰高亮注册表（detached DOM 上的
+  // range 不可见，但语义上属于泄漏）。
+  let searchEffectsDead = false;
+  onDestroy(() => {
+    searchEffectsDead = true;
+  });
   const searchMatches = $derived(
     findMatches(
       [
@@ -264,12 +270,31 @@
     searchRestoreFocus = null;
   }
 
-  function scrollToMatch(match: SearchMatch | undefined) {
-    if (!match || !messageContent || !scrollContainer) return;
+  /** 清-再-设：定位失败（折叠、markdown 重排、显示层剥掉的标记等
+   *  使 DOM 与数据计数不齐）时保持「无高亮」，绝不留上一轮的残影。 */
+  function paintActiveMatch(match: SearchMatch | undefined) {
+    clearSearchHighlight();
+    if (!match || !messageContent) return;
     const el = messageContent.querySelector<HTMLElement>(
       `[data-message-id="${match.message_id}"]`,
     );
     if (!el) return;
+    // Raw query, not trimmed: counting (findMatches) and locating must agree.
+    highlightOccurrence(el, searchQuery, match.occurrence);
+  }
+
+  function scrollToMatch(match: SearchMatch | undefined) {
+    if (!match || !messageContent || !scrollContainer) {
+      clearSearchHighlight();
+      return;
+    }
+    const el = messageContent.querySelector<HTMLElement>(
+      `[data-message-id="${match.message_id}"]`,
+    );
+    if (!el) {
+      clearSearchHighlight();
+      return;
+    }
     handleQueryJump(); // a jump is deliberate navigation: release the pin
     const containerTop = scrollContainer.getBoundingClientRect().top;
     const offset =
@@ -281,11 +306,7 @@
       top: Math.max(0, offset - 96),
       behavior: reduceMotion ? "auto" : "smooth",
     });
-    // The occurrence ordinal is data-level; the rendered DOM may hold
-    // fewer (collapsed details, markdown re-flow) — then the Range is
-    // null and the scroll alone carries the navigation. Raw query, not
-    // trimmed: counting (findMatches) and locating must agree.
-    highlightOccurrence(el, searchQuery, match.occurrence);
+    paintActiveMatch(match);
   }
 
   // Jump on query edits (reset to the first match) and on explicit
@@ -309,7 +330,31 @@
       return;
     }
     const match = matches[clampActiveIndex(index, matches.length)];
-    void tick().then(() => scrollToMatch(match));
+    void tick().then(() => {
+      // 回调落地时搜索可能已关、查询可能已改——过期跳转一律作废，
+      // 否则关闭/换词后又被旧回调重新画上高亮。
+      if (searchEffectsDead || !searchOpen || searchQuery !== query) return;
+      scrollToMatch(match);
+    });
+  });
+
+  // 流式重渲染会替换活动 range 指向的 text node，旧 range 失锚（有的
+  // 引擎直接丢弃、有的画出残缺/残影）。搜索开着时内容一变就把当前匹
+  // 配的高亮重贴到活 DOM——只重贴不滚动，阅读位置不受流式刷新打扰。
+  $effect(() => {
+    if (!searchOpen) return;
+    const query = searchQuery;
+    const index = searchActiveIndex;
+    const matches = searchMatches; // tracked：内容 churn 时重贴
+    if (!query.trim() || matches.length === 0) {
+      clearSearchHighlight();
+      return;
+    }
+    const match = matches[clampActiveIndex(index, matches.length)];
+    void tick().then(() => {
+      if (searchEffectsDead || !searchOpen || searchQuery !== query) return;
+      paintActiveMatch(match);
+    });
   });
 
   function stepSearch(delta: 1 | -1) {

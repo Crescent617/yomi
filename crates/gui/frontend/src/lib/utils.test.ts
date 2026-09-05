@@ -7,6 +7,7 @@ import {
   projectColor,
   sanitizePuaPaste,
   stripPua,
+  stripPuaOnInput,
 } from "./utils";
 
 describe("projectColor", () => {
@@ -47,7 +48,7 @@ describe("PUA guard", () => {
     expect(stripPua("clean")).toBe("clean");
   });
 
-  test("blockPuaInput blocks insertText and composition commits with PUA", () => {
+  test("blockPuaInput blocks every insert* carrying PUA, paste excepted", () => {
     const blocked = (inputType: string, data: string | null) => {
       let prevented = false;
       blockPuaInput({
@@ -59,11 +60,82 @@ describe("PUA guard", () => {
     };
     expect(blocked("insertText", "\uf700")).toBe(true);
     expect(blocked("insertCompositionText", "\uf701")).toBe(true);
+    // 系统文本替换/拖拽/Yank 等冷门插入路径同样拦截。
+    expect(blocked("insertReplacementText", "\uf703")).toBe(true);
+    expect(blocked("insertFromDrop", "\uf700")).toBe(true);
     expect(blocked("insertText", "a")).toBe(false);
     expect(blocked("insertText", null)).toBe(false);
     // 粘贴不整体拦截 —— 由 sanitizePuaPaste 消毒后插入。
     expect(blocked("insertFromPaste", "\uf700")).toBe(false);
-    expect(blocked("deleteContentBackward", null)).toBe(false);
+    expect(blocked("deleteContentBackward", "\uf700")).toBe(false);
+  });
+
+  test("stripPuaOnInput strips PUA in place and re-bases the caret", () => {
+    let selection: [number, number] | null = null;
+    const el = {
+      value: "ab\uf703cd\uf700",
+      selectionStart: 5,
+      setSelectionRange: (start: number, end: number) => {
+        selection = [start, end];
+      },
+    } as unknown as HTMLTextAreaElement;
+    stripPuaOnInput({ target: el } as unknown as Event);
+    expect(el.value).toBe("abcd");
+    // 光标前剥了 1 个（位置 2 的 \uf703），5 → 4。
+    expect(selection).toEqual([4, 4]);
+  });
+
+  test("stripPuaOnInput preserves a multi-char selection across the strip", () => {
+    let selection: [number, number] | null = null;
+    const el = {
+      value: "ab\uf703cdef",
+      selectionStart: 1,
+      selectionEnd: 6,
+      setSelectionRange: (s: number, e: number) => {
+        selection = [s, e];
+      },
+    } as unknown as HTMLTextAreaElement;
+    stripPuaOnInput({ target: el } as unknown as Event);
+    expect(el.value).toBe("abcdef");
+    // 选区双端各自折算：1→1（前无剥除），6→5（前剥 1 个），选区保留。
+    expect(selection).toEqual([1, 5]);
+  });
+
+  test("stripPuaOnInput survives input types whose selectionStart throws", () => {
+    const el = {
+      value: "x\uf700y",
+      get selectionStart(): number {
+        throw new DOMException("InvalidStateError");
+      },
+      setSelectionRange: () => {
+        throw new DOMException("InvalidStateError");
+      },
+    } as unknown as HTMLInputElement;
+    stripPuaOnInput({ target: el } as unknown as Event);
+    expect(el.value).toBe("xy");
+  });
+
+  test("stripPuaOnInput leaves clean values and composing events alone", () => {
+    const clean = {
+      value: "plain",
+      selectionStart: 2,
+      setSelectionRange: () => {
+        throw new Error("must not touch selection");
+      },
+    } as unknown as HTMLInputElement;
+    stripPuaOnInput({ target: clean } as unknown as Event);
+    expect(clean.value).toBe("plain");
+
+    const composing = {
+      value: "a\uf700",
+      selectionStart: 2,
+      setSelectionRange: () => {},
+    } as unknown as HTMLTextAreaElement;
+    stripPuaOnInput({
+      target: composing,
+      isComposing: true,
+    } as unknown as Event);
+    expect(composing.value).toBe("a\uf700");
   });
 
   test("sanitizePuaPaste inserts stripped text at the selection and emits input", () => {

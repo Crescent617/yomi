@@ -3,8 +3,13 @@
  *
  * Highlights ride the CSS Custom Highlight API (a Range registry, no DOM
  * mutation) so Svelte's streaming re-renders never fight wrapper
- * elements; stale ranges are simply dropped by the browser. Where the
- * API is missing the caller falls back to flashing the message frame.
+ * elements; stale ranges are simply dropped by the browser.
+ *
+ * Counting vs locating: findMatches counts with toLowerCase (full case
+ * mapping), rangeForOccurrence locates with /iu (simple case folding).
+ * They disagree only where a character EXPANDS under lowercasing
+ * (İ→i̇): such a match is counted but not locatable, and degrades to
+ * scroll-without-highlight — never to a stale range.
  */
 
 const HIGHLIGHT_NAME = "yomi-search-active";
@@ -17,52 +22,82 @@ export function searchHighlightSupported(): boolean {
   );
 }
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /** Range spanning the nth (0-based) case-insensitive occurrence of
  *  `query` across root's text nodes, or null when the rendered text
  *  holds fewer occurrences than the data layer counted (collapsed
- *  details, markdown re-flow). */
+ *  details, markdown re-flow, display-stripped markers).
+ *
+ *  The match may straddle element boundaries: rendering shreds words
+ *  into multiple text nodes (syntax-highlight token spans, inline
+ *  markup), and a single-node lookup would miss those occurrences and
+ *  skew every later ordinal. Matching runs as a case-insensitive regex
+ *  over the concatenated ORIGINAL text, so offsets always index real
+ *  text — lowercasing a copy would shift offsets wherever a character
+ *  expands under case folding (İ→i̇). */
 export function rangeForOccurrence(
   root: Element,
   query: string,
   occurrence: number,
 ): Range | null {
   if (!query) return null;
-  const needle = query.toLowerCase();
   const walker = root.ownerDocument.createTreeWalker(
     root,
     NodeFilter.SHOW_TEXT,
   );
+  const nodes: Text[] = [];
+  let combined = "";
   let node = walker.nextNode() as Text | null;
-  let seen = 0;
   while (node) {
-    const haystack = node.data.toLowerCase();
-    let from = 0;
-    while (from <= haystack.length - needle.length) {
-      const hit = haystack.indexOf(needle, from);
-      if (hit === -1) break;
-      if (seen === occurrence) {
+    nodes.push(node);
+    combined += node.data;
+    node = walker.nextNode() as Text | null;
+  }
+
+  const needle = new RegExp(escapeRegExp(query), "giu");
+  let seen = 0;
+  for (const hit of combined.matchAll(needle)) {
+    if (seen !== occurrence) {
+      seen += 1;
+      continue;
+    }
+    const start = hit.index;
+    const end = start + hit[0].length;
+    // Map the combined-string offsets back to (node, offset) pairs.
+    let offset = 0;
+    let startNode: Text | null = null;
+    let startOffset = 0;
+    for (const candidate of nodes) {
+      const nodeStart = offset;
+      const nodeEnd = nodeStart + candidate.data.length;
+      if (startNode === null && start <= nodeEnd) {
+        startNode = candidate;
+        startOffset = start - nodeStart;
+      }
+      if (end <= nodeEnd) {
+        if (startNode === null) return null;
         try {
           const range = root.ownerDocument.createRange();
-          range.setStart(node, hit);
-          range.setEnd(node, hit + needle.length);
+          range.setStart(startNode, startOffset);
+          range.setEnd(candidate, end - nodeStart);
           return range;
         } catch {
-          // 大小写折叠会扩长个别字符（İ→i̇），lowercased 串上的偏移
-          // 可能越过原节点末尾 —— 降级为只滚动不高亮。
           return null;
         }
       }
-      seen += 1;
-      from = hit + needle.length;
+      offset = nodeEnd;
     }
-    node = walker.nextNode() as Text | null;
+    return null;
   }
   return null;
 }
 
-/** A match can straddle adjacent text nodes only when the query itself
- *  spans markup boundaries — single-node ranges cover the common case;
- *  the caller treats null as "scroll without highlight". */
+/** The caller clears before setting: a null range (occurrence not
+ *  locatable in the rendered DOM) must leave NOTHING painted rather
+ *  than the previous match's stale range. */
 export function highlightOccurrence(
   root: Element,
   query: string,

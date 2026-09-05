@@ -281,16 +281,74 @@ export function stripPua(text: string): string {
 }
 
 /**
- * 拦截输入框里的私用区字符。覆盖三条注入路径：逐键 insertText、
- * 组字提交 insertCompositionText（组字中按方向键同样会漏）、以及
- * 粘贴 insertFromPaste（整体拒掉会误伤长文本，改由
- * `sanitizePuaPaste` 消毒后手动插入，这里放行）。
+ * 拦截输入框里的私用区字符。两条注入路径：beforeinput 能看到的所有
+ * insert*（逐键 insertText、组字提交 insertCompositionText、系统文本
+ * 替换 insertReplacementText、拖拽/Yank 等——粘贴 insertFromPaste 除
+ * 外，整体拒掉会误伤长文本，由 `sanitizePuaPaste` 消毒后插入）。
  */
 export function blockPuaInput(e: InputEvent) {
   if (e.inputType === "insertFromPaste") return;
-  if (e.inputType !== "insertText" && e.inputType !== "insertCompositionText")
-    return;
+  if (!e.inputType.startsWith("insert")) return;
   if (e.data && containsPua(e.data)) e.preventDefault();
+}
+
+/**
+ * input 事件兜底：少数泄漏路径（输入法/系统命令直接写值）可能不发
+ * beforeinput，或事件形态不在拦截表内。捕获阶段把值里的 PUA 剥掉、
+ * 光标按剥除数折算回原位——在 Svelte bind:value 读取之前完成，组件
+ * 拿到的已是干净值。组字中的 marked text 不动（提交时由上面的
+ * beforeinput 拦截）。
+ */
+export function stripPuaOnInput(e: Event) {
+  if ((e as InputEvent).isComposing) return;
+  // 鸭子判断而非 instanceof：单测跑在 node 环境（无 DOM 类）。
+  const el = e.target as HTMLInputElement | HTMLTextAreaElement | null;
+  if (
+    !el ||
+    typeof el.value !== "string" ||
+    typeof el.setSelectionRange !== "function"
+  ) {
+    return;
+  }
+  const value = el.value;
+  if (!containsPua(value)) return;
+  // email/number 等类型读 selectionStart 会抛 InvalidStateError —— 读到
+  // 就双端各自折算（保留选区），读不到退化为末尾光标。
+  let start: number;
+  let end: number;
+  try {
+    start = el.selectionStart ?? value.length;
+    end = el.selectionEnd ?? start;
+  } catch {
+    start = end = value.length;
+  }
+  const rebase = (pos: number) => {
+    const before = value.slice(0, pos);
+    return pos - (before.length - stripPua(before).length);
+  };
+  el.value = stripPua(value);
+  try {
+    el.setSelectionRange(rebase(start), rebase(end));
+  } catch {
+    // number 等不支持 selection 的输入类型——剥字符已达成，光标随引擎。
+  }
+}
+
+/**
+ * 全局私用区守卫：capture 阶段的 beforeinput 拦截 + input 兜底剥除，
+ * 一次覆盖当前与未来的全部文本框（聊天输入、搜索框、重命名、面板
+ * 表单……），免去逐组件接线。粘贴不进全局层（需要按字段消毒后手动
+ * 插入）：ChatInput/AskUserBar 有各自的 onpaste 消毒，其余字段的粘
+ * 贴靠 input 兜底剥除（撤销栈会被 value setter 清空，可接受）。
+ */
+export function installGlobalPuaGuard(): () => void {
+  const onBeforeInput = (e: Event) => blockPuaInput(e as InputEvent);
+  window.addEventListener("beforeinput", onBeforeInput, true);
+  window.addEventListener("input", stripPuaOnInput, true);
+  return () => {
+    window.removeEventListener("beforeinput", onBeforeInput, true);
+    window.removeEventListener("input", stripPuaOnInput, true);
+  };
 }
 
 /**

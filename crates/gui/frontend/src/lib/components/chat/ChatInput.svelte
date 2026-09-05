@@ -21,7 +21,7 @@
   import { forkSession, textFromBlocks } from "../../session";
   import { isActiveSessionPhase } from "../../session-phase";
   import { SLASH_COMMANDS } from "../../commands";
-  import { blockPuaInput, sanitizePuaPaste } from "../../utils";
+  import { sanitizePuaPaste } from "../../utils";
   import { open } from "@tauri-apps/plugin-dialog";
 
   import ModelSelector from "./ModelSelector.svelte";
@@ -932,7 +932,6 @@
           detectCompletion();
           autoResize();
         }}
-        onbeforeinput={blockPuaInput}
         onkeydown={handleKeydown}
         onfocus={detectCompletion}
         onblur={() => {
