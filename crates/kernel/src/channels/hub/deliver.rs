@@ -553,10 +553,9 @@ pub(crate) async fn deliver_reply(
         // message carrying the reply — same landing path as mid-run posts.
         // Scan every text of the run, not just the body: a mention left
         // in the collapsed process panel must still ping.
-        let has_mention = reply.as_ref().is_some_and(|r| {
-            r.all_texts()
-                .any(crate::channels::utils::contains_mention)
-        });
+        let has_mention = reply
+            .as_ref()
+            .is_some_and(|r| r.all_texts().any(crate::channels::utils::contains_mention));
         if (mid_run_split && obs.has_mid_run_posts(session_id)) || has_mention {
             // The reply lands as a new message below the user's mid-run
             // posts, carrying the run trace; the status card then freezes

@@ -1151,7 +1151,10 @@ async fn flush_reply_card_platform_sends_single_card_with_panel() {
     let card = &cards[0].1;
     assert!(card.contains("collapsible_panel"));
     assert!(card.contains("final answer"));
-    assert!(card.contains("Let me check."), "earlier text joins the body");
+    assert!(
+        card.contains("Let me check."),
+        "earlier text joins the body"
+    );
     assert!(card.contains("cargo test"), "tool summary joins the panel");
 }
 
@@ -9720,7 +9723,11 @@ async fn deliver_reply_with_mention_in_unpromoted_trace_text_flushes_new_message
     buf.record_tool_end("t1", 2000, false);
     buf.record_model_end("最终结论：这段正文 deliberately 写得比 mention 段长很多");
     let reply = buf.into_reply();
-    assert_eq!(reply.body_texts().len(), 1, "mention text stays in the trace");
+    assert_eq!(
+        reply.body_texts().len(),
+        1,
+        "mention text stays in the trace"
+    );
     deliver_reply(
         &obs,
         &adapter,

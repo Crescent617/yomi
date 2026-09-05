@@ -415,12 +415,13 @@ impl FinalReply {
     /// run, not just the body: a text left in the collapsed process panel
     /// renders its `<at>` tag, but a card PATCH never notifies.
     pub(crate) fn all_texts(&self) -> impl Iterator<Item = &str> {
-        self.texts.iter().map(String::as_str).chain(
-            self.entries.iter().filter_map(|e| match e {
+        self.texts
+            .iter()
+            .map(String::as_str)
+            .chain(self.entries.iter().filter_map(|e| match e {
                 TraceEntry::Narration(t) => Some(t.as_str()),
                 TraceEntry::Tool(_) => None,
-            }),
-        )
+            }))
     }
 
     /// Body texts joined for plain/comment surfaces (divider line between

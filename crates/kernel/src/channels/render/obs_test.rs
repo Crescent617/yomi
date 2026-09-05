@@ -2096,7 +2096,9 @@ async fn stopped_morphs_status_card_into_single_body_reply() {
             &StopReason::Completed {
                 finish_reason: None,
             },
-            Some(reply_with("the final answer, deliberately longer than the intermediate")),
+            Some(reply_with(
+                "the final answer, deliberately longer than the intermediate",
+            )),
         )
         .await;
 
