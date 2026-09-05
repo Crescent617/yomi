@@ -169,3 +169,91 @@ test("rangeForOccurrence spans element-split text nodes", async ({ page }) => {
   });
   expect(texts).toEqual(["git", "git", null]);
 });
+
+test("code-block DOM swap re-pins the highlight to live nodes", async ({
+  page,
+}) => {
+  // Regression spec for the 2026-09-06 report: a match painted inside a
+  // code block vanished (and on WebKit could leave un-clearable paint)
+  // when the async syntax highlighter swapped the block's DOM — a pure
+  // DOM change the data-driven re-pin effects cannot see. The
+  // MutationObserver re-pin must anchor the match back to live nodes.
+  await page.goto("/e2e");
+  await page.waitForFunction(() => window.__e2e);
+  await page.setViewportSize({ width: 1280, height: 640 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.evaluate(async () => {
+    const { mount, tick } = window.__e2e.svelte;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
+    const { default: MessageList } = window.__e2e.MessageList;
+    const created_at = new Date().toISOString();
+    const messages = [
+      {
+        id: "u1",
+        type: "user" as const,
+        content: [{ type: "text" as const, text: "找代码" }],
+        created_at,
+      },
+      {
+        id: "a1",
+        type: "assistant" as const,
+        content: [
+          {
+            type: "text" as const,
+            text: "```javascript\nfunction zebraQuarkToken() {\n  return 42;\n}\n```",
+          },
+        ],
+        created_at,
+      },
+    ];
+    const session = sessionLib.createSessionState({
+      id: "codeblock-swap-test",
+      messages,
+    });
+    state.sessionState.sessions.push(session);
+    state.sessionState.activeSessionId = session.id;
+    state.streamingMessages[session.id] = [];
+    document.body.innerHTML =
+      '<main id="codeblock-swap-test" style="height:100vh;position:relative"></main>';
+    const target = document.querySelector<HTMLDivElement>(
+      "#codeblock-swap-test",
+    );
+    if (!target) throw new Error("missing mount target");
+    mount(MessageList, { target });
+    await tick();
+  });
+
+  await page.keyboard.press("ControlOrMeta+f");
+  const input = page
+    .getByRole("search", { name: "Search messages" })
+    .getByRole("textbox", { name: "Search messages" });
+  await input.fill("zebraQuarkToken");
+  const rangeState = () =>
+    page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const h = (CSS as any).highlights?.get("yomi-search-active");
+      if (!h) return { text: null, connected: false };
+      for (const r of h as Iterable<Range>) {
+        return { text: r.toString(), connected: r.startContainer.isConnected };
+      }
+      return { text: null, connected: false };
+    });
+  await expect.poll(rangeState).toEqual({
+    text: "zebraQuarkToken",
+    connected: true,
+  });
+
+  // 语法高亮式的换树：子树销毁重建，数据层毫无变化。
+  await page.evaluate(() => {
+    const content = document.querySelector(".code-block-content");
+    if (!content) throw new Error("no code block rendered");
+    // eslint-disable-next-line no-self-assign -- 自赋值即换树：子节点全毁重建
+    content.innerHTML = content.innerHTML;
+  });
+  // 引擎会把失锚 range 收编成空 range；重贴必须把它钉回活节点。
+  await expect.poll(rangeState).toEqual({
+    text: "zebraQuarkToken",
+    connected: true,
+  });
+});

@@ -21,7 +21,7 @@
   import { forkSession, textFromBlocks } from "../../session";
   import { isActiveSessionPhase } from "../../session-phase";
   import { SLASH_COMMANDS } from "../../commands";
-  import { sanitizePuaPaste } from "../../utils";
+  import { sanitizeControlPuaPaste } from "../../utils";
   import { open } from "@tauri-apps/plugin-dialog";
 
   import ModelSelector from "./ModelSelector.svelte";
@@ -605,8 +605,8 @@
       }
     }
     // 图片已接管这次粘贴（preventDefault 已调）—— 不再消毒文本，
-    // 否则剪贴板同带 image+PUA 文本时会在附件之外多插一段。
-    if (!imageHandled && textareaRef) sanitizePuaPaste(e, textareaRef);
+    // 否则剪贴板同带 image+不可输入字符文本时会在附件之外多插一段。
+    if (!imageHandled && textareaRef) sanitizeControlPuaPaste(e, textareaRef);
   }
 
   function handleKeydown(e: KeyboardEvent) {

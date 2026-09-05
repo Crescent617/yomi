@@ -357,6 +357,43 @@
     });
   });
 
+  // 纯 DOM 层的换树（代码块语法高亮异步完成、mermaid 渲染等）不改数
+  // 据，上面两个数据驱动的 effect 都看不到。实测（WKWebView）：失锚的
+  // range 被引擎收编成容器边界的空 range，高亮从代码块里消失；用户报
+  // 告关闭搜索后高亮仍残留——疑为引擎对无效 range 的删除不做重绘失
+  // 效（规范上 delete 应立即停画，此点未做像素级验证）。搜索开着时对
+  // 正文子树挂 MutationObserver，DOM 一变就把活动匹配重贴回活节点
+  // （每帧最多一次，只重贴不滚动），使关闭时的清除始终作用在有效
+  // range 上。
+  $effect(() => {
+    if (!searchOpen || !messageContent) return;
+    const root = messageContent;
+    let frame: number | null = null;
+    const observer = new MutationObserver(() => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        if (searchEffectsDead || !searchOpen) return;
+        const query = untrack(() => searchQuery);
+        const matches = untrack(() => searchMatches);
+        if (!query.trim() || matches.length === 0) return;
+        const match =
+          matches[
+            clampActiveIndex(
+              untrack(() => searchActiveIndex),
+              matches.length,
+            )
+          ];
+        paintActiveMatch(match);
+      });
+    });
+    observer.observe(root, { childList: true, subtree: true });
+    return () => {
+      observer.disconnect();
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
+  });
+
   function stepSearch(delta: 1 | -1) {
     searchActiveIndex = stepActiveIndex(
       searchActiveClamped,

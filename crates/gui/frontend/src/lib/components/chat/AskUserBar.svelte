@@ -12,7 +12,7 @@
   } from "lucide-svelte";
   import { getActiveSession, showNotification } from "../../state.svelte";
   import * as api from "../../api";
-  import { sanitizePuaPaste } from "../../utils";
+  import { sanitizeControlPuaPaste } from "../../utils";
 
   const activeSession = $derived(getActiveSession());
   const askUser = $derived(activeSession?.pending_ask_users[0]);
@@ -234,7 +234,7 @@
           <textarea
             id={`ask-user-custom-${currentQuestionIndex}`}
             bind:value={customInputs[currentQuestion.header]}
-            onpaste={(e) => sanitizePuaPaste(e, e.currentTarget)}
+            onpaste={(e) => sanitizeControlPuaPaste(e, e.currentTarget)}
             placeholder="Add context or type a different answer..."
             rows={2}
             disabled={submitting || skipping}

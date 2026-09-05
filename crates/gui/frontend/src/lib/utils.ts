@@ -265,41 +265,48 @@ export function isDeliberateRenameExit(
 }
 
 /**
- * 私用区字符（U+E000–U+F8FF）匹配。macOS 输入法怪癖：方向键/功能键
- * 的键码（U+F700–U+F704）可能经 `insertText` 漏进 textarea，显示为
- * 豆腐块。私用区没有任何合法输入内容。
+ * 不可输入字符匹配：C0 控制字符（\t \n \r 除外）、DEL、C1 控制字符、
+ * 私用区（BMP U+E000–F8FF 与第 15/16 平面）。macOS 两条真实泄漏路径：
+ * ①输入法把方向键/功能键键码（U+F700–U+F704）经 `insertText` 漏进
+ *   textarea，显示为豆腐块；
+ * ②无输入法时 WebKit 按老式终端应用模式把功能键映射回 C0 控制字符
+ *   （右箭头 U+F703 → U+001D），光标已在内容末尾、移动命令无处可去时
+ *   该字符被直接插入文本。
+ * 这些字符没有任何合法输入内容。
  */
-const PUA_RE = /[\u{e000}-\u{f8ff}]/gu;
+const CONTROL_PUA_RE =
+  /[\u{0}-\u{8}\u{b}\u{c}\u{e}-\u{1f}\u{7f}\u{80}-\u{9f}\u{e000}-\u{f8ff}\u{f0000}-\u{ffffd}\u{100000}-\u{10fffd}]/gu; // eslint-disable-line no-control-regex -- 匹配对象正是控制字符与私用区
 
-export function containsPua(text: string): boolean {
-  PUA_RE.lastIndex = 0;
-  return PUA_RE.test(text);
+export function containsControlPua(text: string): boolean {
+  CONTROL_PUA_RE.lastIndex = 0;
+  return CONTROL_PUA_RE.test(text);
 }
 
-export function stripPua(text: string): string {
-  return text.replace(PUA_RE, "");
+export function stripControlPua(text: string): string {
+  return text.replace(CONTROL_PUA_RE, "");
 }
 
 /**
- * 拦截输入框里的私用区字符。两条注入路径：beforeinput 能看到的所有
+ * 拦截输入框里的不可输入字符。两条注入路径：beforeinput 能看到的所有
  * insert*（逐键 insertText、组字提交 insertCompositionText、系统文本
  * 替换 insertReplacementText、拖拽/Yank 等——粘贴 insertFromPaste 除
- * 外，整体拒掉会误伤长文本，由 `sanitizePuaPaste` 消毒后插入）。
+ * 外，整体拒掉会误伤长文本，由 `sanitizeControlPuaPaste` 消毒后插入）。
  */
-export function blockPuaInput(e: InputEvent) {
+export function blockControlPuaInput(e: InputEvent) {
   if (e.inputType === "insertFromPaste") return;
   if (!e.inputType.startsWith("insert")) return;
-  if (e.data && containsPua(e.data)) e.preventDefault();
+  if (e.data && containsControlPua(e.data)) e.preventDefault();
 }
 
 /**
  * input 事件兜底：少数泄漏路径（输入法/系统命令直接写值）可能不发
- * beforeinput，或事件形态不在拦截表内。捕获阶段把值里的 PUA 剥掉、
+ * beforeinput，或事件形态不在拦截表内。捕获阶段把值里的控制字符与
+ * 私用区字符剥掉、
  * 光标按剥除数折算回原位——在 Svelte bind:value 读取之前完成，组件
  * 拿到的已是干净值。组字中的 marked text 不动（提交时由上面的
  * beforeinput 拦截）。
  */
-export function stripPuaOnInput(e: Event) {
+export function stripControlPuaOnInput(e: Event) {
   if ((e as InputEvent).isComposing) return;
   // 鸭子判断而非 instanceof：单测跑在 node 环境（无 DOM 类）。
   const el = e.target as HTMLInputElement | HTMLTextAreaElement | null;
@@ -311,7 +318,7 @@ export function stripPuaOnInput(e: Event) {
     return;
   }
   const value = el.value;
-  if (!containsPua(value)) return;
+  if (!containsControlPua(value)) return;
   // email/number 等类型读 selectionStart 会抛 InvalidStateError —— 读到
   // 就双端各自折算（保留选区），读不到退化为末尾光标。
   let start: number;
@@ -324,9 +331,9 @@ export function stripPuaOnInput(e: Event) {
   }
   const rebase = (pos: number) => {
     const before = value.slice(0, pos);
-    return pos - (before.length - stripPua(before).length);
+    return pos - (before.length - stripControlPua(before).length);
   };
-  el.value = stripPua(value);
+  el.value = stripControlPua(value);
   try {
     el.setSelectionRange(rebase(start), rebase(end));
   } catch {
@@ -335,37 +342,37 @@ export function stripPuaOnInput(e: Event) {
 }
 
 /**
- * 全局私用区守卫：capture 阶段的 beforeinput 拦截 + input 兜底剥除，
- * 一次覆盖当前与未来的全部文本框（聊天输入、搜索框、重命名、面板
+ * 全局不可输入字符守卫：capture 阶段的 beforeinput 拦截 + input 兜底剥
+ * 除，一次覆盖当前与未来的全部文本框（聊天输入、搜索框、重命名、面板
  * 表单……），免去逐组件接线。粘贴不进全局层（需要按字段消毒后手动
  * 插入）：ChatInput/AskUserBar 有各自的 onpaste 消毒，其余字段的粘
  * 贴靠 input 兜底剥除（撤销栈会被 value setter 清空，可接受）。
  */
-export function installGlobalPuaGuard(): () => void {
-  const onBeforeInput = (e: Event) => blockPuaInput(e as InputEvent);
+export function installGlobalControlPuaGuard(): () => void {
+  const onBeforeInput = (e: Event) => blockControlPuaInput(e as InputEvent);
   window.addEventListener("beforeinput", onBeforeInput, true);
-  window.addEventListener("input", stripPuaOnInput, true);
+  window.addEventListener("input", stripControlPuaOnInput, true);
   return () => {
     window.removeEventListener("beforeinput", onBeforeInput, true);
-    window.removeEventListener("input", stripPuaOnInput, true);
+    window.removeEventListener("input", stripControlPuaOnInput, true);
   };
 }
 
 /**
- * 粘贴消毒：剪贴板文本含私用区字符时，拦掉默认粘贴、把剥掉 PUA 的
- * 文本手动插到光标处（dispatch input 事件让 Svelte 绑定同步；浏览器
- * 撤销栈对 setRangeText 的支持各引擎不一，不作为语义保证）。无 PUA
- * 时不动，走浏览器默认粘贴。
+ * 粘贴消毒：剪贴板文本含不可输入字符时，拦掉默认粘贴、把剥掉这些字
+ * 符的文本手动插到光标处（dispatch input 事件让 Svelte 绑定同步；浏
+ * 览器撤销栈对 setRangeText 的支持各引擎不一，不作为语义保证）。无
+ * 不可输入字符时不动，走浏览器默认粘贴。
  */
-export function sanitizePuaPaste(
+export function sanitizeControlPuaPaste(
   e: ClipboardEvent,
   textarea: HTMLTextAreaElement,
 ) {
   const text = e.clipboardData?.getData("text/plain");
-  if (!text || !containsPua(text)) return;
+  if (!text || !containsControlPua(text)) return;
   e.preventDefault();
   textarea.setRangeText(
-    stripPua(text),
+    stripControlPua(text),
     textarea.selectionStart,
     textarea.selectionEnd,
     "end",
