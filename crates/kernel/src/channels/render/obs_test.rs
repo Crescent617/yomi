@@ -2023,6 +2023,9 @@ async fn whisper_line_is_capped_at_100_chars() {
 // ── Morph settlement (one message per run) ──────────────────────────
 
 fn reply_with(text: &str) -> crate::channels::reply::FinalReply {
+    // 长度依赖：回复卡正文选择取"最后一段 + 比它长的最早段"。
+    // 传入文本短于 "intermediate thought"(20B) → 两段正文形态；
+    // 传入更长 → 单段正文（首段收进过程面板）。
     let mut buf = crate::channels::reply::RunReplyBuffer::new();
     buf.record_model_end("intermediate thought");
     buf.record_tool_start("t1", "shell", Some(r#"{"command":"cargo test"}"#));
@@ -2070,6 +2073,48 @@ async fn stopped_morphs_status_card_into_final_reply() {
     assert_eq!(elements[3]["expanded"], false);
     let tools = elements[3]["elements"][0]["content"].as_str().unwrap();
     assert!(tools.contains("✅ **shell** · `cargo test`"));
+}
+
+#[tokio::test]
+async fn stopped_morphs_status_card_into_single_body_reply() {
+    // Final text longer than the intermediate one: single body text (no
+    // hr divider), the intermediate text moves to the process panel.
+    let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
+    let mock = MockAdapter::new();
+    let sid = sid();
+    let adapter = adapter_ref(&mock);
+
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &running())
+        .await;
+    tracker
+        .handle_event(&adapter, &sid, "chat-1", None, &tool_start("bash"))
+        .await;
+    tracker
+        .handle_stopped(
+            &sid,
+            &StopReason::Completed {
+                finish_reason: None,
+            },
+            Some(reply_with("the final answer, deliberately longer than the intermediate")),
+        )
+        .await;
+
+    assert_eq!(mock.cards.lock().await.len(), 1);
+    let patches = mock.patches.lock().await;
+    let morphed: serde_json::Value = serde_json::from_str(&patches.last().unwrap().1).unwrap();
+    let elements = morphed["body"]["elements"].as_array().unwrap();
+    assert_eq!(elements.len(), 2, "single body + trace panel");
+    assert_eq!(
+        elements[0]["content"],
+        "the final answer, deliberately longer than the intermediate"
+    );
+    let panel = &elements[1];
+    assert_eq!(panel["tag"], "collapsible_panel");
+    let body = panel["elements"].as_array().unwrap();
+    let tags: Vec<&str> = body.iter().map(|e| e["tag"].as_str().unwrap()).collect();
+    assert_eq!(tags, ["markdown", "collapsible_panel"]);
+    assert_eq!(body[0]["content"], "intermediate thought");
 }
 
 #[tokio::test]

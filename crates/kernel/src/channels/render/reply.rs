@@ -1,15 +1,16 @@
 //! Final-reply buffering for external channels.
 //!
 //! A run (see `obs.rs` for the lifecycle definition) may produce several
-//! assistant texts. The **last one or two** are the reply body (two render
-//! with a divider, so a final bookkeeping step cannot hide the previous
-//! answer); the rest of the run renders as a **process panel** below it
-//! (Feishu card JSON 2.0 `collapsible_panel`, requires Feishu client V7.9+):
-//! collapsed by default like every panel on the final card — one click
-//! reveals the full chronological narrative, each earlier text as a markdown
-//! element, each run of consecutive tool calls folded into a nested
-//! collapsed panel. Runs without intermediate texts keep the classic single
-//! collapsed tool-trace panel. On platforms without card support the trace
+//! assistant texts. The **last text** is the reply body — joined from above
+//! by the **longest earlier text** when that one beats it in length (two
+//! render with a divider, so a final bookkeeping step cannot hide the
+//! run's substantive answer); the rest of the run renders as a **process
+//! panel** below it (Feishu card JSON 2.0 `collapsible_panel`, requires
+//! Feishu client V7.9+): collapsed by default like every panel on the
+//! final card — one click reveals the remaining chronological narrative,
+//! each earlier text as a markdown element, each run of consecutive tool
+//! calls folded into a nested collapsed panel. Runs without intermediate
+//! texts keep the classic single collapsed tool-trace panel. On platforms without card support the trace
 //! appends as plain-text lines. With observability enabled the run's status
 //! card **morphs** into this final reply on settlement — one message per
 //! run; otherwise the reply is sent as a new message bubble.
@@ -74,7 +75,8 @@ const FALLBACK_ARG_KEYS: &[&str] = &[
 enum TraceEntry {
     /// One assistant text. Texts recorded during the run stay Narrations
     /// in the buffer (live preview, terminal receipt); at flush time
-    /// [`RunReplyBuffer::into_reply`] promotes the last one or two to the
+    /// [`RunReplyBuffer::into_reply`] promotes the last text — plus the
+    /// longest earlier one when it beats the last in length — to the
     /// reply body, and the rest stay in the chronological trace — on the
     /// reply card they render full-size in the expanded process panel,
     /// with tool calls folded into nested panels between them.
@@ -192,8 +194,9 @@ impl RunReplyBuffer {
 
     /// Record a completed model response (`ModelEvent::End`) — one step of
     /// the run, whether or not it produced text (tool-call-only turns
-    /// count too). A non-empty text joins the trace: the last one or two
-    /// become the reply body at flush time, all earlier ones stay as
+    /// count too). A non-empty text joins the trace: the last one — plus
+    /// the longest earlier text when it beats the last in length —
+    /// becomes the reply body at flush time, all earlier ones stay as
     /// narrations. Each `<yomi_attachments>` block outside a fenced code
     /// block is stripped from the text and its paths collected for file
     /// delivery; a text that held only blocks leaves no narration.
@@ -252,29 +255,49 @@ impl RunReplyBuffer {
         self.entries.push(entry);
     }
 
-    /// Split into the reply body (the last one or two assistant texts) and
-    /// the remaining trace — kept chronological (intermediate texts
-    /// interleaved with tool calls) so the reply card can render the run's
-    /// process narrative in order. Two body texts render with a divider:
-    /// a final bookkeeping step must not hide the previous answer text.
+    /// Split into the reply body and the remaining trace — kept
+    /// chronological (intermediate texts interleaved with tool calls) so
+    /// the reply card can render the run's process narrative in order.
+    /// Body selection: the last text is always the tail; when an earlier
+    /// text is longer than it (byte length, matching the budget's
+    /// accounting), the longest one is promoted above it (same
+    /// divider join) — a short final bookkeeping step must not hide the
+    /// run's substantive answer, even when that answer is not the
+    /// next-to-last text. A last text that ties for longest stays alone.
     /// Carries the attachment paths collected from `<yomi_attachments>`
     /// blocks at record time.
     pub(crate) fn into_reply(self) -> FinalReply {
         let mut entries = self.entries;
         let mut texts = Vec::new();
-        while texts.len() < 2 {
-            let Some(idx) = entries
-                .iter()
-                .rposition(|e| matches!(e, TraceEntry::Narration(_)))
-            else {
-                break;
-            };
-            let TraceEntry::Narration(text) = entries.remove(idx) else {
+        if let Some(idx) = entries
+            .iter()
+            .rposition(|e| matches!(e, TraceEntry::Narration(_)))
+        {
+            let TraceEntry::Narration(last) = entries.remove(idx) else {
                 unreachable!("rposition matched a Narration");
             };
-            texts.push(text);
+            // The longest earlier text outranking the last joins the body
+            // above it. On equal length the last text already counts as
+            // the longest — nothing to add. Among equal-length candidates
+            // the most recent wins (max_by_key keeps the last maximum).
+            let longest = entries
+                .iter()
+                .enumerate()
+                .filter_map(|(i, e)| match e {
+                    TraceEntry::Narration(t) => Some((i, t.len())),
+                    TraceEntry::Tool(_) => None,
+                })
+                .max_by_key(|(_, len)| *len);
+            if let Some((longest_idx, longest_len)) = longest {
+                if longest_len > last.len() {
+                    let TraceEntry::Narration(text) = entries.remove(longest_idx) else {
+                        unreachable!("filter_map matched a Narration");
+                    };
+                    texts.push(text);
+                }
+            }
+            texts.push(last);
         }
-        texts.reverse();
         FinalReply {
             texts,
             steps: self.steps,
@@ -341,9 +364,10 @@ impl Default for RunReplyBuffer {
     }
 }
 
-/// The deliverable reply: the last one or two assistant texts + the run
-/// trace (may be empty). The trace stays chronological: intermediate texts
-/// interleaved with tool calls.
+/// The deliverable reply: the last text (joined from above by the longest
+/// earlier text when that beats it in length) + the run trace (may be
+/// empty). The trace stays chronological: intermediate texts interleaved
+/// with tool calls.
 pub(crate) struct FinalReply {
     /// Up to two body texts, chronological (older first, latest last).
     texts: Vec<String>,
@@ -384,6 +408,19 @@ impl FinalReply {
     /// Body texts in display order (older first, latest last), at most two.
     pub(crate) fn body_texts(&self) -> &[String] {
         &self.texts
+    }
+
+    /// Every assistant text of the run — body texts plus trace narrations.
+    /// Notification-driving checks (mention pings) must scan the whole
+    /// run, not just the body: a text left in the collapsed process panel
+    /// renders its `<at>` tag, but a card PATCH never notifies.
+    pub(crate) fn all_texts(&self) -> impl Iterator<Item = &str> {
+        self.texts.iter().map(String::as_str).chain(
+            self.entries.iter().filter_map(|e| match e {
+                TraceEntry::Narration(t) => Some(t.as_str()),
+                TraceEntry::Tool(_) => None,
+            }),
+        )
     }
 
     /// Body texts joined for plain/comment surfaces (divider line between
@@ -436,13 +473,13 @@ impl FinalReply {
 }
 
 /// Render the Feishu reply card (schema 2.0, no header): an optional notice
-/// line (e.g. error summary for abnormal endings), the last one or two body
-/// texts (two are split by an `hr` divider), and the run trace — every panel
+/// line (e.g. error summary for abnormal endings), the body texts (two are
+/// split by an `hr` divider), and the run trace — every panel
 /// collapsed by default on the final card. When the run produced earlier
-/// intermediate texts the trace renders as a **process panel**: the full
-/// chronological narrative one click away — each intermediate text as a
-/// markdown element, each run of consecutive tool calls folded into a nested
-/// collapsed panel. Without intermediate texts it stays the classic
+/// intermediate texts the trace renders as a **process panel**: the
+/// remaining chronological narrative one click away — each intermediate
+/// text as a markdown element, each run of consecutive tool calls folded
+/// into a nested collapsed panel. Without intermediate texts it stays the classic
 /// collapsed tool-trace panel. Returns `None` when there is nothing to show.
 pub(crate) fn render_card(reply: &FinalReply, notice: Option<&str>) -> Option<String> {
     let mut elements = Vec::new();
@@ -451,9 +488,27 @@ pub(crate) fn render_card(reply: &FinalReply, notice: Option<&str>) -> Option<St
     }
 
     let body_texts = reply.body_texts();
-    // Two body segments share the old single-body budget so the card stays
-    // under the platform payload cap.
-    let per_text_budget = FINAL_TEXT_MAX_BYTES / body_texts.len().max(1);
+    // Body segments share the old single-body budget so the card stays
+    // under the platform payload cap. A segment under its fair share
+    // donates the surplus to over-budget segments (longest first): a
+    // promoted long text must keep as much of its tail as possible — it
+    // left the deliberately-uncapped process panel to join the body.
+    let share = FINAL_TEXT_MAX_BYTES / body_texts.len().max(1);
+    let mut budgets: Vec<usize> = body_texts.iter().map(|t| share.min(t.len())).collect();
+    let mut leftover = FINAL_TEXT_MAX_BYTES - budgets.iter().sum::<usize>();
+    while leftover > 0 {
+        let Some((idx, _)) = body_texts
+            .iter()
+            .enumerate()
+            .filter(|(i, t)| t.len() > budgets[*i])
+            .max_by_key(|(_, t)| t.len())
+        else {
+            break;
+        };
+        let give = (body_texts[idx].len() - budgets[idx]).min(leftover);
+        budgets[idx] += give;
+        leftover -= give;
+    }
     for (idx, text) in body_texts.iter().enumerate() {
         if idx > 0 {
             elements.push(json!({ "tag": "hr" }));
@@ -463,7 +518,7 @@ pub(crate) fn render_card(reply: &FinalReply, notice: Option<&str>) -> Option<St
         // (an unclosed tag degrades the whole element to plain text on
         // the platform side).
         let text =
-            crate::utils::strs::truncate_with_suffix(text, per_text_budget, "\n\n...(truncated)");
+            crate::utils::strs::truncate_with_suffix(text, budgets[idx], "\n\n...(truncated)");
         // Truncation can cut a fence pair — balance after capping.
         let text = balance_fences(&text);
         // Platform-neutral `<@USER_ID>` contract → feishu <at> syntax.
@@ -493,7 +548,7 @@ pub(crate) fn render_card(reply: &FinalReply, notice: Option<&str>) -> Option<St
 }
 
 /// Render the plain-text fallback (platforms without card support): the
-/// last one or two body texts (joined by a divider line), then the trace
+/// body texts (joined by a divider line), then the trace
 /// title and the chronological transcript — earlier intermediate texts in
 /// full, tool calls as plain lines.
 pub(crate) fn render_plain(reply: &FinalReply) -> String {

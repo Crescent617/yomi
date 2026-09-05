@@ -551,10 +551,11 @@ pub(crate) async fn deliver_reply(
         // A mention forces the split even in a quiet chat: card patches
         // never notify (feishu), so the only way an @ pings is a new
         // message carrying the reply — same landing path as mid-run posts.
+        // Scan every text of the run, not just the body: a mention left
+        // in the collapsed process panel must still ping.
         let has_mention = reply.as_ref().is_some_and(|r| {
-            r.body_texts()
-                .iter()
-                .any(|text| crate::channels::utils::contains_mention(text))
+            r.all_texts()
+                .any(crate::channels::utils::contains_mention)
         });
         if (mid_run_split && obs.has_mid_run_posts(session_id)) || has_mention {
             // The reply lands as a new message below the user's mid-run

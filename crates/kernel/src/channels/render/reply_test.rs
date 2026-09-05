@@ -12,7 +12,7 @@ fn buffer_with_run() -> RunReplyBuffer {
 }
 
 #[test]
-fn into_reply_promotes_last_two_texts_to_body() {
+fn into_reply_promotes_longest_earlier_text_above_last() {
     let reply = buffer_with_run().into_reply();
     assert_eq!(
         reply.body_texts(),
@@ -29,6 +29,78 @@ fn into_reply_promotes_last_two_texts_to_body() {
         .iter()
         .all(|e| matches!(e, TraceEntry::Tool(_))));
     assert!(reply.attachments().is_empty());
+}
+
+#[test]
+fn into_reply_last_text_longest_stays_single_body() {
+    // A long final answer needs no companion: the short preamble stays in
+    // the process panel instead of riding along as a second body text.
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("先看一下");
+    buf.record_model_end("这是本轮真正的最终答案，内容比开头那句铺垫长得多。");
+    let reply = buf.into_reply();
+    assert_eq!(
+        reply.body_texts(),
+        &["这是本轮真正的最终答案，内容比开头那句铺垫长得多。".to_string()]
+    );
+    assert_eq!(reply.entries.len(), 1);
+    assert!(
+        matches!(&reply.entries[0], TraceEntry::Narration(t) if t == "先看一下"),
+        "preamble stays in the trace"
+    );
+}
+
+#[test]
+fn into_reply_promotes_longest_text_beyond_second_to_last() {
+    // The motivating case: the substantive answer sits three texts back —
+    // the last two selection would have buried it in the process panel.
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("这是重要结果：检索到的三条关键证据与完整分析结论。");
+    buf.record_model_end("中间补了一句进展");
+    buf.record_model_end("搞定");
+    let reply = buf.into_reply();
+    assert_eq!(
+        reply.body_texts(),
+        &[
+            "这是重要结果：检索到的三条关键证据与完整分析结论。".to_string(),
+            "搞定".to_string()
+        ]
+    );
+    // The middle text was never promoted: it stays in the trace.
+    assert_eq!(reply.entries.len(), 1);
+    assert!(
+        matches!(&reply.entries[0], TraceEntry::Narration(t) if t == "中间补了一句进展"),
+        "middle text stays in the trace"
+    );
+}
+
+#[test]
+fn into_reply_tie_for_longest_keeps_last_single() {
+    // Equal length: the last text already counts as the longest — no
+    // second body text.
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("aaaaaaaaaa");
+    buf.record_model_end("bbbbbbbbbb");
+    let reply = buf.into_reply();
+    assert_eq!(reply.body_texts(), &["bbbbbbbbbb".to_string()]);
+}
+
+#[test]
+fn into_reply_tied_earlier_texts_promote_the_most_recent() {
+    // Two earlier texts tie for longest: the more recent one is promoted.
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("aaaaaaaaaaaaaaaaaaaa");
+    buf.record_model_end("bbbbbbbbbbbbbbbbbbbb");
+    buf.record_model_end("ccccc");
+    let reply = buf.into_reply();
+    assert_eq!(
+        reply.body_texts(),
+        &["bbbbbbbbbbbbbbbbbbbb".to_string(), "ccccc".to_string()]
+    );
+    assert!(
+        matches!(&reply.entries[0], TraceEntry::Narration(t) if t == "aaaaaaaaaaaaaaaaaaaa"),
+        "the older tied text stays in the trace"
+    );
 }
 
 #[test]
@@ -311,14 +383,14 @@ fn process_panel_keeps_chronology_and_folds_each_tool_run() {
     buf.record_model_end("second note");
     buf.record_tool_start("t3", "edit", None);
     buf.record_tool_end("t3", 8, false);
-    buf.record_model_end("final answer");
+    buf.record_model_end("done");
     let card: serde_json::Value =
         serde_json::from_str(&render_card(&buf.into_reply(), None).unwrap()).unwrap();
     let elements = card["body"]["elements"].as_array().unwrap();
     assert_eq!(elements.len(), 4);
     assert_eq!(elements[0]["content"], "second note");
     assert_eq!(elements[1]["tag"], "hr");
-    assert_eq!(elements[2]["content"], "final answer");
+    assert_eq!(elements[2]["content"], "done");
 
     let body = elements[3]["elements"].as_array().unwrap();
     let tags: Vec<&str> = body.iter().map(|e| e["tag"].as_str().unwrap()).collect();
@@ -343,8 +415,12 @@ fn process_panel_keeps_chronology_and_folds_each_tool_run() {
 fn process_panel_rewrites_mentions_in_intermediate_texts() {
     let mut buf = RunReplyBuffer::new();
     buf.record_model_end("cc <@ou_mid>");
-    buf.record_model_end("done");
-    let card = render_card(&buf.into_reply(), None).unwrap();
+    // The final text is the longest: single body, the mention text stays
+    // in the process panel — this exercises the panel's rewrite path.
+    buf.record_model_end("done — this final text is deliberately longer than the mention line");
+    let reply = buf.into_reply();
+    assert_eq!(reply.body_texts().len(), 1, "single body");
+    let card = render_card(&reply, None).unwrap();
     assert!(card.contains("<at id=ou_mid></at>"), "{card}");
 }
 
@@ -432,7 +508,7 @@ fn buffer_drops_oldest_entries_beyond_cap() {
         buf.record_model_end(&format!("text {i}"));
     }
     let reply = buf.into_reply();
-    // The latest two texts survive as the body even though old ones were dropped.
+    // The latest text survives as the body even though old ones were dropped.
     assert_eq!(
         reply.text(),
         Some(format!("text {}", BUFFER_MAX_ENTRIES + 19)).as_deref()
@@ -442,7 +518,7 @@ fn buffer_drops_oldest_entries_beyond_cap() {
     let card = render_card(&reply, None).unwrap();
     assert!(card.contains("··· and 20 earlier entries"));
     let v: serde_json::Value = serde_json::from_str(&card).unwrap();
-    let body = v["body"]["elements"][3]["elements"].as_array().unwrap();
+    let body = v["body"]["elements"][1]["elements"].as_array().unwrap();
     assert_eq!(body[0]["tag"], "markdown");
     assert_eq!(body[0]["text_size"], "notation");
     assert_eq!(body[0]["content"], "··· and 20 earlier entries");
@@ -888,10 +964,10 @@ fn narration_only_process_panel_has_no_tool_panels() {
 fn render_card_balances_fence_cut_by_cancellation() {
     let mut buf = RunReplyBuffer::new();
     buf.record_model_end("看这段代码：\n```rust\nfn broken(");
-    buf.record_model_end("second note");
+    buf.record_model_end("second note — this middle text is deliberately the longest one here");
     buf.record_model_end("done");
     let card = render_card(&buf.into_reply(), None).unwrap();
-    // Only the last two texts become the body; the broken-fence one
+    // The longest text joins the last as the body; the broken-fence one
     // stays in the trace panel, which must still close the fence.
     // (serialized JSON escapes newlines as \\n)
     assert!(
@@ -904,7 +980,9 @@ fn render_card_balances_fence_cut_by_cancellation() {
 fn render_card_splits_budget_across_two_body_texts() {
     let mut buf = RunReplyBuffer::new();
     buf.record_model_end(&"a".repeat(FINAL_TEXT_MAX_BYTES));
-    buf.record_model_end(&"b".repeat(FINAL_TEXT_MAX_BYTES));
+    // Shorter than the first but still over the halved budget: the longest
+    // earlier text joins the last as a second body segment.
+    buf.record_model_end(&"b".repeat(FINAL_TEXT_MAX_BYTES / 2 + 100));
     let card = render_card(&buf.into_reply(), None).unwrap();
     let card: serde_json::Value = serde_json::from_str(&card).unwrap();
     let elements = card["body"]["elements"].as_array().unwrap();
@@ -925,6 +1003,40 @@ fn render_card_splits_budget_across_two_body_texts() {
     );
     assert!(first.contains("...(truncated)"));
     assert!(second.contains("...(truncated)"));
+}
+
+#[test]
+fn render_card_short_body_donates_budget_to_the_long_one() {
+    // [very long promoted text, short tail]: the tail's unused share
+    // flows to the long text — a promoted text keeps as much of its tail
+    // as possible (it left the uncapped process panel for the body).
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end(&"a".repeat(25_000));
+    buf.record_model_end(&"b".repeat(100));
+    let card = render_card(&buf.into_reply(), None).unwrap();
+    let card: serde_json::Value = serde_json::from_str(&card).unwrap();
+    let elements = card["body"]["elements"].as_array().unwrap();
+    assert_eq!(elements[1]["tag"], "hr");
+    let first = elements[0]["content"].as_str().unwrap();
+    let second = elements[2]["content"].as_str().unwrap();
+    // 25000 ≤ 28000−100: the long text survives whole.
+    assert_eq!(first.len(), 25_000, "no truncation: {}", first.len());
+    assert_eq!(second.len(), 100);
+
+    // Beyond the donated budget it still truncates — but at 27900, not 14000.
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end(&"a".repeat(FINAL_TEXT_MAX_BYTES + 1_000));
+    buf.record_model_end(&"b".repeat(100));
+    let card = render_card(&buf.into_reply(), None).unwrap();
+    let card: serde_json::Value = serde_json::from_str(&card).unwrap();
+    let first = card["body"]["elements"][0]["content"].as_str().unwrap();
+    assert!(first.contains("...(truncated)"));
+    assert!(
+        first.len() > FINAL_TEXT_MAX_BYTES / 2,
+        "donated budget used: {}",
+        first.len()
+    );
+    assert!(first.len() <= FINAL_TEXT_MAX_BYTES - 100);
 }
 
 #[test]

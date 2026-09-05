@@ -1127,6 +1127,9 @@ fn test_routing() -> SessionRouting {
 }
 
 fn run_buffer() -> reply::RunReplyBuffer {
+    // 长度依赖：回复卡正文选择取"最后一段 + 比它长的最早段"。
+    // "Let me check."(13B) > "final answer"(12B) 才保持两段正文形态；
+    // 改动任一文本长度会静默翻转所有下游断言的卡片结构。
     let mut buf = reply::RunReplyBuffer::new();
     buf.record_model_end("Let me check.");
     buf.record_tool_start("t1", "shell", Some(r#"{"command":"cargo test"}"#));
@@ -1148,7 +1151,7 @@ async fn flush_reply_card_platform_sends_single_card_with_panel() {
     let card = &cards[0].1;
     assert!(card.contains("collapsible_panel"));
     assert!(card.contains("final answer"));
-    assert!(card.contains("Let me check."), "narration joins the panel");
+    assert!(card.contains("Let me check."), "earlier text joins the body");
     assert!(card.contains("cargo test"), "tool summary joins the panel");
 }
 
@@ -1168,7 +1171,7 @@ async fn flush_reply_plain_platform_appends_trace_lines() {
     assert!(text.contains("🐾 0s · 💬 2"));
     assert!(
         text.contains("Let me check."),
-        "narration in the transcript"
+        "earlier text in the body section"
     );
     assert!(text.contains("cargo test"));
 }
@@ -9623,6 +9626,7 @@ async fn deliver_reply_with_mention_flushes_new_message_without_mid_run_posts() 
     obs.handle_event(&adapter, &sid, "chat-1", None, &tool_start_event())
         .await;
     // 无 mid-run posts，但回复含 <@USER_ID> —— 必须沉底发新消息才会通知。
+    // 注：追加的 mention 段是最后且最长的一段，新正文规则下单独成 body。
 
     let mut buf = run_buffer();
     buf.record_model_end("cc <@ou_abc> 看一下");
@@ -9693,6 +9697,52 @@ async fn deliver_reply_with_mention_in_older_body_text_flushes_new_message() {
     assert_eq!(cards.len(), 2, "materialize + reply card");
     assert!(cards[1].1.contains("cc <at id=ou_abc></at> 先看这个"));
     assert!(cards[1].1.contains("最终结论"));
+}
+
+#[tokio::test]
+async fn deliver_reply_with_mention_in_unpromoted_trace_text_flushes_new_message() {
+    let mock = Arc::new(CardMockAdapter::new());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(crate::channels::obs::ObsTracker::new());
+    let sid = SessionId::new();
+
+    obs.handle_event(&adapter, &sid, "chat-1", None, &running_event())
+        .await;
+    obs.handle_event(&adapter, &sid, "chat-1", None, &tool_start_event())
+        .await;
+    // mention 段比末段短：正文选择规则只提升最长早段，这一段留在
+    // 过程面板里。卡片 PATCH 不通知，扫描必须覆盖全部文本，
+    // 否则这个 @ 永远不会 ping。
+
+    let mut buf = reply::RunReplyBuffer::new();
+    buf.record_model_end("cc <@ou_abc>");
+    buf.record_tool_start("t1", "shell", Some(r#"{"command":"cargo test"}"#));
+    buf.record_tool_end("t1", 2000, false);
+    buf.record_model_end("最终结论：这段正文 deliberately 写得比 mention 段长很多");
+    let reply = buf.into_reply();
+    assert_eq!(reply.body_texts().len(), 1, "mention text stays in the trace");
+    deliver_reply(
+        &obs,
+        &adapter,
+        &test_routing(),
+        Some(reply),
+        true,
+        true,
+        true,
+        &sid,
+        SettleKind::Stopped(&completed()),
+        &std::sync::Weak::new(),
+    )
+    .await;
+
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1, "frozen in place, no morph");
+    drop(patches);
+    let cards = mock.cards.lock().await;
+    assert_eq!(cards.len(), 2, "materialize + reply card");
+    assert!(cards[1].1.contains("最终结论"));
+    // mention 段随过程面板上卡（面板 narration 也做 <at> 重写）。
+    assert!(cards[1].1.contains("<at id=ou_abc></at>"));
 }
 
 // ── /mailbox ─────────────────────────────────────────────────────────
