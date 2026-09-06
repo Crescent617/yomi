@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **分类**：`Added` 新能力 / `Changed` 行为变化 / `Fixed` 问题修复 / `Removed` 移除能力。
 - **配置与命令必须点名**：新增或变更配置项、命令时，写出名称与默认值。
 
+## [0.10.25] - 2026-09-06
+
+### Added
+
+- `yomi doctor` 现在显示守护进程自报的版本号（如 "running (v0.10.25 · wire protocol v29)"）——此前只显示 CLI 自身版本，brew 升级后旧版守护进程仍在运行时容易造成"已升级"的错觉；连接旧版守护进程时保持原样显示。
+
 ## [0.10.24] - 2026-09-06
 
 ### Added
