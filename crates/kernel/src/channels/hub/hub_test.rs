@@ -383,6 +383,274 @@ async fn settings_card_cfg_ctx_callback_and_reset_all() {
     kernel.stop().await;
 }
 
+/// settings 卡 thread 作用域：thread 内开卡标题 "this thread"、回调值
+/// 带 `th`/`container`/`chat` 键、mention 行在（container 粒度）而无
+/// `rit`/`watch` 两个 chat-only 行、无 session 时显示 chat 覆盖的继
+/// 承生效值；`cfg_model`/`cfg_ctx` 只写本 thread session
+/// （materialize 锚点，chat 不新建不扇出）；mention 写 thread 容器
+/// 键、rit 拒绝；Reset all 清 mention 与本 thread 的 model/ctx 覆
+/// 盖；`cfg_watch` 拒绝。
+#[tokio::test]
+async fn settings_card_thread_scope() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        models: vec![
+            crate::provider::ModelConfig {
+                name: "m1".into(),
+                ..Default::default()
+            },
+            crate::provider::ModelConfig {
+                name: "m2".into(),
+                ..Default::default()
+            },
+        ],
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram {
+            token: "fake".into(),
+        },
+        admin_users: vec!["admin-1".to_string()],
+        require_mention: false,
+        reply_in_thread: true,
+        ..Default::default()
+    };
+    // chat session 带 m2 覆盖：thread 无自身 session 时卡片应显示继
+    // 承生效值。
+    let chat_sid = kernel
+        .create_session(crate::kernel::CreateSessionInput {
+            project_id: None,
+            working_dir: None,
+            auto_approve_level: None,
+            tool_blocklist: vec![],
+            model_key: Some("m2".to_string()),
+            context_window: None,
+        })
+        .await
+        .unwrap();
+    store
+        .save_mapping("mock", "oc_1", &chat_sid, "oc_1", None, MappingKind::Normal)
+        .await
+        .unwrap();
+    let msg = ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: "admin-1".to_string(),
+        external_message_id: Some("msg-t1".to_string()),
+        is_mention: true,
+        raw_text: Some("/settings".to_string()),
+        content: vec![ContentBlock::Text {
+            text: "/settings".to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: Some("omt_1".to_string()),
+        root_id: Some("om_root".to_string()),
+        parent_id: Some("om_root".to_string()),
+        is_group: true,
+        create_time: None,
+        doc_comment: None,
+    };
+
+    // thread 内开卡：标题 this thread、mention 行在（container 粒度，
+    // 容器键 omt_1）、无 rit/watch 两个 chat-only 行、model 行显示继
+    // 承的 m2；mention 的 default 标签 = 频道默认（off）。
+    crate::channels::cards::settings::handle_settings_command(
+        "mock", &config, &kernel, &store, &adapter, &msg, None,
+    )
+    .await
+    .unwrap();
+    let card_json = mock.cards.lock().await.last().unwrap().1.clone();
+    assert!(
+        card_json.contains("⚙️ Settings · this thread"),
+        "{card_json}"
+    );
+    assert!(!card_json.contains("this chat"), "{card_json}");
+    assert!(card_json.contains("cfg_mention"), "{card_json}");
+    assert!(card_json.contains("\"container\":\"omt_1\""), "{card_json}");
+    assert!(!card_json.contains("cfg_watch"), "{card_json}");
+    assert!(!card_json.contains("cfg_threads"), "{card_json}");
+    assert!(card_json.contains("\"th\":true"), "{card_json}");
+    assert!(
+        card_json.contains("\"value\":\"m2\""),
+        "inherited effective value selected, {card_json}"
+    );
+    assert!(
+        card_json.contains("default (off)"),
+        "mention default label = channel default, {card_json}"
+    );
+
+    let action = |value: serde_json::Value| crate::channels::CardAction {
+        operator_open_id: "admin-1".to_string(),
+        chat_id: Some("oc_1".to_string()),
+        message_id: None,
+        value,
+    };
+
+    // cfg_model：materialize thread session 并写入；chat mapping 不动。
+    crate::channels::cards::settings::handle_card_action(
+        "mock",
+        &config,
+        &kernel,
+        &store,
+        &adapter,
+        action(
+            serde_json::json!({"action": "cfg_model", "scope": "om_root", "container": "omt_1", "chat": "oc_1", "dm": false, "th": true, "option": "m1"}),
+        ),
+    )
+    .await;
+    let thread_sid = store
+        .find_mapping("mock", "om_root")
+        .await
+        .unwrap()
+        .expect("thread session materialized by the write");
+    assert_eq!(kernel.get_session_model(&thread_sid).await, "m1");
+    assert_eq!(
+        store.find_mapping("mock", "oc_1").await.unwrap(),
+        Some(chat_sid.clone()),
+        "chat mapping untouched"
+    );
+
+    // cfg_ctx：写本 thread（m1 窗口 131_072 的 25%）。
+    crate::channels::cards::settings::handle_card_action(
+        "mock",
+        &config,
+        &kernel,
+        &store,
+        &adapter,
+        action(
+            serde_json::json!({"action": "cfg_ctx", "scope": "om_root", "container": "omt_1", "chat": "oc_1", "dm": false, "th": true, "option": "32.8k (25%)"}),
+        ),
+    )
+    .await;
+    let info = kernel
+        .get_session_context_window(&thread_sid)
+        .await
+        .unwrap();
+    assert_eq!(info.override_, Some(32_768), "25% preset on the thread");
+
+    // cfg_watch：thread scope 拒绝——kind 不变。
+    crate::channels::cards::settings::handle_card_action(
+        "mock",
+        &config,
+        &kernel,
+        &store,
+        &adapter,
+        action(
+            serde_json::json!({"action": "cfg_watch", "scope": "om_root", "container": "omt_1", "chat": "oc_1", "dm": false, "th": true, "option": "on"}),
+        ),
+    )
+    .await;
+    let kind = store
+        .find_mapping_kind("mock", "om_root")
+        .await
+        .unwrap()
+        .map(|(_, k)| k);
+    assert_eq!(kind, Some(MappingKind::Normal), "cfg_watch refused");
+
+    // cfg_set mention：container 粒度——写 thread 自己的覆盖；chat 容
+    // 器不动。
+    crate::channels::cards::settings::handle_card_action(
+        "mock",
+        &config,
+        &kernel,
+        &store,
+        &adapter,
+        action(
+            serde_json::json!({"action": "cfg_set", "key": "mention", "scope": "om_root", "container": "omt_1", "chat": "oc_1", "dm": false, "th": true, "option": "on"}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        crate::channels::hub_routing::read_mention_override(&store, "mock", "omt_1").await,
+        Some(true),
+        "mention override lands on the thread container"
+    );
+    assert_eq!(
+        crate::channels::hub_routing::read_mention_override(&store, "mock", "oc_1").await,
+        None,
+        "chat container untouched"
+    );
+
+    // cfg_set rit（threads）：chat-only——thread scope 拒绝。
+    crate::channels::cards::settings::handle_card_action(
+        "mock",
+        &config,
+        &kernel,
+        &store,
+        &adapter,
+        action(
+            serde_json::json!({"action": "cfg_set", "key": "threads", "scope": "om_root", "container": "omt_1", "chat": "oc_1", "dm": false, "th": true, "option": "on"}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        store.get_rit_override("mock", "oc_1").await.unwrap(),
+        None,
+        "cfg_set threads refused at thread scope"
+    );
+
+    // mention default 标签跟随回落链：chat 覆盖 on → thread 卡显示
+    // default (on)。
+    store
+        .set_mention_override("mock", "oc_1", true)
+        .await
+        .unwrap();
+    crate::channels::cards::settings::handle_settings_command(
+        "mock", &config, &kernel, &store, &adapter, &msg, None,
+    )
+    .await
+    .unwrap();
+    let card_json = mock.cards.lock().await.last().unwrap().1.clone();
+    assert!(
+        card_json.contains("default (on)"),
+        "mention default label follows the chat override, {card_json}"
+    );
+
+    // Reset all：清 mention（thread 容器键）+ 本 thread 的 model/ctx。
+    crate::channels::cards::settings::handle_card_action(
+        "mock",
+        &config,
+        &kernel,
+        &store,
+        &adapter,
+        action(serde_json::json!({"action": "cfg_reset_all", "scope": "om_root", "container": "omt_1", "chat": "oc_1", "dm": false, "th": true})),
+    )
+    .await;
+    assert_eq!(
+        crate::channels::hub_routing::read_mention_override(&store, "mock", "omt_1").await,
+        None,
+        "reset clears the thread mention override"
+    );
+    assert_eq!(
+        crate::channels::hub_routing::read_mention_override(&store, "mock", "oc_1").await,
+        Some(true),
+        "reset at thread scope leaves the chat override alone"
+    );
+    let raw = kernel
+        .session_store()
+        .await
+        .get(&thread_sid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(raw.model_key, None, "reset clears the thread model");
+    let info = kernel
+        .get_session_context_window(&thread_sid)
+        .await
+        .unwrap();
+    assert_eq!(info.override_, None, "reset clears the thread ctx");
+
+    kernel.stop().await;
+}
+
 /// settings 卡 `cfg_watch` 回调链路：下拉值 → `handle_card_action` →
 /// `set_channel_watch_by_name`（与 `/watch` 命令同核，幂等收敛——陈旧卡
 /// 重发当前态是纯 no-op）；卡片路径零消息（翻转结果由卡片原地刷新与
@@ -5206,11 +5474,13 @@ async fn refused_thread_command_does_not_advance_history_cursor() {
     );
 }
 
-/// Model/info commands in a fresh thread must not claim it: thread
-/// mappings are conversation-only, so the first real trigger still
-/// treats the thread as fresh (and inherits the chat-level model).
+/// Read-only model commands (/models, /info) in a fresh thread must not
+/// claim it. `/model <key>` is different: an explicit choice is always
+/// thread-scoped — a sessionless thread is claimed as the override
+/// anchor (never fanned out to the whole chat), and the first real
+/// trigger reuses that session.
 #[tokio::test]
-async fn model_commands_do_not_claim_fresh_thread() {
+async fn model_switch_in_fresh_thread_is_thread_scoped() {
     let (_pool, store) = create_test_pool().await;
     let store: Arc<dyn ChannelStore> = store;
     let tmp = tempfile::TempDir::new().unwrap();
@@ -5305,8 +5575,9 @@ async fn model_commands_do_not_claim_fresh_thread() {
     );
     assert!(!thread_claimed().await, "/info must not claim the thread");
 
-    // /model m2: no thread session to switch → falls back to the chat
-    // session; the thread stays unclaimed.
+    // /model m2: thread-scoped even without a session — the thread is
+    // claimed as the override anchor; the chat session is NOT created
+    // and other threads are untouched.
     let reply = handle_incoming_message(
         "mock",
         &config,
@@ -5319,16 +5590,23 @@ async fn model_commands_do_not_claim_fresh_thread() {
     .await
     .unwrap();
     assert!(
-        reply.as_deref().is_some_and(|r| r.contains("all threads")),
+        reply
+            .as_deref()
+            .is_some_and(|r| r.contains("Switched to `m2`")),
         "{reply:?}"
     );
-    assert!(!thread_claimed().await, "/model must not claim the thread");
+    let sid = store
+        .find_mapping("mock", "om_root")
+        .await
+        .unwrap()
+        .expect("/model claims the thread as its override anchor");
+    assert_eq!(kernel.get_session_model(&sid).await, "m2", "thread-local");
     assert!(
-        store.find_mapping("mock", "oc_1").await.unwrap().is_some(),
-        "the choice lands on the chat session"
+        store.find_mapping("mock", "oc_1").await.unwrap().is_none(),
+        "no chat-level fan-out from a thread"
     );
 
-    // The first real trigger now claims the thread — and inherits m2.
+    // The first real trigger reuses the same session (explicit m2).
     handle_incoming_message(
         "mock",
         &config,
@@ -5340,12 +5618,215 @@ async fn model_commands_do_not_claim_fresh_thread() {
     )
     .await
     .unwrap();
-    let sid = store
+    let sid2 = store
         .find_mapping("mock", "om_root")
         .await
         .unwrap()
-        .expect("thread session created by the real trigger");
-    assert_eq!(kernel.get_session_model(&sid).await, "m2", "inherited");
+        .expect("thread session reused by the real trigger");
+    assert_eq!(sid2.0, sid.0, "same session, not a fresh one");
+    assert_eq!(kernel.get_session_model(&sid2).await, "m2", "explicit");
+}
+
+/// A top-level quote-reply carries `root_id` but no `thread_id` — it
+/// addresses the chat, not a thread session: `/model` there must switch
+/// the whole chat, never create a per-message anchor session that no
+/// live conversation would reach.
+#[tokio::test]
+async fn model_switch_via_quote_reply_is_chat_level() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        models: vec![
+            crate::provider::ModelConfig {
+                name: "m1".into(),
+                ..Default::default()
+            },
+            crate::provider::ModelConfig {
+                name: "m2".into(),
+                ..Default::default()
+            },
+        ],
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram {
+            token: "fake".into(),
+        },
+        require_mention: false,
+        reply_in_thread: true,
+        ..Default::default()
+    };
+    let msg = ChannelMessage {
+        external_chat_id: "oc_1".to_string(),
+        external_user_id: "ou_b".to_string(),
+        external_message_id: Some("msg-q1".to_string()),
+        is_mention: true,
+        raw_text: Some("/model m2".to_string()),
+        content: vec![ContentBlock::Text {
+            text: "/model m2".to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: Some("om_quoted".to_string()),
+        parent_id: Some("om_quoted".to_string()),
+        is_group: true,
+        create_time: None,
+        doc_comment: None,
+    };
+    let reply = handle_incoming_message(
+        "mock",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        msg,
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert!(
+        reply.as_deref().is_some_and(|r| r.contains("all threads")),
+        "{reply:?}"
+    );
+    let chat_sid = store
+        .find_mapping("mock", "oc_1")
+        .await
+        .unwrap()
+        .expect("chat session switched");
+    assert_eq!(kernel.get_session_model(&chat_sid).await, "m2");
+    assert!(
+        store
+            .find_mapping("mock", "msg-q1")
+            .await
+            .unwrap()
+            .is_none(),
+        "no per-message anchor session"
+    );
+    kernel.stop().await;
+}
+
+/// thread 卡 clear/Reset 的两条分支：纯 default 状态（无 chat 覆盖）
+/// 下 clear/Reset 是 no-op 不建行；有 chat 覆盖时 clear 建行并钉死清
+/// 除态（不再跟随 chat 覆盖）。
+#[tokio::test]
+async fn settings_card_thread_clear_semantics() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        models: vec![
+            crate::provider::ModelConfig {
+                name: "m1".into(),
+                ..Default::default()
+            },
+            crate::provider::ModelConfig {
+                name: "m2".into(),
+                ..Default::default()
+            },
+        ],
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram {
+            token: "fake".into(),
+        },
+        admin_users: vec!["admin-1".to_string()],
+        ..Default::default()
+    };
+    let action = |value: serde_json::Value| crate::channels::CardAction {
+        operator_open_id: "admin-1".to_string(),
+        chat_id: Some("oc_1".to_string()),
+        message_id: None,
+        value,
+    };
+
+    // (a) 纯 default：default 伪选项与 Reset all 都是 no-op——不建行。
+    for value in [
+        serde_json::json!({"action": "cfg_model", "scope": "om_root", "container": "omt_1", "chat": "oc_1", "dm": false, "th": true, "option": "default (m1)"}),
+        serde_json::json!({"action": "cfg_reset_all", "scope": "om_root", "container": "omt_1", "chat": "oc_1", "dm": false, "th": true}),
+    ] {
+        crate::channels::cards::settings::handle_card_action(
+            "mock",
+            &config,
+            &kernel,
+            &store,
+            &adapter,
+            action(value),
+        )
+        .await;
+        assert!(
+            store
+                .find_mapping("mock", "om_root")
+                .await
+                .unwrap()
+                .is_none(),
+            "no-op clear must not materialize a session"
+        );
+    }
+
+    // (b) chat 覆盖 m2：clear 建行并钉死清除态——继承的 m2 不再生
+    // 效，跟随配置默认。
+    let chat_sid = kernel
+        .create_session(crate::kernel::CreateSessionInput {
+            project_id: None,
+            working_dir: None,
+            auto_approve_level: None,
+            tool_blocklist: vec![],
+            model_key: Some("m2".to_string()),
+            context_window: None,
+        })
+        .await
+        .unwrap();
+    store
+        .save_mapping("mock", "oc_1", &chat_sid, "oc_1", None, MappingKind::Normal)
+        .await
+        .unwrap();
+    crate::channels::cards::settings::handle_card_action(
+        "mock",
+        &config,
+        &kernel,
+        &store,
+        &adapter,
+        action(
+            serde_json::json!({"action": "cfg_model", "scope": "om_root", "container": "omt_1", "chat": "oc_1", "dm": false, "th": true, "option": "default (m1)"}),
+        ),
+    )
+    .await;
+    let thread_sid = store
+        .find_mapping("mock", "om_root")
+        .await
+        .unwrap()
+        .expect("clear with an inherited value materializes to pin the cleared state");
+    let raw = kernel
+        .session_store()
+        .await
+        .get(&thread_sid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(raw.model_key, None, "cleared, not inherited m2");
+    assert_eq!(
+        kernel.get_session_model(&thread_sid).await,
+        kernel.default_model_key(),
+        "follows the configured default, no longer tracking the chat"
+    );
+    kernel.stop().await;
 }
 
 #[test]

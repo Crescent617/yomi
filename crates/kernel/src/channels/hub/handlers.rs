@@ -252,22 +252,27 @@ pub(crate) async fn handle_incoming_message(
             if !models.iter().any(|model| model.name == key) {
                 return Ok(Some(format_unknown_model(&key, &models)));
             }
-            // Chat level — or a thread without a session: switch the chat
-            // session instead and let the thread inherit it (also keeps
-            // thread mappings conversation-only).
-            let chat_level = is_chat_level_message(&msg, rit)
-                || store
-                    .find_mapping(channel_name, &mapping_key)
-                    .await?
-                    .is_none();
-            if chat_level {
+            // Anything outside a thread switches the whole chat (chat
+            // session + thread fan-out) — a top-level quote-reply
+            // addresses the chat, not a thread session (a fresh key of
+            // its own reaches no live conversation). Inside a thread the
+            // choice is always thread-scoped: a sessionless thread is
+            // claimed as the override anchor (inheritance applies at
+            // creation, the explicit key wins) — never fanned out.
+            if msg.thread_id.is_none() {
                 set_chat_model(channel_name, store, &kernel, &chat_id, Some(&key)).await?;
-                return Ok(Some(format!(
-                    "Switched all threads in this chat to `{key}`. It takes effect on the next model invocation."
-                )));
+                // 行为一致（DM 里 fan-out 只有 chat session 一个目
+                // 标），ack 按是否有 threads 可言区分措辞。
+                return Ok(Some(if msg.is_group {
+                    format!(
+                        "Switched all threads in this chat to `{key}`. It takes effect on the next model invocation."
+                    )
+                } else {
+                    format!(
+                        "✅ Switched to `{key}`. It takes effect on the next model invocation."
+                    )
+                }));
             }
-            // find_mapping above proved the mapping exists; this only
-            // refreshes its routing anchor.
             let (sid, _) = get_or_create_session(
                 channel_name,
                 store,

@@ -1,18 +1,40 @@
-//! `/settings` — chat-scope 配置面板卡：mention / reply-in-thread /
-//! model / context-window 四行覆盖型 `select_static`（on/off/default(x)、
-//! 模型 key 列表、25–100% 窗口档位；auto 列宽自适应）+ watch 两态行
-//! （on/off，无 default——watched set 即全部状态；仅群聊渲染，on 时附
-//! 一行 notation 说明 mention/rit 挂起中），底部 ♻️ Reset all（只清四个
-//! 覆盖，不动 watch 模式）/ 🔄 Refresh。`cfg_*` 回调执行后原地刷新
-//! （"点击即切换"的实质：执行 → 重读状态 → update_card）。
-//! 配置修改限 admin（与 `/mention` `/threads` 命令同档）；路由层
-//! user 门限对所有按钮生效。
+//! `/settings` — 配置面板卡，作用域跟随命令落点（与 `/model` `/mailbox`
+//! 等 session-addressing 命令同规）：chat 顶层调用 = chat 作用域（标题
+//! "this chat"），thread 内调用 = thread 作用域（标题 "this thread"）。
+//! 标题只写真实作用域——凡在标题里标作用域的卡都遵此约。
 //!
-//! 群/私判定随卡往返：卡片无法从 `chat_id` 推回群聊/私聊，回调值一律带
-//! `dm` 标志供重渲染与 `cfg_watch` 拒绝私聊翻转（`/watch` 命令在私聊
-//! 同样拒绝——私聊开了 watch，连唯一的关闭入口都没了）。缺失按私聊处理
-//! （保守方向：旧卡最多少一行，绝不给私聊开出 watch）。标志可被伪造，
-//! 但 admin 本就有 RPC 直达路径——它是 UI 保护，不是安全边界。
+//! 行集合按作用域粒度裁剪（chat 卡五行 + footer，thread 卡三行 +
+//! footer）：
+//! - **Mention required**（chat+thread）：container 粒度——thread 有
+//!   自己的覆盖（按 `thread_id` 键，回落 chat 覆盖 → 频道默认，见
+//!   `resolve_require_mention`；`/mention` 命令在 thread 里写的就是
+//!   这个键）。`default (x)` 的 x 是回落生效值，不是裸频道默认。
+//! - **Reply in thread**（chat only）：chat 级覆盖，thread 无此维度
+//!   （"threads carry no own override"，见 `handle_threads_command`）。
+//! - **Model / Context window**（chat+thread）：session 粒度。chat 卡
+//!   写 chat session 并 fan-out 本 chat 全部 thread session（未来
+//!   thread 建行时继承）；thread 卡只写本 thread session——无
+//!   session 时读显示继承生效值（chat session 的覆盖，即首条消息实
+//!   际会用到的值，选中项恒表达生效值），写先 materialize（继承先
+//!   应用、显式选择赢），clear/Reset 落在纯 default 状态上是 no-op
+//!   不白建行——与 `/model` 在 thread 下无 session 时的建行同一条
+//!   规则。
+//! - **Watch**（chat 群聊 only）：chat 级开关，两态无 default（watched
+//!   set 即全部状态）；thread/私聊不可开（`/watch` 命令同规拒绝）；
+//!   on 时附一行 notation 说明 mention/rit 挂起中。
+//! - footer：♻️ Reset all（只清本作用域的覆盖，不动 watch）/ 🔄 Refresh。
+//!
+//! `cfg_*` 回调执行后原地刷新（"点击即切换"的实质：执行 → 重读状态 →
+//! `update_card`）。配置修改限 admin（与 `/mention` `/threads` 命令同
+//! 档）；路由层 user 门限对所有按钮生效。
+//!
+//! 作用域的唯一载体是 [`Scope`]：渲染时构造一次，随每个回调值往返，
+//! 回调入口解析一次，读状态/渲染/写路径都以它为单位。三个键在
+//! thread 卡上各不相同（chat 卡三者同为 `chat_id`），`dm`/`thread` 是
+//! UI 保护标志而非安全边界（可被伪造，但 admin 本就有 RPC 直达路
+//! 径）。旧卡只有扁平 `scope`+`dm`——缺失字段一律向保守方向回落
+//! （`container`/`chat` 回落 `session`、`th` 回落 chat、`dm` 回落私
+//! 聊），旧卡语义不变。
 
 use std::sync::Arc;
 
@@ -23,13 +45,90 @@ use crate::kernel::Kernel;
 use crate::types::Result as KernelResult;
 
 use crate::channels::hub_deliver::info_card_envelope;
-use crate::channels::hub_routing::read_mention_override;
+use crate::channels::hub_routing::{
+    effective_mapping_key, get_or_create_session, read_mention_override, resolve_reply_in_thread,
+};
 use crate::channels::{
     CardAction, ChannelConfig, ChannelMessage, ChannelStore, MappingKind, PlatformAdapter,
 };
 
-/// 面板管理的配置项的当前状态（chat scope；`None` = 跟随 channel
-/// default）。
+/// 卡片的作用域：渲染时构造一次，随每个回调值往返，回调入口解析一
+/// 次——读状态、渲染、写路径都以它为单位（见模块 doc）。thread 卡
+/// 上三个键各不相同：
+/// - `chat`：真实 chat id——thread 无自身 session 时继承生效值的读
+///   取对象、materialize 时继承的来源；
+/// - `session`：session mapping key（thread root id）——model/ctx 的
+///   读写目标；
+/// - `container`：mention 容器键（`thread_id`）——mention 行的读写目
+///   标（与 `history_container` 同取法）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Scope {
+    chat: String,
+    session: String,
+    container: String,
+    thread: bool,
+    dm: bool,
+}
+
+impl Scope {
+    fn chat_scope(chat_id: &str, dm: bool) -> Self {
+        Self {
+            chat: chat_id.to_string(),
+            session: chat_id.to_string(),
+            container: chat_id.to_string(),
+            thread: false,
+            dm,
+        }
+    }
+
+    fn thread_scope(chat_id: &str, session: &str, container: &str, dm: bool) -> Self {
+        Self {
+            chat: chat_id.to_string(),
+            session: session.to_string(),
+            container: container.to_string(),
+            thread: true,
+            dm,
+        }
+    }
+
+    /// 随卡往返的线格式解析。缺失字段向保守方向回落（见模块 doc）；
+    /// 事件自带的 `chat_id` 是 `chat` 的第二来源（`chat` 字段不在卡上
+    /// 时的旧卡/异常卡）。
+    fn from_value(value: &serde_json::Value, event_chat_id: Option<&str>) -> Option<Self> {
+        let non_empty = |key: &str| value[key].as_str().filter(|s| !s.is_empty());
+        let session = non_empty("scope")?;
+        let container = non_empty("container").unwrap_or(session);
+        let chat = non_empty("chat")
+            .or(event_chat_id.filter(|s| !s.is_empty()))
+            .unwrap_or(session);
+        Some(Self {
+            chat: chat.to_string(),
+            session: session.to_string(),
+            container: container.to_string(),
+            thread: value["th"].as_bool().unwrap_or(false),
+            dm: value["dm"].as_bool().unwrap_or(true),
+        })
+    }
+
+    /// 每行回调值的公共部分；行专属字段由调用方补上（如 `cfg_set` 的
+    /// `key`）。
+    fn callback(&self, action: &str) -> serde_json::Value {
+        json!({
+            "action": action,
+            "scope": self.session,
+            "container": self.container,
+            "chat": self.chat,
+            "dm": self.dm,
+            "th": self.thread,
+        })
+    }
+}
+
+/// 面板管理的配置项的当前状态（`None` = 跟随 default）。thread scope
+/// 下 mention 读自 thread 容器（`default_mention` 取回落生效值：chat
+/// 覆盖 ?? 频道默认），model/ctx 读自本 thread session（无 session 时
+/// 回落 chat session 的覆盖——继承生效值）；rit/watch 是 chat-only，
+/// 不读不渲染。
 struct SettingsState {
     mention_override: Option<bool>,
     rit_override: Option<bool>,
@@ -38,12 +137,12 @@ struct SettingsState {
     default_rit: bool,
     default_model: String,
     models: Vec<String>,
-    /// 当前 chat session 的 context-window 覆盖（settings 袋）。
+    /// 作用域 session 的 context-window 覆盖（settings 袋）。
     ctx_override: Option<u32>,
     /// 解析到当前模型（覆盖或默认）的配置窗口，预设档位的基准。
     model_context_window: u32,
-    /// 当前 chat 的 watch 模式（mapping kind 直读，两态无 default）；
-    /// 是否渲染成行由卡片按 `is_group` 决定。
+    /// chat 的 watch 模式（mapping kind 直读，两态无 default）；是否渲
+    /// 染成行由卡片按 scope 决定。
     watch_on: bool,
 }
 
@@ -52,17 +151,42 @@ async fn read_state(
     config: &ChannelConfig,
     kernel: &Arc<Kernel>,
     store: &Arc<dyn ChannelStore>,
-    chat_id: &str,
+    scope: &Scope,
 ) -> KernelResult<SettingsState> {
-    let mention_override = read_mention_override(store, channel_name, chat_id).await;
-    let rit_override = store.get_rit_override(channel_name, chat_id).await?;
-    // The chat-level session's raw model_key: `None` means "follow the
+    // mention 是 container 粒度（thread 有自己的覆盖），两种卡都读。
+    let mention_override = read_mention_override(store, channel_name, &scope.container).await;
+    // default 伪选项标签里的回落生效值：chat 卡 = 频道默认；thread 卡
+    // = chat 覆盖 ?? 频道默认（与 resolve_require_mention 的回落链一致）。
+    let default_mention = if scope.thread {
+        read_mention_override(store, channel_name, &scope.chat)
+            .await
+            .unwrap_or(config.require_mention)
+    } else {
+        config.require_mention
+    };
+    // rit 是 chat-only，thread 卡不读不渲染。
+    let rit_override = if scope.thread {
+        None
+    } else {
+        store.get_rit_override(channel_name, &scope.session).await?
+    };
+    // The scoped session's raw model_key: `None` means "follow the
     // default" — distinct from an explicit choice that happens to equal
     // it (which would stop tracking default changes).
-    let session = match store.find_mapping(channel_name, chat_id).await? {
+    let mut session = match store.find_mapping(channel_name, &scope.session).await? {
         Some(sid) => kernel.session_store().await.get(&sid).await.ok().flatten(),
         None => None,
     };
+    // Thread 卡无自身 session：读 chat session 的覆盖——首条消息经
+    // overrides_for_new_channel_session 继承到的就是它，选中项恒表达
+    // 生效值。已有自身 session（即使无覆盖）不回落：继承只在建行时
+    // 发生，现存 session 的 None 就是跟随配置默认。
+    if session.is_none() && scope.thread {
+        session = match store.find_mapping(channel_name, &scope.chat).await? {
+            Some(sid) => kernel.session_store().await.get(&sid).await.ok().flatten(),
+            None => None,
+        };
+    }
     let model_override = session.as_ref().and_then(|info| info.model_key.clone());
     let ctx_override = session
         .and_then(|info| info.settings)
@@ -82,15 +206,19 @@ async fn read_state(
             m.context_window
         });
     let models = models_info.into_iter().map(|m| m.name).collect();
-    let watch_on = matches!(
-        store.find_mapping_kind(channel_name, chat_id).await?,
-        Some((_, MappingKind::Watch))
-    );
+    // watch 是 chat 级开关（thread 上不允许开），thread 卡不读不渲染。
+    let watch_on = !scope.thread
+        && matches!(
+            store
+                .find_mapping_kind(channel_name, &scope.session)
+                .await?,
+            Some((_, MappingKind::Watch))
+        );
     Ok(SettingsState {
         mention_override,
         rit_override,
         model_override,
-        default_mention: config.require_mention,
+        default_mention,
         default_rit: config.reply_in_thread,
         default_model,
         models,
@@ -108,7 +236,7 @@ fn on_off(v: bool) -> &'static str {
     }
 }
 
-/// One label + select_static row: label `auto` (natural width), select
+/// One label + `select_static` row: label `auto` (natural width), select
 /// `weighted` (stretches over the rest — an auto select gets squeezed
 /// invisible in the narrow thread side panel, verified). A STABLE
 /// `element_id` is mandatory: the client tracks per-select chosen state
@@ -158,7 +286,14 @@ fn select_row(
     })
 }
 
-fn settings_card(chat_id: &str, is_group: bool, state: &SettingsState) -> String {
+/// `cfg_set` 行专属字段：回调公共部分（[`Scope::callback`]）+ 覆盖项名。
+fn set_row(scope: &Scope, key: &str) -> serde_json::Value {
+    let mut v = scope.callback("cfg_set");
+    v["key"] = json!(key);
+    v
+}
+
+fn settings_card(scope: &Scope, state: &SettingsState) -> String {
     let tri_options = |default_val: bool| {
         vec![
             "on".to_string(),
@@ -171,22 +306,24 @@ fn settings_card(chat_id: &str, is_group: bool, state: &SettingsState) -> String
         Some(false) => 1,
         None => 2,
     };
-    let mut elements = vec![
-        select_row(
-            "cfg_mention",
-            "Mention required",
-            &tri_options(state.default_mention),
-            tri_initial(state.mention_override),
-            json!({ "action": "cfg_set", "key": "mention", "scope": chat_id, "dm": !is_group }),
-        ),
-        select_row(
+    // mention 是 container 粒度（thread 有自己的覆盖），两种卡都渲染。
+    let mut elements = vec![select_row(
+        "cfg_mention",
+        "Mention required",
+        &tri_options(state.default_mention),
+        tri_initial(state.mention_override),
+        set_row(scope, "mention"),
+    )];
+    // rit 是 chat-only，thread 卡不渲染。
+    if !scope.thread {
+        elements.push(select_row(
             "cfg_threads",
             "Reply in thread",
             &tri_options(state.default_rit),
             tri_initial(state.rit_override),
-            json!({ "action": "cfg_set", "key": "threads", "scope": chat_id, "dm": !is_group }),
-        ),
-    ];
+            set_row(scope, "threads"),
+        ));
+    }
     // Model row: every configured key + the reset pseudo-option.
     let mut model_options = state.models.clone();
     model_options.push(format!("default ({})", state.default_model));
@@ -203,7 +340,7 @@ fn settings_card(chat_id: &str, is_group: bool, state: &SettingsState) -> String
         "Model",
         &model_options,
         model_initial,
-        json!({ "action": "cfg_model", "scope": chat_id, "dm": !is_group }),
+        scope.callback("cfg_model"),
     ));
     // Context window row: presets keyed to the resolved model's
     // configured window — 25/50/75/100% + the reset pseudo-option.
@@ -252,23 +389,25 @@ fn settings_card(chat_id: &str, is_group: bool, state: &SettingsState) -> String
         "Context window",
         &ctx_labels,
         ctx_initial,
-        json!({ "action": "cfg_ctx", "scope": chat_id, "dm": !is_group }),
+        scope.callback("cfg_ctx"),
     ));
     // Watch row: two-state, no `default` pseudo-option — the watched set
-    // is the whole state (see `/watch`). Groups only: the command
-    // refuses DMs, so the card must not open a flip there either (in a
-    // DM the off switch would vanish with it). While on, a notation line
-    // names the rows watch suspends: mention/rit gate conversation
-    // replies, which watch replaces with the observer's own voice
-    // (model/ctx stay live — the observer is a real session).
-    if is_group {
+    // is the whole state (see `/watch`). Chat-scope groups only: the
+    // command refuses DMs and threads alike, so the card must not open
+    // a flip there either (in a DM the off switch would vanish with it;
+    // from a thread the flip would silently swallow the whole chat).
+    // While on, a notation line names the rows watch suspends: mention/
+    // rit gate conversation replies, which watch replaces with the
+    // observer's own voice (model/ctx stay live — the observer is a
+    // real session).
+    if !scope.dm && !scope.thread {
         elements.push(select_row(
             "cfg_watch",
             "Watch",
             &["on".to_string(), "off".to_string()],
             // off → index 1, on → index 0 (options are ["on", "off"]).
             usize::from(!state.watch_on),
-            json!({ "action": "cfg_watch", "scope": chat_id, "dm": false }),
+            scope.callback("cfg_watch"),
         ));
         if state.watch_on {
             elements.push(json!({
@@ -289,7 +428,7 @@ fn settings_card(chat_id: &str, is_group: bool, state: &SettingsState) -> String
                     "text": { "tag": "plain_text", "content": "♻️ Reset all" },
                     "type": "default",
                     "size": "small",
-                    "behaviors": [{ "type": "callback", "value": { "action": "cfg_reset_all", "scope": chat_id, "dm": !is_group } }],
+                    "behaviors": [{ "type": "callback", "value": scope.callback("cfg_reset_all") }],
                 }],
             },
             {
@@ -299,15 +438,22 @@ fn settings_card(chat_id: &str, is_group: bool, state: &SettingsState) -> String
                     "text": { "tag": "plain_text", "content": "🔄 Refresh" },
                     "type": "default",
                     "size": "small",
-                    "behaviors": [{ "type": "callback", "value": { "action": "cfg_refresh", "scope": chat_id, "dm": !is_group } }],
+                    "behaviors": [{ "type": "callback", "value": scope.callback("cfg_refresh") }],
                 }],
             },
         ],
     }));
-    info_card_envelope("⚙️ Settings · this chat", elements)
+    // 标题只写真实作用域（见模块 doc）。
+    let title = if scope.thread {
+        "⚙️ Settings · this thread"
+    } else {
+        "⚙️ Settings · this chat"
+    };
+    info_card_envelope(title, elements)
 }
 
-/// `/settings` 命令主体（admin 门槛在命令臂，此处只管执行）。
+/// `/settings` 命令主体（admin 门槛在命令臂，此处只管执行）。作用域
+/// 跟随命令落点（见模块 doc）：thread 内调用 = thread 作用域。
 pub(crate) async fn handle_settings_command(
     channel_name: &str,
     config: &ChannelConfig,
@@ -318,11 +464,25 @@ pub(crate) async fn handle_settings_command(
     reply_msg_id: Option<String>,
 ) -> KernelResult<Option<String>> {
     let chat_id = &msg.external_chat_id;
-    let state = read_state(channel_name, config, kernel, store, chat_id).await?;
+    let dm = !msg.is_group;
+    let scope = if msg.thread_id.is_some() {
+        let rit = resolve_reply_in_thread(store, config, chat_id).await;
+        // mention 容器与 history_container 同取法（thread_id）；session
+        // 键与 /subscribe 同取法（effective_mapping_key，thread root）。
+        Scope::thread_scope(
+            chat_id,
+            &effective_mapping_key(store, adapter, channel_name, msg, chat_id, rit).await?,
+            msg.thread_id.as_deref().unwrap_or_default(),
+            dm,
+        )
+    } else {
+        Scope::chat_scope(chat_id, dm)
+    };
+    let state = read_state(channel_name, config, kernel, store, &scope).await?;
     adapter
         .send_card(
             chat_id,
-            &settings_card(chat_id, msg.is_group, &state),
+            &settings_card(&scope, &state),
             reply_msg_id.as_deref(),
         )
         .await?;
@@ -355,13 +515,10 @@ async fn handle_card_action_inner(
     action: &CardAction,
 ) -> KernelResult<()> {
     let value = &action.value;
-    let chat_id = value["scope"].as_str().unwrap_or_default();
-    if chat_id.is_empty() {
+    let Some(scope) = Scope::from_value(value, action.chat_id.as_deref()) else {
         warn!(value = %value, "settings card action missing scope");
         return Ok(());
-    }
-    // 群/私判定随卡往返（见模块 doc）：缺失按私聊处理（保守方向）。
-    let dm = value["dm"].as_bool().unwrap_or(true);
+    };
     if let Some(deny) = crate::channels::approval::check_admin(config, &action.operator_open_id) {
         crate::channels::approval::send_action_denial(adapter, action, deny).await;
         return Ok(());
@@ -369,19 +526,34 @@ async fn handle_card_action_inner(
     match value["action"].as_str() {
         Some("cfg_set") => {
             let key = value["key"].as_str().unwrap_or_default();
+            // rit 是 chat-only——thread 卡不渲染这行，回调臂同样拒绝
+            // （伪造/陈旧值不写出垃圾键）。mention 是 container 粒度，
+            // thread 卡写 thread 容器自己的覆盖。
+            if scope.thread && key != "mention" {
+                warn!(value = %value, "cfg_set ignored at thread scope");
+                return Ok(());
+            }
             let opt = value["option"].as_str().unwrap_or_default();
             match (key, map_cfg_set(opt)) {
                 ("mention", CfgSetOp::Set(v)) => {
-                    store.set_mention_override(channel_name, chat_id, v).await?
+                    store
+                        .set_mention_override(channel_name, &scope.container, v)
+                        .await?;
                 }
                 ("mention", CfgSetOp::Clear) => {
-                    store.clear_mention_override(channel_name, chat_id).await?
+                    store
+                        .clear_mention_override(channel_name, &scope.container)
+                        .await?;
                 }
                 ("threads", CfgSetOp::Set(v)) => {
-                    store.set_rit_override(channel_name, chat_id, v).await?
+                    store
+                        .set_rit_override(channel_name, &scope.session, v)
+                        .await?;
                 }
                 ("threads", CfgSetOp::Clear) => {
-                    store.clear_rit_override(channel_name, chat_id).await?
+                    store
+                        .clear_rit_override(channel_name, &scope.session)
+                        .await?;
                 }
                 (key, op) => {
                     warn!(key, ?op, "unknown cfg_set key/option");
@@ -401,16 +573,7 @@ async fn handle_card_action_inner(
                 }
             };
             match map_cfg_model(&models, opt) {
-                Some(key) => {
-                    crate::channels::hub_handlers::set_chat_model(
-                        channel_name,
-                        store,
-                        kernel,
-                        chat_id,
-                        key,
-                    )
-                    .await?
-                }
+                Some(key) => write_model(channel_name, config, kernel, store, &scope, key).await?,
                 None => {
                     warn!(opt, "cfg_model: unknown option, model untouched");
                     return Ok(());
@@ -421,38 +584,24 @@ async fn handle_card_action_inner(
             let opt = value["option"].as_str().unwrap_or_default();
             // Tokens are recomputed off the CURRENT model default (the
             // card may be stale), never parsed from the label's k-text.
-            let model_default = read_state(channel_name, config, kernel, store, chat_id)
+            let model_default = read_state(channel_name, config, kernel, store, &scope)
                 .await?
                 .model_context_window;
             match parse_ctx_label(opt, model_default) {
                 CtxOp::Set(tokens) => {
-                    crate::channels::hub_handlers::set_chat_context_window(
-                        channel_name,
-                        store,
-                        kernel,
-                        chat_id,
-                        Some(tokens),
-                    )
-                    .await?
+                    write_ctx(channel_name, config, kernel, store, &scope, Some(tokens)).await?;
                 }
                 CtxOp::Clear => {
-                    crate::channels::hub_handlers::set_chat_context_window(
-                        channel_name,
-                        store,
-                        kernel,
-                        chat_id,
-                        None,
-                    )
-                    .await?
+                    write_ctx(channel_name, config, kernel, store, &scope, None).await?;
                 }
                 CtxOp::Noop => {}
             }
         }
         Some("cfg_watch") => {
-            // 私聊卡（或 dm 标志缺失的旧卡）拒绝翻转——与 `/watch`
-            // 命令的私聊拒绝同规。
-            if dm {
-                warn!("cfg_watch ignored: DM scope");
+            // 私聊卡（dm 标志缺失的旧卡同）与 thread 卡拒绝翻转——与
+            // `/watch` 命令的私聊/thread 拒绝同规。
+            if scope.dm || scope.thread {
+                warn!(value = %value, "cfg_watch ignored: DM/thread scope");
                 return Ok(());
             }
             let opt = value["option"].as_str().unwrap_or_default();
@@ -468,7 +617,7 @@ async fn handle_card_action_inner(
                         store,
                         kernel,
                         channel_name,
-                        chat_id,
+                        &scope.session,
                         on,
                     )
                     .await?;
@@ -479,26 +628,7 @@ async fn handle_card_action_inner(
                 }
             }
         }
-        Some("cfg_reset_all") => {
-            store.clear_mention_override(channel_name, chat_id).await?;
-            store.clear_rit_override(channel_name, chat_id).await?;
-            crate::channels::hub_handlers::set_chat_model(
-                channel_name,
-                store,
-                kernel,
-                chat_id,
-                None,
-            )
-            .await?;
-            crate::channels::hub_handlers::set_chat_context_window(
-                channel_name,
-                store,
-                kernel,
-                chat_id,
-                None,
-            )
-            .await?;
-        }
+        Some("cfg_reset_all") => reset_all(channel_name, config, kernel, store, &scope).await?,
         Some("cfg_refresh") => {}
         other => {
             warn!(value = %value, "unrecognized settings card action {other:?}");
@@ -506,15 +636,137 @@ async fn handle_card_action_inner(
         }
     }
     if let Some(message_id) = &action.message_id {
-        let state = read_state(channel_name, config, kernel, store, chat_id).await?;
+        let state = read_state(channel_name, config, kernel, store, &scope).await?;
         adapter
-            .update_card(message_id, &settings_card(chat_id, !dm, &state))
+            .update_card(message_id, &settings_card(&scope, &state))
             .await?;
     }
     Ok(())
 }
 
-/// cfg_set tri-state mapping: `on`/`off` set the override, the
+/// thread scope 的写入锚点：无 session 的 thread 在写入时建行——继承
+/// （`overrides_for_new_channel_session`）在建行时先应用，随后的显式
+/// set/clear 覆盖之。读路径（渲染/Refresh）永不调用本函数。
+async fn materialize_scope_session(
+    channel_name: &str,
+    store: &Arc<dyn ChannelStore>,
+    kernel: &Arc<Kernel>,
+    scope: &Scope,
+) -> KernelResult<crate::types::SessionId> {
+    Ok(get_or_create_session(
+        channel_name,
+        store,
+        kernel,
+        &scope.chat,
+        &scope.session,
+        None,
+        MappingKind::Normal,
+    )
+    .await?
+    .0)
+}
+
+/// 一次 model 覆盖写入。chat scope：`set_chat_model` 扇出本 chat 全部
+/// thread session；thread scope：只写本 thread session——无 session
+/// 时 materialize 再落；clear 落在纯 default 状态上是 no-op，不白建
+/// 行（见模块 doc）。
+async fn write_model(
+    channel_name: &str,
+    config: &ChannelConfig,
+    kernel: &Arc<Kernel>,
+    store: &Arc<dyn ChannelStore>,
+    scope: &Scope,
+    key: Option<&str>,
+) -> KernelResult<()> {
+    if !scope.thread {
+        return crate::channels::hub_handlers::set_chat_model(
+            channel_name,
+            store,
+            kernel,
+            &scope.session,
+            key,
+        )
+        .await;
+    }
+    let dirty = match key {
+        Some(_) => true,
+        None => read_state(channel_name, config, kernel, store, scope)
+            .await?
+            .model_override
+            .is_some(),
+    };
+    if dirty {
+        let sid = materialize_scope_session(channel_name, store, kernel, scope).await?;
+        match key {
+            Some(k) => kernel.set_session_model(&sid, k).await?,
+            None => kernel.clear_session_model(&sid).await?,
+        }
+    }
+    Ok(())
+}
+
+/// 一次 ctx 覆盖写入（作用域语义同 [`write_model`]）。
+async fn write_ctx(
+    channel_name: &str,
+    config: &ChannelConfig,
+    kernel: &Arc<Kernel>,
+    store: &Arc<dyn ChannelStore>,
+    scope: &Scope,
+    tokens: Option<u32>,
+) -> KernelResult<()> {
+    if !scope.thread {
+        return crate::channels::hub_handlers::set_chat_context_window(
+            channel_name,
+            store,
+            kernel,
+            &scope.session,
+            tokens,
+        )
+        .await;
+    }
+    let dirty = match tokens {
+        Some(_) => true,
+        None => read_state(channel_name, config, kernel, store, scope)
+            .await?
+            .ctx_override
+            .is_some(),
+    };
+    if dirty {
+        let sid = materialize_scope_session(channel_name, store, kernel, scope).await?;
+        kernel.set_session_context_window(&sid, tokens).await?;
+    }
+    Ok(())
+}
+
+/// ♻️ Reset all：清本作用域的全部覆盖（不动 watch）——chat scope 清
+/// mention/rit/model/ctx 四项；thread scope 清 mention（thread 容器
+/// 键）与本 thread session 的 model/ctx（复用 write_* 的 no-op 豁
+/// 免，纯 default 状态下不白建行）。
+async fn reset_all(
+    channel_name: &str,
+    config: &ChannelConfig,
+    kernel: &Arc<Kernel>,
+    store: &Arc<dyn ChannelStore>,
+    scope: &Scope,
+) -> KernelResult<()> {
+    if read_mention_override(store, channel_name, &scope.container)
+        .await
+        .is_some()
+    {
+        store
+            .clear_mention_override(channel_name, &scope.container)
+            .await?;
+    }
+    if !scope.thread {
+        store
+            .clear_rit_override(channel_name, &scope.session)
+            .await?;
+    }
+    write_model(channel_name, config, kernel, store, scope, None).await?;
+    write_ctx(channel_name, config, kernel, store, scope, None).await
+}
+
+/// `cfg_set` tri-state mapping: `on`/`off` set the override, the
 /// `default (…)` pseudo-option clears it, anything else (missing or
 /// malformed option) is a no-op — never an accidental reset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -533,7 +785,7 @@ fn map_cfg_set(opt: &str) -> CfgSetOp {
     }
 }
 
-/// cfg_model mapping: `Some(Some(key))` switch, `Some(None)` reset
+/// `cfg_model` mapping: `Some(Some(key))` switch, `Some(None)` reset
 /// (the `default (…)` pseudo-option), `None` no-op. Callers must not
 /// reach here on a `list_models` failure (handled upstream).
 fn map_cfg_model<'a>(models: &[String], opt: &'a str) -> Option<Option<&'a str>> {
@@ -557,7 +809,7 @@ fn map_cfg_watch(opt: &str) -> Option<bool> {
     }
 }
 
-/// cfg_ctx 档位解析的结果。
+/// `cfg_ctx` 档位解析的结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CtxOp {
     Set(u32),
@@ -565,7 +817,7 @@ enum CtxOp {
     Noop,
 }
 
-/// cfg_ctx label → operation：档位标签形如 `200k (25%)`，按其中的百分比
+/// `cfg_ctx` label → operation：档位标签形如 `200k (25%)`，按其中的百分比
 /// 乘当前模型默认窗口得 tokens（不解析 k 文本——卡片可能是旧的）；
 /// `default (…)` 伪选项清除覆盖；**算出来正好等于模型默认（100% 档）也
 /// 视为清除**——把等于默认的值钉成显式覆盖会断送对默认变化的跟踪；
@@ -611,7 +863,19 @@ mod tests {
         }
     }
 
-    /// Collect every select_static in the card: (placeholder, options, current value, callback value).
+    fn chat_scope() -> Scope {
+        Scope::chat_scope("oc_1", false)
+    }
+
+    fn dm_scope() -> Scope {
+        Scope::chat_scope("oc_1", true)
+    }
+
+    fn thread_scope() -> Scope {
+        Scope::thread_scope("oc_1", "om_root", "omt_9", false)
+    }
+
+    /// Collect every `select_static` in the card: (placeholder, options, current value, callback value).
     fn selects_of(card: &str) -> Vec<(String, Vec<String>, String, serde_json::Value)> {
         fn walk(
             v: &serde_json::Value,
@@ -672,7 +936,7 @@ mod tests {
 
     #[test]
     fn card_renders_tri_state_and_model_selection() {
-        let card = settings_card("oc_1", true, &state(Some(false), None, Some("opus-4-6")));
+        let card = settings_card(&chat_scope(), &state(Some(false), None, Some("opus-4-6")));
         let s = selects_of(&card);
         assert_eq!(s.len(), 5, "{card}");
 
@@ -686,6 +950,9 @@ mod tests {
         assert_eq!(s[0].2, "off", "current value rides `value`");
         assert_eq!(s[0].3["key"], "mention");
         assert_eq!(s[0].3["scope"], "oc_1");
+        assert_eq!(s[0].3["container"], "oc_1");
+        assert_eq!(s[0].3["chat"], "oc_1");
+        assert_eq!(s[0].3["th"], false, "chat card callbacks carry th:false");
 
         // Rit unset → the default pseudo-option, labeled with the default.
         assert_eq!(s[1].0, "default (off)");
@@ -716,13 +983,15 @@ mod tests {
         // card is stale-tolerant by contract (🔄 Refresh).
         assert!(card.contains("Context window"), "{card}");
         assert!(!card.contains("(now"), "{card}");
+        assert!(card.contains("⚙️ Settings · this chat"), "{card}");
 
-        // Watch row: two-state, no default pseudo-option, dm flag rides.
+        // Watch row: two-state, no default pseudo-option, scope fields ride.
         assert_eq!(s[4].0, "off");
         assert_eq!(s[4].1, ["on", "off"]);
         assert_eq!(s[4].2, "off");
         assert_eq!(s[4].3["action"], "cfg_watch");
         assert_eq!(s[4].3["dm"], false);
+        assert_eq!(s[4].3["th"], false);
         assert!(!card.contains("👁 Watching"), "{card}");
     }
 
@@ -731,7 +1000,7 @@ mod tests {
         // Override exactly on a preset → that preset is the selection.
         let mut st = state(None, None, None);
         st.ctx_override = Some(400_000);
-        let card = settings_card("oc_1", true, &st);
+        let card = settings_card(&chat_scope(), &st);
         let s = selects_of(&card);
         assert_eq!(s[3].0, "400k (50%)");
         assert_eq!(s[3].2, "400k (50%)");
@@ -739,7 +1008,7 @@ mod tests {
 
         // Off-preset override (set via TUI/GUI/CLI) → honest custom option.
         st.ctx_override = Some(320_000);
-        let card = settings_card("oc_1", true, &st);
+        let card = settings_card(&chat_scope(), &st);
         let s = selects_of(&card);
         assert_eq!(s[3].0, "custom (320k)");
         assert_eq!(s[3].1[0], "custom (320k)");
@@ -750,7 +1019,7 @@ mod tests {
     fn card_watch_row_marks_on_and_explains_suspension() {
         let mut st = state(None, None, None);
         st.watch_on = true;
-        let card = settings_card("oc_1", true, &st);
+        let card = settings_card(&chat_scope(), &st);
         let s = selects_of(&card);
         assert_eq!(s[4].0, "on");
         assert_eq!(s[4].2, "on");
@@ -767,15 +1036,88 @@ mod tests {
         // in DM scope — the off switch must not be offered there.
         let mut st = state(None, None, None);
         st.watch_on = true;
-        let card = settings_card("oc_1", false, &st);
+        let card = settings_card(&dm_scope(), &st);
         let s = selects_of(&card);
         assert_eq!(s.len(), 4, "{card}");
         assert!(!card.contains("cfg_watch"), "{card}");
         assert!(!card.contains("👁 Watching"), "{card}");
         assert!(
-            s.iter().all(|sel| sel.3["dm"] == true),
-            "every callback value carries dm:true for re-render, {card}"
+            s.iter()
+                .all(|sel| sel.3["dm"] == true && sel.3["th"] == false),
+            "every callback value carries dm:true and th:false, {card}"
         );
+    }
+
+    #[test]
+    fn thread_card_is_thread_scoped_and_hides_chat_level_rows() {
+        // rit/watch 即使有值也不渲染（chat-only）；mention 是
+        // container 粒度，thread 卡保留（写 thread 容器键）。
+        let mut st = state(Some(false), Some(true), Some("opus-4-6"));
+        st.watch_on = true;
+        st.ctx_override = Some(400_000);
+        let card = settings_card(&thread_scope(), &st);
+        assert!(card.contains("⚙️ Settings · this thread"), "{card}");
+        assert!(!card.contains("this chat"), "{card}");
+
+        let s = selects_of(&card);
+        assert_eq!(s.len(), 3, "{card}");
+        assert_eq!(s[0].3["action"], "cfg_set");
+        assert_eq!(s[0].3["key"], "mention");
+        assert_eq!(s[0].3["container"], "omt_9");
+        assert_eq!(s[0].0, "off");
+        assert_eq!(s[1].3["action"], "cfg_model");
+        assert_eq!(s[1].0, "opus-4-6");
+        assert_eq!(s[2].3["action"], "cfg_ctx");
+        assert_eq!(s[2].0, "400k (50%)");
+        assert!(
+            s.iter().all(|sel| sel.3["th"] == true
+                && sel.3["scope"] == "om_root"
+                && sel.3["chat"] == "oc_1"),
+            "every callback value carries th:true and both scope keys, {card}"
+        );
+        assert!(!card.contains("cfg_watch"), "{card}");
+        assert!(!card.contains("cfg_threads"), "{card}");
+        assert!(!card.contains("👁 Watching"), "{card}");
+
+        let v: serde_json::Value = serde_json::from_str(&card).unwrap();
+        let mut buttons = Vec::new();
+        buttons_of(&v, &mut buttons);
+        assert_eq!(buttons.len(), 2, "{card}");
+        assert!(
+            buttons.iter().all(|b| b.1["th"] == true
+                && b.1["scope"] == "om_root"
+                && b.1["container"] == "omt_9"
+                && b.1["chat"] == "oc_1"),
+            "footer buttons carry th:true and all scope keys, {card}"
+        );
+    }
+
+    #[test]
+    fn scope_from_value_falls_back_conservatively() {
+        // 旧卡（扁平 scope+dm）：container/chat 回落 session，th 回落
+        // chat——语义与渲染它的旧代码一致。
+        let old = json!({"action": "cfg_model", "scope": "oc_1", "dm": false, "option": "k3-hs"});
+        let scope = Scope::from_value(&old, Some("oc_1")).unwrap();
+        assert_eq!(scope, Scope::chat_scope("oc_1", false));
+
+        // dm 缺失按私聊（保守）；事件 chat_id 是 chat 的第二来源。
+        let old = json!({"action": "cfg_refresh", "scope": "oc_1"});
+        let scope = Scope::from_value(&old, Some("oc_9")).unwrap();
+        assert_eq!(scope.chat, "oc_9");
+        assert!(scope.dm);
+        assert!(!scope.thread);
+
+        // 新 thread 卡：三键各自就位。
+        let new = json!({
+            "action": "cfg_ctx", "scope": "om_root", "container": "omt_9",
+            "chat": "oc_1", "dm": false, "th": true, "option": "200k (25%)"
+        });
+        let scope = Scope::from_value(&new, Some("oc_1")).unwrap();
+        assert_eq!(scope, thread_scope());
+
+        // scope 缺失/为空 → 拒绝。
+        assert!(Scope::from_value(&json!({"action": "cfg_refresh"}), None).is_none());
+        assert!(Scope::from_value(&json!({"scope": ""}), None).is_none());
     }
 
     #[test]
@@ -795,7 +1137,7 @@ mod tests {
 
     #[test]
     fn card_defaults_point_at_reset_pseudo_option() {
-        let card = settings_card("oc_1", true, &state(None, None, None));
+        let card = settings_card(&chat_scope(), &state(None, None, None));
         let s = selects_of(&card);
         assert_eq!(s[0].0, "default (on)");
         assert_eq!(s[1].0, "default (off)");
@@ -806,7 +1148,7 @@ mod tests {
 
     #[test]
     fn footer_buttons_carry_scope_and_small_size() {
-        let card = settings_card("oc_1", true, &state(None, None, None));
+        let card = settings_card(&chat_scope(), &state(None, None, None));
         let v: serde_json::Value = serde_json::from_str(&card).unwrap();
         let mut buttons = Vec::new();
         buttons_of(&v, &mut buttons);
@@ -814,12 +1156,12 @@ mod tests {
         assert_eq!(buttons[0].0, "♻️ Reset all");
         assert_eq!(
             buttons[0].1,
-            serde_json::json!({"action": "cfg_reset_all", "scope": "oc_1", "dm": false})
+            serde_json::json!({"action": "cfg_reset_all", "scope": "oc_1", "container": "oc_1", "chat": "oc_1", "dm": false, "th": false})
         );
         assert_eq!(buttons[1].0, "🔄 Refresh");
         assert_eq!(
             buttons[1].1,
-            serde_json::json!({"action": "cfg_refresh", "scope": "oc_1", "dm": false})
+            serde_json::json!({"action": "cfg_refresh", "scope": "oc_1", "container": "oc_1", "chat": "oc_1", "dm": false, "th": false})
         );
         let json = v.to_string();
         assert_eq!(json.matches("\"size\":\"small\"").count(), 2, "{json}");
