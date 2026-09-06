@@ -471,11 +471,11 @@ fn format_pending_list(rows: &[PermRequestRow]) -> String {
     lines.join("\n")
 }
 
-/// Compact schema-2.0 card, mirroring the status-card layout.
+/// Schema-2.0 card, mirroring the status-card layout (platform default
+/// width — no `width_mode` override).
 fn card_json(template: &str, title: &str, elements: &[serde_json::Value]) -> String {
     json!({
         "schema": "2.0",
-        "config": { "width_mode": "compact" },
         "header": {
             "title": { "tag": "plain_text", "content": title },
             "template": template,

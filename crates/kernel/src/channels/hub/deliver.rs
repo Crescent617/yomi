@@ -192,13 +192,13 @@ pub(crate) fn notify_quote_snippet(text: &str) -> String {
 }
 
 /// The run-completion subscription card: a single notation-sized line
-/// (mentioning subscribers when posted to a group) in a compact-width
-/// card, the whole card clickable via `card_link` — no button, minimal
-/// by design. The line names the source chat when known (threads have no
-/// name of their own — the group name stands in). The emoji mirrors the
-/// run's end status (✅/⏹/❌). Card markdown strips applink URLs, so the
-/// jump rides `card_link` instead; without a link it degrades to a
-/// text-only ping. An optional `quote` (trigger-message snippet, or the
+/// (mentioning subscribers when posted to a group), the whole card
+/// clickable via `card_link` — no button, minimal by design. The line
+/// names the source chat when known (threads have no name of their own —
+/// the group name stands in). The emoji mirrors the run's end status
+/// (✅/⏹/❌). Card markdown strips applink URLs, so the jump rides
+/// `card_link` instead; without a link it degrades to a text-only ping.
+/// An optional `quote` (trigger-message snippet, or the
 /// session title) rides as a second markdown-quote line so overlapping
 /// subscriptions stay distinguishable.
 pub(crate) fn subscription_notify_card(
@@ -243,13 +243,11 @@ pub(crate) fn subscription_notify_card(
     let card = match link {
         Some(link) => serde_json::json!({
             "schema": "2.0",
-            "config": { "width_mode": "compact" },
             "card_link": { "url": link },
             "body": { "elements": elements }
         }),
         None => serde_json::json!({
             "schema": "2.0",
-            "config": { "width_mode": "compact" },
             "body": { "elements": elements }
         }),
     };
@@ -354,7 +352,7 @@ pub(crate) async fn send_command_reply(
     Ok(())
 }
 
-/// Info-command reply: a header-titled compact card on card-capable
+/// Info-command reply: a header-titled card on card-capable platforms
 /// platforms (the `/sessions` style — title lives in the blue header);
 /// plain text with the title as a bold first line everywhere else.
 ///
@@ -379,13 +377,13 @@ pub(crate) async fn send_info_reply(
     send_command_reply(adapter, msg, reply_msg_id, format!("**{title}**\n\n{body}")).await
 }
 
-/// The shared info-card envelope: blue header + compact body — the
-/// `/sessions` style, reused by every info card (single-markdown-body
-/// via [`info_card`], multi-element via `/sessions`).
+/// The shared info-card envelope: blue header, platform default card
+/// width (no `width_mode` override — same as the run/reply cards),
+/// reused by every info card (single-markdown-body via [`info_card`],
+/// multi-element via `/sessions`).
 pub(crate) fn info_card_envelope(title: &str, elements: Vec<serde_json::Value>) -> String {
     serde_json::json!({
         "schema": "2.0",
-        "config": { "width_mode": "compact" },
         "header": {
             "template": "blue",
             "title": { "tag": "plain_text", "content": title },

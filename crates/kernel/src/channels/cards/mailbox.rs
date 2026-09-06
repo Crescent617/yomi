@@ -36,7 +36,7 @@ fn parse_scope(v: &serde_json::Value) -> MailboxScope {
     }
 }
 
-/// Pending 卡（info 卡同款蓝头 compact）：每行小字内容（preview ≤80
+/// Pending 卡（info 卡同款蓝头）：每行小字内容（preview ≤80
 /// 字符）+ 行尾 ❌ 撤回按钮（text 型无边框）；底部 刷新/清空 为
 /// default 边框 small 按钮。
 pub(crate) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> String {
