@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **分类**：`Added` 新能力 / `Changed` 行为变化 / `Fixed` 问题修复 / `Removed` 移除能力。
 - **配置与命令必须点名**：新增或变更配置项、命令时，写出名称与默认值。
 
+## [0.10.24] - 2026-09-06
+
+### Added
+
+- daemon 停止或重启时，正在运行的任务会先被正常停掉再关机：飞书状态卡会走到终态，不再永远冻结在"运行中"。被关停打断的任务在卡片上显示 "🔌 Stopped · daemon shutdown"（有回复时则在回复卡内带一行说明），消息附 💤 表情，与手动 `/stop` 的 "Stopped" 明确区分；`/subscribe` 订阅者同样收到打断通知。会话上下文也会记录打断原因，daemon 恢复后继续对话时模型知道上次输出被截断。
+
+### Changed
+
+- `daemon stop` / `daemon restart` 等待守护进程退出的上限从 3 秒放宽到 90 秒——有任务在跑时给正常停止留足时间，不再动辄强杀（无任务时退出速度不变）。
+
 ## [0.10.23] - 2026-09-06
 
 ### Added
