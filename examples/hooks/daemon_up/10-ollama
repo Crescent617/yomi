@@ -3,7 +3,9 @@
 # 幂等 + 所有权：已在跑（不是本 hook 拉起的）则跳过，并只在真正拉起时
 # 落所有权标记——配对的 daemon_down 只停"自己人"，不动用户预启的服务。
 # 常驻进程放后台：hook 脚本本身要立即返回；引擎已 setsid，脚本退出后
-# 后台进程自然存活（输出也可重定向到 $YOMI_STATE_DIR 下的日志留档）。
+# 后台进程自然存活。注意连坐：脚本与其后台孩子同进程组，脚本拖满 30s
+# 被组杀时孩子一起死——本例立即返回，无此风险（输出也可重定向到
+# $YOMI_STATE_DIR 下的日志留档）。
 if ! pgrep -x ollama >/dev/null 2>&1; then
     nohup ollama serve >/dev/null 2>&1 &
     touch "$YOMI_STATE_DIR/started-by-hook"

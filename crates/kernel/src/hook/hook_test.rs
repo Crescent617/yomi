@@ -445,7 +445,7 @@ async fn daemon_point_runs_in_order_and_delivers_contract() {
         &dir,
         "10-first",
         &format!(
-            "echo first >> {}; printf '%s|%s' \"$YOMI_EVENT\" \"${{YOMI_SESSION_ID:-unset}}\" > \"$YOMI_STATE_DIR/env\"; exit 0\n",
+            "echo first >> {}; printf '%s|%s' \"$YOMI_EVENT\" \"${{YOMI_SESSION_ID:-unset}}\" > \"$YOMI_STATE_DIR/env\"; pwd > \"$YOMI_STATE_DIR/pwd\"; exit 0\n",
             order.display()
         ),
         true,
@@ -459,6 +459,17 @@ async fn daemon_point_runs_in_order_and_delivers_contract() {
     let env =
         std::fs::read_to_string(tmp.path().join("state/hooks/daemon_up/10-first/env")).unwrap();
     assert_eq!(env, "daemon_up|unset");
+    // 进程 cwd = 数据目录（不只是 payload 里的 cwd 字段）。pwd 是物理
+    // 路径，macOS 上 /var → /private/var，比 canonicalize 后的形式。
+    let pwd =
+        std::fs::read_to_string(tmp.path().join("state/hooks/daemon_up/10-first/pwd")).unwrap();
+    assert_eq!(
+        pwd.trim(),
+        std::fs::canonicalize(tmp.path())
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
+    );
     // stdin 精简契约：event/cwd，无 session_id。
     let payload: serde_json::Value = serde_json::from_slice(
         &std::fs::read(
@@ -500,19 +511,24 @@ async fn daemon_point_failure_does_not_break_chain() {
 #[tokio::test]
 async fn daemon_point_removes_stale_session_env() {
     std::env::set_var("YOMI_SESSION_ID", "sess_stale");
+    std::env::set_var("YOMI_HOOK_EVENT", "pre_tool_use");
     let tmp = tempdir();
     let dir = point_dir(tmp.path(), POINT_DAEMON_UP);
     std::fs::create_dir_all(&dir).unwrap();
     write_script(
         &dir,
         "10-env",
-        "printf '%s' \"${YOMI_SESSION_ID:-unset}\" > \"$YOMI_STATE_DIR/env\"; exit 0\n",
+        "printf '%s|%s' \"${YOMI_SESSION_ID:-unset}\" \"${YOMI_HOOK_EVENT:-unset}\" > \"$YOMI_STATE_DIR/env\"; exit 0\n",
         true,
     );
     run_daemon_point(tmp.path(), POINT_DAEMON_UP).await;
     std::env::remove_var("YOMI_SESSION_ID");
+    std::env::remove_var("YOMI_HOOK_EVENT");
     let env = std::fs::read_to_string(tmp.path().join("state/hooks/daemon_up/10-env/env")).unwrap();
-    assert_eq!(env, "unset", "stale YOMI_SESSION_ID must be removed");
+    assert_eq!(
+        env, "unset|unset",
+        "stale YOMI_SESSION_ID and YOMI_HOOK_EVENT must both be removed"
+    );
 }
 
 /// 目录形态 hook（`<名>/run`）：与 tools 同约定——排序/state 目录按
@@ -576,4 +592,29 @@ async fn file_and_dir_forms_interleave_by_entry_name() {
     let outcome = run_pre_tool_use(tmp.path(), "sess_x", tmp.path(), &calls, &no_cancel()).await;
     assert_eq!(outcome.approved.len(), 1);
     assert_eq!(std::fs::read_to_string(&order).unwrap(), "file\npkg\n");
+}
+
+/// 符号链接形态全跟随：point 下挂指向目录的链接（stow 部署形态），
+/// 目录形态照常生效，state 目录按链接条目名寻址。
+#[cfg(unix)]
+#[tokio::test]
+async fn symlink_to_dir_form_is_followed() {
+    let tmp = tempdir();
+    let dir = point_dir_of(tmp.path());
+    let real = tmp.path().join("elsewhere/pkg");
+    std::fs::create_dir_all(&real).unwrap();
+    write_script(
+        &real,
+        "run",
+        "echo linked >> \"$YOMI_STATE_DIR/ran\"; exit 0\n",
+        true,
+    );
+    std::os::unix::fs::symlink(&real, dir.join("10-link")).unwrap();
+    let calls = [call("c1", "shell")];
+    let outcome = run_pre_tool_use(tmp.path(), "sess_x", tmp.path(), &calls, &no_cancel()).await;
+    assert_eq!(outcome.approved.len(), 1);
+    // 目录形态经符号链接生效；state 目录按链接条目名（10-link）寻址。
+    let ran =
+        std::fs::read_to_string(tmp.path().join("state/hooks/pre_tool_use/10-link/ran")).unwrap();
+    assert_eq!(ran, "linked\n");
 }

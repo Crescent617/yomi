@@ -255,10 +255,18 @@ impl KernelServer {
         // 触发点。后台任务里跑，daemon 不等（不挡 accept）；脚本可立即回连
         // CLI（socket 已在服务）。JoinHandle 留到关停路径：若关停时 up 链
         // 仍在跑，先等它收尾再跑 down 链（保证 down 在 up 之后的时序）。
-        let up_task = tokio::spawn({
-            let data_dir = self.kernel.data_dir().await;
-            async move { crate::hook::run_daemon_point(&data_dir, crate::hook::POINT_DAEMON_UP).await }
-        });
+        // 关停已在 pending（boot 窗口内 stop）：跳过 up，直接进关停流程，
+        // 不白等 N×30s。
+        let up_task = if self.shutdown.is_cancelled() || shutdown.is_cancelled() {
+            None
+        } else {
+            Some(tokio::spawn({
+                let data_dir = self.kernel.data_dir().await;
+                async move {
+                    crate::hook::run_daemon_point(&data_dir, crate::hook::POINT_DAEMON_UP).await;
+                }
+            }))
+        };
         tokio::select! {
             biased;
             () = self.shutdown.cancelled() => {},
@@ -270,7 +278,9 @@ impl KernelServer {
         // 回收子进程，不等则清理不可靠。每条脚本 30s 硬顶兜底（引擎超时
         // 按组杀）。先等可能仍在飞的 up 链，避免 down/up 并发（示例对
         // ollama 的 pkill 不得先于 nohup 落地）。
-        let _ = up_task.await;
+        if let Some(up_task) = up_task {
+            let _ = up_task.await;
+        }
         crate::hook::run_daemon_point(
             &self.kernel.data_dir().await,
             crate::hook::POINT_DAEMON_DOWN,

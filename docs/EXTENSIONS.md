@@ -59,7 +59,11 @@ session；`YOMI_SESSION_ID` 不注入。）
 
 **生命周期钩子的用法**：`daemon_up` 在后台跑、不挡开机，脚本可立即回连
 CLI；要常驻进程就在脚本里放后台（`nohup … &`），脚本本身立即返回。
-`daemon_down` 会被等待跑完（每条 30s 上限兜底）。两个点都要幂等
+**注意进程组连坐**：脚本和它的后台孩子在同一进程组——脚本拖满 30 秒
+被组杀时，后台孩子一起死（所以"拉起服务"的脚本要快去快回；需要等
+就绪的自己轮询后退出）。`daemon_down` 会被等待跑完（每条 30s 上限
+兜底），关停等待还包含可能在飞的 `daemon_up` 链收尾——这些时间都计
+入 `daemon stop` 的 90 秒强杀兜底线，hook 保持短小。两个点都要幂等
 （重启 = down 全跑 + up 全跑）。成对示例：
 `examples/hooks/daemon_up/10-ollama` 与
 `examples/hooks/daemon_down/10-ollama`。

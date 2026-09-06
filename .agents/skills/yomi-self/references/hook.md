@@ -41,7 +41,7 @@ $YOMI_DATA_DIR/hooks/pre_tool_use/   # gate 点（另有 daemon_up/daemon_down �
 | `YOMI_HOOK_EVENT` | `pre_tool_use` | 一脚本挂多点时分辨触发点 |
 | `YOMI_SESSION_ID` | 同 stdin | 回连 yomi（session cat/send 等） |
 | `YOMI_DATA_DIR` | 数据目录 | 定位 yomi 资产 |
-| `YOMI_STATE_DIR` | `<data_dir>/state/hooks/<point>/<文件名>` | 持久状态目录（留档/缓存），daemon 惰性创建（v0.10.26 起） |
+| `YOMI_STATE_DIR` | `<data_dir>/state/hooks/<point>/<条目名>` | 持久状态目录（留档/缓存），daemon 惰性创建（v0.10.26 起） |
 
 ## 退出码
 
@@ -102,4 +102,4 @@ fi
 exit 0
 ```
 
-state 目录按事件点隔离：同一文件名挂两个点各占 `state/hooks/<point>/<文件名>/`，不共享。
+state 目录按事件点隔离：同一条目名挂两个点各占 `state/hooks/<point>/<条目名>/`，不共享。

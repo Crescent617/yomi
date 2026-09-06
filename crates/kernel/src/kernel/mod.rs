@@ -650,8 +650,8 @@ impl Kernel {
         const WIND_DOWN_POLL: std::time::Duration = std::time::Duration::from_millis(500);
         /// cancel 后等待在跑 run 落地的上界。与 CLI 侧
         /// `GRACEFUL_SHUTDOWN_TIMEOUT`（90s，SIGKILL 兜底）互参——本窗口
-        /// 加 settle grace、persist drain（10s）、连接排空（5s）必须留
-        /// 在外层预算内。
+        /// 加 settle grace、persist drain（10s）、连接排空（5s）、daemon
+        /// hook 链（每条脚本 30s 上界）必须留在外层预算内。
         const WIND_DOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(1);
         /// 终态事件（Stopped）投递 grace：event bus → obs forwarder →
         /// 通道状态卡 PATCH（settle 带 usage 拉取时两次 RTT）。投递无

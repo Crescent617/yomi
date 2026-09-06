@@ -8,8 +8,9 @@ use tokio::time::{sleep, Duration};
 /// How long to wait for graceful shutdown before falling back to kill.
 /// 必须罩住 kernel 侧关停预算（与 `kernel/mod.rs` 的 `stop_active_runs`
 /// 互参）：等在跑 run 停完（60s 上界）+ 终态投递 grace（1.5s）+
-/// persist drain（10s 上界）+ 连接排空（5s 上界）+ 进程退出余量。
-/// 无在跑 run 时进程秒退，本上限只是病态工具的兜底。
+/// persist drain（10s 上界）+ 连接排空（5s 上界）+ daemon hook 链
+/// （daemon_up 在飞收尾 + daemon_down 全链，每条脚本 30s 上界）+
+/// 进程退出余量。无在跑 run 时进程秒退，本上限只是病态工具的兜底。
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(90);
 /// Polling interval while waiting for graceful shutdown.
 const GRACEFUL_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(50);

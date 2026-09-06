@@ -168,7 +168,14 @@ async fn list_hooks(dir: &Path, point: &str) -> crate::types::Result<Vec<(String
             }
         }
     }
-    hooks.sort_by(|a, b| a.0.cmp(&b.0));
+    hooks.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    // 同名条目（文件与目录同挂一名）：多半笔误。顺序已按路径兜底确定，
+    // 但 state 目录同名共享、同一事件跑两遍——warn 留痕，值得修。
+    for pair in hooks.windows(2) {
+        if pair[0].0 == pair[1].0 {
+            warn!(point, name = %pair[0].0, "hook: duplicate entry name (file and dir forms both present)");
+        }
+    }
     Ok(hooks)
 }
 
