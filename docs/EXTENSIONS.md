@@ -124,5 +124,3 @@ skill 教 agent 怎么做事（知识进 prompt）；外挂是接在 kernel 上�
 v1 扩展（`ext_register`/`ext_pull`/`ext_result` 长连接注册 + config.toml
 `[[extensions]]` supervised）已整体删除：wire 协议升至 30，旧 SDK
 `examples/yomi_ext.py` 移除。source 路由（`ext_route` RPC）保留。
-旧 config.toml 里的 `[[extensions]]` 段会被**静默忽略**（supervised
-进程不再拉起），请删除该段并迁移到 `tools/` 目录。
