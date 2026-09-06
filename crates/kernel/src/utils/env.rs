@@ -6,6 +6,13 @@
 /// --steer -s "$YOMI_SESSION_ID"`）。
 pub const YOMI_SESSION_ID: &str = crate::env_name!("SESSION_ID");
 pub const YOMI_DATA_DIR: &str = crate::env_name!("DATA_DIR");
+/// 外挂（hook/tool）的持久状态目录：hook 为
+/// `<data_dir>/state/hooks/<point>/<脚本名>/`，tool 为
+/// `<data_dir>/state/tools/<名>/`，daemon 惰性创建，脚本自管内容
+/// （去重水位、缓存、留档）。
+pub const YOMI_STATE_DIR: &str = crate::env_name!("STATE_DIR");
+/// 外挂子进程注入的事件标识（值：hook=hook point 名，tool="tool"）。
+pub const YOMI_EVENT: &str = crate::env_name!("EVENT");
 
 /// 给 tokio `Command` 注入 yomi 标准环境变量，返回 `&mut` 便于链式。
 /// `None` 的项会被**显式移除**而非保留继承值：父进程自身可能带着这些
@@ -37,6 +44,32 @@ pub fn inject_child_env<'a>(
         }
     }
     cmd
+}
+
+/// 注入 `YOMI_STATE_DIR`（`None` 时显式移除，同 `inject_child_env` 的
+/// 防残留语义）。与 `inject_child_env` 分开：state 目录只对有名字的外挂
+/// （hook 文件名 / tool 目录名）有意义，shell/cron/workflow 不注入。
+pub fn inject_state_dir<'a>(
+    cmd: &'a mut tokio::process::Command,
+    state_dir: Option<&std::path::Path>,
+) -> &'a mut tokio::process::Command {
+    match state_dir {
+        Some(dir) => {
+            cmd.env(YOMI_STATE_DIR, dir);
+        }
+        None => {
+            cmd.env_remove(YOMI_STATE_DIR);
+        }
+    }
+    cmd
+}
+
+/// state 目录惰性创建：失败仅 debug 不致命——脚本可自行 mkdir。
+/// hook（state/hooks/<point>/<脚本名>）/tool（state/tools/<名>）共用。
+pub async fn ensure_state_dir(kind: &'static str, name: &str, dir: &std::path::Path) {
+    if let Err(e) = tokio::fs::create_dir_all(dir).await {
+        tracing::debug!(kind, name, dir = %dir.display(), error = %e, "state dir create failed");
+    }
 }
 
 /// Get environment variable - inlined for performance

@@ -136,16 +136,6 @@ impl KernelServer {
     pub async fn start(&self, config: &crate::config::Config) {
         self.kernel.start();
 
-        // supervised 扩展进程：跟随 daemon 拉起，随 daemon 死亡。
-        if !config.extensions.is_empty() {
-            let log_dir = self.kernel.data_dir().await.join("logs");
-            crate::extension::supervisor::start_supervisor(
-                config.extensions.clone(),
-                log_dir,
-                self.shutdown.child_token(),
-            );
-        }
-
         if let Some(store) = self.kernel.cron_store.as_ref() {
             let (task_tx, task_rx) = mpsc::channel(64);
             let scheduler = Arc::new(crate::cron::CronScheduler::new(Arc::clone(store), task_tx));
@@ -261,12 +251,31 @@ impl KernelServer {
                 }
             });
         }
+        // hooks/daemon_up/：此刻 listeners 已绑、后台服务已起——"up 之后"
+        // 触发点。后台任务里跑，daemon 不等（不挡 accept）；脚本可立即回连
+        // CLI（socket 已在服务）。JoinHandle 留到关停路径：若关停时 up 链
+        // 仍在跑，先等它收尾再跑 down 链（保证 down 在 up 之后的时序）。
+        let up_task = tokio::spawn({
+            let data_dir = self.kernel.data_dir().await;
+            async move { crate::hook::run_daemon_point(&data_dir, crate::hook::POINT_DAEMON_UP).await }
+        });
         tokio::select! {
             biased;
             () = self.shutdown.cancelled() => {},
             () = shutdown.cancelled() => {},
         }
         tracing::info!("Server shutting down, accept loops stopped");
+        // hooks/daemon_down/：关停清理（关停信号已到、kernel 拆除前——此时
+        // socket 仍在服务，脚本可回连 CLI），等它跑完再拆：运行时退出会
+        // 回收子进程，不等则清理不可靠。每条脚本 30s 硬顶兜底（引擎超时
+        // 按组杀）。先等可能仍在飞的 up 链，避免 down/up 并发（示例对
+        // ollama 的 pkill 不得先于 nohup 落地）。
+        let _ = up_task.await;
+        crate::hook::run_daemon_point(
+            &self.kernel.data_dir().await,
+            crate::hook::POINT_DAEMON_DOWN,
+        )
+        .await;
         // Idempotent: stops the kernel (停 run + 终态投递 + 持久化排空)
         // then cancels all connections/background tasks, regardless of
         // which token ended the wait.
@@ -455,10 +464,6 @@ impl KernelServer {
             handle.abort();
         }
         drop(subs);
-
-        // RAII：连接终止 = 该连接的全部扩展能力回收（代理 tool 摘除、
-        // pending 工作项以 disconnected 报错）。
-        self.kernel.extension_registry().sweep(&conn_id);
 
         cancel.cancel();
         let _ = writer.await;

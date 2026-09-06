@@ -1445,3 +1445,94 @@ async fn empty_completion_is_not_persisted_and_fails_turn_cleanly() {
         "error: {error}"
     );
 }
+
+/// 外挂合并（Agent::new 收口）：有效进表、撞内建让位、blocklist 拦截、
+/// 自声明 level 经 `Tool::level` 流露。
+#[tokio::test]
+async fn ext_tools_merge_shadow_and_blocklist() {
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs};
+    use crate::provider::ModelConfig;
+    use crate::types::SessionId;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    fn write_ext_tool(data_dir: &std::path::Path, name: &str, desc: &str) {
+        let dir = data_dir.join("tools").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("tool.json"),
+            format!(r#"{{"desc":"{desc}","schema":{{"type":"object"}},"level":"safe"}}"#),
+        )
+        .unwrap();
+        let run = dir.join("run");
+        std::fs::write(&run, "#!/bin/sh\ntrue\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
+    let data_dir = tempfile::tempdir().unwrap();
+    write_ext_tool(data_dir.path(), "probe_ok", "ext ok");
+    write_ext_tool(data_dir.path(), "read", "ext read shadow");
+    write_ext_tool(data_dir.path(), "probe_blocked", "ext blocked");
+    let ext_tools = crate::tools::ext::scan(data_dir.path()).await;
+    assert_eq!(ext_tools.len(), 3);
+
+    let model_config = ModelConfig {
+        name: "test".to_string(),
+        model_id: "test-id".to_string(),
+        ..ModelConfig::default()
+    };
+    let mut models = BTreeMap::new();
+    models.insert("test".to_string(), model_config);
+    let shared = Arc::new(AgentShared::new(
+        Arc::new(models),
+        "test".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+        None,
+    ));
+
+    let working_dir = tempfile::tempdir().unwrap();
+    let args = AgentSpawnArgs {
+        base_prompt: "test".to_string(),
+        skills: Vec::new(),
+        history: Vec::new(),
+        session_id: SessionId::new().to_string(),
+        parent_session_id: None,
+        max_iterations: 1,
+        working_dir: working_dir.path().to_path_buf(),
+        cancel_token: None,
+        tool_flags: crate::tools::ToolFlags::new(false),
+        file_state_store: None,
+        tool_blocklist: vec!["probe_blocked".to_string()],
+        max_tool_output_length: 1024,
+        mailbox: Arc::new(crate::comms::Mailbox::new()),
+        input_bus: None,
+        ext_tools,
+    };
+    let agent = Agent::new(&shared, args).await;
+
+    // 有效进表 + 自声明 level 流露（resolver 经 `Tool::level` 收口）。
+    let ok = agent
+        .tool_registry
+        .get("probe_ok")
+        .expect("probe_ok registered");
+    assert_eq!(ok.desc(), "ext ok");
+    assert_eq!(ok.level(), Some(crate::permission::Level::Safe));
+    // 撞内建让位：read 仍是内建（desc 非外挂版、level 走内建名表 None）。
+    let read = agent.tool_registry.get("read").expect("builtin read");
+    assert_ne!(read.desc(), "ext read shadow");
+    assert!(read.level().is_none());
+    // blocklist 拦截。
+    assert!(agent.tool_registry.get("probe_blocked").is_none());
+}

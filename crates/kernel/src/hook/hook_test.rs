@@ -227,6 +227,7 @@ async fn hook_timeout_fails_open() {
     let script = write_script(tmp.path(), "slow", "sleep 5\n", true);
     let started = std::time::Instant::now();
     let verdict = run_one_hook(
+        "slow",
         &script,
         b"{}",
         POINT_PRE_TOOL_USE,
@@ -258,6 +259,7 @@ async fn timeout_kills_process_group() {
     let data = tmp.path().to_path_buf();
     let gate = tokio::spawn(async move {
         run_one_hook(
+            "spawner",
             &script,
             b"{}",
             POINT_PRE_TOOL_USE,
@@ -356,7 +358,7 @@ async fn stdin_payload_and_env() {
         &dir,
         "10-dump",
         &format!(
-            "cat > {}; printf '%s|%s|%s' \"$YOMI_HOOK_EVENT\" \"$YOMI_SESSION_ID\" \"$YOMI_DATA_DIR\" > {}; exit 0\n",
+            "cat > {}; printf '%s|%s|%s|%s|%s' \"$YOMI_HOOK_EVENT\" \"$YOMI_SESSION_ID\" \"$YOMI_DATA_DIR\" \"$YOMI_EVENT\" \"$YOMI_STATE_DIR\" > {}; exit 0\n",
             dump.display(),
             envdump.display()
         ),
@@ -377,8 +379,13 @@ async fn stdin_payload_and_env() {
     let env = std::fs::read_to_string(&envdump).unwrap();
     assert_eq!(
         env,
-        format!("pre_tool_use|sess_abc|{}", tmp.path().display())
+        format!(
+            "pre_tool_use|sess_abc|{0}|pre_tool_use|{0}/state/hooks/pre_tool_use/10-dump",
+            tmp.path().display()
+        )
     );
+    // state 目录已按 YOMI_STATE_DIR 惰性创建。
+    assert!(tmp.path().join("state/hooks/pre_tool_use/10-dump").is_dir());
 }
 
 #[cfg(unix)]
@@ -416,4 +423,157 @@ fn truncate_reason_caps_long_text() {
     let long = "x".repeat(MAX_REASON_CHARS + 100);
     let truncated = truncate_reason(&long);
     assert_eq!(truncated.chars().count(), MAX_REASON_CHARS + 1); // +1 为省略号
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn daemon_point_runs_in_order_and_delivers_contract() {
+    let tmp = tempdir();
+    let dir = point_dir(tmp.path(), POINT_DAEMON_UP);
+    std::fs::create_dir_all(&dir).unwrap();
+    let order = tmp.path().join("order.txt");
+    write_script(
+        &dir,
+        "20-second",
+        &format!(
+            "echo second >> {}; cat > \"$YOMI_STATE_DIR/stdin.json\"; exit 0\n",
+            order.display()
+        ),
+        true,
+    );
+    write_script(
+        &dir,
+        "10-first",
+        &format!(
+            "echo first >> {}; printf '%s|%s' \"$YOMI_EVENT\" \"${{YOMI_SESSION_ID:-unset}}\" > \"$YOMI_STATE_DIR/env\"; exit 0\n",
+            order.display()
+        ),
+        true,
+    );
+    write_script(&dir, "30-off", "exit 0\n", false); // 无执行位：跳过
+    run_daemon_point(tmp.path(), POINT_DAEMON_UP).await;
+
+    // 字典序串行；无执行位的 30-off 未参与。
+    assert_eq!(std::fs::read_to_string(&order).unwrap(), "first\nsecond\n");
+    // env 契约：YOMI_EVENT=point；YOMI_SESSION_ID 显式移除（无会话语义）。
+    let env =
+        std::fs::read_to_string(tmp.path().join("state/hooks/daemon_up/10-first/env")).unwrap();
+    assert_eq!(env, "daemon_up|unset");
+    // stdin 精简契约：event/cwd，无 session_id。
+    let payload: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            tmp.path()
+                .join("state/hooks/daemon_up/20-second/stdin.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(payload["event"], "daemon_up");
+    assert_eq!(payload["cwd"], tmp.path().to_string_lossy().as_ref());
+    assert!(payload.get("session_id").is_none());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn daemon_point_failure_does_not_break_chain() {
+    let tmp = tempdir();
+    let dir = point_dir(tmp.path(), POINT_DAEMON_DOWN);
+    std::fs::create_dir_all(&dir).unwrap();
+    let ran = tmp.path().join("ran.txt");
+    write_script(&dir, "10-boom", "echo why >&2\nexit 3\n", true);
+    write_script(
+        &dir,
+        "20-next",
+        &format!("echo next >> {}; exit 0\n", ran.display()),
+        true,
+    );
+    run_daemon_point(tmp.path(), POINT_DAEMON_DOWN).await;
+    // 通知型语义：前者非零只留痕，不中断后续脚本。
+    assert_eq!(std::fs::read_to_string(&ran).unwrap(), "next\n");
+}
+
+/// 防残留是 daemon hook 的关键契约：父进程带着残留 `YOMI_SESSION_ID`
+/// 时（daemon 从 hook/工具环境里被拉起的场景），子进程必须读不到——
+/// `inject_child_env(None)` 是 `env_remove` 而非不设置。不清除则脚本读到
+/// 残留值，断言必炸。
+#[cfg(unix)]
+#[tokio::test]
+async fn daemon_point_removes_stale_session_env() {
+    std::env::set_var("YOMI_SESSION_ID", "sess_stale");
+    let tmp = tempdir();
+    let dir = point_dir(tmp.path(), POINT_DAEMON_UP);
+    std::fs::create_dir_all(&dir).unwrap();
+    write_script(
+        &dir,
+        "10-env",
+        "printf '%s' \"${YOMI_SESSION_ID:-unset}\" > \"$YOMI_STATE_DIR/env\"; exit 0\n",
+        true,
+    );
+    run_daemon_point(tmp.path(), POINT_DAEMON_UP).await;
+    std::env::remove_var("YOMI_SESSION_ID");
+    let env = std::fs::read_to_string(tmp.path().join("state/hooks/daemon_up/10-env/env")).unwrap();
+    assert_eq!(env, "unset", "stale YOMI_SESSION_ID must be removed");
+}
+
+/// 目录形态 hook（`<名>/run`）：与 tools 同约定——排序/state 目录按
+/// 条目名（目录名而非 `run`），`dirname "$0"` 即包目录可带伴生文件；
+/// 否决语义与文件形态一致；无执行位 `run` 的目录跳过。
+#[cfg(unix)]
+#[tokio::test]
+async fn directory_form_hook_runs_and_denies() {
+    let tmp = tempdir();
+    let dir = point_dir_of(tmp.path());
+    // 目录形态：20-guard/run + 伴生文件 patterns.txt。
+    let pkg = dir.join("20-guard");
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(pkg.join("patterns.txt"), "rm -rf").unwrap();
+    write_script(
+        &pkg,
+        "run",
+        "cat \"$(dirname \"$0\")/patterns.txt\" > \"$YOMI_STATE_DIR/companion\"\necho denied-by-pkg >&2\nexit 2\n",
+        true,
+    );
+    // 无执行位 run 的目录：开关关，跳过。
+    let off = dir.join("30-off");
+    std::fs::create_dir_all(&off).unwrap();
+    write_script(&off, "run", "exit 0\n", false);
+    let calls = [call("c1", "shell")];
+    let outcome = run_pre_tool_use(tmp.path(), "sess_x", tmp.path(), &calls, &no_cancel()).await;
+    assert!(outcome.approved.is_empty());
+    assert_eq!(outcome.denied.len(), 1, "dir-form hook must deny");
+    assert!(outcome.denied[0].1.contains("denied-by-pkg"));
+    // state 目录按目录名寻址；伴生文件经包目录引用。
+    let companion = std::fs::read_to_string(
+        tmp.path()
+            .join("state/hooks/pre_tool_use/20-guard/companion"),
+    )
+    .unwrap();
+    assert_eq!(companion, "rm -rf");
+}
+
+/// 文件与目录形态混挂：按条目名字典序交错执行。
+#[cfg(unix)]
+#[tokio::test]
+async fn file_and_dir_forms_interleave_by_entry_name() {
+    let tmp = tempdir();
+    let dir = point_dir_of(tmp.path());
+    let order = tmp.path().join("order.txt");
+    let pkg = dir.join("20-pkg");
+    std::fs::create_dir_all(&pkg).unwrap();
+    write_script(
+        &pkg,
+        "run",
+        &format!("echo pkg >> {}; exit 0\n", order.display()),
+        true,
+    );
+    write_script(
+        &dir,
+        "10-file",
+        &format!("echo file >> {}; exit 0\n", order.display()),
+        true,
+    );
+    let calls = [call("c1", "shell")];
+    let outcome = run_pre_tool_use(tmp.path(), "sess_x", tmp.path(), &calls, &no_cancel()).await;
+    assert_eq!(outcome.approved.len(), 1);
+    assert_eq!(std::fs::read_to_string(&order).unwrap(), "file\npkg\n");
 }

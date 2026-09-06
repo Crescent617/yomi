@@ -6,14 +6,11 @@ use crate::tools::{
 };
 use serde_json::Value;
 
-/// 权限级别解析的唯一收口：ext 注册表优先（扩展声明的 level），
-/// 查不到才落内建名表（内建语义稳定、ext 与内建不撞名由 spawn 保证）。
-pub fn resolve_level(
-    extension_registry: Option<&crate::extension::ExtensionRegistry>,
-    tool_name: &str,
-    args: &Value,
-) -> Level {
-    if let Some(level) = extension_registry.and_then(|r| r.registered_level(tool_name)) {
+/// 权限级别解析的唯一收口：工具自声明优先（外挂 manifest 的 level，
+/// 经 `Tool::level` 传入），查不到才落内建名表（内建语义稳定、外挂与
+/// 内建不撞名由 spawn 合并保证）。
+pub fn resolve_level(declared: Option<Level>, tool_name: &str, args: &Value) -> Level {
+    if let Some(level) = declared {
         return level;
     }
     match tool_name {
@@ -113,55 +110,23 @@ impl ToolLevelResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extension::{ExtToolDef, ExtensionRegistry};
-    use std::sync::Arc;
-
-    fn registry_with(name: &str, level: Level) -> Arc<ExtensionRegistry> {
-        let registry = ExtensionRegistry::new();
-        registry
-            .register_tool(
-                "conn_x",
-                ExtToolDef {
-                    name: name.to_string(),
-                    desc: "d".to_string(),
-                    schema: serde_json::json!({}),
-                    level,
-                },
-            )
-            .unwrap();
-        Arc::new(registry)
-    }
 
     #[test]
-    fn ext_declared_level_wins_over_default_caution() {
-        let registry = registry_with("danger_op", Level::Dangerous);
-        // ext 声明 dangerous 必须生效（此前的死字段会被静默降档为 caution）。
+    fn declared_level_wins_over_default_caution() {
+        // 外挂声明 dangerous 必须生效（此前的死字段会被静默降档为 caution）。
         assert_eq!(
-            resolve_level(Some(&registry), "danger_op", &Value::Null),
+            resolve_level(Some(Level::Dangerous), "danger_op", &Value::Null),
             Level::Dangerous
         );
-        let registry = registry_with("safe_lookup", Level::Safe);
         assert_eq!(
-            resolve_level(Some(&registry), "safe_lookup", &Value::Null),
+            resolve_level(Some(Level::Safe), "safe_lookup", &Value::Null),
             Level::Safe
         );
     }
 
     #[test]
-    fn builtin_table_unaffected_by_registry() {
-        let registry = registry_with("danger_op", Level::Dangerous);
-        assert_eq!(
-            resolve_level(Some(&registry), READ_TOOL_NAME, &Value::Null),
-            Level::Safe
-        );
-        assert_eq!(
-            resolve_level(Some(&registry), "unknown_tool", &Value::Null),
-            Level::Caution
-        );
-    }
-
-    #[test]
-    fn no_registry_falls_back_to_builtin_table() {
+    fn builtin_table_unaffected_by_declared() {
+        // 内建不携带自声明（`Tool::level` 默认 None），名表语义不变。
         assert_eq!(
             resolve_level(None, READ_TOOL_NAME, &Value::Null),
             Level::Safe

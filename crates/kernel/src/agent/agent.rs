@@ -147,7 +147,7 @@ impl Agent {
             .with_file_state_store(args.file_state_store.clone()),
         );
 
-        // wire 外部扩展工具（spawn 时快照）：收口与内建一致——
+        // tools/ 目录外挂工具（spawn 时快照）：收口与内建一致——
         // blocklist 同样生效，与内建/已注册撞名让位记 warn。
         for tool in args.ext_tools {
             let name = tool.name().to_string();

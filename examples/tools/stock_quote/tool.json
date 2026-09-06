@@ -1,0 +1,10 @@
+{
+  "desc": "查询股票伪实时报价（外挂示例）",
+  "schema": {
+    "type": "object",
+    "properties": {"symbol": {"type": "string"}},
+    "required": ["symbol"]
+  },
+  "level": "safe",
+  "timeout_secs": 10
+}

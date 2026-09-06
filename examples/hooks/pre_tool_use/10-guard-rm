@@ -1,0 +1,11 @@
+#!/bin/sh
+# 外挂示例·hook（拦截）：只拦 shell 里的 rm -rf。
+# 依赖：jq（无 jq 时所有检查走 || exit 0，fail-open 放行——guard 会静默
+# 失效，部署后先用一条 rm -rf 探针验证）。
+# 部署：cp 到 <data_dir>/hooks/pre_tool_use/10-guard-rm 并 chmod +x。
+# 契约：stdin 单行 JSON（hook_event_name/tool_name/tool_input/…）；
+# exit 0=放行，exit 2=否决（stderr 即原因，回流给 agent）。
+jq -e '.tool_name == "shell"' >/dev/null || exit 0
+jq -r '.tool_input.command' | grep -q 'rm -rf' || exit 0
+echo 'refused: rm -rf' >&2
+exit 2

@@ -188,25 +188,6 @@ app_secret = "..."
 
 ---
 
-## `[[extensions]]` — wire 外部扩展
-
-列出即跟随 daemon 拉起的扩展进程（daemon 死则组杀，崩溃固定退避重拉）：
-
-```toml
-[[extensions]]
-name = "stock"
-command = ["python3", "/path/to/stock_tools.py"]
-```
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `name` | string | 扩展名 |
-| `command` | string[] | 命令行（argv[0] 为可执行文件） |
-
-扩展开发（注册自定义工具、Python 快速上手）见 `docs/EXTENSIONS.md`。
-
----
-
 ## 环境变量
 
 `YOMI_` 前缀变量启动时覆盖配置文件对应值。

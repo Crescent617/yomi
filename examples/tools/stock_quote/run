@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+"""外挂示例·tool（能力）：stdin 进、stdout 出，无 socket 无 SDK。
+
+部署：把整个 stock_quote/ 目录拷到 <data_dir>/tools/ 并 chmod +x run。
+契约：stdin 单行 JSON（event/session_id/cwd/tool_name/args）；
+exit 0 → stdout 即工具结果；非零 → stderr 作 tool error 喂回 agent。
+"""
+
+import json
+import os
+import sys
+
+payload = json.load(sys.stdin)
+symbol = payload["args"]["symbol"]
+
+# 持久状态目录（缓存/水位/留档）：<data_dir>/state/tools/stock_quote/
+state_dir = os.environ["YOMI_STATE_DIR"]
+with open(os.path.join(state_dir, "last.json"), "w") as f:
+    json.dump(payload, f)
+
+print(json.dumps({"symbol": symbol, "price": 81.08, "demo": True}))

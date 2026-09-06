@@ -193,7 +193,7 @@ impl Agent {
             calls,
             self.permission_checker.as_deref(),
             &self.create_runtime_token(),
-            self.shared.extension_registry.as_deref(),
+            &self.tool_registry,
         )
         .await;
 

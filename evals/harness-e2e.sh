@@ -121,14 +121,14 @@ printf '本话题守则：\n- 接头暗号：%s\n' "$MARK_B" > "$SESS_DIR/rules/
 "$YOMI" session send -s "$sid_a" "你的规则文件里的接头暗号是什么？只回答暗号本身，不要别的字。" >/dev/null 2>&1
 wait_idle "$sid_a" || bad "session rules 会话 A 跑完" "超时未 idle"
 grep -q "$MARK_A" "$SESS_DIR/$sid_a.jsonl" 2>/dev/null \
-  && ok "session rules 注入（A 复读暗号）" || bad "session rules 注入（A 复读暗号）" "jsonl 未见暗号（$sid_a）"
+  && ok "session rules 注入（A 复读暗号）" || bad "session rules 注入（A 复读暗号）" "jsonl 未见暗号（${sid_a}）"
 
 "$YOMI" session send -s "$sid_b" "你的规则文件里的接头暗号是什么？只回答暗号本身，不要别的字。" >/dev/null 2>&1
 wait_idle "$sid_b" || bad "session rules 会话 B 跑完" "超时未 idle"
 grep -q "$MARK_B" "$SESS_DIR/$sid_b.jsonl" 2>/dev/null \
-  && ok "session rules 注入（B 复读暗号）" || bad "session rules 注入（B 复读暗号）" "jsonl 未见暗号（$sid_b）"
+  && ok "session rules 注入（B 复读暗号）" || bad "session rules 注入（B 复读暗号）" "jsonl 未见暗号（${sid_b}）"
 grep -q "$MARK_A" "$SESS_DIR/$sid_b.jsonl" 2>/dev/null \
-  && bad "session rules 隔离（B 不见 A 暗号）" "B 的 jsonl 出现 A 暗号（$sid_b）" \
+  && bad "session rules 隔离（B 不见 A 暗号）" "B 的 jsonl 出现 A 暗号（${sid_b}）" \
   || ok "session rules 隔离（B 不见 A 暗号）"
 
 # fork 复制：确定性断言，无模型调用

@@ -179,27 +179,6 @@
       },
       "type": "object"
     },
-    "ExtensionConfig": {
-      "description": "`[[extensions]]` 条目：列出即拉起，daemon 死则组杀，崩溃固定退避重拉。",
-      "properties": {
-        "command": {
-          "description": "命令行（argv[0] 为可执行文件）。",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "name": {
-          "description": "Extension name (unique identifier)",
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "command"
-      ],
-      "type": "object"
-    },
     "FeaturesConfig": {
       "description": "Feature flags for experimental capabilities.",
       "properties": {
@@ -475,13 +454,6 @@
       },
       "description": "General-purpose environment variables injected at startup, overriding\nhost values.\nKeys are used verbatim and do not require the [`crate::ENV_PREFIX`] prefix.",
       "type": "object"
-    },
-    "extensions": {
-      "description": "wire 外部扩展（TOML: `[[extensions]]`）：跟随 daemon 拉起的扩展进程。",
-      "items": {
-        "$ref": "#/$defs/ExtensionConfig"
-      },
-      "type": "array"
     },
     "features": {
       "$ref": "#/$defs/FeaturesConfig",

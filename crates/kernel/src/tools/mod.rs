@@ -9,6 +9,7 @@ pub mod ask_user;
 pub mod cron;
 pub mod edit;
 pub mod executor;
+pub mod ext;
 pub mod glob;
 pub mod grep;
 pub mod helper;
@@ -150,6 +151,12 @@ pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn desc(&self) -> &str;
     fn schema(&self) -> Value;
+
+    /// 自声明权限级别：外挂工具由 manifest 提供；内建工具返回 `None`，
+    /// 走 `permission::resolver` 的内建名表。
+    fn level(&self) -> Option<crate::permission::Level> {
+        None
+    }
 
     async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput>;
 }

@@ -44,7 +44,7 @@ pub enum CronActionOutcome {
     Skipped,
 }
 
-/// precheck 闸门命令的固定超时（不设 knob，同 `ext_pull` 的 55s 哲学）。
+/// precheck 闸门命令的固定超时（不设 knob；与 hook 30s 同为固定值的哲学）。
 pub const PRECHECK_TIMEOUT_SECS: u64 = 60;
 
 /// precheck stdout 追加进消息体的最大字节数。

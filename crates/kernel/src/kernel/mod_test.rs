@@ -780,3 +780,34 @@ async fn stop_without_active_run_returns_immediately() {
         "idle shutdown should be near-instant"
     );
 }
+
+// ── ext_route（内存回退路径）──────────────────────────────────────────
+
+#[tokio::test]
+async fn ext_route_concurrent_same_key_single_winner() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let (r1, r2, r3) = tokio::join!(
+        kernel.ext_route("gitlab-ci", "proj1"),
+        kernel.ext_route("gitlab-ci", "proj1"),
+        kernel.ext_route("gitlab-ci", "proj1"),
+    );
+    let (s1, c1) = r1.unwrap();
+    let (s2, c2) = r2.unwrap();
+    let (s3, c3) = r3.unwrap();
+    assert_eq!(s1, s2);
+    assert_eq!(s2, s3);
+    let created = [c1, c2, c3].iter().filter(|c| **c).count();
+    assert_eq!(created, 1, "exactly one caller must see created=true");
+
+    // 后续单发调用：复用，不再创建。
+    let (s4, c4) = kernel.ext_route("gitlab-ci", "proj1").await.unwrap();
+    assert_eq!(s4, s1);
+    assert!(!c4);
+}

@@ -1,9 +1,11 @@
-//! hook/ — 文件系统 hook（一期：`pre_tool_use` 单点，Gate 端口的脚本形态）。
+//! hook/ — 文件系统 hook（Gate 端口 `pre_tool_use` + daemon 生命周期
+//! 通知点 `daemon_up`/`daemon_down` 的脚本形态）。
 //!
-//! 目录即注册表，零配置文件：`<data_dir>/hooks/pre_tool_use/` 下带执行位
-//! 的普通文件按文件名字典序串行执行；执行位即开关，无 reload（每次事件
-//! readdir，目录是真相）。**跟随符号链接**（stow/nix 式部署）；破损符号
-//! 链接跳过不致命。
+//! 目录即注册表，零配置文件：`<data_dir>/hooks/<point>/` 下的条目按
+//! **条目名**字典序串行执行——条目为带执行位的裸文件，或含带执行位
+//! `run` 的目录（与 tools 同约定，伴生文件放包里）。执行位即开关，无
+//! reload（每次事件 readdir，目录是真相）。**跟随符号链接**（stow/nix
+//! 式部署）；破损符号链接跳过不致命。
 //!
 //! stdin 契约（全项目统一 `snake_case`）：
 //! ```json
@@ -37,43 +39,37 @@
 //!   工具失败（对照 permission 否决的 `Permission denied:` 前缀）
 
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::types::ToolCall;
 
-// POSIX `kill(2)`：同 workflow/mod.rs 的做法，unix 上始终已链接，手动
-// 声明以避免 libc/nix 依赖。setsid 已收敛到 `utils::process`。
-#[cfg(unix)]
-extern "C" {
-    fn kill(pid: i32, sig: i32) -> i32;
-}
-
-#[cfg(unix)]
-const SIGKILL: i32 = 9;
-
 /// hook 库目录名（相对 `data_dir`）。
 pub(crate) const DIR_NAME: &str = "hooks";
-/// 一期唯一的 hook point 目录名（相对 hook 库目录）。
+/// 一期 gate hook point 目录名（相对 hook 库目录）。
 pub(crate) const POINT_PRE_TOOL_USE: &str = "pre_tool_use";
+
+/// daemon 生命周期 hook point（通知型，无否决语义）：
+/// - `daemon_up`：服务就绪**后**触发（listeners 已绑、后台服务已起，
+///   脚本可回连 CLI）；后台任务里跑，daemon 不等它——不挡开机。
+/// - `daemon_down`：关停流程**中**触发（关停信号已到、kernel 拆除前；
+///   此时 socket 仍在服务，脚本可回连 CLI），等它跑完再继续关停——
+///   运行时退出会回收子进程，不等则清理不可靠。
+///
+/// 两个点共用 daemon 事件的精简契约（见 `run_daemon_point`）。
+pub(crate) const POINT_DAEMON_UP: &str = "daemon_up";
+pub(crate) const POINT_DAEMON_DOWN: &str = "daemon_down";
 
 /// 子进程注入的 hook point 标识（值 = 目录名）。
 pub(crate) const YOMI_HOOK_EVENT: &str = crate::env_name!("HOOK_EVENT");
 
+/// 目录形态 hook 的入口文件名（与 tools 的 `run` 同约定）。
+const RUN_FILE: &str = "run";
+
 /// 单 hook 执行上限：gate 在 agent 热路径上，不能给 workflow 的 5min。
 const HOOK_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// 主进程退出/被杀后 drain 收尾的宽限期（同 workflow）。
-const DRAIN_GRACE: Duration = Duration::from_secs(2);
-
-/// drain 缓冲累积上限：超出继续读（防管道阻塞）但停止累积——坏脚本
-/// `cat hugefile >&2` 不会在热路径上撑爆内存。
-const DRAIN_CAP: usize = 64 * 1024;
 
 /// 否决原因（hook stderr）回流给 agent 的长度上限。
 const MAX_REASON_CHARS: usize = 2000;
@@ -123,17 +119,20 @@ fn is_executable(md: &std::fs::Metadata) -> bool {
     }
 }
 
-/// 列出一个 hook point 的可执行脚本：普通文件（`metadata` 跟随符号链接）、
-/// 带执行位、跳过隐藏文件，按文件名字典序；目录不存在视为空。
+/// 列出一个 hook point 的可执行条目，按**条目名**字典序。条目两种形态：
+/// 带执行位的裸文件，或含带执行位 `run` 的目录（目录形态与 tools 同约定
+/// ——伴生文件放自己包里，`dirname "$0"` 即得）。目录不存在视为空。
 /// 单条目 metadata 失败（如破损符号链接）跳过而非整批失败——一个坏条目
-/// 不该拆掉整道 gate。
-async fn list_hooks(dir: &Path) -> crate::types::Result<Vec<PathBuf>> {
+/// 不该拆掉整道 gate。`point` 仅用于日志归类（这是唯一的观测渠道）。
+/// 返回 (条目名, 可执行路径)：state 目录/日志前缀按条目名（目录形态按
+/// 目录名，不是 `run`）。
+async fn list_hooks(dir: &Path, point: &str) -> crate::types::Result<Vec<(String, PathBuf)>> {
     let mut rd = match tokio::fs::read_dir(dir).await {
         Ok(rd) => rd,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e.into()),
     };
-    let mut paths = Vec::new();
+    let mut hooks = Vec::new();
     while let Some(de) = rd.next_entry().await? {
         let Ok(name) = de.file_name().into_string() else {
             continue; // 非 UTF-8 文件名：无法排序寻址，跳过
@@ -146,17 +145,31 @@ async fn list_hooks(dir: &Path) -> crate::types::Result<Vec<PathBuf>> {
         let md = match tokio::fs::metadata(de.path()).await {
             Ok(md) => md,
             Err(e) => {
-                debug!(name = %name, error = %e, "pre_tool_use: skipping entry with unreadable metadata");
+                debug!(point, name = %name, error = %e, "hook: skipping entry with unreadable metadata");
                 continue;
             }
         };
-        if !md.is_file() || !is_executable(&md) {
+        if md.is_file() {
+            if is_executable(&md) {
+                hooks.push((name, de.path()));
+            }
             continue;
         }
-        paths.push(de.path());
+        if md.is_dir() {
+            // 目录形态：<名>/run 带执行位才收；否则视为开关关/未就绪。
+            let run = de.path().join(RUN_FILE);
+            match tokio::fs::metadata(&run).await {
+                Ok(rmd) if rmd.is_file() && is_executable(&rmd) => {
+                    hooks.push((name, run));
+                }
+                _ => {
+                    debug!(point, name = %name, "hook: skipping dir without executable {RUN_FILE}");
+                }
+            }
+        }
     }
-    paths.sort();
-    Ok(paths)
+    hooks.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(hooks)
 }
 
 /// 对一批 tool calls 跑 `pre_tool_use` hook 链。
@@ -172,7 +185,8 @@ pub async fn run_pre_tool_use(
     calls: &[ToolCall],
     cancel: &CancellationToken,
 ) -> PreToolUseOutcome {
-    let hooks = match list_hooks(&point_dir(data_dir, POINT_PRE_TOOL_USE)).await {
+    let hooks = match list_hooks(&point_dir(data_dir, POINT_PRE_TOOL_USE), POINT_PRE_TOOL_USE).await
+    {
         Ok(h) => h,
         Err(e) => {
             // readdir 故障同 hook 故障：fail-open，但必须可见。
@@ -201,7 +215,7 @@ pub async fn run_pre_tool_use(
                 continue 'calls;
             }
         };
-        for hook in &hooks {
+        for (name, hook) in &hooks {
             let verdict = tokio::select! {
                 biased;
                 () = cancel.cancelled() => {
@@ -209,7 +223,7 @@ pub async fn run_pre_tool_use(
                     outcome.approved.extend_from_slice(&calls[i..]);
                     break 'calls;
                 }
-                v = run_one_hook(hook, &payload_json, POINT_PRE_TOOL_USE, working_dir, data_dir, session_id, HOOK_TIMEOUT) => v,
+                v = run_one_hook(name, hook, &payload_json, POINT_PRE_TOOL_USE, working_dir, data_dir, session_id, HOOK_TIMEOUT) => v,
             };
             match verdict {
                 Verdict::Allow => {}
@@ -230,9 +244,11 @@ pub async fn run_pre_tool_use(
 }
 
 /// 执行单个 hook：喂 stdin JSON，捕获 stderr 作否决原因，超时强杀。
-/// 故障一律 fail-open（warn + Allow）。
+/// 故障一律 fail-open（warn + Allow）。进程管线与 tools 共用
+/// `utils::spawn` 引擎。
 #[allow(clippy::too_many_arguments)]
 async fn run_one_hook(
+    name: &str,
     path: &Path,
     stdin_json: &[u8],
     point: &str,
@@ -241,91 +257,38 @@ async fn run_one_hook(
     session_id: &str,
     timeout: Duration,
 ) -> Verdict {
+    // state 目录（state/hooks/<point>/<条目名>）惰性创建；失败不致命——
+    // 脚本可自行 mkdir，缺个目录不拆 gate。
+    let state_dir = data_dir.join("state").join(DIR_NAME).join(point).join(name);
+    crate::utils::env::ensure_state_dir("hook", name, &state_dir).await;
     let mut cmd = tokio::process::Command::new(path);
     cmd.current_dir(cwd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .env(YOMI_HOOK_EVENT, point);
+        .env(YOMI_HOOK_EVENT, point)
+        .env(crate::utils::env::YOMI_EVENT, point);
     crate::utils::env::inject_child_env(&mut cmd, Some(data_dir), Some(session_id));
-    let mut child = {
-        crate::utils::process::pre_exec_new_session(&mut cmd);
-        match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                warn!(hook = %path.display(), error = %e, "pre_tool_use: spawn failed, allowing");
-                return Verdict::Allow;
-            }
-        }
-    };
-    // 两管各自持续读空（管道不排空，写多的脚本会阻塞）：stdout 排空丢弃，
-    // stderr 共享缓冲留存——即使 drain 宽限到期被迫 abort，已捕获的部分
-    // 否决原因仍读得到（后裔持有管道不见 EOF 的场景）。
-    let err_buf = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-    let mut drain_out = tokio::spawn(drain(
-        child.stdout.take().expect("stdout piped"),
-        Arc::new(tokio::sync::Mutex::new(Vec::new())),
-    ));
-    let mut drain_err = tokio::spawn(drain(
-        child.stderr.take().expect("stderr piped"),
-        Arc::clone(&err_buf),
-    ));
-    let mut stdin = child.stdin.take().expect("stdin piped");
-    // spawn 要求 'static：字节按 hook 复制一份（memcpy 廉价；昂贵的
-    // 序列化已在调用方按 call 只做一次）。
-    let stdin_bytes = stdin_json.to_vec();
-    let write = tokio::spawn(async move {
-        use tokio::io::AsyncWriteExt as _;
-        // 脚本不读 stdin 时写会 BrokenPipe：正常场景，不算错误。
-        let _ = stdin.write_all(&stdin_bytes).await;
-        let _ = stdin.shutdown().await;
-    });
-    let wait = tokio::time::timeout(timeout, child.wait()).await;
-    let (exit_code, timed_out) = match wait {
-        Ok(Ok(status)) => (status.code(), false),
-        Ok(Err(e)) => {
-            warn!(hook = %path.display(), error = %e, "pre_tool_use: wait failed, allowing");
-            write.abort();
+    crate::utils::env::inject_state_dir(&mut cmd, Some(&state_dir));
+    let captured = match crate::utils::spawn::spawn_captured(
+        &mut cmd,
+        Some(stdin_json),
+        timeout,
+        None, // gate 在 agent 热路径上：30s 硬顶内跑完，不接取消（取消臂在调用方 select）
+    )
+    .await
+    {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(hook = %path.display(), error = %e, "pre_tool_use: engine failed, allowing");
             return Verdict::Allow;
         }
-        Err(_) => {
-            #[cfg(unix)]
-            {
-                if let Some(pid) = child.id() {
-                    // 进程组仍在（wait 未返回），按组强杀，连后裔一起。
-                    unsafe { kill(-(pid as i32), SIGKILL) };
-                }
-                let _ = child.wait().await; // 收割僵尸
-            }
-            #[cfg(not(unix))]
-            {
-                let _ = child.kill().await;
-            }
-            (None, true)
-        }
     };
-    write.abort();
-    // 主进程已死：两管共享一段 drain 宽限收尾，到期放弃（detach 前显式
-    // abort）；缓冲是共享的，abort 后已捕获内容仍在。
-    let _ = tokio::join!(
-        tokio::time::timeout(DRAIN_GRACE, &mut drain_out),
-        tokio::time::timeout(DRAIN_GRACE, &mut drain_err),
-    );
-    drain_out.abort();
-    drain_err.abort();
-
-    if timed_out {
+    if captured.timed_out {
         warn!(hook = %path.display(), timeout_ms = timeout.as_millis(), "pre_tool_use: timed out, allowing");
         return Verdict::Allow;
     }
-    let stderr = String::from_utf8_lossy(&err_buf.lock().await).into_owned();
-    match exit_code {
+    let stderr = String::from_utf8_lossy(&captured.stderr).into_owned();
+    match captured.exit_code {
         Some(0) => Verdict::Allow,
         Some(2) => {
-            let name = path
-                .file_name()
-                .map_or_else(|| "?".to_string(), |n| n.to_string_lossy().into_owned());
             let reason = stderr.trim();
             Verdict::Deny(if reason.is_empty() {
                 format!("[hook:{name}] denied without reason")
@@ -345,27 +308,6 @@ async fn run_one_hook(
     }
 }
 
-/// 持续读空一根管道并入共享缓冲；累积到 `DRAIN_CAP` 后继续读但停止
-/// 累积（防管道阻塞的同时防内存放大）。
-async fn drain<R>(mut pipe: R, buf: Arc<tokio::sync::Mutex<Vec<u8>>>)
-where
-    R: tokio::io::AsyncRead + Unpin,
-{
-    let mut chunk = [0u8; 8192];
-    loop {
-        match pipe.read(&mut chunk).await {
-            Ok(0) | Err(_) => break,
-            Ok(n) => {
-                let mut b = buf.lock().await;
-                let room = DRAIN_CAP.saturating_sub(b.len());
-                if room > 0 {
-                    b.extend_from_slice(&chunk[..n.min(room)]);
-                }
-            }
-        }
-    }
-}
-
 /// 否决原因截断到 `MAX_REASON_CHARS`（按 char 边界）。
 fn truncate_reason(reason: &str) -> String {
     if reason.chars().count() <= MAX_REASON_CHARS {
@@ -373,6 +315,81 @@ fn truncate_reason(reason: &str) -> String {
     }
     let truncated: String = reason.chars().take(MAX_REASON_CHARS).collect();
     format!("{truncated}…")
+}
+
+/// 跑一个 daemon 生命周期 hook point（`daemon_up`/`daemon_down`）：
+/// `hooks/<point>/` 下可执行文件按文件名字典序串行，同一引擎、同一目录
+/// 约定。与 gate 的差异——
+///
+/// - stdin 是精简契约 `{"event":"<point>","cwd":"<data_dir>"}`：无会话
+///   语义，`YOMI_SESSION_ID` 显式移除（脚本 cwd 同为数据目录）；
+/// - 无否决：非零/超时/spawn 故障只 warn 留痕，不中断后续脚本；
+/// - 不接取消：down 钩子是关停清理，必须跑完（每条 30s 硬顶兜底）。
+///
+/// 调用方决定等不等（`daemon_up` 后台任务触发、`daemon_down` 关停路径
+/// 上 await），本函数本身总是跑完整条链。
+pub async fn run_daemon_point(data_dir: &Path, point: &str) {
+    let hooks = match list_hooks(&point_dir(data_dir, point), point).await {
+        Ok(h) => h,
+        Err(e) => {
+            warn!(point, error = %e, "daemon hook: failed to list hooks, skipping");
+            return;
+        }
+    };
+    if hooks.is_empty() {
+        return;
+    }
+    let payload = serde_json::json!({
+        "event": point,
+        "cwd": data_dir.to_string_lossy(),
+    });
+    let payload = serde_json::to_vec(&payload).expect("daemon hook payload serializes");
+    info!(point, count = hooks.len(), "daemon hook: running");
+    for (name, hook) in &hooks {
+        run_one_daemon_hook(name, hook, &payload, point, data_dir).await;
+    }
+}
+
+/// 执行单个 daemon hook：通知语义，结果只留痕（warn/debug），不反馈给
+/// 任何调用方。
+async fn run_one_daemon_hook(
+    name: &str,
+    path: &Path,
+    stdin_json: &[u8],
+    point: &str,
+    data_dir: &Path,
+) {
+    let state_dir = data_dir.join("state").join(DIR_NAME).join(point).join(name);
+    crate::utils::env::ensure_state_dir("hook", name, &state_dir).await;
+    let mut cmd = tokio::process::Command::new(path);
+    cmd.current_dir(data_dir)
+        .env(crate::utils::env::YOMI_EVENT, point)
+        // 防残留：`YOMI_HOOK_EVENT` 是 pre_tool_use 的兼容变量，daemon
+        // 点不注入——父进程若从 hook 环境继承，显式清掉。
+        .env_remove(YOMI_HOOK_EVENT);
+    crate::utils::env::inject_child_env(&mut cmd, Some(data_dir), None);
+    crate::utils::env::inject_state_dir(&mut cmd, Some(&state_dir));
+    let captured =
+        match crate::utils::spawn::spawn_captured(&mut cmd, Some(stdin_json), HOOK_TIMEOUT, None)
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                warn!(hook = %path.display(), point, error = %e, "daemon hook: engine failed");
+                return;
+            }
+        };
+    if captured.timed_out {
+        warn!(hook = %path.display(), point, timeout_ms = HOOK_TIMEOUT.as_millis(), "daemon hook: timed out (killed)");
+        return;
+    }
+    match captured.exit_code {
+        Some(0) => debug!(hook = %path.display(), point, "daemon hook: ok"),
+        other => {
+            let stderr = String::from_utf8_lossy(&captured.stderr);
+            warn!(hook = %path.display(), point, exit_code = ?other, stderr = %stderr.trim(), "daemon hook: failed (ignored)");
+        }
+    }
 }
 
 #[cfg(test)]

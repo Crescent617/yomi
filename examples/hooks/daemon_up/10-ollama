@@ -1,0 +1,11 @@
+#!/bin/sh
+# daemon_up 示例：yomi 就绪后拉起本地模型服务。
+# 幂等 + 所有权：已在跑（不是本 hook 拉起的）则跳过，并只在真正拉起时
+# 落所有权标记——配对的 daemon_down 只停"自己人"，不动用户预启的服务。
+# 常驻进程放后台：hook 脚本本身要立即返回；引擎已 setsid，脚本退出后
+# 后台进程自然存活（输出也可重定向到 $YOMI_STATE_DIR 下的日志留档）。
+if ! pgrep -x ollama >/dev/null 2>&1; then
+    nohup ollama serve >/dev/null 2>&1 &
+    touch "$YOMI_STATE_DIR/started-by-hook"
+fi
+exit 0

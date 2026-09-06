@@ -1,0 +1,10 @@
+#!/bin/sh
+# daemon_down 示例：yomi 关停前停掉本地模型服务。
+# 只停"自己人"：有所有权标记才 pkill（用户自己跑的服务不动）。state
+# 目录按事件点隔离，down 读 up 的标记要跨点寻址（布局即契约）。
+MARK="$YOMI_DATA_DIR/state/hooks/daemon_up/10-ollama/started-by-hook"
+if [ -f "$MARK" ]; then
+    pkill -x ollama 2>/dev/null
+    rm -f "$MARK"
+fi
+exit 0

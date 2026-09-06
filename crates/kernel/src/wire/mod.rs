@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 // ── Wire Protocol ────────────────────────────────────────────────────────
 
 /// Wire protocol version. Bumped on any breaking change to the IPC schema.
-pub const WIRE_PROTOCOL_VERSION: u32 = 29;
+pub const WIRE_PROTOCOL_VERSION: u32 = 30;
 
 /// All operations a client can request from the daemon.
 ///
@@ -300,29 +300,7 @@ pub enum ReqMethod {
         on: Option<bool>,
     },
 
-    // ── Extension（wire 外部扩展，见 docs/archive/extension-phase1.md）───
-    /// 登记一个外部能力（kind=tool）。Result: `{registration}`。
-    ExtRegister {
-        /// 一期只有 "tool"。
-        kind: String,
-        name: String,
-        desc: String,
-        #[schemars(with = "serde_json::Value")]
-        schema: serde_json::Value,
-        /// 权限级别（snake_case，如 "safe"/"caution"），缺省 caution。
-        level: Option<Level>,
-    },
-    /// 长轮询领取工作项（55s 空转心跳；同 registration 同时只允许
-    /// 一条挂起 pull）。Result: 工作项或 null。
-    ExtPull {
-        registration: String,
-    },
-    /// 交付工作项回执（call_id 必须属于本连接）。
-    ExtResult {
-        call_id: String,
-        output: String,
-        is_error: bool,
-    },
+    // ── Extension（source 路由）───────────────────────────────────────
     /// source 路由：pseudo-channel + key → session（复用 channel
     /// mapping store；无渠道存储时回退内存表）。Result: `{session_id,
     /// created}`。

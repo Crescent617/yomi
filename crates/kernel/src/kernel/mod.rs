@@ -89,8 +89,9 @@ pub struct Kernel {
     /// Disposable persistent KV cache (`cache.db`), shared with channel adapters.
     pub(crate) kv_cache: Option<Arc<crate::kv_cache::KvCache>>,
     pub(crate) channel_manager: Option<Arc<crate::channels::hub::ChannelHub>>,
-    /// wire 外部扩展注册表（custom tool / source 路由；纯内存，RAII 回收）。
-    extension_registry: Arc<crate::extension::ExtensionRegistry>,
+    /// `ext_route` 的内存回退路由表（无 channel store 时）：(source, key)
+    /// → session。纯内存，daemon 重启后首个 emit 重建映射。
+    ext_routes: dashmap::DashMap<(String, String), SessionId>,
     /// Global notification bus for state changes and other broadcasts.
     notification_bus: Arc<crate::notification::NotificationBus>,
     /// Global shutdown token for graceful stop.
@@ -313,14 +314,9 @@ impl Kernel {
         self.kv_cache.clone()
     }
 
-    /// wire 外部扩展注册表（server 分发与 conductor spawn 共用）。
-    pub fn extension_registry(&self) -> Arc<crate::extension::ExtensionRegistry> {
-        Arc::clone(&self.extension_registry)
-    }
-
     /// `ext_route`：source 的 pseudo-channel 路由。有渠道存储时复用
     /// `get_or_create_session` 单点（映射逻辑与键锁的唯一收口）；
-    /// 无渠道存储的 daemon 回退注册表内存路由（同键空间的独立持锁）。
+    /// 无渠道存储的 daemon 回退内存路由表（同键空间的独立持锁）。
     pub async fn ext_route(&self, source: &str, key: &str) -> Result<(SessionId, bool)> {
         if source.is_empty() || key.is_empty() {
             return Err(KernelError::Config(
@@ -345,8 +341,8 @@ impl Kernel {
         // 内存回退：无 channel store（无渠道配置的 daemon）。与
         // get_or_create_session 内建锁同键空间（两处不嵌套，无死锁）。
         let _guard = crate::utils::g_lock::g_lock(format!("channel_route:{channel}:{key}")).await;
-        if let Some(sid) = self.extension_registry.route_get(source, key) {
-            return Ok((sid, false));
+        if let Some(sid) = self.ext_routes.get(&(source.to_string(), key.to_string())) {
+            return Ok((sid.clone(), false));
         }
         let sid = self
             .create_session(CreateSessionInput {
@@ -358,7 +354,8 @@ impl Kernel {
                 context_window: None,
             })
             .await?;
-        self.extension_registry.route_set(source, key, sid.clone());
+        self.ext_routes
+            .insert((source.to_string(), key.to_string()), sid.clone());
         Ok((sid, true))
     }
 
@@ -514,9 +511,7 @@ impl Kernel {
         let channel_manager =
             channel_store.map(|store| Arc::new(crate::channels::hub::ChannelHub::new(store)));
 
-        let extension_registry = Arc::new(crate::extension::ExtensionRegistry::new());
         let agent_shared = agent_shared.with_channel_manager(channel_manager.clone());
-        let agent_shared = agent_shared.with_extension_registry(Arc::clone(&extension_registry));
         let event_bus = crate::comms::EventBus::new();
         let agent_shared = agent_shared.with_event_bus(event_bus.clone());
         let agent_shared = Arc::new(agent_shared);
@@ -537,7 +532,6 @@ impl Kernel {
             base_prompt,
             data_dir_for_conductor,
             notification_bus.clone(),
-            Arc::clone(&extension_registry),
         ));
         let cron_store = if enable_cron {
             Some(storage.cron_store())
@@ -563,7 +557,7 @@ impl Kernel {
             restart_tx: Arc::new(std::sync::Mutex::new(None)),
             kv_cache: storage.kv_cache(),
             channel_manager,
-            extension_registry,
+            ext_routes: dashmap::DashMap::new(),
             notification_bus,
             shutdown,
             started_at: Utc::now(),

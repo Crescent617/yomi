@@ -2,7 +2,6 @@ use super::{pet_activity, Conductor};
 use crate::agent::{AgentConfig, AgentInput, AgentShared};
 use crate::comms::{EventBus, InputBus};
 use crate::event::{AgentEvent, AgentStatus, Event, InternalEvent, StopReason};
-use crate::extension::ExtensionRegistry;
 use crate::notification::{AgentActivity, NotificationBus};
 use crate::storage::message::jsonl::JsonlMessageStore;
 use crate::storage::migrations::run_migrations;
@@ -166,7 +165,6 @@ async fn orphan_harness_with(
         String::new(),
         data_dir,
         Arc::new(NotificationBus::new()),
-        Arc::new(ExtensionRegistry::new()),
     ));
     OrphanHarness {
         conductor,

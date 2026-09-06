@@ -27,8 +27,6 @@ pub struct Conductor {
     /// Per-session spawn lock to prevent duplicate agent creation races.
     spawn_locks: DashMap<SessionId, Arc<tokio::sync::Mutex<()>>>,
     notification_bus: Arc<NotificationBus>,
-    /// wire 外部扩展注册表（spawn 时把 ext 工具代理并入新 agent）。
-    extension_registry: Arc<crate::extension::ExtensionRegistry>,
 }
 
 pub struct ActiveSessionSnapshot {
@@ -54,7 +52,6 @@ impl Conductor {
         base_prompt: String,
         data_dir: std::path::PathBuf,
         notification_bus: Arc<NotificationBus>,
-        extension_registry: Arc<crate::extension::ExtensionRegistry>,
     ) -> Self {
         Self {
             agent_shared,
@@ -68,7 +65,6 @@ impl Conductor {
             data_dir,
             spawn_locks: DashMap::new(),
             notification_bus,
-            extension_registry,
         }
     }
 
@@ -759,6 +755,10 @@ impl Conductor {
                 .with_cron(self.agent_config.enable_cron_tool && !is_sub_agent)
                 .with_todo(self.agent_config.enable_todo_tool);
 
+        // tools/ 目录外挂（spawn 时扫描快照）：代理工具的收口与内建一致
+        // （Agent::new 合并处做 blocklist 与撞名让位）。
+        let ext_tools = crate::tools::ext::scan(&self.data_dir).await;
+
         let args = AgentSpawnArgs::new(base_prompt, sid.0.clone(), mailbox, working_dir)
             .with_skills(skills)
             .with_arc_history(history)
@@ -769,13 +769,7 @@ impl Conductor {
             .with_max_tool_output_length(self.agent_config.max_tool_output_length)
             .with_cancel_token(cancel_token.clone())
             .with_input_bus(self.input_bus.clone())
-            .with_ext_tools(
-                self.extension_registry
-                    .tool_proxies()
-                    .into_iter()
-                    .map(|t| Arc::new(t) as Arc<dyn crate::tools::Tool>)
-                    .collect(),
-            );
+            .with_ext_tools(ext_tools);
 
         let agent = Agent::new(&shared, args).await;
 

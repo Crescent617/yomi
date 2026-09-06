@@ -824,7 +824,7 @@ pub enum SessionError {
     #[error("{0}")]
     Other(String),
     /// Wire protocol version mismatch between client and daemon.
-    #[error("daemon wire protocol too old, please upgrade and restart daemon")]
+    #[error("wire protocol mismatch between client and daemon; upgrade both to the same version")]
     WireProtocolMismatch,
 }
 

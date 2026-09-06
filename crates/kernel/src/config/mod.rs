@@ -284,18 +284,6 @@ pub struct Config {
     /// Multi-model configuration array (TOML: `[[models]]`), at least one element
     #[serde(default)]
     pub models: Vec<ModelConfig>,
-    /// wire 外部扩展（TOML: `[[extensions]]`）：跟随 daemon 拉起的扩展进程。
-    #[serde(default)]
-    pub extensions: Vec<ExtensionConfig>,
-}
-
-/// `[[extensions]]` 条目：列出即拉起，daemon 死则组杀，崩溃固定退避重拉。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-pub struct ExtensionConfig {
-    /// Extension name (unique identifier)
-    pub name: String,
-    /// 命令行（argv[0] 为可执行文件）。
-    pub command: Vec<String>,
 }
 
 impl Default for Config {
@@ -315,7 +303,6 @@ impl Default for Config {
             socket_auth_hash: None,
             channels: Vec::new(),
             models: vec![ModelConfig::default()],
-            extensions: Vec::new(),
         }
     }
 }

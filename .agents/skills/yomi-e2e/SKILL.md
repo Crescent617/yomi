@@ -31,6 +31,8 @@ grep 'Loaded 0 active cron jobs' ~/.yomi-test/logs/daemon.$(date +%Y-%m-%d).log
 
 观测：db `~/.yomi-test/yomi.db`、转录 `~/.yomi-test/sessions/<sid>.jsonl`、日志 `~/.yomi-test/logs/`。取 id 用 sqlite、改状态用 CLI。approval 群 `oc_4b1f6d93…`。绝不 `daemon restart` 生产 daemon。
 
+**跑 evals/harness-e2e.sh 需第四件套**：`YOMI_DB="$HOME/.yomi-test/yomi.db"`——脚本的 sqlite 断言与 `SESS_DIR` 从 `YOMI_DB` 派生，缺省指向生产 db/rules（2026-09-06 教训：rules 孤儿文件写进生产、sessions 断言全歪）。另：`session send` 后到 agent spawn 之间 `phase` 仍是 idle（mailbox 排队窗口），自写 wait 循环先 `sleep 3` 再轮询，否则过早判 idle（同日探针 cleanup 竞态惨案）。
+
 ## 2. 测飞书通道
 
 bot 收不到自己消息的事件——**触发必须用用户身份（lark-cli）**；tenant token 只做只读验证。
