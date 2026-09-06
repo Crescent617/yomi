@@ -13,6 +13,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **分类**：`Added` 新能力 / `Changed` 行为变化 / `Fixed` 问题修复 / `Removed` 移除能力。
 - **配置与命令必须点名**：新增或变更配置项、命令时，写出名称与默认值。
 
+## [0.10.23] - 2026-09-06
+
+### Added
+
+- 新增入群欢迎卡：bot 被拉进群时发送一张说明卡（自我介绍、消息表情含义、`/settings` 与 `/help` 入口）；可用频道配置的 `disabled_events = ["welcome"]` 关闭。需在飞书应用后台订阅"机器人进群"事件后生效。
+
+### Changed
+
+- `/settings` 面板卡跟随调用位置区分作用域：在话题里打开显示 "this thread"，只管理该话题的设置（Mention 要求、模型、上下文窗口，不再出现 Reply-in-thread 与 Watch 两行）；在群顶层打开显示 "this chat"，管理全群（五行齐全）。此前话题里打开的也是全群设置卡，在话题里点一下会误改全群。
+- `/model` 在话题里切换现在只影响当前话题（此前该话题尚未开始对话时会误切全群所有话题）。
+- `/threads` 在话题里调用会被拒绝并提示到群顶层操作（此前会静默修改全群设置，与 `/watch` 的既有拒绝行为对齐）。
+- `/help` 默认只显示常用命令，完整列表移至 `/help all`（按用途分组）；帮助末尾新增消息表情含义说明。
+- `/watch on` 的确认文本补充说明：watch 期间消息不会有表情回执和状态卡。
+- 定时任务、待处理消息、后台任务、会话列表等面板卡的标题现在标明各自的管理范围（如 "all chats"、"this session"、"this channel"）。
+
 ## [0.10.22] - 2026-09-06
 
 ### Fixed
