@@ -166,6 +166,14 @@ async fn test_restart_wire_request() {
 }
 
 #[tokio::test]
+async fn test_hello_reports_daemon_version() {
+    let (client, _tmp, shutdown) = setup().await;
+    let version = client.server_version().await.unwrap();
+    assert_eq!(version.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+    shutdown.cancel();
+}
+
+#[tokio::test]
 async fn test_agent_templates_wire_round_trip() {
     use crate::agent_tmpl::{TemplateScope, TemplateSource};
 

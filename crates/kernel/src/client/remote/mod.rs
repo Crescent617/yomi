@@ -311,6 +311,17 @@ impl RemoteKernel {
             .ok_or_else(|| SessionError::WireProtocolMismatch.into())
     }
 
+    /// Daemon's yomi version from the Hello handshake; `None` for daemons
+    /// older than the field's introduction.
+    pub async fn server_version(&self) -> Result<Option<String>> {
+        self.ensure_connected().await?;
+        let value = self.call_raw(ReqMethod::Hello).await?;
+        Ok(value
+            .get("version")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned))
+    }
+
     /// Retries for up to 10 s to allow the daemon to finish spawning.
     /// On reconnect, re-subscribes all sessions in the persistent router.
     async fn ensure_connected(&self) -> Result<()> {

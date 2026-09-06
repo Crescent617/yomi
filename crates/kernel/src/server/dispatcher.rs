@@ -823,6 +823,7 @@ impl KernelServer {
             ReqMethod::Hello => ok_body(ProtoResponse {
                 proto: crate::wire::WIRE_PROTOCOL_VERSION,
                 instance_id: &self.instance_id,
+                version: env!("CARGO_PKG_VERSION"),
             }),
         }
     }
@@ -1018,6 +1019,10 @@ struct JobIdResponse {
 struct ProtoResponse<'a> {
     proto: u32,
     instance_id: &'a str,
+    /// Daemon's yomi version. Added after wire v29 as a backward-compatible
+    /// field: old clients ignore it, new clients treat its absence (older
+    /// daemons) as "unknown".
+    version: &'static str,
 }
 
 fn rpc_error(code: &str, message: impl Into<String>) -> RespBody {

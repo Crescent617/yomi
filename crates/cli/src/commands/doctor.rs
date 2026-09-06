@@ -92,11 +92,16 @@ pub async fn run(global: &GlobalArgs) -> Result<()> {
     // 抹成同一句，而这两者处置完全不同。
     let client = match kernel::client::RemoteKernel::connect(&crate::daemon::socket_addr()).await {
         Ok(c) => {
+            // daemon 自报的 yomi 版本（旧 daemon 无此字段时省略）。
+            let version = match c.server_version().await {
+                Ok(Some(v)) => format!("v{v} · "),
+                _ => String::new(),
+            };
             checks.push(check(
                 Level::Ok,
                 "daemon",
                 format!(
-                    "running (wire protocol v{})",
+                    "running ({version}wire protocol v{})",
                     kernel::wire::WIRE_PROTOCOL_VERSION
                 ),
             ));
