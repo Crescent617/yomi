@@ -88,7 +88,7 @@ impl Conductor {
                 () = shutdown.cancelled() => {
                     tracing::info!("Conductor shutting down, cancelling all active agents");
                     for agent in &self.active {
-                        agent.cancel_token.cancel();
+                        agent.cancel_token.cancel_for_shutdown();
                     }
                     break;
                 }
@@ -296,10 +296,16 @@ impl Conductor {
 
     async fn handle_input(&self, sid: SessionId, input: AgentInput) {
         match input {
-            AgentInput::Cancel => {
+            input @ (AgentInput::Cancel | AgentInput::Shutdown) => {
                 let mailbox = self.mailboxes.get(&sid).map(|mb| Arc::clone(&mb));
                 if let Some(agent) = self.active.get(&sid) {
-                    agent.cancel_token.cancel();
+                    // Shutdown（kernel 关停）与 /stop 同路径，但取消令牌
+                    // 带 shutdown 归因——终态与上下文标记可区分两者。
+                    if matches!(input, AgentInput::Shutdown) {
+                        agent.cancel_token.cancel_for_shutdown();
+                    } else {
+                        agent.cancel_token.cancel();
+                    }
                 }
                 if let Some(ref mb) = mailbox {
                     mb.clear().await;
@@ -432,8 +438,9 @@ impl Conductor {
     /// 主通道打满时 `EventSink` 的 `try_send().ok()` 会静默丢
     /// `MessageAdded`/`Stopped`，此时可能读到上一轮旧答案。
     async fn forward_orphan_reply(&self, sid: &SessionId, reason: &StopReason) {
-        // Cancelled 多半是 parent 自己 /stop 的——不转运。
-        if matches!(reason, StopReason::Cancelled { .. }) {
+        // Cancelled 多半是 parent 自己 /stop 的；Shutdown 是 daemon
+        // 关停打断——半成品答案都不转运。
+        if matches!(reason, StopReason::Cancelled { .. } | StopReason::Shutdown) {
             return;
         }
         let (Some(messages), Some(sessions)) = (
@@ -487,7 +494,9 @@ impl Conductor {
             StopReason::MaxIterations { reached } => {
                 format!("⚠ run hit max iterations ({reached})\n{reply}")
             }
-            StopReason::Cancelled { .. } => unreachable!("cancelled filtered above"),
+            StopReason::Cancelled { .. } | StopReason::Shutdown => {
+                unreachable!("cancelled/shutdown filtered above")
+            }
         };
         let steer =
             crate::tools::format_agent_message(&sid.0, format_args!("Follow-up reply\n{body}"));

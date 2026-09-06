@@ -673,7 +673,15 @@ impl Kernel {
             "stopping active runs before shutdown"
         );
         for snap in &running {
-            self.cancel(&snap.session_id);
+            // `AgentInput::Shutdown`（而非 /stop 的 Cancel）：终态标
+            // `StopReason::Shutdown`——卡片与上下文标记都能区分
+            // "daemon 关停打断"与用户主动停止。
+            if let Err(e) = self
+                .input_bus
+                .publish(snap.session_id.clone(), AgentInput::Shutdown)
+            {
+                tracing::warn!(session_id = %snap.session_id.0, "Failed to publish shutdown input: {e}");
+            }
         }
         let deadline = tokio::time::Instant::now() + WIND_DOWN_TIMEOUT;
         loop {

@@ -253,6 +253,9 @@ enum Settle {
     Completed,
     Failed(String),
     Cancelled,
+    /// Kernel shutdown interrupted the run — user did NOT stop it, so the
+    /// card carries an explicit marker (and a settle reaction).
+    Shutdown,
     MaxIterations(usize),
     /// Watchdog settlement — session agent is no longer alive
     /// (crash / panic / lost `Stopped`).
@@ -292,6 +295,7 @@ fn settle_from_reason(reason: &StopReason) -> Settle {
     match reason {
         StopReason::Completed { .. } => Settle::Completed,
         StopReason::Cancelled { .. } => Settle::Cancelled,
+        StopReason::Shutdown => Settle::Shutdown,
         StopReason::Failed { error } => Settle::Failed(error.clone()),
         StopReason::MaxIterations { reached } => Settle::MaxIterations(*reached),
     }
@@ -304,6 +308,7 @@ impl Settle {
     fn notice(&self) -> Option<String> {
         match self {
             Settle::Completed | Settle::Cancelled => None,
+            Settle::Shutdown => Some("🔌 Interrupted by daemon shutdown.".to_string()),
             Settle::Failed(error) => Some(format!("❌ {}", error_line(error))),
             Settle::MaxIterations(reached) => {
                 Some(format!("❌ Max iterations reached ({reached})"))
@@ -314,11 +319,14 @@ impl Settle {
 
     /// Settle-reaction emoji (Feishu `emoji_type`): the completion signal
     /// for a silently-settled card. `None` for cancelled runs — the user
-    /// stopped it themselves, they know.
+    /// stopped it themselves, they know. Shutdown gets 💤 (`SLEEP`, the
+    /// only shutdown-flavoured type Feishu accepts): the daemon went to
+    /// sleep mid-run, and the user had no other way to know.
     fn reaction_emoji(&self) -> Option<&'static str> {
         match self {
             Settle::Completed => Some("DONE"),
             Settle::Failed(_) | Settle::MaxIterations(_) | Settle::Timeout => Some("CrossMark"),
+            Settle::Shutdown => Some("SLEEP"),
             Settle::Cancelled => None,
         }
     }
@@ -1267,6 +1275,7 @@ fn render_terminal(s: &ObsCardState, settle: &Settle, keep_trace: bool) -> Strin
         Settle::Completed => ("✅", "Done".to_string()),
         Settle::Failed(_) => ("❌", "Failed".to_string()),
         Settle::Cancelled => ("⏹", "Stopped".to_string()),
+        Settle::Shutdown => ("🔌", "Stopped · daemon shutdown".to_string()),
         Settle::MaxIterations(reached) => ("❌", format!("Max iterations ({reached})")),
         Settle::Timeout => ("⏰", "Timed out".to_string()),
     };

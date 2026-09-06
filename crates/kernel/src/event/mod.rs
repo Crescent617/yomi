@@ -175,6 +175,9 @@ pub enum StopReason {
         /// Name of the cancelled operation (e.g. "streaming", "compaction")
         operation: Option<String>,
     },
+    /// Kernel shutdown interrupted the run (daemon stop/restart) —
+    /// distinct from a user-initiated cancel.
+    Shutdown,
     /// Execution failed
     Failed { error: String },
     /// Reached maximum iterations

@@ -214,7 +214,7 @@ impl SubagentTool {
                         status = SubAgentStatus::Completed;
                         break;
                     }
-                    StopReason::Cancelled { .. } => {
+                    StopReason::Cancelled { .. } | StopReason::Shutdown => {
                         status = SubAgentStatus::Cancelled;
                         break;
                     }

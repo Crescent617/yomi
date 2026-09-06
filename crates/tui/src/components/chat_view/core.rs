@@ -399,9 +399,8 @@ impl ChatView {
                             kernel::event::StopReason::Completed { .. } => {
                                 SubagentStatus::Completed
                             }
-                            kernel::event::StopReason::Cancelled { .. } => {
-                                SubagentStatus::Cancelled
-                            }
+                            kernel::event::StopReason::Cancelled { .. }
+                            | kernel::event::StopReason::Shutdown => SubagentStatus::Cancelled,
                             _ => SubagentStatus::Failed,
                         };
                     }

@@ -479,6 +479,11 @@ fn notice_reason(reason: &StopReason) -> (PetNoticeKind, Option<String>) {
             finish_reason.map(|reason| format!("{reason:?}")),
         ),
         StopReason::Cancelled { operation } => (PetNoticeKind::Cancelled, operation.clone()),
+        // daemon 关停打断：桌宠通知与用户取消同显示（"已停止"）。
+        StopReason::Shutdown => (
+            PetNoticeKind::Cancelled,
+            Some("daemon shutdown".to_string()),
+        ),
         StopReason::Failed { error } => (PetNoticeKind::Failed, Some(error.clone())),
         StopReason::MaxIterations { reached } => (
             PetNoticeKind::MaxIterations,

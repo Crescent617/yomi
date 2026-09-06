@@ -107,3 +107,54 @@ async fn test_cancel_token_cancellation_after_reset() {
         "old future waits on old token which is never cancelled"
     );
 }
+
+// ── shutdown 归因 ────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_shutdown_attribution_set_take_reset() {
+    let token = CancelToken::new();
+
+    // 普通取消不归因 shutdown。
+    token.cancel();
+    assert!(!token.take_for_shutdown());
+
+    let token = CancelToken::new();
+    token.cancel_for_shutdown();
+    assert!(token.is_cancelled());
+    // 读取即复位：一次取消只归因一次。
+    assert!(token.take_for_shutdown());
+    assert!(!token.take_for_shutdown());
+}
+
+#[tokio::test]
+async fn test_reset_clears_shutdown_attribution() {
+    let token = CancelToken::new();
+    token.cancel_for_shutdown();
+    token.reset_if_cancelled();
+    assert!(!token.take_for_shutdown());
+
+    let token = CancelToken::new();
+    token.cancel_for_shutdown();
+    token.force_reset();
+    assert!(!token.take_for_shutdown());
+}
+
+#[tokio::test]
+async fn test_child_token_has_independent_shutdown_attribution() {
+    // subagent 的 token 经 child_token 派生：父子并发停 run 时各自
+    // 读取各自的标记（共享 flag 会被 take-once 竞态吞掉一半）。
+    let parent = CancelToken::new();
+    let child = parent.child_token();
+
+    parent.cancel_for_shutdown();
+    // 取消经 tokio child 传播，但归因各自独立。
+    assert!(child.is_cancelled());
+    assert!(parent.take_for_shutdown());
+    assert!(!child.take_for_shutdown());
+
+    let parent = CancelToken::new();
+    let child = parent.child_token();
+    child.cancel_for_shutdown();
+    assert!(!parent.take_for_shutdown());
+    assert!(child.take_for_shutdown());
+}

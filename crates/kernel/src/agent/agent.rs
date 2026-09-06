@@ -36,7 +36,10 @@ pub enum AgentInput {
         approved: bool,
         remember: bool,
     },
-    /// Shutdown the agent gracefully (for subagent/resource management)
+    /// Cancel the current run as the kernel is shutting down (daemon
+    /// stop/restart): same wind-down as `Cancel`, but the interruption
+    /// marker and the `Stopped` reason carry `Shutdown` so channels can
+    /// tell "daemon went down" from a user-initiated stop.
     Shutdown,
     /// Force compaction of message buffer
     Compact,
@@ -400,12 +403,18 @@ impl Agent {
         result
     }
 
-    /// Handle cancellation - sends Cancelled event, transitions state, returns Ok(())
+    /// Handle cancellation - emits `Stopped` with the cancel origin's
+    /// reason (user /stop vs kernel shutdown), transitions state, Ok(())
     async fn handle_cancel(&mut self, context: &str) -> Result<(), AgentError> {
         tracing::info!("{} cancelled", context);
-        self.mark_interrupted("cancelled").await;
-        // Emit cancellation event with operation name
-        self.emit_operation_cancelled(context);
+        if self.cancel_token.take_for_shutdown() {
+            self.mark_interrupted("daemon shutdown").await;
+            self.emit_stopped_shutdown();
+        } else {
+            self.mark_interrupted("cancelled").await;
+            // Emit cancellation event with operation name
+            self.emit_operation_cancelled(context);
+        }
         self.context.transition_to(AgentState::Idle);
         Ok(())
     }
@@ -514,6 +523,15 @@ impl Agent {
                 reason: StopReason::Cancelled {
                     operation: Some(operation.to_string()),
                 },
+            },
+        }));
+    }
+
+    /// Emit `Stopped` with the shutdown reason (kernel going down).
+    fn emit_stopped_shutdown(&self) {
+        self.emit(Event::Agent(AgentEvent::Lifecycle {
+            state: AgentStatus::Stopped {
+                reason: StopReason::Shutdown,
             },
         }));
     }
@@ -731,20 +749,10 @@ impl Agent {
             }
             AgentInput::Steer(blocks) => self.inject_user_message(blocks, true).await,
             AgentInput::Shutdown => {
-                tracing::info!("received close signal");
-                if let Some(turn) = self.current_turn.take() {
-                    if let Err(e) = turn.cancel().await {
-                        tracing::warn!("Failed to cancel turn on shutdown: {}", e);
-                    }
-                }
-                self.emit(Event::Agent(AgentEvent::Lifecycle {
-                    state: AgentStatus::Stopped {
-                        reason: StopReason::Completed {
-                            finish_reason: None,
-                        },
-                    },
-                }));
-                Err(AgentError::Shutdown)
+                tracing::info!("received shutdown signal");
+                self.cancel_token.cancel_for_shutdown();
+                self.context.transition_to(AgentState::Idle);
+                Ok(())
             }
             AgentInput::Compact => {
                 tracing::info!("received compact request");
@@ -1184,7 +1192,13 @@ impl Agent {
             }
             Err(CompactionError::Cancelled) => {
                 tracing::info!("compaction cancelled");
-                self.emit_operation_cancelled("compaction");
+                if self.cancel_token.take_for_shutdown() {
+                    self.mark_interrupted("daemon shutdown").await;
+                    self.emit_stopped_shutdown();
+                } else {
+                    self.mark_interrupted("cancelled").await;
+                    self.emit_operation_cancelled("compaction");
+                }
                 Err("Compaction was cancelled".to_string())
             }
             Err(CompactionError::Api(e) | CompactionError::ContextOverflow(e)) => {

@@ -2655,6 +2655,34 @@ async fn settle_cancelled_sends_no_reaction() {
 }
 
 #[tokio::test]
+async fn settle_shutdown_marks_card_and_sends_sleep_reaction() {
+    let tracker = ObsTracker::new();
+    let mock = MockAdapter::new();
+    let sid = sid();
+
+    tracker.record_user_msg(&sid, "user-msg-1".into());
+    drive_materialized_run(&tracker, &mock, &sid).await;
+    tracker
+        .handle_stopped(
+            &sid,
+            &StopReason::Shutdown,
+            Some(reply_with("partial answer")),
+        )
+        .await;
+
+    // The daemon went down mid-run — the user did NOT stop it, so the
+    // morphed card carries an explicit notice and a 💤 settle reaction.
+    let patches = mock.patches.lock().await;
+    assert_eq!(patches.len(), 1);
+    assert!(patches[0].1.contains("Interrupted by daemon shutdown"));
+    drop(patches);
+    let reactions = mock.reactions_added.lock().await;
+    assert_eq!(reactions.len(), 1);
+    assert_eq!(reactions[0].0, "user-msg-1");
+    assert_eq!(reactions[0].1, "SLEEP");
+}
+
+#[tokio::test]
 async fn settle_with_mid_run_posts_sends_no_reaction() {
     let tracker = ObsTracker::new();
     let mock = MockAdapter::new();

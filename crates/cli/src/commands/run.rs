@@ -245,7 +245,9 @@ impl RunState {
                     StopReason::Completed { .. } => (RunStatus::Completed, None),
                     StopReason::Failed { error } => (RunStatus::Failed, Some(error.clone())),
                     StopReason::MaxIterations { .. } => (RunStatus::MaxIterations, None),
-                    StopReason::Cancelled { .. } => (RunStatus::Cancelled, None),
+                    StopReason::Cancelled { .. } | StopReason::Shutdown => {
+                        (RunStatus::Cancelled, None)
+                    }
                 };
                 Step::Done(self.finish(status, error))
             }

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 // ── Wire Protocol ────────────────────────────────────────────────────────
 
 /// Wire protocol version. Bumped on any breaking change to the IPC schema.
-pub const WIRE_PROTOCOL_VERSION: u32 = 28;
+pub const WIRE_PROTOCOL_VERSION: u32 = 29;
 
 /// All operations a client can request from the daemon.
 ///

@@ -11,6 +11,10 @@ use tokio_util::sync::CancellationToken;
 #[derive(Debug, Clone)]
 pub struct CancelToken {
     inner: Arc<ArcSwap<CancellationToken>>,
+    /// 最近一次 cancel 是否由 kernel shutdown 发起——停 run 时经
+    /// `take_for_shutdown` 读取（读即复位），据此选择 interruption
+    /// marker 与 `Stopped` reason（daemon 打断 vs 用户停止）。
+    for_shutdown: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl CancelToken {
@@ -18,6 +22,7 @@ impl CancelToken {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(ArcSwap::new(Arc::new(CancellationToken::new()))),
+            for_shutdown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -26,12 +31,27 @@ impl CancelToken {
     pub fn from_runtime_token(token: CancellationToken) -> Self {
         Self {
             inner: Arc::new(ArcSwap::new(Arc::new(token))),
+            for_shutdown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
     /// 请求取消
     pub fn cancel(&self) {
         self.inner.load().cancel();
+    }
+
+    /// 以 kernel shutdown 的名义取消——本次停 run 的 interruption
+    /// marker 与 `Stopped` reason 携带 shutdown 标识。
+    pub fn cancel_for_shutdown(&self) {
+        self.for_shutdown
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.cancel();
+    }
+
+    /// 读取并复位 shutdown 标记（一次取消只归因一次）。
+    pub fn take_for_shutdown(&self) -> bool {
+        self.for_shutdown
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
     }
 
     #[must_use]
@@ -45,6 +65,8 @@ impl CancelToken {
     pub fn reset_if_cancelled(&self) {
         if self.is_cancelled() {
             self.inner.store(Arc::new(CancellationToken::new()));
+            self.for_shutdown
+                .store(false, std::sync::atomic::Ordering::Release);
         }
     }
 
@@ -55,6 +77,10 @@ impl CancelToken {
         let child = self.inner.load().child_token();
         Self {
             inner: Arc::new(ArcSwap::new(Arc::new(child))),
+            // 独立归因（不共享）：subagent 的 token 经此派生——父子
+            // agent 并发停 run 时各自读取各自的 shutdown 标记，
+            // 共享一个 flag 会被 take-once 竞态吞掉一半。
+            for_shutdown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -62,6 +88,8 @@ impl CancelToken {
     /// 注意：这会使得之前获取的 `cancelled()` future 永远等待旧 token
     pub fn force_reset(&self) {
         self.inner.store(Arc::new(CancellationToken::new()));
+        self.for_shutdown
+            .store(false, std::sync::atomic::Ordering::Release);
     }
 
     /// 返回 Future 用于 select! - 取消时完成

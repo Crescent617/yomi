@@ -19,6 +19,9 @@ use crate::channels::{
 pub(crate) enum RunEndStatus {
     Completed,
     Cancelled,
+    /// Kernel shutdown interrupted the run — still notified (unlike a
+    /// user-initiated cancel): subscribers did not stop it.
+    Shutdown,
     Failed,
 }
 
@@ -27,6 +30,7 @@ impl RunEndStatus {
         match reason {
             crate::event::StopReason::Completed { .. } => Self::Completed,
             crate::event::StopReason::Cancelled { .. } => Self::Cancelled,
+            crate::event::StopReason::Shutdown => Self::Shutdown,
             crate::event::StopReason::Failed { .. }
             | crate::event::StopReason::MaxIterations { .. } => Self::Failed,
         }
@@ -36,6 +40,7 @@ impl RunEndStatus {
         match self {
             Self::Completed => "✅",
             Self::Cancelled => "⏹",
+            Self::Shutdown => "🔌",
             Self::Failed => "❌",
         }
     }
@@ -44,6 +49,7 @@ impl RunEndStatus {
         match self {
             Self::Completed => "finished",
             Self::Cancelled => "was stopped",
+            Self::Shutdown => "was interrupted by daemon shutdown",
             Self::Failed => "failed",
         }
     }
@@ -57,7 +63,9 @@ impl RunEndStatus {
 /// subscribers routed to it). Skipped entirely when the run delivered no
 /// message to point at (crash without a card), and for cancelled runs —
 /// the initiator stopped it themselves, they know (mirrors the settle
-/// reaction policy). Per-target failures only affect their target.
+/// reaction policy). Shutdown-interrupted runs are NOT skipped:
+/// subscribers did not stop the run, the daemon went down.
+/// Per-target failures only affect their target.
 pub(crate) async fn notify_run_subscribers(
     store: &Arc<dyn ChannelStore>,
     adapter: &Arc<dyn PlatformAdapter>,

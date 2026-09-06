@@ -694,20 +694,20 @@ async fn stop_winds_down_active_run_before_shutdown() {
     // bus 关停后 subscriber 仍能收完存量——收集 task 全程跑，stop() 后汇合。
     let mut events = kernel.event_bus().unwrap().subscribe_all();
     let collect = tokio::spawn(async move {
-        let mut saw_cancelled = false;
+        let mut saw_shutdown = false;
         while let Some((_, envelope)) = events.recv().await {
             if matches!(
                 envelope.event,
                 Event::Agent(AgentEvent::Lifecycle {
                     state: AgentStatus::Stopped {
-                        reason: StopReason::Cancelled { .. }
+                        reason: StopReason::Shutdown
                     }
                 })
             ) {
-                saw_cancelled = true;
+                saw_shutdown = true;
             }
         }
-        saw_cancelled
+        saw_shutdown
     });
 
     kernel
@@ -741,21 +741,21 @@ async fn stop_winds_down_active_run_before_shutdown() {
         elapsed < std::time::Duration::from_secs(30),
         "wind-down should finish far below the 60s cap, took {elapsed:?}"
     );
-    // 终态事件（Stopped{Cancelled}）已在 bus 关停前投递。
+    // 终态事件（Stopped{Shutdown}）已在 bus 关停前投递。
     assert!(
         tokio::time::timeout(std::time::Duration::from_secs(5), collect)
             .await
             .expect("event collector hung")
             .expect("event collector panicked"),
-        "no Stopped{{Cancelled}} event was delivered before shutdown"
+        "no Stopped{{Shutdown}} event was delivered before shutdown"
     );
-    // 上下文落盘带打断标记（模型下次醒来知道输出被截断）。
+    // 上下文落盘带 shutdown 打断标记（模型下次醒来知道输出被截断）。
     let transcript =
         std::fs::read_to_string(tmp.path().join("sessions").join(format!("{}.jsonl", sid.0)))
             .expect("transcript should exist");
     assert!(
-        transcript.contains("[interrupted: cancelled]"),
-        "transcript missing the interruption marker"
+        transcript.contains("[interrupted: daemon shutdown]"),
+        "transcript missing the shutdown interruption marker"
     );
 }
 

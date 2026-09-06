@@ -762,6 +762,7 @@ fn render_subagent_inline(sa: &SubagentState, _width: usize) -> Vec<Arc<Line<'st
                     kernel::event::StopReason::Completed { .. } => " Agent completed".to_string(),
                     kernel::event::StopReason::Cancelled { .. } => " Cancelled".to_string(),
                     kernel::event::StopReason::Failed { error } => format!(" Failed: {error}"),
+                    kernel::event::StopReason::Shutdown => " Daemon shutdown".to_string(),
                     kernel::event::StopReason::MaxIterations { reached } => {
                         format!(" Max iterations ({reached})")
                     }

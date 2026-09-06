@@ -325,6 +325,13 @@ impl Model {
                                 );
                                 self.handle_streaming_error(StreamingStatus::Cancelled, message);
                             }
+                            StopReason::Shutdown => {
+                                // daemon 关停打断——同取消的 UI 收尾，文案可辨。
+                                self.handle_streaming_error(
+                                    StreamingStatus::Cancelled,
+                                    " Interrupted: daemon shutdown".to_string(),
+                                );
+                            }
                             StopReason::Failed { error } => {
                                 let message = format!(" Task failed: {error}");
                                 self.send_desktop_notification("Yomi - Error", &message);
