@@ -269,7 +269,11 @@ pub(crate) async fn handle_incoming_message(
             // its own reaches no live conversation). Inside a thread the
             // choice is always thread-scoped: a sessionless thread is
             // claimed as the override anchor (inheritance applies at
-            // creation, the explicit key wins) — never fanned out.
+            // creation, the explicit key wins) — never fanned out. Key
+            // drift is tolerated: an event without root_id plus a failed
+            // thread_root_id lookup anchors to the thread_id key; the
+            // conversation self-heals on the root key and gc reclaims
+            // the orphan.
             if msg.thread_id.is_none() {
                 set_chat_model(channel_name, store, &kernel, &chat_id, Some(&key)).await?;
                 // 行为一致（DM 里 fan-out 只有 chat session 一个目

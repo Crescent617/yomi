@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 pub(crate) mod command;
 pub(crate) mod context;
@@ -314,10 +314,23 @@ impl ChannelHub {
                                 continue;
                             }
                             // Onboarding one-shot: the bot joined a chat.
-                            // Off-loop (a send failure must not stall the
-                            // gate); no access control — the event only
-                            // fires for chats the bot actually joined.
+                            // Feature toggle + chat lists first: disabled
+                            // or excluded chats get no card. Off-loop (a
+                            // send failure must not stall the gate); no
+                            // user access control — the event only fires
+                            // for chats the bot actually joined.
                             ChannelEvent::BotAddedToChat { chat_id } => {
+                                if config_gate
+                                    .disabled_events
+                                    .iter()
+                                    .any(|e| e == crate::channels::EVENT_WELCOME)
+                                    || config_gate.blocked_chats.contains(&chat_id)
+                                    || (!config_gate.allowed_chats.is_empty()
+                                        && !config_gate.allowed_chats.contains(&chat_id))
+                                {
+                                    debug!(channel = %name_gate, chat_id, "welcome card skipped (disabled or chat not allowed)");
+                                    continue;
+                                }
                                 let (config, adapter) =
                                     (config_gate.clone(), Arc::clone(&adapter_gate));
                                 tokio::spawn(async move {

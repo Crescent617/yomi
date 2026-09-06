@@ -25,8 +25,8 @@
    就不在该作用域的卡上渲染（例：rit/watch 是 chat-only，thread
    卡不渲染），回调臂对该作用域防御性拒绝。
 5. **admin 门**：配置修改限 admin（路由层 user 门限对所有按钮生
-   效）；停止类动作（bg 行尾 ⏹、mailbox 撤回）与 `/stop` 同档，
-   不叠加 admin。
+   效）；停止类动作（bg 行尾 ⏹）与 `/stop` 同档，不叠加 admin；
+   mailbox 撤回/清空与 `/mailbox` 命令同档限 admin。
 6. **footer 约定**：全局动作（Reset/Refresh）用 default 边框 small
    按钮放行尾；行内动作用 text 型小按钮。
 7. **标志随卡往返**：卡片无法从 chat_id 推回群/私/线程，需要的判

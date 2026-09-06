@@ -1,6 +1,8 @@
 //! 入群欢迎卡：bot 被拉进群（`im.chat.member.bot.added_v1`）时的一
 //! 张说明卡——做什么、消息表情图例、两个入口（`/settings` 面板、
-//! `/help`）。事件触发即单次，无重发。
+//! `/help`）。事件触发即发；投递 at-least-once，重连补投或移群再拉
+//! 可能重复一张，可接受不另去重。特性开关：`disabled_events =
+//! ["welcome"]`；名单外（`blocked_chats` / 非 `allowed_chats`）的群不发。
 
 use serde_json::json;
 

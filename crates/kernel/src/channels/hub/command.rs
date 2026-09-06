@@ -122,10 +122,10 @@ pub(crate) const HELP_TEXT: &str = "\
 `/model` (`/m`) — show current model; `/model <key>` to switch (in a thread: this thread only)
 
 **Chat admin**
-`/mention` — show the @-requirement here; `/mention on|off|reset` (chat or thread scope, by location)
-`/threads` — show reply-in-thread mode; `/threads on|off|reset` (chat only — use at top level)
+`/mention` — show the @-requirement here; `/mention on|off|reset` (chat or thread scope, by location; mutations admin)
+`/threads` — show reply-in-thread mode; `/threads on|off|reset` (chat only — use at top level; mutations admin)
 `/watch` — show watch mode; `/watch on|off` observer mode: every message mirrored to one session that decides when to reply (admin; chat only)
-`/settings` — settings panel card: mention / reply-in-thread / model / context window / watch as dropdowns
+`/settings` — settings panel card: mention / reply-in-thread / model / context window / watch as dropdowns (admin)
 `/subscribe [chat_id] [-r]` (`/sub`) — DM you when runs here complete; `-r` covers this chat's threads (Feishu)
 `/unsubscribe` (`/unsub`) — cancel the subscription here
 `/bind` — show this conversation's session id; `/bind <session_id>` to retarget it (admin)

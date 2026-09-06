@@ -190,6 +190,10 @@ pub struct ChannelConfig {
 /// Event feature: Feishu doc comments (`drive.notice.comment_add_v1`).
 pub(crate) const EVENT_DOC_COMMENT: &str = "doc_comment";
 
+/// Event feature: Feishu bot-added welcome card
+/// (`im.chat.member.bot.added_v1`).
+pub(crate) const EVENT_WELCOME: &str = "welcome";
+
 fn default_history_context() -> usize {
     20
 }
@@ -329,7 +333,7 @@ impl PlatformConfig {
     /// only warns on unknown names; serde can't reject array contents).
     pub(crate) fn known_event_names(&self) -> &'static [&'static str] {
         match self {
-            Self::Feishu { .. } => &[EVENT_DOC_COMMENT],
+            Self::Feishu { .. } => &[EVENT_DOC_COMMENT, EVENT_WELCOME],
             Self::Telegram { .. } => &[],
         }
     }

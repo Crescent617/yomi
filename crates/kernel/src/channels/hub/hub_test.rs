@@ -2211,6 +2211,28 @@ async fn help_card_anchor_follows_command_scope() {
         Some("msg-1"),
         "in-thread feedback anchors to the command message"
     );
+    // Bare /help carries the short list plus the platform reaction
+    // legend (rig platform = feishu).
+    assert!(
+        cards[0].1.contains("**Reactions**"),
+        "legend: {}",
+        cards[0].1
+    );
+    assert!(
+        cards[0].1.contains("`[马上]` accepted"),
+        "legend: {}",
+        cards[0].1
+    );
+    assert!(cards[0].1.contains("/help all"), "pointer: {}", cards[0].1);
+}
+
+/// bg 卡标题标真实作用域（面板契约，见 docs/design/channel-panels.md）。
+#[test]
+fn background_tasks_card_titles_state_scope() {
+    let card = crate::channels::hub_handlers::background_tasks_card(None, &[], &[], false);
+    assert!(card.contains("🖥 Background tasks · this session"), "{card}");
+    let card = crate::channels::hub_handlers::background_tasks_card(None, &[], &[], true);
+    assert!(card.contains("🖥 Background tasks · all sessions"), "{card}");
 }
 
 /// `/clear` at chat level addresses the chat session — honestly

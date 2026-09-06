@@ -93,14 +93,20 @@ impl Scope {
 
     /// 随卡往返的线格式解析。缺失字段向保守方向回落（见模块 doc）；
     /// 事件自带的 `chat_id` 是 `chat` 的第二来源（`chat` 字段不在卡上
-    /// 时的旧卡/异常卡）。
+    /// 时的旧卡/异常卡）。卡面 `chat` 与平台事件 chat 不一致 = 伪造
+    /// 或转发卡——拒绝：事件是平台断言，卡面值可编造，不一致时信任
+    /// 何一边都可能把 session 锚定到错误的群。
     fn from_value(value: &serde_json::Value, event_chat_id: Option<&str>) -> Option<Self> {
         let non_empty = |key: &str| value[key].as_str().filter(|s| !s.is_empty());
         let session = non_empty("scope")?;
+        let event_chat = event_chat_id.filter(|s| !s.is_empty());
+        if let (Some(card_chat), Some(event_chat)) = (non_empty("chat"), event_chat) {
+            if card_chat != event_chat {
+                return None;
+            }
+        }
         let container = non_empty("container").unwrap_or(session);
-        let chat = non_empty("chat")
-            .or(event_chat_id.filter(|s| !s.is_empty()))
-            .unwrap_or(session);
+        let chat = non_empty("chat").or(event_chat).unwrap_or(session);
         Some(Self {
             chat: chat.to_string(),
             session: session.to_string(),
@@ -647,6 +653,12 @@ async fn handle_card_action_inner(
 /// thread scope 的写入锚点：无 session 的 thread 在写入时建行——继承
 /// （`overrides_for_new_channel_session`）在建行时先应用，随后的显式
 /// set/clear 覆盖之。读路径（渲染/Refresh）永不调用本函数。
+///
+/// 键漂移窗口：命令事件缺 `root_id` 且平台 `thread_root_id` 查询失败
+/// 时，`effective_mapping_key` 回落 `thread_id` 键——与后续对话的
+/// root 键不一致（孤儿 session）。对话/重试会在 root 键上另建并自
+/// 愈，孤儿由 gc 清理；Feishu 话题事件实测恒带 `root_id`，窗口只剩
+/// API 故障一瞬，接受。
 async fn materialize_scope_session(
     channel_name: &str,
     store: &Arc<dyn ChannelStore>,
@@ -1118,6 +1130,16 @@ mod tests {
         // scope 缺失/为空 → 拒绝。
         assert!(Scope::from_value(&json!({"action": "cfg_refresh"}), None).is_none());
         assert!(Scope::from_value(&json!({"scope": ""}), None).is_none());
+
+        // 卡面 chat 与平台事件 chat 不一致 → 拒绝（伪造/转发卡）。
+        let forged = json!({
+            "action": "cfg_model", "scope": "om_root", "container": "omt_9",
+            "chat": "oc_victim", "dm": false, "th": true, "option": "k3-hs"
+        });
+        assert!(Scope::from_value(&forged, Some("oc_other")).is_none());
+        // 一致则通行；事件缺 chat 时信卡面值（见上 doc）。
+        assert!(Scope::from_value(&new, Some("oc_1")).is_some());
+        assert!(Scope::from_value(&new, None).is_some());
     }
 
     #[test]

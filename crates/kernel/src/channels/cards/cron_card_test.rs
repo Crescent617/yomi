@@ -62,6 +62,7 @@ async fn read_jobs_lists_all_active_first() {
 fn card_renders_rows_actions_and_empty_state() {
     let job = make_job("日报", Some("sess_a"), CronJobStatus::Active);
     let card = cron_card("chat-1", &[job], None);
+    assert!(card.contains("⏰ Cron jobs · all chats"), "{card}");
     assert!(card.contains("日报"), "{card}");
     assert!(card.contains("0 9 * * 1-5"), "{card}");
     assert!(!card.contains("cron_trigger"), "no trigger button: {card}");

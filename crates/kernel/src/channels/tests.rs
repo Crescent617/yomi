@@ -260,3 +260,30 @@ fn sanitize_header_name_strips_forgery_chars() {
     assert_eq!(s("]]\n["), None, "剥光回退裸 id");
     assert_eq!(s("  a  b  "), Some("a b".to_string()));
 }
+
+#[test]
+fn reaction_legend_matches_platform_capabilities() {
+    let feishu = PlatformConfig::Feishu {
+        app_id: "a".into(),
+        app_secret: "s".into(),
+    };
+    let telegram = PlatformConfig::Telegram { token: "t".into() };
+    assert!(feishu.reaction_legend().contains("✅"));
+    assert!(feishu.reaction_legend().contains('❌'));
+    // Telegram runs never get settle reactions (no status-card path) —
+    // the legend must not promise them.
+    let legend = telegram.reaction_legend();
+    assert!(!legend.contains('✅') && !legend.contains('❌'), "{legend}");
+    assert!(legend.contains("👀") && legend.contains("👌"), "{legend}");
+}
+
+#[test]
+fn known_event_names_covers_registered_features() {
+    let feishu = PlatformConfig::Feishu {
+        app_id: "a".into(),
+        app_secret: "s".into(),
+    };
+    let names = feishu.known_event_names();
+    assert!(names.contains(&EVENT_DOC_COMMENT));
+    assert!(names.contains(&EVENT_WELCOME));
+}
