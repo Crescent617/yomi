@@ -4,7 +4,7 @@
 //! Methods with extra client-side logic (reconnect-aware `restart`,
 //! subscription plumbing, write-then-verify cron precheck) stay hand-written.
 
-use super::{RemoteKernel, ALL_EVENTS_ROUTER_KEY, CONNECT_RETRY_TIMEOUT};
+use super::{RemoteKernel, ALL_EVENTS_ROUTER_KEY};
 use crate::checkpoint::RewindTarget;
 use crate::client::RESTART_CONFIG_NOT_APPLIED;
 use crate::client::{KernelApi, PaginatedSessions, SessionJsonlChunk};
@@ -76,7 +76,7 @@ impl KernelApi for RemoteKernel {
         loop {
             match self.server_instance_id().await {
                 Ok(instance_id) if instance_id != old_instance_id => break,
-                Ok(_) | Err(_) if start.elapsed() < CONNECT_RETRY_TIMEOUT => {
+                Ok(_) | Err(_) if start.elapsed() < self.restart_instance_timeout => {
                     self.invalidate_connection().await;
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }

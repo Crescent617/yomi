@@ -27,7 +27,7 @@ use std::sync::Arc;
 use dashmap::{DashMap, DashSet};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, warn};
+use tracing::{error, trace, warn};
 
 use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, ToolEvent};
 use crate::kernel::Kernel;
@@ -470,6 +470,7 @@ async fn settle_deliver(
     // 用——闸只能在这里取；交给调用方各自取既漏掉兜底路径，又会与
     // 事件路径嵌套取第二张 permit，构成信号量死锁。
     let _permit = ctx.io_permits.acquire().await.ok();
+    trace!(session_id = %session_id.0, "settle_deliver: permit acquired");
 
     let routing = match ctx.store.find_routing_by_session(session_id).await {
         Ok(Some(r)) => r,
@@ -515,6 +516,7 @@ async fn settle_deliver(
             SettleKind::Timeout => RunEndStatus::Failed,
         }
     });
+    trace!(session_id = %session_id.0, "settle_deliver: calling deliver_reply");
     let reply_msg_id = deliver_reply(
         &ctx.obs,
         &flags.adapter,
@@ -528,6 +530,11 @@ async fn settle_deliver(
         &ctx.kernel,
     )
     .await;
+    trace!(
+        session_id = %session_id.0,
+        delivered = reply_msg_id.is_some(),
+        "settle_deliver: deliver_reply returned"
+    );
     // 回复已送达（或已尽力）——订阅者拿到带链接的完成通知。
     notify_run_subscribers(
         &ctx.store,

@@ -617,15 +617,19 @@ impl Kernel {
         });
     }
 
-    /// Gracefully stop the kernel and all background tasks：先
-    /// cancel 全部后台（conductor 停分发、持久化池开始 drain），
-    /// 再等持久化池排空（10s 上界，超时 warn——单 key 排空的
+    /// Gracefully stop the kernel and all background tasks：先把在跑的
+    /// run 按 /stop 同路径停完（`stop_active_runs`——此刻 shutdown 尚未
+    /// cancel，conductor / obs forwarder / 通道 forwarder 全部存活，
+    /// 终态事件能正常投递，飞书状态卡 morph 进终态而不是冻结在
+    /// "运行中"）；再 cancel 全部后台（conductor 停分发、持久化池开始
+    /// drain），等持久化池排空（10s 上界，超时 warn——单 key 排空的
     /// 30s 上界在 `persist_pool::wait_drained`，两者互参），最后
     /// 关 bus（排空期间 conductor 残臂仍可能 publish）。
     /// **唯一的关停入口**——daemon 重启/CLI 退出走它，已入队的
     /// 落盘写不被进程退出截断；只需"立即信号"的场景请直接取消
-    /// `shutdown` token（本方法就是从这个 cancel 开始的）。
+    /// `shutdown` token。
     pub async fn stop(&self) {
+        self.stop_active_runs().await;
         self.shutdown.cancel();
         if let Some(ref pool) = self.agent_shared.persist_pool {
             if tokio::time::timeout(std::time::Duration::from_secs(10), pool.wait_all_idle())
@@ -639,6 +643,54 @@ impl Kernel {
         if let Some(ref bus) = self.agent_shared.event_bus {
             bus.shutdown();
         }
+    }
+
+    /// 关停前置：把在跑的 run 按 /stop 同路径（`AgentInput::Cancel`）
+    /// 停掉并等它们落地。无在跑 run 时零开销；等待有上界——卡死或
+    /// 不可中断的工具不阻塞关停（超时仅意味着终态 PATCH 可能没赶上，
+    /// 结局与直接 cancel 相同，不会更糟）。只等 cancel 快照里的会话，
+    /// 等待窗口内新触发的 run（cron/mailbox）不干扰、走原有的
+    /// shutdown 兜底 cancel。
+    async fn stop_active_runs(&self) {
+        /// 轮询间隔（`is_running` 是纯内存查询：handle 存活 + state）。
+        const WIND_DOWN_POLL: std::time::Duration = std::time::Duration::from_millis(500);
+        /// cancel 后等待在跑 run 落地的上界。与 CLI 侧
+        /// `GRACEFUL_SHUTDOWN_TIMEOUT`（90s，SIGKILL 兜底）互参——本窗口
+        /// 加 settle grace、persist drain（10s）、连接排空（5s）必须留
+        /// 在外层预算内。
+        const WIND_DOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(1);
+        /// 终态事件（Stopped）投递 grace：event bus → obs forwarder →
+        /// 通道状态卡 PATCH（settle 带 usage 拉取时两次 RTT）。投递无
+        /// 完成信号可用，给固定窗口。
+        const SETTLE_DELIVERY_GRACE: std::time::Duration = std::time::Duration::from_millis(1500);
+
+        let running = self.conductor.running_sessions();
+        if running.is_empty() {
+            return;
+        }
+        tracing::info!(
+            count = running.len(),
+            "stopping active runs before shutdown"
+        );
+        for snap in &running {
+            self.cancel(&snap.session_id);
+        }
+        let deadline = tokio::time::Instant::now() + WIND_DOWN_TIMEOUT;
+        loop {
+            // cancel 异步生效，先睡再查，省掉首轮必然为真的查询。
+            tokio::time::sleep(WIND_DOWN_POLL).await;
+            if running
+                .iter()
+                .all(|s| !self.conductor.is_running(&s.session_id))
+            {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                tracing::warn!("timed out waiting for active runs to stop; continuing shutdown");
+                break;
+            }
+        }
+        tokio::time::sleep(SETTLE_DELIVERY_GRACE).await;
     }
 
     // ── Project API ──────────────────────────────────────────────────────

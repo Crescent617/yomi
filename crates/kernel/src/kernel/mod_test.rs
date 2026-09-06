@@ -591,3 +591,192 @@ async fn session_context_window_override_roundtrip() {
 
     kernel.stop().await;
 }
+
+// ── 关停前置：stop_active_runs ─────────────────────────────────────
+
+/// 挂起 mock LLM：SSE 回首个 chunk 后保持连接不再写——agent 停在
+/// Streaming，直到 cancel 把流断开。返回监听地址。
+async fn hanging_llm_server() -> std::net::SocketAddr {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                // 读完整请求（headers + body），避免客户端早夭。
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 8192];
+                let header_end = loop {
+                    let n = sock.read(&mut chunk).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
+                    {
+                        break pos;
+                    }
+                };
+                let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
+                let content_length: usize = headers
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .and_then(|v| v.trim().parse().ok())
+                    })
+                    .unwrap_or(0);
+                while buf.len() - header_end < content_length {
+                    let n = sock.read(&mut chunk).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                }
+                let body = "data: {\"id\":\"hang\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"stub\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"...\"},\"finish_reason\":null}]}\n\n";
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n{body}"
+                );
+                if sock.write_all(resp.as_bytes()).await.is_err() {
+                    return;
+                }
+                // 挂起：等客户端断开（cancel 后 agent drop 流），永不写 finish。
+                let mut sink = [0u8; 64];
+                let _ = sock.read(&mut sink).await;
+            });
+        }
+    });
+    addr
+}
+
+/// 关停前置：在跑的 run 按 /stop 同路径停完、终态事件投递后 `stop()`
+/// 才返回——通道状态卡得以 morph 进终态，而不是冻结在"运行中"。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stop_winds_down_active_run_before_shutdown() {
+    use crate::event::{AgentEvent, AgentStatus, Event, StopReason};
+    use crate::provider::ModelConfig;
+
+    let addr = hanging_llm_server().await;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    config.models.clear();
+    config.models.push(ModelConfig {
+        name: "stub".to_string(),
+        model_id: "stub".to_string(),
+        endpoint: format!("http://{addr}"),
+        api_key: "stub".to_string(),
+        context_window: 128_000,
+        ..ModelConfig::default()
+    });
+    config.agent.default_model = "stub".to_string();
+    config.finalize();
+
+    let kernel = crate::build_kernel(&config, false).await.unwrap();
+    kernel.start();
+
+    let sid = kernel
+        .create_session(super::CreateSessionInput {
+            project_id: None,
+            working_dir: Some(tmp.path().to_path_buf()),
+            auto_approve_level: None,
+            tool_blocklist: Vec::new(),
+            model_key: None,
+            context_window: None,
+        })
+        .await
+        .unwrap();
+
+    // bus 关停后 subscriber 仍能收完存量——收集 task 全程跑，stop() 后汇合。
+    let mut events = kernel.event_bus().unwrap().subscribe_all();
+    let collect = tokio::spawn(async move {
+        let mut saw_cancelled = false;
+        while let Some((_, envelope)) = events.recv().await {
+            if matches!(
+                envelope.event,
+                Event::Agent(AgentEvent::Lifecycle {
+                    state: AgentStatus::Stopped {
+                        reason: StopReason::Cancelled { .. }
+                    }
+                })
+            ) {
+                saw_cancelled = true;
+            }
+        }
+        saw_cancelled
+    });
+
+    kernel
+        .send_message_inner(
+            &sid,
+            vec![crate::types::ContentBlock::Text {
+                text: "hi".to_string(),
+            }],
+            false,
+        )
+        .await
+        .unwrap();
+
+    // mock LLM 挂起 → run 停在 Streaming。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !kernel.conductor.is_running(&sid) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "run never reached a running state"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    let started = std::time::Instant::now();
+    kernel.stop().await;
+    let elapsed = started.elapsed();
+
+    // stop() 返回时 run 已停完——且远快于 60s 等待上界（cancel 即断流）。
+    assert!(!kernel.conductor.is_running(&sid));
+    assert!(
+        elapsed < std::time::Duration::from_secs(30),
+        "wind-down should finish far below the 60s cap, took {elapsed:?}"
+    );
+    // 终态事件（Stopped{Cancelled}）已在 bus 关停前投递。
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), collect)
+            .await
+            .expect("event collector hung")
+            .expect("event collector panicked"),
+        "no Stopped{{Cancelled}} event was delivered before shutdown"
+    );
+    // 上下文落盘带打断标记（模型下次醒来知道输出被截断）。
+    let transcript =
+        std::fs::read_to_string(tmp.path().join("sessions").join(format!("{}.jsonl", sid.0)))
+            .expect("transcript should exist");
+    assert!(
+        transcript.contains("[interrupted: cancelled]"),
+        "transcript missing the interruption marker"
+    );
+}
+
+/// 无在跑 run 时 `stop()` 零开销（不停 run、不留投递 grace）。
+#[tokio::test]
+async fn stop_without_active_run_returns_immediately() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    config.gc.auto = false;
+    config.finalize();
+
+    let kernel = crate::build_kernel(&config, false).await.unwrap();
+    kernel.start();
+
+    let started = std::time::Instant::now();
+    kernel.stop().await;
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(1),
+        "idle shutdown should be near-instant"
+    );
+}

@@ -6,7 +6,11 @@ use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
 
 /// How long to wait for graceful shutdown before falling back to kill.
-const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
+/// 必须罩住 kernel 侧关停预算（与 `kernel/mod.rs` 的 `stop_active_runs`
+/// 互参）：等在跑 run 停完（60s 上界）+ 终态投递 grace（1.5s）+
+/// persist drain（10s 上界）+ 连接排空（5s 上界）+ 进程退出余量。
+/// 无在跑 run 时进程秒退，本上限只是病态工具的兜底。
+const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(90);
 /// Polling interval while waiting for graceful shutdown.
 const GRACEFUL_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -252,9 +256,11 @@ pub async fn graceful_shutdown() -> Result<()> {
 /// stripped tool env). Falls back to the signal-based path when the daemon
 /// is unreachable, rejects the request, or the replacement never comes up.
 pub async fn restart_daemon() -> Result<()> {
-    /// Outer cap; the client itself polls for the replacement for up to
-    /// `CONNECT_RETRY_TIMEOUT` (10 s), so this only guards against hangs.
-    const WIRE_RESTART_TIMEOUT: Duration = Duration::from_secs(20);
+    /// Outer cap. Sized against the kernel's shutdown budget
+    /// (`stop_active_runs`: up to 60s wind-down + 1.5s delivery grace +
+    /// 10s persist drain + 5s connection drain ≈ 77s) plus respawn/ready
+    /// slack — a slow wind-down must not fall back to the signal path.
+    const WIRE_RESTART_TIMEOUT: Duration = Duration::from_secs(100);
 
     tracing::info!("Restarting daemon...");
     let old_pid = read_daemon_pid().await;
@@ -296,7 +302,7 @@ pub async fn restart_daemon() -> Result<()> {
 
     graceful_shutdown().await?;
 
-    // graceful_shutdown already waits up to 3s for the PID file to disappear.
+    // graceful_shutdown already waits up to 90s for the PID file to disappear.
     // Give a short extra grace period in case the old process is slow to exit.
     sleep(Duration::from_millis(200)).await;
 
@@ -328,7 +334,10 @@ fn is_config_not_applied(e: &kernel::types::KernelError) -> bool {
 /// can outlast our outer timeout. If a *different* pid comes to own the
 /// socket, the restart already happened; never SIGTERM that fresh daemon.
 async fn self_restart_settled(old_pid: Option<u32>) -> bool {
-    const SETTLE_GRACE: Duration = Duration::from_secs(10);
+    // Same budget as WIRE_RESTART_TIMEOUT: a slow wind-down (up to ~77s
+    // kernel-side) means the replacement may legitimately take that long
+    // to own the socket.
+    const SETTLE_GRACE: Duration = Duration::from_secs(90);
     const SETTLE_POLL: Duration = Duration::from_millis(200);
 
     let Some(old_pid) = old_pid else {

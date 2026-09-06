@@ -267,8 +267,9 @@ impl KernelServer {
             () = shutdown.cancelled() => {},
         }
         tracing::info!("Server shutting down, accept loops stopped");
-        // Idempotent: cancels all connections/background tasks and stops the
-        // kernel (含持久化排空) regardless of which token ended the wait.
+        // Idempotent: stops the kernel (停 run + 终态投递 + 持久化排空)
+        // then cancels all connections/background tasks, regardless of
+        // which token ended the wait.
         self.shutdown().await;
         Ok(())
     }
@@ -292,8 +293,13 @@ impl KernelServer {
     }
 
     pub async fn shutdown(&self) {
-        self.shutdown.cancel();
+        // 先停内核（停 run + 终态投递 grace + 持久化排空），再 cancel
+        // server 自身 token——通道 forwarder / wire event forwarder /
+        // cron / 连接都挂在这个 token 上，它们必须活到 kernel.stop()
+        // 返回，否则终态事件（Stopped → 状态卡 PATCH / 客户端通知）
+        // 无人投递。
         self.kernel.stop().await;
+        self.shutdown.cancel();
     }
 
     pub fn connection_count(&self) -> usize {

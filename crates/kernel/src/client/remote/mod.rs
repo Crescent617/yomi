@@ -16,6 +16,11 @@ use tokio::sync::{broadcast, mpsc, Mutex};
 /// Daemon initialisation (storage, provider, skills) can take several
 /// seconds, so we allow a generous timeout.
 const CONNECT_RETRY_TIMEOUT: Duration = Duration::from_secs(10);
+/// Replacement-instance poll budget after a wire restart: the old
+/// daemon's shutdown may take up to ~77s (wind-down + delivery grace +
+/// drains) before the replacement can own the socket. Deliberately much
+/// longer than `CONNECT_RETRY_TIMEOUT` (ordinary first-connect budget).
+const RESTART_INSTANCE_TIMEOUT: Duration = Duration::from_secs(90);
 /// Interval between connection retries.
 const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(10);
 /// RPC request timeout.
@@ -74,6 +79,9 @@ pub struct RemoteKernel {
     event_routers: Arc<EventRouterMap>,
     /// Local broadcast channel for notifications received from the wire.
     notification_tx: broadcast::Sender<Notification>,
+    /// Poll budget for the replacement instance after a wire restart.
+    /// Field (not const) so tests can shrink it.
+    pub(crate) restart_instance_timeout: Duration,
 }
 
 impl RemoteKernel {
@@ -87,6 +95,7 @@ impl RemoteKernel {
             connection: Arc::new(Mutex::new(None)),
             event_routers: Arc::new(EventRouterMap::new()),
             notification_tx,
+            restart_instance_timeout: RESTART_INSTANCE_TIMEOUT,
         }
     }
 
@@ -138,6 +147,7 @@ impl RemoteKernel {
             connection: Arc::new(Mutex::new(None)),
             event_routers,
             notification_tx,
+            restart_instance_timeout: RESTART_INSTANCE_TIMEOUT,
         };
         *this.connection.lock().await = Some(Connection {
             write_half,

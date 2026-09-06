@@ -150,7 +150,10 @@ async fn test_get_rules_wire_round_trip() {
 #[tokio::test]
 async fn test_restart_wire_request() {
     let (restart_tx, mut restart_rx) = tokio::sync::mpsc::channel(1);
-    let (client, _tmp, shutdown) = setup_with_config_path(None, Some(restart_tx)).await;
+    let (mut client, _tmp, shutdown) = setup_with_config_path(None, Some(restart_tx)).await;
+    // 生产默认 90s（罩慢 wind-down）；测试 server 故意不替换实例，
+    // 收紧让第一次轮询迭代后直接走 Err 臂。
+    client.restart_instance_timeout = std::time::Duration::from_secs(1);
 
     let call = tokio::spawn(async move { client.restart().await });
     tokio::time::timeout(std::time::Duration::from_secs(1), restart_rx.recv())

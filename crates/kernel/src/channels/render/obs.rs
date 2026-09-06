@@ -1077,6 +1077,12 @@ impl ObsTracker {
         };
         // Clone out of the map instead of holding a shard guard across await.
         let target = self.last_user_msg.get(session_id).map(|t| t.clone());
+        tracing::trace!(
+            session_id = %session_id.0,
+            emoji,
+            target = ?target.as_ref().map(|t| &t.msg_id),
+            "settle reaction"
+        );
         let Some(target) = target else {
             return;
         };
