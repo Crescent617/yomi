@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **分类**：`Added` 新能力 / `Changed` 行为变化 / `Fixed` 问题修复 / `Removed` 移除能力。
 - **配置与命令必须点名**：新增或变更配置项、命令时，写出名称与默认值。
 
+## [0.10.26] - 2026-09-06
+
+### Added
+
+- 新增 `tools/` 目录自定义工具：在数据目录 `tools/<工具名>/` 放一个 `tool.json`（`desc`、`schema`、`level` 审批级别缺省 `caution`、`timeout_secs` 缺省 60、上限 600）和一个可执行的 `run`，agent 就能调用这个工具；脚本从 stdin 收 JSON（内含调用参数），成功时 stdout 作为结果，失败时 stderr 以 `[ext:<工具名>]` 前缀报给 agent。可执行位即开关，新会话生效；示例见 `examples/tools/stock_quote`。
+- 新增两个 daemon 生命周期 hook 目录：`hooks/daemon_up/`（daemon 服务就绪后执行，后台运行不占启动时间）与 `hooks/daemon_down/`（关停时执行并等待完成）——其他进程可随 yomi 启动和停止；目录下可执行文件按名字顺序执行，单条 30 秒超时，退出码只记日志不影响 daemon；示例见 `examples/hooks/`。
+- hook 条目支持目录形态：`hooks/<事件>/<名字>/run` 可执行即生效，伴生文件（配置、辅助脚本）可放进同一目录，与单文件形态混用、按条目名字典序执行。
+- hook 与 tool 脚本统一注入环境变量 `YOMI_EVENT`（事件名）与 `YOMI_STATE_DIR`（各自的持久状态目录：`state/hooks/<事件>/<名字>/`、`state/tools/<名字>/`）。
+
+### Removed
+
+- 删除旧版扩展机制（v1）：`ext_register`/`ext_pull`/`ext_result` 长连接注册方式与配置文件中的 `[[extensions]]` 段不再生效（旧段静默忽略），Python SDK 示例已移除；wire 协议升至 30，新旧版本 CLI 与 daemon 之间不能混连，请配套升级。迁移方式见 `docs/EXTENSIONS.md`（改用 `tools/` 目录）。
+
 ## [0.10.25] - 2026-09-06
 
 ### Added
