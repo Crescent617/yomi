@@ -171,7 +171,8 @@ fn cron_card(chat_id: &str, jobs: &[CronJob], confirming: Option<(&str, &str)>) 
             "elements": [small_button("🔄 Refresh", &json!({ "action": "cron_refresh", "scope": chat_id }))],
         }],
     }));
-    info_card_envelope("⏰ Cron jobs", elements)
+    // 全局列表（任何 chat 的任务都可在此管理）——标题标真实作用域。
+    info_card_envelope("⏰ Cron jobs · all chats", elements)
 }
 
 /// `/cron` 命令主体（admin 门槛在命令臂，此处只管执行）。

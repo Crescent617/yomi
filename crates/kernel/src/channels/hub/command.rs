@@ -98,46 +98,71 @@ pub(crate) const COMMANDS: &[(&str, &[&str])] = &[
     (CMD_RESTART, &[]),
 ];
 
-/// `/help` response: the channel command list.
+/// `/help all` response: the full channel command list, grouped by
+/// domain. Bare `/help` shows [`HELP_SHORT`]. Scope rule of thumb:
+/// commands that configure or inspect a conversation follow the message's
+/// location (in a thread = this thread; `/watch` and `/threads` are
+/// chat-only — use them at top level); daemon/channel-wide commands
+/// ignore the location.
 pub(crate) const HELP_TEXT: &str = "\
-**Info**
-`/help` (`/h`) — this help
-`/info` (`/i`) — current session + channel ids (platform / chat / thread)
+**Conversation**
+`/info` (`/i`) — current session + channel ids (platform / chat / thread; watch state at top level)
 `/rules` — rules in effect here: the chat's channel rules + this session's own rules
-`/mailbox` (`/mb`) — pending steer/queued messages; `/mailbox retract <n>` · `/mailbox clear [steer|queue|all]` (admin)
-`/bg` — background tasks (shells + running subagents) with stop buttons (admin)
-`/models` — list configured models (current one marked)
-`/model` (`/m`) — show current model; `/model <key>` to switch
-`/sessions` — recent 10 sessions of this channel with jump links; `/sessions <offset>` for the next page (admin)
-`/status` — daemon runtime: uptime, active runs, shells, subagents, cron jobs (admin)
-`/usage` (`/u`) — token usage for the last N days; `/usage [days]` (default 7, max 90) (admin)
-`/workflow` (`/wkfl`) — workflow scripts in `~/.yomi/workflows/`; `/workflow ls` · `/workflow run <name> [args]` · `/workflow rm <name>` (run/rm admin)
-
-**Session control**
 `/clear` (`/c`) — clear context and start fresh
 `/compact` — summarize and compact the context
 `/stop` (`/s`) — stop the current run
 `/steer <text>` — inject a message into the current run
 `/queue <text>` (`/q`) — queue a message for a later turn
-`/thread <text>` (`/t`) — ask in a new thread opened off this message (Feishu)
-`/subscribe [chat_id] [-r]` (`/sub`) — DM you when runs here complete; `-r` covers this chat's threads (Feishu)
-`/unsubscribe` (`/unsub`) — cancel the subscription here
+`/mailbox` (`/mb`) — pending steer/queued messages; `/mailbox retract <n>` · `/mailbox clear [steer|queue|all]` (admin)
+`/bg` — background tasks with stop buttons; `/bg --all` spans sessions (admin)
+`/thread <text>` (`/t`) — ask in a new thread off this message (Feishu; redundant in reply-in-thread chats — every top-level message opens one)
+
+**Models**
+`/models` — list configured models (current one marked)
+`/model` (`/m`) — show current model; `/model <key>` to switch (in a thread: this thread only)
 
 **Chat admin**
-`/mention` — show the @-requirement here; `/mention on|off|reset` to override it
-`/threads` — show reply-in-thread mode for this chat; `/threads on|off|reset` to override it
-`/watch` — show watch mode for this chat; `/watch on|off` to route every message to a single agent session that decides when to reply (admin)
+`/mention` — show the @-requirement here; `/mention on|off|reset` (chat or thread scope, by location)
+`/threads` — show reply-in-thread mode; `/threads on|off|reset` (chat only — use at top level)
+`/watch` — show watch mode; `/watch on|off` observer mode: every message mirrored to one session that decides when to reply (admin; chat only)
 `/settings` — settings panel card: mention / reply-in-thread / model / context window / watch as dropdowns
+`/subscribe [chat_id] [-r]` (`/sub`) — DM you when runs here complete; `-r` covers this chat's threads (Feishu)
+`/unsubscribe` (`/unsub`) — cancel the subscription here
+`/bind` — show this conversation's session id; `/bind <session_id>` to retarget it (admin)
+
+**Automation**
 `/cron` — cron panel card: pause / resume / delete scheduled jobs (admin; **all** jobs, any chat)
-`/bind` — show this conversation's session id; `/bind <session_id>` to retarget it
+`/workflow` (`/wkfl`) — workflow scripts in `~/.yomi/workflows/`; `/workflow ls` · `/workflow run <name> [args]` · `/workflow rm <name>` (run/rm admin)
+
+**Stats & daemon**
+`/sessions` — recent 10 sessions of this channel with jump links; `/sessions <offset>` for the next page (admin)
+`/status` — daemon runtime: uptime, active runs, shells, subagents, cron jobs (admin)
+`/usage` (`/u`) — token usage for the last N days; `/usage [days]` (default 7, max 90) (admin)
 `/permits` — list pending doc-permission requests
 `/approve <id> [perm]` — approve a doc-permission request
 `/deny <id>` — deny a doc-permission request
-`/restart` — restart the daemon
+`/restart` — restart the daemon (admin)
 
+**Misc**
+`/help` (`/h`) — common commands; `/help all` — this list
 In groups, every command needs an @mention of the bot — whatever the mode.
-
 Anything else is sent to the agent as a message.";
+
+/// Bare `/help` response: the common commands only — the full list is
+/// `/help all` ([`HELP_TEXT`]). Aliases exist for the frequent commands
+/// only; everything else is full-word.
+pub(crate) const HELP_SHORT: &str = "\
+**Common commands**
+`/info` (`/i`) — current session + channel ids
+`/model` (`/m`) — show/switch model (in a thread: this thread only)
+`/clear` (`/c`) · `/compact` — reset / compact context
+`/stop` (`/s`) — stop the current run
+`/steer <text>` · `/queue <text>` (`/q`) — inject now / queue for later
+`/settings` — panel card: mention / reply-in-thread / model / context window / watch
+`/watch` — observer mode for the whole chat (admin)
+`/subscribe` (`/sub`) — DM you when runs here complete
+
+Full list: `/help all` · In groups, every command needs an @.";
 
 /// Parsed channel command from an incoming message.
 pub(crate) enum ChannelCommand {
@@ -168,8 +193,10 @@ pub(crate) enum ChannelCommand {
     /// Show the rules in effect here (read-only): the chat's channel
     /// rules plus the current session's own rules.
     Rules,
-    /// Show the command list.
+    /// Show the common commands ([`HELP_SHORT`]).
     Help,
+    /// Show the full command list ([`HELP_TEXT`]).
+    HelpAll,
     /// List pending doc-permission applications (admin only).
     Permits,
     /// Approve a doc-permission application, optionally overriding the level.
@@ -332,7 +359,12 @@ pub(crate) fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
         CMD_STOP if parts.next().is_none() => ChannelCommand::Stop,
         CMD_INFO if parts.next().is_none() => ChannelCommand::Info,
         CMD_RULES if parts.next().is_none() => ChannelCommand::Rules,
-        CMD_HELP if parts.next().is_none() => ChannelCommand::Help,
+        CMD_HELP => match (parts.next(), parts.next()) {
+            (None, _) => ChannelCommand::Help,
+            (Some("all"), None) => ChannelCommand::HelpAll,
+            // 与其他无参命令同规：多余参数不当命令处理（落回普通消息）。
+            _ => ChannelCommand::None,
+        },
         CMD_STEER | CMD_QUEUE => {
             let rest = parts.collect::<Vec<_>>().join(" ");
             if rest.is_empty() {

@@ -311,6 +311,19 @@ impl PlatformConfig {
         }
     }
 
+    /// One-line legend of the bot's message reactions, for `/help` and
+    /// the welcome card: gate ack / queue / (Feishu only) settle ✅❌ —
+    /// Telegram runs never get settle reactions (no status-card path) —
+    /// / access denied.
+    pub(crate) fn reaction_legend(&self) -> &'static str {
+        match self {
+            Self::Feishu { .. } => {
+                "`[马上]` accepted · `[收到]` queued · ✅ run done · ❌ run failed · 🙏 no access"
+            }
+            Self::Telegram { .. } => "👀 accepted · 👌 queued · 🙏 no access",
+        }
+    }
+
     /// Event feature names this platform understands — the valid
     /// vocabulary of `ChannelConfig::disabled_events` (startup validation
     /// only warns on unknown names; serde can't reject array contents).
@@ -384,6 +397,12 @@ pub enum ChannelEvent {
     /// (same deferred pattern as `ChannelMessage::image_keys`), so
     /// filtered-out events cost no platform API calls.
     DocCommentAdded(DocCommentNotice),
+    /// Feishu `im.chat.member.bot.added_v1`: the bot was added to a chat
+    /// — the one-shot onboarding moment (welcome card).
+    BotAddedToChat {
+        /// Chat the bot joined.
+        chat_id: String,
+    },
 }
 
 /// A Feishu `drive.notice.comment_add_v1` event (ids only).

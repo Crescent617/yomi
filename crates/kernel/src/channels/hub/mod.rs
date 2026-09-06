@@ -313,6 +313,24 @@ impl ChannelHub {
                                 });
                                 continue;
                             }
+                            // Onboarding one-shot: the bot joined a chat.
+                            // Off-loop (a send failure must not stall the
+                            // gate); no access control — the event only
+                            // fires for chats the bot actually joined.
+                            ChannelEvent::BotAddedToChat { chat_id } => {
+                                let (config, adapter) =
+                                    (config_gate.clone(), Arc::clone(&adapter_gate));
+                                tokio::spawn(async move {
+                                    let card = crate::channels::cards::welcome::welcome_card(
+                                        config.platform.reaction_legend(),
+                                    );
+                                    if let Err(e) = adapter.send_card(&chat_id, &card, None).await
+                                    {
+                                        warn!(error = %e, "welcome card send failed");
+                                    }
+                                });
+                                continue;
+                            }
                             ChannelEvent::CardAction(action) => {
                                 let (name, config, store, adapter, kernel_weak, ask_reg) = (
                                     name_gate.clone(),

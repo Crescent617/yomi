@@ -1483,6 +1483,40 @@ async fn doc_permission_event_without_file_token_is_ignored() {
 }
 
 #[tokio::test]
+async fn bot_added_event_is_forwarded() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let event = json!({
+        "header": { "event_type": "im.chat.member.bot.added_v1" },
+        "event": { "chat_id": "oc_new", "operator_id": { "open_id": "ou_x" } }
+    });
+
+    adapter.parse_event_json(&event, &tx).await.unwrap();
+
+    let crate::channels::ChannelEvent::BotAddedToChat { chat_id } =
+        rx.try_recv().expect("bot-added event forwarded")
+    else {
+        panic!("expected BotAddedToChat");
+    };
+    assert_eq!(chat_id, "oc_new");
+}
+
+#[tokio::test]
+async fn bot_added_event_without_chat_id_is_ignored() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let event = json!({
+        "header": { "event_type": "im.chat.member.bot.added_v1" },
+        "event": {}
+    });
+
+    adapter.parse_event_json(&event, &tx).await.unwrap();
+    assert!(rx.try_recv().is_err(), "nothing forwarded");
+}
+
+#[tokio::test]
 async fn unknown_event_type_is_ignored() {
     let stub = StubFeishu::start().await;
     let adapter = stub_adapter(&stub.base_url);

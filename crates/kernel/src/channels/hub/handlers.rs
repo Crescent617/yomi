@@ -12,7 +12,7 @@ use crate::channels::hub_command::{
     format_channel_line, format_current_model, format_model_list, format_rules,
     format_runtime_status, format_session_info, format_unknown_model, format_usage,
     format_watch_line, format_workflow_list, format_workflow_result, parse_channel_command,
-    suggest_command, ChannelCommand, OverrideMode, HELP_TEXT, WORKFLOW_USAGE,
+    suggest_command, ChannelCommand, OverrideMode, HELP_SHORT, HELP_TEXT, WORKFLOW_USAGE,
 };
 use crate::channels::hub_context::{append_message_images, prepare_trigger, TriggerKind};
 use crate::channels::hub_deliver::send_info_reply;
@@ -53,8 +53,19 @@ pub(crate) async fn handle_incoming_message(
 
     match cmd {
         ChannelCommand::Help => {
-            send_info_reply(adapter, &msg, reply_msg_id, "📖 Commands", HELP_TEXT.to_string())
-                .await?;
+            let body = format!(
+                "{HELP_SHORT}\n\n**Reactions**\n{}",
+                config.platform.reaction_legend()
+            );
+            send_info_reply(adapter, &msg, reply_msg_id, "📖 Commands", body).await?;
+            Ok(None)
+        }
+        ChannelCommand::HelpAll => {
+            let body = format!(
+                "{HELP_TEXT}\n\n**Reactions**\n{}",
+                config.platform.reaction_legend()
+            );
+            send_info_reply(adapter, &msg, reply_msg_id, "📖 All commands", body).await?;
             Ok(None)
         }
         ChannelCommand::Clear => {
@@ -552,9 +563,9 @@ pub(crate) async fn handle_incoming_message(
                 ));
             }
             let title = if all {
-                "🖥 Background tasks (all sessions)"
+                "🖥 Background tasks · all sessions"
             } else {
-                "🖥 Background tasks"
+                "🖥 Background tasks · this session"
             };
             send_info_reply(adapter, &msg, reply_msg_id, title, lines.join("\n")).await?;
             Ok(None)
@@ -1046,6 +1057,13 @@ pub(crate) async fn handle_threads_command(
             "No need for this in DMs — replies are never threaded.".to_string(),
         ));
     }
+    // Chat-only 设置的闸与 `/watch` 同款：thread 里查询/修改都会误
+    // 导读写作用域——请到顶层操作。
+    if msg.thread_id.is_some() {
+        return Ok(Some(
+            "Reply-in-thread applies to the whole chat — use `/threads` at top level.".to_string(),
+        ));
+    }
     let on_off = |v: bool| if v { "on" } else { "off" };
     let chat_id = &msg.external_chat_id;
     let Some(mode) = mode else {
@@ -1343,7 +1361,7 @@ pub(crate) fn sessions_card(offset: usize, entries: &[SessionEntry], has_more: b
     }
     crate::channels::hub_deliver::info_card_envelope(
         &format!(
-            "📋 Recent sessions ({}–{})",
+            "📋 Recent sessions ({}–{}) · this channel",
             offset + 1,
             offset + entries.len()
         ),
@@ -1603,7 +1621,7 @@ pub(crate) async fn handle_sessions_action(
     let card = match page {
         Ok((entries, has_more)) if !entries.is_empty() => sessions_card(offset, &entries, has_more),
         Ok(_) => crate::channels::hub_deliver::info_card_envelope(
-            "📋 Recent sessions",
+            "📋 Recent sessions · this channel",
             vec![serde_json::json!({
                 "tag": "markdown", "text_size": "notation",
                 "content": format!("No more sessions beyond offset {offset}."),
@@ -1732,9 +1750,9 @@ pub(crate) fn background_tasks_card(
         }],
     }));
     let title = if all {
-        "🖥 Background tasks (all sessions)"
+        "🖥 Background tasks · all sessions"
     } else {
-        "🖥 Background tasks"
+        "🖥 Background tasks · this session"
     };
     crate::channels::hub_deliver::info_card_envelope(title, elements)
 }
@@ -1813,9 +1831,9 @@ pub(crate) async fn handle_bg_action(
     let card = if shells.is_empty() && subagents.is_empty() {
         crate::channels::hub_deliver::info_card_envelope(
             if all {
-                "🖥 Background tasks (all sessions)"
+                "🖥 Background tasks · all sessions"
             } else {
-                "🖥 Background tasks"
+                "🖥 Background tasks · this session"
             },
             vec![serde_json::json!({
                 "tag": "markdown", "text_size": "notation",

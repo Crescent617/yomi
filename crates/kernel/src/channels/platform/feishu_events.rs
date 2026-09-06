@@ -173,6 +173,10 @@ impl FeishuAdapter {
             "drive.notice.comment_add_v1" => {
                 return self.forward_doc_comment_event(msg, incoming).await;
             }
+            "im.chat.member.bot.added_v1" => {
+                Self::forward_bot_added_event(&msg["event"], incoming).await;
+                return Ok(None);
+            }
             // Card callbacks are normally delivered as `card` data frames,
             // but tolerate delivery as a plain event too.
             "card.action.trigger" => {
@@ -477,6 +481,25 @@ impl FeishuAdapter {
         // Record only after a successful forward (same rule as messages).
         self.seen_messages.lock().await.put(dedup_key, ());
         Ok(None)
+    }
+
+    /// `im.chat.member.bot.added_v1`: the bot joined a chat — forward the
+    /// chat id for the one-shot welcome card. Ids only; the card needs
+    /// nothing else.
+    async fn forward_bot_added_event(
+        event: &serde_json::Value,
+        incoming: &mpsc::Sender<ChannelEvent>,
+    ) {
+        let chat_id = event["chat_id"].as_str().unwrap_or_default();
+        if chat_id.is_empty() {
+            warn!("bot-added event missing chat_id");
+            return;
+        }
+        let _ = incoming
+            .send(ChannelEvent::BotAddedToChat {
+                chat_id: chat_id.to_string(),
+            })
+            .await;
     }
 
     /// Parse a `drive.file.permission_member_applied_v1` event and forward

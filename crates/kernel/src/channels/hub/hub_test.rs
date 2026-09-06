@@ -1771,10 +1771,23 @@ fn test_parse_help_command() {
         ChannelCommand::Help
     ));
     assert!(matches!(
+        parse_channel_command(Some("/help all")),
+        ChannelCommand::HelpAll
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/help all now")),
+        ChannelCommand::None
+    ));
+    assert!(matches!(
         parse_channel_command(Some("/help extra")),
         ChannelCommand::None
     ));
     assert!(HELP_TEXT.contains("/steer") && HELP_TEXT.contains("/models"));
+    // 短版只给高频并指向全量；全量按域分组且每条命令在列。
+    assert!(HELP_SHORT.contains("/help all") && HELP_SHORT.contains("/settings"));
+    for name in ["/info", "/model", "/watch", "/threads", "/cron", "/bg"] {
+        assert!(HELP_TEXT.contains(name), "full help missing {name}");
+    }
 }
 
 #[test]
@@ -8517,12 +8530,27 @@ async fn threads_command_query_set_reset() {
     assert!(text.contains("`on`"), "query: {text}");
     assert!(text.contains("chat override"), "source: {text}");
 
-    // A thread message still queries/mutates the chat scope.
+    // A thread message is refused — chat-only scope, same gate as
+    // `/watch` (query and mutation alike); the override stays untouched.
     let mut thread_msg = msg("ou_random", "/threads", true);
     thread_msg.thread_id = Some("omt_1".to_string());
     let reply = handle(thread_msg).await.unwrap();
-    assert!(reply.is_none());
-    assert!(last_outgoing_text(&mock).await.contains("chat override"));
+    assert_eq!(
+        reply.as_deref(),
+        Some("Reply-in-thread applies to the whole chat — use `/threads` at top level.")
+    );
+    let mut thread_mut = msg("ou_admin", "/threads off", true);
+    thread_mut.thread_id = Some("omt_1".to_string());
+    let reply = handle(thread_mut).await.unwrap();
+    assert_eq!(
+        reply.as_deref(),
+        Some("Reply-in-thread applies to the whole chat — use `/threads` at top level.")
+    );
+    assert_eq!(
+        store.get_rit_override("mock", "oc_1").await.unwrap(),
+        Some(true),
+        "thread-scope refusal writes nothing"
+    );
 
     // Reset: back to the channel default.
     let reply = handle(msg("ou_admin", "/threads reset", true))
@@ -9934,7 +9962,10 @@ async fn sessions_command_card_rendering() {
     let (chat, card, anchor) = cards.last().expect("a card was sent");
     assert_eq!(chat, "oc_1");
     assert_eq!(anchor, &None, "rit=off: unanchored, same as the text path");
-    assert!(card.contains("📋 Recent sessions (1–1)"), "{card}");
+    assert!(
+        card.contains("📋 Recent sessions (1–1) · this channel"),
+        "{card}"
+    );
     assert!(card.contains("🧵"), "{card}");
     assert!(card.contains("[**话题讨论**](link://thread/"), "{card}");
 }
@@ -10366,7 +10397,7 @@ async fn mailbox_command_show_retract_clear_and_card_actions() {
         };
         card.clone()
     };
-    assert!(card.contains("⏳ Pending (3)"), "{card}");
+    assert!(card.contains("⏳ Pending (3) · this session"), "{card}");
     assert!(card.contains("task A") && card.contains("note C"), "{card}");
     assert!(
         card.contains("mb_retract") && card.contains("mb_clear"),
@@ -10395,7 +10426,7 @@ async fn mailbox_command_show_retract_clear_and_card_actions() {
         assert!(
             patches
                 .iter()
-                .any(|(mid, card)| mid == "om_card" && card.contains("Pending (2)")),
+                .any(|(mid, card)| mid == "om_card" && card.contains("Pending (2) · this session")),
             "in-place card refresh: {patches:?}"
         );
     }

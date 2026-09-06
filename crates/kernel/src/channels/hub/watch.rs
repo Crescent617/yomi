@@ -287,7 +287,7 @@ pub(crate) fn flip_ack_text(on: bool) -> String {
     if on {
         "👁 Watch on — every non-command message here goes to this chat's session as its observer. \
          It decides for itself when to speak (via skill) or stay silent; \
-         @-mentions no longer trigger conversation replies while watch is on. \
+         @-mentions no longer trigger conversation replies, and messages get no reactions or status cards while watch is on. \
          In groups commands always need an @: `@bot /watch off` to stop."
             .to_string()
     } else {

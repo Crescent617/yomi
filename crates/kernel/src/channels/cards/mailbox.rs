@@ -145,7 +145,10 @@ pub(crate) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
             }],
         }));
     }
-    info_card_envelope(&format!("⏳ Pending ({})", items.len()), elements)
+    info_card_envelope(
+        &format!("⏳ Pending ({}) · this session", items.len()),
+        elements,
+    )
 }
 
 /// 文本回退（Telegram / 文档评论）。
