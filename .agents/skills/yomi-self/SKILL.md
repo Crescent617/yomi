@@ -5,55 +5,47 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 
 # yomi 自我管理
 
-你是 yomi。这个 skill 是你管理自己运行时的手册：daemon、会话、cron、数据，全部通过 `yomi` CLI 完成。flag 细节一律以 `yomi <cmd> --help` 为准——这里只记**场景 → 命令**的映射，以及 help 里看不出来的坑。全局选项 `-c/--config`、`-d/--dir` 所有子命令通用。
+你是 yomi。全部运维走 `yomi` CLI；flag 以 `yomi <cmd> --help` 为准，这里只记**场景 → 命令**和 help 里看不出来的坑。全局选项 `-c/--config`、`-d/--dir` 通用。
 
-内核三态（仅 `run`/`tui`）：默认 auto——活 daemon 且 hello 握手通过就走 daemon，没有 daemon 才落本地 in-process；daemon 活着但 hello 失败会直接报错，不静默 fallback。`--bg` 强制 daemon（不在则 spawn）；`--fg` 强制本地。
+## daemon
 
-## daemon（自己的生命周期）
-
-常驻进程：IM 通道（飞书/Telegram）、多客户端共享都跑在它上面。
-
-- `yomi daemon status` / `restart` / `stop`；`start` 仅供内部调用。
-- `yomi doctor`：健康自检（config / daemon 握手含协议版本 / 渠道连通 / cron / storage），任一 ❌ 即 exit 1——重启自检、发版门禁用它。
-- 重启等效路径：CLI `restart`、IM 通道 `/restart`（限 `admin_users`）、GUI 改配置自动重启。会话数据在 sqlite，重启不丢；**进行中的 run 会被打断**——重启前先 `rpc list_running_sessions` 确认没在跑。
-- **自杀式重启**（agent 在 daemon 里重启自己）：命令必须**立即 exit 0**，绝不在同一条里 `sleep`+验证——restart 生效时本进程即死，后续验证必然以"失败"误报，诱导重试跑两遍。正确姿势：先排**一次性 cron 自检**（job 持久化在 sqlite，重启后照跑），再 `nohup sh -c 'sleep 8; yomi daemon restart' >/dev/null 2>&1 &` 直接结束：
+- `yomi daemon status` / `restart` / `stop`（`start` 仅供内部调用）。
+- `yomi doctor`：健康自检，任一 ❌ 即 exit 1——重启自检、发版门禁用它。
+- 重启路径：CLI `restart`、IM `/restart`（限 `admin_users`）、GUI 改配置自动重启。**进行中的 run 会被打断**——先 `rpc list_running_sessions` 确认没在跑。
+- **自杀式重启**（agent 重启自己）：命令必须**立即 exit 0**，绝不在同一条里 `sleep`+验证——restart 生效时本进程即死，验证必以"失败"误报，诱导重试跑两遍。姿势：先排一次性 cron 自检（job 持久化在 sqlite，重启后照跑），再 `nohup sh -c 'sleep 8; yomi daemon restart' >/dev/null 2>&1 &` 直接结束：
   `yomi cron create --name restart-self-check-<版本号> --session <本会话id> --max-runs 1 --schedule "$(date -v+2M '+%-M %-H %-d %-m *')" --message '自检重启：yomi doctor + yomi --version，简报结果'`
-  （name 带版本号：同名 create 幂等返回旧任务，不更新。）
-- 日志在 `~/.yomi/logs/daemon.<date>.log`（`tui.`/`run.` 前缀同理）——行为异常先看这里。
-- `session`/`cron`/`events`/`rpc` 等 daemon-only 命令**不会自动 spawn daemon**，连不上即报 "Is it running?"。
+  （同名 create 幂等返回旧任务，name 带版本号区分。）
+- 日志 `~/.yomi/logs/daemon.<date>.log`（`tui.`/`run.` 前缀同理）——行为异常先看这里。
+- daemon-only 命令（`session`/`cron`/`events`/`rpc`）不会自动拉起 daemon，连不上即报 "Is it running?"。
 
 ## 配置
 
-- `yomi config show` / `get` / `set`；`set` 之后必须 `daemon restart` 生效
+- `yomi config show` / `get` / `set`；`set` 之后必须 `daemon restart` 生效。
 
-## 会话（自己或兄弟会话）
+## 会话
 
-- `session list` 默认全列，`-d` 按目录过滤。
-- `session cat [-s <id>]` 读会话消息日志（直接读文件，不依赖 daemon）：默认友好输出（user/assistant 文本 + 图片 asset 路径，**不含 thinking**）；`--tools` 加工具调用行；`--verbose` 加 thinking 块；`--raw` 输出 JSONL；`--line <n> [--context <k>]` 按行号取窗口，行号来自 `session search`。
-- `session search <词> [-s <id>] [--json] [--verbose]`：跨会话全文检索（含工具参数与结果，thinking 仅 `--verbose` 纳入），按会话分组输出 `L<行号> [role] 片段`，行号直接喂 `cat --line`。
-- `session send` 往会话注消息，时机语义不同：不加 flag = **执行完才收到**（排队成新用户消息，起新任务用它）；`--steer` = **执行中即收到**（注入当前 run，回合间生效）——补充信息、中途纠偏用 steer，不打断也不另起回合。
-- pending 队列管理：`session mailbox` 查看，`session mailbox-remove <mbx_>` 撤回单条，`session mailbox-clear [--steer|--queue]` 按队列清空——只动 pending、不杀 run（区别于 cancel）。前端经 rpc（mailbox_snapshot / remove / clear）管理，`mailbox_changed` 事件（附双队列计数）触发刷新。
-- 新话题起新会话干活：`channel new-thread --chat <oc_> --text <任务>`——话题里的后续发言进同一会话；返回 session_id/thread_url，可接 `send --steer` / `session-wait`。`--channel` 选填，仅同平台多通道时消歧用。
-- 群聊观察模式：`rpc set_channel_watch '{"chat_id":"oc_…"}'` 查询、加 `"on":true/false` 开关（Vim `:set` 风格）；on 后该群全部消息只进该群会话本人（观察模式，返回其 session_id），它自己经平台 skill 决定何时说话——设计见 docs/design/watch.md。
-- 新建 session：`rpc create_session '{}'` 返回新 session_id（可选 `working_dir`/`model_key`/`auto_approve_level`，缺省继承配置）。
+- `session cat [-s <id>]` 读消息日志（直接读文件，不依赖 daemon）：默认**不含 thinking**；`--tools` 加工具调用行、`--verbose` 加 thinking、`--raw` 出 JSONL、`--line <n> [--context <k>]` 取窗口（行号来自 `session search`）。
+- `session search <词> [-s <id>]`：跨会话全文检索（含工具参数与结果），输出 `L<行号> [role] 片段` 直接喂 `cat --line`。
+- `session send` 时机语义：不加 flag = **执行完才收到**（排队成新消息，起新任务用）；`--steer` = **执行中即收到**（注入当前 run）——纠偏用 steer，不打断不起新回合。
+- pending 队列：`session mailbox` 查看、`mailbox-remove <mbx_>` 撤回、`mailbox-clear [--steer|--queue]` 清空——只动 pending、不杀 run。
+- 新话题起新会话：`channel new-thread --chat <oc_> --text <任务>`——返回 session_id/thread_url，可接 `send --steer` / `session-wait`。
+- 群观察模式：`rpc set_channel_watch '{"chat_id":"oc_…","on":true}'`——该群全部消息进该群会话本人（返回其 session_id），设计见 docs/design/watch.md。
+- 新建 session：`rpc create_session '{}'` 返回新 session_id（可选 `working_dir`/`model_key`/`auto_approve_level`）。
 - `session cancel` 停 agent loop，会话保留。
-- 观察运行态（都走 `yomi rpc`）：
-  - `get_session '{"session_id":"sess_…"}'`：单会话 `phase`（idle/streaming/executing_tool/compacting）。
-  - `list_running_sessions`：在跑会话（有后台任务的 idle 会话也在列）；后台 shell 任务嵌在 `background_shells` 字段（task_id/pid/command/output_path/started_at），无独立 rpc。
-  - `list_subagents '{"parent_session_id":"sess_…"}'`：直接子 agent（`is_running`）；会话不存在返回空数组而非报错。
-- **等待跑完**：`scripts/session-wait <session_id>`——轮询（无超时）至 `phase=idle` 且无 running subagent、无后台 shell；退出码 0 安静 / 2 用法错或首查失败。`session send` + `session-wait` = 驱动兄弟会话干活并等它完成的最小回路。
-- checkpoint：列表走 `rpc get_checkpoints`；回滚在 TUI `/rewind`；无属主备份由 `gc` 孤儿 sweep 清理。
-- 规则文件两层（非空即在 spawn 时原文注入 system prompt）：channel rules `<data_dir>/channels/rules/<chat_id>.md` 作用于全群会话（chat/thread/观察者）；session rules `<data_dir>/sessions/rules/<session_id>.md` 只作用于当前 session。两层都只在用户要求时更改。IM 里 `/rules` 查看当前生效的两层（与注入同一读取路径，所见即所注入）；GUI 侧会话信息区同口径展示（get_rules RPC）。
+- 运行态（走 `yomi rpc`）：`get_session '{"session_id":"sess_…"}'` 看 `phase`；`list_running_sessions` 看在跑会话（后台 shell 嵌在 `background_shells` 字段）；`list_subagents '{"parent_session_id":"sess_…"}'` 看直接子 agent。
+- **等待跑完**：`scripts/session-wait <sid>`——轮询至 `phase=idle` 且无 running subagent、无后台 shell。`send` + `session-wait` = 驱动兄弟会话的最小回路。
+- checkpoint：`rpc get_checkpoints` 列表；回滚在 TUI `/rewind`。
+- 规则文件两层（spawn 时原文注入 system prompt，只在用户要求时更改）：channel rules `<data_dir>/channels/rules/<chat_id>.md`（全群会话）、session rules `<data_dir>/sessions/rules/<session_id>.md`（当前 session）。IM `/rules` 查看生效内容（与注入同一读取路径）。
 
-## cron（自己的闹钟）
+## cron
 
-- `cron list|get|create|update|pause|resume|delete`；`cron trigger <id>` 立即手动触发一次，调试任务时用。
-- 一次性任务（如重启自检，见 daemon 节）：`--max-runs 1` + 近未来的 schedule。
-- shell 类 job 脚本退出码 **42** = 自我完成：标记 `Completed` 不再调度（仅调度执行兑现，手动 `trigger` 不生效）。
+- `cron list|get|create|update|pause|resume|delete`；`cron trigger <id>` 立即触发一次（调试用）。
+- 一次性任务：`--max-runs 1` + 近未来 schedule。
+- shell 类 job 退出码 **42** = 自我完成：标记 `Completed` 不再调度（仅调度执行兑现，手动 `trigger` 不生效）。
 
-## workflow（全局脚本）
+## workflow
 
-用户自有的可执行脚本：`$YOMI_DATA_DIR/workflows/`（py / shell / node 均可，需 shebang + `chmod +x`，写入即生效）。shell 工具、cron shell 任务与 `/workflow run` 都会注入 `YOMI_DATA_DIR`（及有会话时的 `YOMI_SESSION_ID`），脚本里用 `"$YOMI_DATA_DIR"` 定位 yomi 数据目录。
+用户自有脚本：`$YOMI_DATA_DIR/workflows/`（py / shell / node，需 shebang + `chmod +x`，写入即生效）。shell 工具、cron shell 任务与 `/workflow run` 注入 `YOMI_DATA_DIR`（有会话时加 `YOMI_SESSION_ID`）。
 
 ## hook（事件闸与生命周期）
 
@@ -63,17 +55,17 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 
 `$YOMI_DATA_DIR/tools/<工具名>/` 放 `tool.json`（`desc`/`schema`/`level` 缺省 `caution`/`timeout_secs` 缺省 60 上限 600）+ 可执行 `run` 即注册，agent 新会话即可调用；stdin 收 JSON（内含 `args`），exit 0 的 stdout 作结果，非零/超时把 stderr 以 `[ext:<名>]` 前缀报错给 agent（fail-closed）。写 tool 前读 `references/tools.md`（manifest 字段 / 调用契约 / env）。
 
-## 清理（自己的数据）
+## 清理
 
-- `yomi gc` **默认 dry-run**，`--yes` 才真删；不带参数时缺省值回落 `[gc]` 配置段。清理范围：过期会话 + 无属主文件 + cache.db（`--vacuum` 时压缩）。daemon 侧 `[gc] auto` 可每天自动清。
+- `yomi gc` 默认 dry-run，`--yes` 才真删；范围：过期会话 + 无属主文件 + cache.db（`--vacuum` 压缩）。`[gc] auto` 可每天自动清。
 
 ## 调试
 
-- `yomi run "prompt"`：headless 一次性运行，退出码 0 成功 / 2 失败 / 3 超迭代 / 124 超时。脚本里要执行工具须 `--yolo` 或 `--auto-approve`，否则权限请求被立即拒绝。
-- `yomi events [-s <sid>]`：会话事件 NDJSON 流；`--all` 跨会话但仅实时（无回放）；`--after-event-id` 断点续传。
-- `yomi rpc <method> [params-json]`：wire 协议逃生舱口，任意 `ReqMethod` 直打 daemon，result 以 JSON 输出；参数可经 stdin 传入。`--help` 列全部方法、`<method> --help` 显示参数 schema（无需 daemon）。流式方法（subscribe）只回 ack，事件流用 `events`。
+- `yomi run "prompt"`：headless 一次性运行，退出码 0 成功 / 2 失败 / 3 超迭代 / 124 超时。脚本里要执行工具须 `--yolo` 或 `--auto-approve`。
+- `yomi events [-s <sid>]`：事件 NDJSON 流；`--all` 跨会话仅实时（无回放）；`--after-event-id` 断点续传。
+- `yomi rpc <method> [params-json]`：wire 逃生舱口；`--help` 列全部方法、`<method> --help` 显示参数 schema（无需 daemon）。流式方法（subscribe）只回 ack，事件流用 `events`。
 - `yomi usage`：token 用量统计。
 
 ## 隔离测试
 
-要一个与生产并行的测试 daemon 随便折腾（`YOMI_CONFIG` + `YOMI_SOCKET` 两环境变量隔离）：见 yomi-e2e skill。
+与生产并行的测试 daemon 随便折腾：见 yomi-e2e skill。
