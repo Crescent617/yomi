@@ -5,16 +5,16 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 
 # yomi 自我管理
 
-你是 yomi。全部运维走 `yomi` CLI；flag 以 `yomi <cmd> --help` 为准，这里只记**场景 → 命令**和 help 里看不出来的坑。全局选项 `-c/--config`、`-d/--dir` 通用。
+你是 yomi。运维走 `yomi` CLI；flag 以 `yomi <cmd> --help` 为准，此处只记 help 里看不出来的坑。`-c/--config`、`-d/--dir` 全局通用。
 
 ## daemon
 
 - `yomi daemon status` / `restart` / `stop`（`start` 仅供内部调用）。
-- `yomi doctor`：健康自检，任一 ❌ 即 exit 1——重启自检、发版门禁用它。
+- `yomi doctor`：任一 ❌ 即 exit 1——重启自检、发版门禁用它。
 - 重启路径：CLI `restart`、IM `/restart`（限 `admin_users`）、GUI 改配置自动重启。**进行中的 run 会被打断**——先 `rpc list_running_sessions` 确认没在跑。
 - **自杀式重启**（agent 重启自己）：restart 生效时本进程即死——命令必须**立即 exit 0**，不在同一条里 `sleep`+验证（必误报，诱导重试）。先排一次性 cron 自检（重启后照跑），再 `nohup sh -c 'sleep 8; yomi daemon restart' >/dev/null 2>&1 &` 直接结束：
   `yomi cron create --name restart-self-check-<版本号> --session <本会话id> --max-runs 1 --schedule "$(date -v+2M '+%-M %-H %-d %-m *')" --message '自检重启：yomi doctor + yomi --version，简报结果'`
-- 日志 `~/.yomi/logs/daemon.<date>.log`（`tui.`/`run.` 前缀同理）——行为异常先看这里。
+- 日志 `~/.yomi/logs/daemon.<date>.log`（`tui.`/`run.` 前缀同理）。
 
 ## 配置
 
@@ -22,18 +22,18 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 
 ## 会话
 
-- `session cat [-s <id>]` 读消息日志（直接读文件，不依赖 daemon）：默认**不含 thinking**；`--tools` 加工具调用行、`--verbose` 加 thinking、`--raw` 出 JSONL、`--line <n> [--context <k>]` 取窗口（行号来自 `session search`）。
+- `session cat [-s <id>]`（直接读文件，daemon 不在也能用）：默认**不含 thinking**；`--tools` 加工具调用行、`--verbose` 加 thinking、`--raw` 出 JSONL、`--line <n> [--context <k>]` 取窗口（行号来自 `session search`）。
 - `session search <词> [-s <id>]`：跨会话全文检索（含工具参数与结果），输出 `L<行号> [role] 片段` 直接喂 `cat --line`。
 - `session send` 时机语义：不加 flag = **执行完才收到**（排队成新消息，起新任务用）；`--steer` = **执行中即收到**（注入当前 run）——纠偏用 steer，不打断不起新回合。
 - pending 队列：`session mailbox` 查看、`mailbox-remove <mbx_>` 撤回、`mailbox-clear [--steer|--queue]` 清空——只动 pending、不杀 run。
 - 新话题起新会话：`channel new-thread --chat <oc_> --text <任务>`——返回 session_id/thread_url，可接 `send --steer` / `session-wait`。
-- 群观察模式：`rpc set_channel_watch '{"chat_id":"oc_…","on":true}'`——该群全部消息进该群会话本人（返回其 session_id），设计见 docs/design/watch.md。
+- 群观察模式：`rpc set_channel_watch '{"chat_id":"oc_…","on":true}'`——该群全部消息进该群会话本人（返回其 session_id）。
 - 新建 session：`rpc create_session '{}'` 返回新 session_id（可选 `working_dir`/`model_key`/`auto_approve_level`）。
 - `session cancel` 停 agent loop，会话保留。
 - 运行态（走 `yomi rpc`）：`get_session '{"session_id":"sess_…"}'` 看 `phase`；`list_running_sessions` 看在跑会话（后台 shell 嵌在 `background_shells` 字段）；`list_subagents '{"parent_session_id":"sess_…"}'` 看直接子 agent。
 - **等待跑完**：`scripts/session-wait <sid>`——轮询至 `phase=idle` 且无 running subagent、无后台 shell。`send` + `session-wait` = 驱动兄弟会话的最小回路。
 - checkpoint：`rpc get_checkpoints` 列表；回滚在 TUI `/rewind`。
-- 规则文件两层（spawn 时原文注入 system prompt，只在用户要求时更改）：channel rules `<data_dir>/channels/rules/<chat_id>.md`（全群会话）、session rules `<data_dir>/sessions/rules/<session_id>.md`（当前 session）。IM `/rules` 查看生效内容（与注入同一读取路径）。
+- 规则文件两层（spawn 时原文注入 system prompt，只在用户要求时更改）：channel rules `<data_dir>/channels/rules/<chat_id>.md`（全群会话）、session rules `<data_dir>/sessions/rules/<session_id>.md`（当前 session）。IM `/rules` 查看生效内容。
 
 ## cron
 
