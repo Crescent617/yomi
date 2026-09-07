@@ -70,4 +70,4 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 
 ## deployment
 
-容器/K8s 部署与健康探针（readiness 标记、关停时序）：见 `references/deployment.md`。
+容器/K8s readiness 探针（`state/intake` 健康标记）：见 `references/deployment.md`。
