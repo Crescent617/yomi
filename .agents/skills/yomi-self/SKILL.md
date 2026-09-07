@@ -15,7 +15,6 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 - **自杀式重启**（agent 重启自己）：restart 生效时本进程即死——命令必须**立即 exit 0**，不在同一条里 `sleep`+验证（必误报，诱导重试）。先排一次性 cron 自检（重启后照跑），再 `nohup sh -c 'sleep 8; yomi daemon restart' >/dev/null 2>&1 &` 直接结束：
   `yomi cron create --name restart-self-check-<版本号> --session <本会话id> --max-runs 1 --schedule "$(date -v+2M '+%-M %-H %-d %-m *')" --message '自检重启：yomi doctor + yomi --version，简报结果'`
 - 日志 `~/.yomi/logs/daemon.<date>.log`（`tui.`/`run.` 前缀同理）——行为异常先看这里。
-- daemon-only 命令（`session`/`cron`/`events`/`rpc`）不会自动拉起 daemon，连不上即报 "Is it running?"。
 
 ## 配置
 
