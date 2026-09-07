@@ -12,9 +12,8 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 - `yomi daemon status` / `restart` / `stop`（`start` 仅供内部调用）。
 - `yomi doctor`：健康自检，任一 ❌ 即 exit 1——重启自检、发版门禁用它。
 - 重启路径：CLI `restart`、IM `/restart`（限 `admin_users`）、GUI 改配置自动重启。**进行中的 run 会被打断**——先 `rpc list_running_sessions` 确认没在跑。
-- **自杀式重启**（agent 重启自己）：命令必须**立即 exit 0**，绝不在同一条里 `sleep`+验证——restart 生效时本进程即死，验证必以"失败"误报，诱导重试跑两遍。姿势：先排一次性 cron 自检（job 持久化在 sqlite，重启后照跑），再 `nohup sh -c 'sleep 8; yomi daemon restart' >/dev/null 2>&1 &` 直接结束：
+- **自杀式重启**（agent 重启自己）：restart 生效时本进程即死——命令必须**立即 exit 0**，不在同一条里 `sleep`+验证（必误报，诱导重试）。先排一次性 cron 自检（重启后照跑），再 `nohup sh -c 'sleep 8; yomi daemon restart' >/dev/null 2>&1 &` 直接结束：
   `yomi cron create --name restart-self-check-<版本号> --session <本会话id> --max-runs 1 --schedule "$(date -v+2M '+%-M %-H %-d %-m *')" --message '自检重启：yomi doctor + yomi --version，简报结果'`
-  （同名 create 幂等返回旧任务，name 带版本号区分。）
 - 日志 `~/.yomi/logs/daemon.<date>.log`（`tui.`/`run.` 前缀同理）——行为异常先看这里。
 - daemon-only 命令（`session`/`cron`/`events`/`rpc`）不会自动拉起 daemon，连不上即报 "Is it running?"。
 
@@ -47,13 +46,13 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 
 用户自有脚本：`$YOMI_DATA_DIR/workflows/`（py / shell / node，需 shebang + `chmod +x`，写入即生效）。shell 工具、cron shell 任务与 `/workflow run` 注入 `YOMI_DATA_DIR`（有会话时加 `YOMI_SESSION_ID`）。
 
-## hook（事件闸与生命周期）
+## hook
 
-`$YOMI_DATA_DIR/hooks/<事件>/` 下的条目即注册（带执行位的裸文件，或含可执行 `run` 的目录；按条目名字典序串行，`chmod ±x` 即时生效，无 reload）。事件点：`pre_tool_use`（工具调用前、权限审批前；`0`=放行、`2`=否决（stderr 以 `[hook:<条目名>]` 前缀回流给 agent）、其他非零/超时（30s）=故障放行 fail-open）；`daemon_up` / `daemon_down`（daemon 就绪后 / 关停前，通知型无否决——up 后台跑不占启动、down 等完再拆；其他进程随 yomi 启停用这对，脚本快去快回，常驻进程 `nohup … &` 放后台）。写 hook 脚本前读 `references/hook.md`（stdin schema / env / 示例 / 与 Claude Code 差异）。
+`$YOMI_DATA_DIR/hooks/<事件>/` 下带执行位的条目即注册（事件点：`pre_tool_use`、`daemon_up`、`daemon_down`）。契约见 `references/hook.md`。
 
-## tool（自定义工具）
+## tool
 
-`$YOMI_DATA_DIR/tools/<工具名>/` 放 `tool.json`（`desc`/`schema`/`level` 缺省 `caution`/`timeout_secs` 缺省 60 上限 600）+ 可执行 `run` 即注册，agent 新会话即可调用；stdin 收 JSON（内含 `args`），exit 0 的 stdout 作结果，非零/超时把 stderr 以 `[ext:<名>]` 前缀报错给 agent（fail-closed）。写 tool 前读 `references/tools.md`（manifest 字段 / 调用契约 / env）。
+`$YOMI_DATA_DIR/tools/<名>/` 放 `tool.json` + 可执行 `run` 即注册。契约见 `references/tools.md`。
 
 ## 清理
 

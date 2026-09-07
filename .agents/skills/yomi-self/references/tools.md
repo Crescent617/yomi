@@ -1,4 +1,4 @@
-# tool 契约（tools/ 目录自定义工具，v0.10.26 起）
+# tool 契约
 
 文件系统注册，零配置文件：目录即注册表，执行位即开关。agent 会话 spawn 时扫描 `$YOMI_DATA_DIR/tools/` 合并进工具表（快照）——新会话 / `/clear` / idle respawn 后生效，无 reload。
 

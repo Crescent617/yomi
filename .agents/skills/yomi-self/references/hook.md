@@ -1,4 +1,4 @@
-# hook 契约（pre_tool_use / daemon_up / daemon_down）
+# hook 契约
 
 文件系统闸，零配置文件：目录即注册表，执行位即开关，无 reload（每次事件 readdir）。
 
@@ -72,7 +72,7 @@ exit 2
 
 无 `transcript_path` 字段；超时固定 30s（CC 默认 60s，30–60s 的慢 guard 语义反转：CC 否决、此处 fail-open）；不支持 CC 的 stdout JSON 高级协议（`permissionDecision`）；非 0/2 退出码的 stderr 不进用户界面（CC 会展示）。
 
-## daemon 生命周期 hook（daemon_up / daemon_down，v0.10.26 起）
+## daemon 生命周期 hook
 
 通知型点，无否决语义：退出码只记 warn 日志，不影响 daemon、不中断后续脚本。同一目录约定（`hooks/<point>/` 下可执行文件、文件名字典序串行、执行位即开关）。
 
