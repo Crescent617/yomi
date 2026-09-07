@@ -134,6 +134,11 @@ impl KernelServer {
     }
 
     pub async fn start(&self, config: &crate::config::Config) {
+        // readiness 标记（K8s probe）：boot 先清 crash 残留——intake
+        // 开放前文件必须不存在。
+        let intake_marker = crate::kernel::intake_marker_path(&self.kernel.data_dir().await);
+        let _ = std::fs::remove_file(&intake_marker);
+
         self.kernel.start();
 
         if let Some(store) = self.kernel.cron_store.as_ref() {
@@ -141,7 +146,9 @@ impl KernelServer {
             let scheduler = Arc::new(crate::cron::CronScheduler::new(Arc::clone(store), task_tx));
 
             let sched_clone = Arc::clone(&scheduler);
-            let cron_token = self.shutdown.child_token();
+            // cron 触发挂 intake 闸：关停第一步即停止新触发（worker 在
+            // 飞任务不算 intake，仍挂 server token，由排空阶段收尾）。
+            let cron_token = self.kernel.intake_token().child_token();
             tokio::spawn(async move { sched_clone.run(cron_token).await });
 
             let worker = crate::cron::CronWorker::new(
@@ -160,7 +167,12 @@ impl KernelServer {
         if let Some(ref mgr) = self.kernel.channel_manager {
             let weak = Arc::downgrade(&self.kernel);
             if let Err(e) = mgr
-                .start_all(self.shutdown.clone(), config.channels.clone(), weak)
+                .start_all(
+                    self.kernel.intake_token(),
+                    self.shutdown.clone(),
+                    config.channels.clone(),
+                    weak,
+                )
                 .await
             {
                 tracing::warn!(error = %e, "some channels failed to start");
@@ -171,6 +183,13 @@ impl KernelServer {
         // buffers events, and forwards them to real-time subscribers.
         self.start_event_forwarder(self.shutdown.child_token());
         self.start_subscriber_sweeper(self.shutdown.child_token());
+
+        // intake 全部开放——建立 readiness 标记；`kernel.stop()` 第一
+        // 步（关入口）会删除它。
+        if let Some(parent) = intake_marker.parent() {
+            let _ = std::fs::create_dir_all(parent);
+            let _ = std::fs::write(&intake_marker, b"");
+        }
     }
 
     fn start_event_forwarder(&self, cancel: tokio_util::sync::CancellationToken) {
@@ -312,11 +331,11 @@ impl KernelServer {
     }
 
     pub async fn shutdown(&self) {
-        // 先停内核（停 run + 终态投递 grace + 持久化排空），再 cancel
-        // server 自身 token——通道 forwarder / wire event forwarder /
-        // cron / 连接都挂在这个 token 上，它们必须活到 kernel.stop()
-        // 返回，否则终态事件（Stopped → 状态卡 PATCH / 客户端通知）
-        // 无人投递。
+        // 先停内核（①关 intake 入口 → ②停 run + 终态投递 grace +
+        // 持久化排空），再 cancel server 自身 token——通道 forwarder /
+        // wire event forwarder / cron worker / 连接都挂在这个 token
+        // 上，它们必须活到 kernel.stop() 返回，否则终态事件
+        // （Stopped → 状态卡 PATCH / 客户端通知）无人投递。
         self.kernel.stop().await;
         self.shutdown.cancel();
     }

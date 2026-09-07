@@ -165,6 +165,7 @@ async fn orphan_harness_with(
         String::new(),
         data_dir,
         Arc::new(NotificationBus::new()),
+        tokio_util::sync::CancellationToken::new(),
     ));
     OrphanHarness {
         conductor,

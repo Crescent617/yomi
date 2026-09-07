@@ -391,3 +391,70 @@ async fn test_session_context_window_wire_round_trip() {
 
     shutdown.cancel();
 }
+
+/// intake 闸（关停第①步）的 RPC 面：闸关闭后，起 run 类方法
+/// （`SendMessage` / `Command`）被明确拒绝为 `shutting_down`，而不是
+/// 静默接受后在 teardown 里丢失。
+#[tokio::test]
+async fn run_starting_methods_rejected_after_intake_close() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..Config::default()
+    };
+    config.finalize();
+    let kernel = crate::build_kernel(&config, false).await.unwrap();
+    let kernel_handle = std::sync::Arc::clone(&kernel);
+    let server = crate::server::KernelServer::with_lifecycle(kernel, None, None);
+    server.start(&config).await;
+    let addr = crate::transport::SocketAddr::Unix(tmp.path().join("daemon.sock"));
+    let listener = crate::transport::bind(&addr, None).await.unwrap();
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    tokio::spawn({
+        let serve_shutdown = shutdown.clone();
+        async move {
+            let _ = server.serve(vec![listener], serve_shutdown).await;
+        }
+    });
+    let client = RemoteKernel::connect(&addr).await.unwrap();
+
+    let sid = client
+        .create_session(crate::kernel::CreateSessionInput {
+            project_id: None,
+            working_dir: Some(tmp.path().to_path_buf()),
+            auto_approve_level: None,
+            tool_blocklist: vec![],
+            model_key: None,
+            context_window: None,
+        })
+        .await
+        .unwrap();
+
+    kernel_handle.intake_token().cancel();
+    assert!(!kernel_handle.intake_open());
+
+    let err = client
+        .send_message(
+            &sid,
+            vec![crate::types::ContentBlock::Text {
+                text: "hi".to_string(),
+            }],
+        )
+        .await
+        .expect_err("SendMessage must be rejected once intake is closed");
+    assert!(
+        err.to_string().contains("shutting_down"),
+        "unexpected error: {err}"
+    );
+
+    let err = client
+        .cancel(&sid)
+        .await
+        .expect_err("Command must be rejected once intake is closed");
+    assert!(
+        err.to_string().contains("shutting_down"),
+        "unexpected error: {err}"
+    );
+
+    shutdown.cancel();
+}

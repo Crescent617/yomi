@@ -96,11 +96,22 @@ pub struct Kernel {
     notification_bus: Arc<crate::notification::NotificationBus>,
     /// Global shutdown token for graceful stop.
     shutdown: tokio_util::sync::CancellationToken,
+    /// Intake 闸：`stop()` 第一步 cancel——扇出到 conductor spawn 闸、
+    /// 通道接收三环、cron 触发与 RPC 起 run 拒绝（outside-in 关停：
+    /// 先关入口，再排空，最后拆投递链）。
+    intake: tokio_util::sync::CancellationToken,
     /// Daemon boot time (for `/status` uptime).
     started_at: DateTime<Utc>,
 }
 
 const SESSION_JSONL_CHUNK_BYTES: u64 = 256 * 1024;
+
+/// readiness 标记文件（K8s probe）：`<data_dir>/state/intake`，
+/// 存在 = intake 开放。boot 清残留、intake 全开后建立、`stop()`
+/// 第一步删除——探针 `test -f` 即可。
+pub(crate) fn intake_marker_path(data_dir: &std::path::Path) -> std::path::PathBuf {
+    data_dir.join("state").join("intake")
+}
 
 /// Wall-clock duration until the next local midnight (fallback: 24h).
 /// Recomputed before every auto-gc sleep, so clock changes and OS
@@ -279,6 +290,16 @@ impl Kernel {
     /// Get cron store if configured.
     pub fn cron_store(&self) -> Option<Arc<dyn crate::cron::CronStore>> {
         self.cron_store.clone()
+    }
+
+    /// Intake 闸 token（server 启动时扇出给通道接收三环与 cron 触发）。
+    pub fn intake_token(&self) -> tokio_util::sync::CancellationToken {
+        self.intake.clone()
+    }
+
+    /// Intake 是否仍开放（`stop()` 第一步起为 false；RPC 起 run 拒绝用）。
+    pub fn intake_open(&self) -> bool {
+        !self.intake.is_cancelled()
     }
 
     /// Shared slot for the cron scheduler. `KernelServer` adopts this slot and
@@ -518,6 +539,7 @@ impl Kernel {
 
         let input_bus = InputBus::new();
         let rx = input_bus.subscribe_all();
+        let intake = tokio_util::sync::CancellationToken::new();
         let base_prompt = agent_config.system_prompt.clone();
         let notification_bus = Arc::new(crate::notification::NotificationBus::new());
         agent_shared
@@ -532,6 +554,7 @@ impl Kernel {
             base_prompt,
             data_dir_for_conductor,
             notification_bus.clone(),
+            intake.clone(),
         ));
         let cron_store = if enable_cron {
             Some(storage.cron_store())
@@ -560,6 +583,7 @@ impl Kernel {
             ext_routes: dashmap::DashMap::new(),
             notification_bus,
             shutdown,
+            intake,
             started_at: Utc::now(),
         }))
     }
@@ -611,19 +635,29 @@ impl Kernel {
         });
     }
 
-    /// Gracefully stop the kernel and all background tasks：先把在跑的
-    /// run 按 /stop 同路径停完（`stop_active_runs`——此刻 shutdown 尚未
-    /// cancel，conductor / obs forwarder / 通道 forwarder 全部存活，
-    /// 终态事件能正常投递，飞书状态卡 morph 进终态而不是冻结在
-    /// "运行中"）；再 cancel 全部后台（conductor 停分发、持久化池开始
-    /// drain），等持久化池排空（10s 上界，超时 warn——单 key 排空的
-    /// 30s 上界在 `persist_pool::wait_drained`，两者互参），最后
-    /// 关 bus（排空期间 conductor 残臂仍可能 publish）。
+    /// Gracefully stop the kernel and all background tasks（outside-in
+    /// 三段式）：① 关入口——cancel intake token（conductor spawn 闸、
+    /// 通道三环、cron 触发、RPC 起 run 同时关闭），run 集合从此只减
+    /// 不增；② 排空——在跑的 run 按 /stop 同路径停完（此刻 shutdown
+    /// 尚未 cancel，obs forwarder / 通道投递链全部存活，终态事件正常
+    /// 投递，状态卡 morph 进终态而不是冻结在"运行中"）；③ 拆除——
+    /// cancel 全部后台（conductor 停分发、持久化池开始 drain），等持
+    /// 久化池排空（10s 上界，超时 warn——单 key 排空的 30s 上界在
+    /// `persist_pool::wait_drained`，两者互参），最后关 bus（排空期
+    /// 间 conductor 残臂仍可能 publish）。
     /// **唯一的关停入口**——daemon 重启/CLI 退出走它，已入队的
     /// 落盘写不被进程退出截断；只需"立即信号"的场景请直接取消
     /// `shutdown` token。
     pub async fn stop(&self) {
+        // ① 关入口（含 readiness 标记删除——K8s 摘流量）。
+        self.intake.cancel();
+        let marker = intake_marker_path(&self.data_dir().await);
+        if marker.exists() {
+            let _ = std::fs::remove_file(&marker);
+        }
+        // ② 排空在跑 run。
         self.stop_active_runs().await;
+        // ③ 拆除。
         self.shutdown.cancel();
         if let Some(ref pool) = self.agent_shared.persist_pool {
             if tokio::time::timeout(std::time::Duration::from_secs(10), pool.wait_all_idle())
@@ -639,16 +673,16 @@ impl Kernel {
         }
     }
 
-    /// 关停前置：把在跑的 run 按 /stop 同路径（`AgentInput::Cancel`）
-    /// 停掉并等它们落地。无在跑 run 时零开销；等待有上界——卡死或
-    /// 不可中断的工具不阻塞关停（超时仅意味着终态 PATCH 可能没赶上，
-    /// 结局与直接 cancel 相同，不会更糟）。只等 cancel 快照里的会话，
-    /// 等待窗口内新触发的 run（cron/mailbox）不干扰、走原有的
-    /// shutdown 兜底 cancel。
+    /// 关停第②步：把在跑的 run 按 /stop 同路径（`AgentInput::Shutdown`）
+    /// 停掉并等它们落地。入口已在第①步关闭（不再 spawn，含 Cancel 臂
+    /// respawn），active 只减不增；轮询每轮对**当前**快照补发——过闸
+    /// 在飞的 spawn 晚一拍落入也能被补杀。等待有上界——卡死或不可中
+    /// 断的工具不阻塞关停（超时仅意味着终态 PATCH 可能没赶上，结局与
+    /// 直接 cancel 相同，不会更糟）。
     async fn stop_active_runs(&self) {
         /// 轮询间隔（`is_running` 是纯内存查询：handle 存活 + state）。
         const WIND_DOWN_POLL: std::time::Duration = std::time::Duration::from_millis(500);
-        /// cancel 后等待在跑 run 落地的上界。与 CLI 侧
+        /// cancel 后等待在跑 run 落地的上界（全部轮次共享）。与 CLI 侧
         /// `GRACEFUL_SHUTDOWN_TIMEOUT`（90s，SIGKILL 兜底）互参——本窗口
         /// 加 settle grace、persist drain（10s）、连接排空（5s）、daemon
         /// hook 链（每条脚本 30s 上界）必须留在外层预算内。
@@ -658,35 +692,37 @@ impl Kernel {
         /// 完成信号可用，给固定窗口。
         const SETTLE_DELIVERY_GRACE: std::time::Duration = std::time::Duration::from_millis(1500);
 
-        let running = self.conductor.running_sessions();
-        if running.is_empty() {
-            return;
-        }
-        tracing::info!(
-            count = running.len(),
-            "stopping active runs before shutdown"
-        );
-        for snap in &running {
-            // `AgentInput::Shutdown`（而非 /stop 的 Cancel）：终态标
-            // `StopReason::Shutdown`——卡片与上下文标记都能区分
-            // "daemon 关停打断"与用户主动停止。
-            if let Err(e) = self
-                .input_bus
-                .publish(snap.session_id.clone(), AgentInput::Shutdown)
-            {
-                tracing::warn!(session_id = %snap.session_id.0, "Failed to publish shutdown input: {e}");
-            }
-        }
         let deadline = tokio::time::Instant::now() + WIND_DOWN_TIMEOUT;
+        let mut published = std::collections::HashSet::new();
         loop {
-            // cancel 异步生效，先睡再查，省掉首轮必然为真的查询。
-            tokio::time::sleep(WIND_DOWN_POLL).await;
-            if running
-                .iter()
-                .all(|s| !self.conductor.is_running(&s.session_id))
-            {
+            let running = self.conductor.running_sessions();
+            if running.is_empty() {
+                if published.is_empty() {
+                    // 无在跑 run：零开销（不停 run、不留投递 grace）。
+                    return;
+                }
                 break;
             }
+            if published.is_empty() {
+                tracing::info!(
+                    count = running.len(),
+                    "stopping active runs before shutdown"
+                );
+            }
+            for snap in running {
+                // `AgentInput::Shutdown`（而非 /stop 的 Cancel）：终态标
+                // `StopReason::Shutdown`——卡片与上下文标记都能区分
+                // "daemon 关停打断"与用户主动停止。每会话只发一次。
+                if published.insert(snap.session_id.clone()) {
+                    if let Err(e) = self
+                        .input_bus
+                        .publish(snap.session_id.clone(), AgentInput::Shutdown)
+                    {
+                        tracing::warn!(session_id = %snap.session_id.0, "Failed to publish shutdown input: {e}");
+                    }
+                }
+            }
+            tokio::time::sleep(WIND_DOWN_POLL).await;
             if tokio::time::Instant::now() >= deadline {
                 tracing::warn!("timed out waiting for active runs to stop; continuing shutdown");
                 break;

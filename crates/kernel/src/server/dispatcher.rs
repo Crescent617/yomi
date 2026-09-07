@@ -162,13 +162,21 @@ impl KernelServer {
                         .map(|sid| sid.0),
                 )
             }
-            ReqMethod::SendMessage { session_id, blocks } => rpc_body(
-                "send_message_failed",
-                self.kernel
-                    .send_message(&SessionId::from(session_id), blocks)
-                    .await
-                    .map(|()| serde_json::Value::Null),
-            ),
+            ReqMethod::SendMessage { session_id, blocks } => {
+                if !self.kernel.intake_open() {
+                    return rpc_error(
+                        "shutting_down",
+                        "daemon is shutting down; please retry shortly",
+                    );
+                }
+                rpc_body(
+                    "send_message_failed",
+                    self.kernel
+                        .send_message(&SessionId::from(session_id), blocks)
+                        .await
+                        .map(|()| serde_json::Value::Null),
+                )
+            }
             ReqMethod::ListSessionSkills { session_id } => rpc_body(
                 "list_session_skills_failed",
                 self.kernel
@@ -176,6 +184,12 @@ impl KernelServer {
                     .await,
             ),
             ReqMethod::Command { session_id, cmd } => {
+                if !self.kernel.intake_open() {
+                    return rpc_error(
+                        "shutting_down",
+                        "daemon is shutting down; please retry shortly",
+                    );
+                }
                 let sid = SessionId::from(session_id);
                 rpc_body(
                     "command_failed",

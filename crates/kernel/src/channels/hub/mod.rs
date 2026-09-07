@@ -159,9 +159,14 @@ impl ChannelHub {
 
     /// Start all enabled channels from the given configurations.
     /// If a channel with the same name already exists, it is skipped.
+    /// `intake`：各实例接收三环（receiver/gate/dispatch）的父 token——
+    /// 关停第一步即被取消（outside-in：先关入口）；`shutdown`：outbound
+    /// 投递链（事件 forwarder → delivery pool）的父 token，活到终态
+    /// 事件投完才被取消。
     pub async fn start_all(
         &self,
-        token: CancellationToken,
+        intake: CancellationToken,
+        shutdown: CancellationToken,
         configs: Vec<ChannelConfig>,
         kernel: std::sync::Weak<Kernel>,
     ) -> Result<()> {
@@ -176,7 +181,7 @@ impl ChannelHub {
                 continue;
             }
             if let Err(e) = self
-                .start_instance(config, token.child_token(), kernel.clone())
+                .start_instance(config, intake.child_token(), kernel.clone())
                 .await
             {
                 error!(error = %e, "failed to start channel");
@@ -187,7 +192,7 @@ impl ChannelHub {
         // Start the global event forwarder if we have a kernel with an event bus.
         if let Some(coord) = kernel.upgrade() {
             if let Some(bus) = coord.event_bus() {
-                self.start_event_forwarder(bus, token.child_token(), kernel.clone())
+                self.start_event_forwarder(bus, shutdown.child_token(), kernel.clone())
                     .await;
             }
         }

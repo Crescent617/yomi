@@ -182,9 +182,14 @@ async fn flood_91_sessions_all_delivered() {
 
     // 只起事件转发器（bus → delivery pool），不起任何真实 channel。
     let token = CancellationToken::new();
-    hub.start_all(token.clone(), Vec::new(), Arc::downgrade(&kernel))
-        .await
-        .unwrap();
+    hub.start_all(
+        token.clone(),
+        token.clone(),
+        Vec::new(),
+        Arc::downgrade(&kernel),
+    )
+    .await
+    .unwrap();
 
     // 注入记录型实例（关闭状态卡：本压测聚焦投递吞吐而非渲染）。
     let adapter = Arc::new(StressAdapter {
@@ -371,9 +376,14 @@ async fn watch_session_events_never_reach_delivery() {
     kernel.start();
     let hub = kernel.channel_manager().expect("channel hub must exist");
     let token = CancellationToken::new();
-    hub.start_all(token.clone(), Vec::new(), Arc::downgrade(&kernel))
-        .await
-        .unwrap();
+    hub.start_all(
+        token.clone(),
+        token.clone(),
+        Vec::new(),
+        Arc::downgrade(&kernel),
+    )
+    .await
+    .unwrap();
 
     let adapter = Arc::new(StressAdapter {
         sent: tokio::sync::Mutex::new(Vec::new()),
@@ -503,9 +513,14 @@ async fn watch_delivery_gate_kind_at_speech() {
     kernel.start();
     let hub = kernel.channel_manager().expect("channel hub must exist");
     let token = CancellationToken::new();
-    hub.start_all(token.clone(), Vec::new(), Arc::downgrade(&kernel))
-        .await
-        .unwrap();
+    hub.start_all(
+        token.clone(),
+        token.clone(),
+        Vec::new(),
+        Arc::downgrade(&kernel),
+    )
+    .await
+    .unwrap();
     let adapter = Arc::new(StressAdapter {
         sent: tokio::sync::Mutex::new(Vec::new()),
         counter: std::sync::atomic::AtomicU64::new(0),

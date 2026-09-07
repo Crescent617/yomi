@@ -27,6 +27,9 @@ pub struct Conductor {
     /// Per-session spawn lock to prevent duplicate agent creation races.
     spawn_locks: DashMap<SessionId, Arc<tokio::sync::Mutex<()>>>,
     notification_bus: Arc<NotificationBus>,
+    /// Intake 闸（kernel `stop()` 第一步 cancel）：关闭后 `wake_agent`
+    /// 不再 spawn——关停窗口内 run 集合只减不增（outside-in 关停）。
+    intake: tokio_util::sync::CancellationToken,
 }
 
 pub struct ActiveSessionSnapshot {
@@ -52,6 +55,7 @@ impl Conductor {
         base_prompt: String,
         data_dir: std::path::PathBuf,
         notification_bus: Arc<NotificationBus>,
+        intake: tokio_util::sync::CancellationToken,
     ) -> Self {
         Self {
             agent_shared,
@@ -65,6 +69,7 @@ impl Conductor {
             data_dir,
             spawn_locks: DashMap::new(),
             notification_bus,
+            intake,
         }
     }
 
@@ -83,8 +88,22 @@ impl Conductor {
                 biased;
                 () = shutdown.cancelled() => {
                     tracing::info!("Conductor shutting down, cancelling all active agents");
-                    for agent in &self.active {
-                        agent.cancel_token.cancel_for_shutdown();
+                    // intake 闸已先关（kernel `stop()` 第一步），active
+                    // 只减不增；过闸在飞的 spawn 晚一拍落入，轮询补杀
+                    // 直到全部落地（卡死工具按既有 detach 哲学放行）。
+                    let cap = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+                    loop {
+                        for agent in &self.active {
+                            agent.cancel_token.cancel_for_shutdown();
+                        }
+                        if self.active.iter().all(|a| a.handle.is_finished()) {
+                            break;
+                        }
+                        if tokio::time::Instant::now() >= cap {
+                            tracing::warn!("conductor shutdown: agents still winding down; detaching");
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     }
                     break;
                 }
@@ -537,6 +556,12 @@ impl Conductor {
     }
 
     async fn wake_agent(&self, sid: &SessionId, mailbox: Arc<Mailbox>) {
+        // 关停闸：intake 关闭后一律不 spawn（含 Cancel/Shutdown 臂的
+        // respawn——"重启打断后 run 被复活再被兜底杀"的根修）；消息留
+        // 在 mailbox 随进程退出。
+        if self.intake.is_cancelled() {
+            return;
+        }
         let lock = self
             .spawn_locks
             .entry(sid.clone())

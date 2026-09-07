@@ -1190,9 +1190,14 @@ async fn test_start_and_shutdown() {
         },
     ];
 
-    hub.start_all(cancel.clone(), configs, std::sync::Weak::new())
-        .await
-        .unwrap();
+    hub.start_all(
+        cancel.clone(),
+        cancel.clone(),
+        configs,
+        std::sync::Weak::new(),
+    )
+    .await
+    .unwrap();
 
     let channels = hub.list_channels();
     assert_eq!(channels.len(), 2);
@@ -1227,9 +1232,14 @@ async fn test_disabled_channel_skipped() {
         },
     ];
 
-    ch.start_all(cancel.clone(), configs, std::sync::Weak::new())
-        .await
-        .unwrap();
+    ch.start_all(
+        cancel.clone(),
+        cancel.clone(),
+        configs,
+        std::sync::Weak::new(),
+    )
+    .await
+    .unwrap();
 
     let channels = ch.list_channels();
     assert_eq!(channels.len(), 1);
@@ -1255,15 +1265,25 @@ async fn test_skip_existing_channel() {
         ..Default::default()
     };
 
-    hub.start_all(cancel.clone(), vec![config.clone()], std::sync::Weak::new())
-        .await
-        .unwrap();
+    hub.start_all(
+        cancel.clone(),
+        cancel.clone(),
+        vec![config.clone()],
+        std::sync::Weak::new(),
+    )
+    .await
+    .unwrap();
     assert_eq!(hub.list_channels().len(), 1);
 
     // Second attempt should be skipped
-    hub.start_all(cancel.clone(), vec![config], std::sync::Weak::new())
-        .await
-        .unwrap();
+    hub.start_all(
+        cancel.clone(),
+        cancel.clone(),
+        vec![config],
+        std::sync::Weak::new(),
+    )
+    .await
+    .unwrap();
     assert_eq!(hub.list_channels().len(), 1);
 
     cancel.cancel();
@@ -1511,9 +1531,14 @@ async fn test_skip_duplicate_channel() {
     ];
 
     // Should succeed but only start one
-    hub.start_all(cancel.clone(), configs, std::sync::Weak::new())
-        .await
-        .unwrap();
+    hub.start_all(
+        cancel.clone(),
+        cancel.clone(),
+        configs,
+        std::sync::Weak::new(),
+    )
+    .await
+    .unwrap();
     assert_eq!(hub.list_channels().len(), 1);
 
     cancel.cancel();
@@ -10737,9 +10762,14 @@ async fn set_channel_watch_query_and_switch_round_trip() {
         },
         ..Default::default()
     };
-    hub.start_all(cancel.clone(), vec![config], std::sync::Weak::new())
-        .await
-        .unwrap();
+    hub.start_all(
+        cancel.clone(),
+        cancel.clone(),
+        vec![config],
+        std::sync::Weak::new(),
+    )
+    .await
+    .unwrap();
 
     // Query: never watched → off, no observer session.
     let status = hub

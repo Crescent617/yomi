@@ -781,6 +781,206 @@ async fn stop_without_active_run_returns_immediately() {
     );
 }
 
+/// intake 闸（关停第①步）：关闭后 `send_message` 不再 spawn run——
+/// conductor 消费 input 但 `wake_agent` 被闸挡住，连 `Running` 事件都没有。
+#[tokio::test]
+async fn intake_closed_blocks_new_spawns() {
+    use crate::event::{AgentEvent, AgentStatus, Event};
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    config.gc.auto = false;
+    config.finalize();
+
+    let kernel = crate::build_kernel(&config, false).await.unwrap();
+    kernel.start();
+
+    let sid = kernel
+        .create_session(super::CreateSessionInput {
+            project_id: None,
+            working_dir: Some(tmp.path().to_path_buf()),
+            auto_approve_level: None,
+            tool_blocklist: Vec::new(),
+            model_key: None,
+            context_window: None,
+        })
+        .await
+        .unwrap();
+
+    let mut events = kernel.event_bus().unwrap().subscribe_all();
+    kernel.intake_token().cancel();
+    assert!(!kernel.intake_open());
+
+    kernel
+        .send_message_inner(
+            &sid,
+            vec![crate::types::ContentBlock::Text {
+                text: "hi".to_string(),
+            }],
+            false,
+        )
+        .await
+        .unwrap();
+
+    // 给 conductor 一个处理窗口：闸着则永不 spawn。
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert!(!kernel.conductor.is_running(&sid));
+    while let Ok(Some((_, envelope))) =
+        tokio::time::timeout(std::time::Duration::ZERO, events.recv()).await
+    {
+        assert!(
+            !matches!(
+                envelope.event,
+                Event::Agent(AgentEvent::Lifecycle {
+                    state: AgentStatus::Running
+                })
+            ),
+            "gated intake must not emit Lifecycle(Running)"
+        );
+    }
+
+    kernel.stop().await;
+}
+
+/// 关停不复活：mailbox 里有排队消息的 run 被 Shutdown 停掉后不再
+/// respawn（intake 闸堵住 Cancel/Shutdown 臂的 respawn）——"重启打断
+/// 后 run 复活、占位卡成孤儿"的根修回归。Running 事件恰好一次。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stop_does_not_respawn_queued_run() {
+    use crate::event::{AgentEvent, AgentStatus, Event, StopReason};
+    use crate::provider::ModelConfig;
+
+    let addr = hanging_llm_server().await;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    config.models.clear();
+    config.models.push(ModelConfig {
+        name: "stub".to_string(),
+        model_id: "stub".to_string(),
+        endpoint: format!("http://{addr}"),
+        api_key: "stub".to_string(),
+        context_window: 128_000,
+        ..ModelConfig::default()
+    });
+    config.agent.default_model = "stub".to_string();
+    config.finalize();
+
+    let kernel = crate::build_kernel(&config, false).await.unwrap();
+    kernel.start();
+
+    let sid = kernel
+        .create_session(super::CreateSessionInput {
+            project_id: None,
+            working_dir: Some(tmp.path().to_path_buf()),
+            auto_approve_level: None,
+            tool_blocklist: Vec::new(),
+            model_key: None,
+            context_window: None,
+        })
+        .await
+        .unwrap();
+
+    let mut events = kernel.event_bus().unwrap().subscribe_all();
+    let collect = tokio::spawn(async move {
+        let (mut running, mut saw_shutdown) = (0usize, false);
+        while let Some((_, envelope)) = events.recv().await {
+            match envelope.event {
+                Event::Agent(AgentEvent::Lifecycle {
+                    state: AgentStatus::Running,
+                }) => running += 1,
+                Event::Agent(AgentEvent::Lifecycle {
+                    state:
+                        AgentStatus::Stopped {
+                            reason: StopReason::Shutdown,
+                        },
+                }) => saw_shutdown = true,
+                _ => {}
+            }
+        }
+        (running, saw_shutdown)
+    });
+
+    // run 起到 Streaming（mock LLM 挂起）。
+    kernel
+        .send_message_inner(
+            &sid,
+            vec![crate::types::ContentBlock::Text {
+                text: "first".to_string(),
+            }],
+            false,
+        )
+        .await
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !kernel.conductor.is_running(&sid) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "run never reached a running state"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    // 在跑期间再发一条——进 mailbox 排队（触发 Cancel 臂 respawn 的条件）。
+    kernel
+        .send_message_inner(
+            &sid,
+            vec![crate::types::ContentBlock::Text {
+                text: "queued".to_string(),
+            }],
+            false,
+        )
+        .await
+        .unwrap();
+
+    kernel.stop().await;
+
+    assert!(!kernel.conductor.is_running(&sid));
+    let (running, saw_shutdown) = tokio::time::timeout(std::time::Duration::from_secs(5), collect)
+        .await
+        .expect("event collector hung")
+        .expect("event collector panicked");
+    assert!(saw_shutdown, "no Stopped{{Shutdown}} event delivered");
+    assert_eq!(
+        running, 1,
+        "queued mailbox must not respawn a run during shutdown"
+    );
+}
+
+/// readiness 标记（K8s probe）：`stop()` 第一步删除 intake 标记文件。
+#[tokio::test]
+async fn stop_removes_intake_marker() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    config.gc.auto = false;
+    config.finalize();
+
+    let kernel = crate::build_kernel(&config, false).await.unwrap();
+    kernel.start();
+
+    let marker = super::intake_marker_path(tmp.path());
+    std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+    std::fs::write(&marker, b"").unwrap();
+    assert!(kernel.intake_open());
+
+    kernel.stop().await;
+
+    assert!(!kernel.intake_open());
+    assert!(
+        !marker.exists(),
+        "intake marker should be removed by stop()"
+    );
+}
+
 // ── ext_route（内存回退路径）──────────────────────────────────────────
 
 #[tokio::test]
