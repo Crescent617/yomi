@@ -13,6 +13,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **分类**：`Added` 新能力 / `Changed` 行为变化 / `Fixed` 问题修复 / `Removed` 移除能力。
 - **配置与命令必须点名**：新增或变更配置项、命令时，写出名称与默认值。
 
+## [0.10.27] - 2026-09-07
+
+### Added
+
+- 新增部署健康标记：daemon 完整启动后会在数据目录创建 `state/intake` 文件、开始关停时率先删除，文件存在即代表可以正常接收消息，可直接用作 K8s readiness 探针（`test -f`）；部署说明见 yomi-self skill 的 `references/deployment.md`。
+
+### Changed
+
+- daemon 关停改为先停止接收再收尾：重启/关停期间新发来的消息与命令、新建话题、手动触发 cron 会立刻收到"daemon 正在关停，请稍后重试"的明确报错，不再被接受后悄悄丢失。
+
+### Fixed
+
+- 修复 daemon 重启打断进行中的任务后，飞书群里残留一张永远停在"思考中"的空白状态卡：被打断的任务卡片现在会正常结算为中断状态。
+- 修复 GUI 重启或停止等待超时时旧内核未被强制关闭就启动新内核，可能短时出现两个 daemon 同时处理消息。
+- 修复 daemon 启动后立刻收到关停信号时仍空跑 `daemon_up` hooks 拖延关停：该情况现跳过 up 链。
+
 ## [0.10.26] - 2026-09-06
 
 ### Added
