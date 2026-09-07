@@ -19,7 +19,6 @@
 3. **Model is suspect** — bounded by design, not by hope.
 4. **Spawn, don't link** — extensions are executables driven over stdio (JSON in, exit code and stdout out); no sockets, no SDK, no reload — any language that can read stdin can extend yomi.
 5. **One engine, one shape** — gate hooks, custom tools, and daemon-lifecycle hooks are the same pipeline; they differ only in trigger and exit-code semantics.
-6. **Deletion is design** — an abstraction that duplicates an existing one doesn't get to exist.
 
 ## Features
 
