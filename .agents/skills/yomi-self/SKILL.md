@@ -1,6 +1,6 @@
 ---
 name: yomi-self
-description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话、cron 和数据。Use when 要健康自检（doctor）、检查/重启 daemon、看日志、检索或查看会话（search/cat/list/send/cancel/等待跑完）、管理 cron、管理 workflow/hook/tool 脚本、gc 清理、查 token 用量、跑 headless 任务，或用 events/rpc 调试。"
+description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话、cron 和数据。Use when 要 doctor 自检、重启 daemon、看日志、检索/查看/驱动会话、管理 cron 与 workflow/hook/tool 脚本、gc 清理、查 token 用量、跑 headless，或 events/rpc 调试。"
 ---
 
 # yomi 自我管理
