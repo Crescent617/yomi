@@ -12,17 +12,21 @@
 
 ## Design Philosophy
 
-> **The stream is reality.**
+> **The stream is reality. The filesystem is the registry.**
 
 1. **Everything is stream** — in as messages, out as events, borne by sessions; nothing lives off-stream.
 2. **State is cache** — discarded at will, restored at a fold.
 3. **Model is suspect** — bounded by design, not by hope.
+4. **Spawn, don't link** — extensions are executables driven over stdio (JSON in, exit code and stdout out); no sockets, no SDK, no reload — any language that can read stdin can extend yomi.
+5. **One engine, one shape** — gate hooks, custom tools, and daemon-lifecycle hooks are the same pipeline; they differ only in trigger and exit-code semantics.
+6. **Deletion is design** — an abstraction that duplicates an existing one doesn't get to exist.
 
 ## Features
 
 - **TUI** — minimalist terminal interface for seamless interaction
 - **GUI** — desktop app built with Tauri for a richer experience
 - **Channels** — Feishu/Telegram integration in daemon mode: every chat gets its own persistent agent session (see [Channels](#channels-im-integration))
+- **Extensions** — drop executables into `hooks/` or `tools/` directories: gate tool calls, add custom tools, or hook daemon lifecycle (see [`docs/EXTENSIONS.md`](docs/EXTENSIONS.md))
 - **Tools** — built-in file operations (read/write/edit), glob/grep, shell command execution, and more
 - **Configurable** — context window, agent tools, and LLM provider settings
 - **Safe by default** — all operations require user confirmation except in YOLO mode
