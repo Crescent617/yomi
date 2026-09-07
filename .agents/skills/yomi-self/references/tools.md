@@ -28,7 +28,7 @@ $YOMI_DATA_DIR/tools/stock_quote/
 - **stdin**：单行 compact JSON `{"event":"tool","session_id":"sess_…","cwd":"/work/dir","tool_name":"stock_quote","args":{…}}`（`args` = 模型给出的参数原始 JSON）
 - **进程 cwd** = 会话工作目录
 - **exit 0** → stdout 作工具结果（超出输出预算按 shell 工具同值截断）
-- **非零 / 超时 / spawn 失败** → fail-closed：stderr 以 `[ext:<名>]` 前缀作 tool error 喂回 agent（截 2000 字符）——调用方在等结果，不静默
+- **非零 / 超时 / spawn 失败** → fail-closed：stderr 以 `[ext:<名>]` 前缀作 tool error 喂回 agent（截 2000 字符）
 
 超时按进程组 SIGKILL（setsid，后裔连坐）；stdout/stderr 捕获上限各 64KB。每次调用独立进程，无状态、天然并发；跨调用要留状态用 `YOMI_STATE_DIR`。
 

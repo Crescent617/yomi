@@ -1,6 +1,6 @@
 # hook 契约
 
-文件系统闸，零配置文件：目录即注册表，执行位即开关，无 reload（每次事件 readdir）。
+目录即注册表：执行位即开关，无 reload（每次事件 readdir）。
 
 ## 目录布局
 
@@ -14,7 +14,7 @@ $YOMI_DATA_DIR/hooks/pre_tool_use/   # gate 点（另有 daemon_up/daemon_down �
 └── .draft                           # 隐藏文件跳过
 ```
 
-执行语义：按**条目名**字典序串行；单 call 首个否决短路；多 call 间串行。隐藏文件、无执行位、无 `run`/不可执行的目录跳过；破损符号链接跳过不致命。state 目录与日志前缀按条目名（目录形态按目录名）。
+执行语义：按**条目名**字典序串行；单 call 首个否决短路；多 call 间串行。隐藏文件、无执行位、无 `run`/不可执行的目录跳过；破损符号链接跳过不致命。
 
 ## stdin schema
 
@@ -48,7 +48,7 @@ $YOMI_DATA_DIR/hooks/pre_tool_use/   # gate 点（另有 daemon_up/daemon_down �
 | 码 | 语义 |
 |---|---|
 | `0` | 放行（stdout 丢弃） |
-| `2` | 否决；stderr 即原因，以 `[hook:<文件名>]` 前缀回流为 tool error 喂回 agent |
+| `2` | 否决；stderr 即原因，以 `[hook:<条目名>]` 前缀回流为 tool error 喂回 agent |
 | 其他非零 / 超时 30s / spawn 失败 | hook 自身故障 → fail-open 放行 + warn 日志（否决必须是显式行为） |
 
 超时按进程组 SIGKILL（setsid，后裔连坐）。stderr 捕获上限 64KB，回流给 agent 的否决原因截断到 2000 字符。进程在闸与落盘之间被杀时恢复会重过 hook（at-least-once）——有副作用的 hook 须自行幂等。
@@ -74,7 +74,7 @@ exit 2
 
 ## daemon 生命周期 hook
 
-通知型点，无否决语义：退出码只记 warn 日志，不影响 daemon、不中断后续脚本。同一目录约定（`hooks/<point>/` 下可执行文件、文件名字典序串行、执行位即开关）。
+通知型点，无否决语义：退出码只记 warn 日志，不影响 daemon、不中断后续脚本。
 
 | 点 | 触发 | daemon 等吗 |
 |---|---|---|
@@ -102,4 +102,4 @@ fi
 exit 0
 ```
 
-state 目录按事件点隔离：同一条目名挂两个点各占 `state/hooks/<point>/<条目名>/`，不共享。
+state 目录按事件点隔离，同名条目挂两点不共享。
