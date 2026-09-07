@@ -845,9 +845,11 @@ async fn intake_closed_blocks_new_spawns() {
     kernel.stop().await;
 }
 
-/// 关停不复活：mailbox 里有排队消息的 run 被 Shutdown 停掉后不再
-/// respawn（intake 闸堵住 Cancel/Shutdown 臂的 respawn）——"重启打断
-/// 后 run 复活、占位卡成孤儿"的根修回归。Running 事件恰好一次。
+/// 风停冒烟：mailbox 有排队消息的挂起 run 能被 stop 停掉，且 Running
+/// 事件恰好一次。注意本测试**不是**复活根修的区分性覆盖——Shutdown
+/// 臂先清 mailbox 再判 respawn，排队消息在 stop 前已入 mailbox 时新
+/// 旧代码都不会复活；闸的区分性覆盖在
+/// `intake_closed_blocks_new_spawns`（S3 评审结论）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stop_does_not_respawn_queued_run() {
     use crate::event::{AgentEvent, AgentStatus, Event, StopReason};
@@ -953,9 +955,12 @@ async fn stop_does_not_respawn_queued_run() {
     );
 }
 
-/// readiness 标记（K8s probe）：`stop()` 第一步删除 intake 标记文件。
+/// readiness 标记属主（S5）：标记由 server 创建；不带 server 的本地
+/// kernel 退出（`stop()`）**不得**删除它——否则与 daemon 共享
+/// `data_dir` 的本地进程（`yomi run`/`tui --fg`）会摘掉在役 daemon 的
+/// readiness。
 #[tokio::test]
-async fn stop_removes_intake_marker() {
+async fn local_kernel_stop_preserves_intake_marker() {
     let tmp = tempfile::TempDir::new().unwrap();
     let mut config = crate::config::Config {
         data_dir: tmp.path().to_path_buf(),
@@ -976,8 +981,8 @@ async fn stop_removes_intake_marker() {
 
     assert!(!kernel.intake_open());
     assert!(
-        !marker.exists(),
-        "intake marker should be removed by stop()"
+        marker.exists(),
+        "local kernel stop must not remove the server-owned intake marker"
     );
 }
 

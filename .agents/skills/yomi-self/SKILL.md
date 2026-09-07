@@ -67,3 +67,7 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 ## 隔离测试
 
 与生产并行的测试 daemon 随便折腾：见 yomi-e2e skill。
+
+## deployment
+
+容器/K8s 部署与健康探针（readiness 标记、关停时序）：见 `references/deployment.md`。

@@ -565,6 +565,12 @@ impl KernelServer {
             }
 
             ReqMethod::TriggerCronJob { job_id } => {
+                if !self.kernel.intake_open() {
+                    return rpc_error(
+                        "shutting_down",
+                        "daemon is shutting down; please retry shortly",
+                    );
+                }
                 match self.kernel.trigger_cron_job(&CronJobId::from(job_id)).await {
                     Ok(()) => RespBody::Ok {
                         result: serde_json::Value::Null,
@@ -653,27 +659,37 @@ impl KernelServer {
                 chat_id,
                 title,
                 text,
-            } => rpc_body(
-                "channel_new_thread_failed",
-                match self.kernel.channel_manager() {
-                    Some(hub) => {
-                        hub.create_thread_in_chat(
-                            &self.kernel,
-                            channel.as_deref(),
-                            platform
-                                .as_deref()
-                                .unwrap_or(crate::channels::DEFAULT_PLATFORM),
-                            &chat_id,
-                            title.as_deref(),
-                            &text,
-                        )
-                        .await
-                    }
-                    None => Err(crate::types::KernelError::Config(
-                        "no channels are running".to_string(),
-                    )),
-                },
-            ),
+            } => {
+                // 闸必须在任何平台副作用（锚点/开帖消息）之前——受理后
+                // 静默丢弃与孤儿卡同类（S1）。
+                if !self.kernel.intake_open() {
+                    return rpc_error(
+                        "shutting_down",
+                        "daemon is shutting down; please retry shortly",
+                    );
+                }
+                rpc_body(
+                    "channel_new_thread_failed",
+                    match self.kernel.channel_manager() {
+                        Some(hub) => {
+                            hub.create_thread_in_chat(
+                                &self.kernel,
+                                channel.as_deref(),
+                                platform
+                                    .as_deref()
+                                    .unwrap_or(crate::channels::DEFAULT_PLATFORM),
+                                &chat_id,
+                                title.as_deref(),
+                                &text,
+                            )
+                            .await
+                        }
+                        None => Err(crate::types::KernelError::Config(
+                            "no channels are running".to_string(),
+                        )),
+                    },
+                )
+            }
 
             ReqMethod::SetChannelWatch {
                 channel,

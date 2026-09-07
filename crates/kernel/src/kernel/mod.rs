@@ -635,6 +635,15 @@ impl Kernel {
         });
     }
 
+    /// 防御性强拆（宿主进程放弃等待 serve 时用）：只发信号不等待——
+    /// intake 与 shutdown 两个 token 全部取消，通道/conductor/cron
+    /// 必死。正常关停走 `stop()`（有排空）；本方法不替代它，只保证
+    /// "等不及先走"时旧内核不会活着与新内核并存（S2）。
+    pub fn close_tokens(&self) {
+        self.intake.cancel();
+        self.shutdown.cancel();
+    }
+
     /// Gracefully stop the kernel and all background tasks（outside-in
     /// 三段式）：① 关入口——cancel intake token（conductor spawn 闸、
     /// 通道三环、cron 触发、RPC 起 run 同时关闭），run 集合从此只减
@@ -649,16 +658,26 @@ impl Kernel {
     /// 落盘写不被进程退出截断；只需"立即信号"的场景请直接取消
     /// `shutdown` token。
     pub async fn stop(&self) {
-        // ① 关入口（含 readiness 标记删除——K8s 摘流量）。
+        // ① 关入口。readiness 标记的删除在 KernelServer::shutdown——
+        // 标记由 server 创建，kernel 不越属主（S5：不带 server 的本地
+        // kernel 与 daemon 共享 data_dir 时，本地退出不得摘掉 daemon
+        // 的 readiness）。
         self.intake.cancel();
-        let marker = intake_marker_path(&self.data_dir().await);
-        if marker.exists() {
-            let _ = std::fs::remove_file(&marker);
-        }
         // ② 排空在跑 run。
         self.stop_active_runs().await;
         // ③ 拆除。
         self.shutdown.cancel();
+        // 等 conductor 兜底臂静止再关 bus（二轮评审 Should-fix）：只被
+        // 臂杀死的 run（②最后一拍后落入 active 的 spawn），其 Stopped
+        // 须先落进 bus 队列——bus 关闭后 subscriber 只收存量，晚到事件
+        // 丢弃会让占位卡冻结在"运行中"（原 bug 的最窄形态）。上界与臂
+        // 自身 5s 对齐，不引入新的卡死面。
+        let arm_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !self.conductor.running_sessions().is_empty()
+            && tokio::time::Instant::now() < arm_deadline
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
         if let Some(ref pool) = self.agent_shared.persist_pool {
             if tokio::time::timeout(std::time::Duration::from_secs(10), pool.wait_all_idle())
                 .await
@@ -675,10 +694,10 @@ impl Kernel {
 
     /// 关停第②步：把在跑的 run 按 /stop 同路径（`AgentInput::Shutdown`）
     /// 停掉并等它们落地。入口已在第①步关闭（不再 spawn，含 Cancel 臂
-    /// respawn），active 只减不增；轮询每轮对**当前**快照补发——过闸
-    /// 在飞的 spawn 晚一拍落入也能被补杀。等待有上界——卡死或不可中
-    /// 断的工具不阻塞关停（超时仅意味着终态 PATCH 可能没赶上，结局与
-    /// 直接 cancel 相同，不会更糟）。
+    /// respawn），active 只减不增；每会话发一次 Shutdown（publish 失败
+    /// 的下轮补发），过闸在飞的 spawn 晚一拍落入也能在后续轮次被补杀。
+    /// 等待有上界——卡死或不可中断的工具不阻塞关停（超时仅意味着终态
+    /// PATCH 可能没赶上，结局与直接 cancel 相同，不会更糟）。
     async fn stop_active_runs(&self) {
         /// 轮询间隔（`is_running` 是纯内存查询：handle 存活 + state）。
         const WIND_DOWN_POLL: std::time::Duration = std::time::Duration::from_millis(500);
@@ -712,14 +731,18 @@ impl Kernel {
             for snap in running {
                 // `AgentInput::Shutdown`（而非 /stop 的 Cancel）：终态标
                 // `StopReason::Shutdown`——卡片与上下文标记都能区分
-                // "daemon 关停打断"与用户主动停止。每会话只发一次。
-                if published.insert(snap.session_id.clone()) {
-                    if let Err(e) = self
-                        .input_bus
-                        .publish(snap.session_id.clone(), AgentInput::Shutdown)
-                    {
-                        tracing::warn!(session_id = %snap.session_id.0, "Failed to publish shutdown input: {e}");
-                    }
+                // "daemon 关停打断"与用户主动停止。每会话只发一次；
+                // publish 失败不记账，下轮还会补发（S6）。
+                if published.contains(&snap.session_id) {
+                    continue;
+                }
+                if let Err(e) = self
+                    .input_bus
+                    .publish(snap.session_id.clone(), AgentInput::Shutdown)
+                {
+                    tracing::warn!(session_id = %snap.session_id.0, "Failed to publish shutdown input: {e}");
+                } else {
+                    published.insert(snap.session_id.clone());
                 }
             }
             tokio::time::sleep(WIND_DOWN_POLL).await;

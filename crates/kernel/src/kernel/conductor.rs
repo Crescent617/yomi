@@ -798,6 +798,14 @@ impl Conductor {
 
         let agent = Agent::new(&shared, args).await;
 
+        // 过闸后二次检查（B1）：上方异步段（history/prompt/Agent::new）
+        // 可能跨越 intake 关闭——此处到 insert 无 await，逃逸窗口缩到
+        // 指令级；insert 必先于 conductor 兜底臂（其在 intake.cancel
+        // 之后才运行）落入 active，被兜底补杀。
+        if self.intake.is_cancelled() {
+            return;
+        }
+
         let session_id = sid.0.clone();
         let loop_span = tracing::info_span!("agent_loop", session_id = %session_id);
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();

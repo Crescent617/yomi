@@ -146,8 +146,8 @@ impl KernelServer {
             let scheduler = Arc::new(crate::cron::CronScheduler::new(Arc::clone(store), task_tx));
 
             let sched_clone = Arc::clone(&scheduler);
-            // cron 触发挂 intake 闸：关停第一步即停止新触发（worker 在
-            // 飞任务不算 intake，仍挂 server token，由排空阶段收尾）。
+            // cron 触发挂 intake 闸：关停第一步即停止新触发；worker 同
+            // 挂 intake（下方 worker_token），①后不再从队列取新任务。
             let cron_token = self.kernel.intake_token().child_token();
             tokio::spawn(async move { sched_clone.run(cron_token).await });
 
@@ -158,7 +158,10 @@ impl KernelServer {
                 Some(Arc::clone(&scheduler)),
                 self.kernel.data_dir().await,
             );
-            let worker_token = self.shutdown.child_token();
+            // worker 也挂 intake 闸（S4）：①后不再从队列取新任务——
+            // 否则 SendMessage 类任务 publish 即按成功记账但 run 已被
+            // 闸挡（假成功），Shell 类在 teardown 期间真实执行。
+            let worker_token = self.kernel.intake_token().child_token();
             tokio::spawn(async move { worker.run(worker_token).await });
 
             *self.cron_scheduler.lock().unwrap() = Some(scheduler);
@@ -336,7 +339,25 @@ impl KernelServer {
         // wire event forwarder / cron worker / 连接都挂在这个 token
         // 上，它们必须活到 kernel.stop() 返回，否则终态事件
         // （Stopped → 状态卡 PATCH / 客户端通知）无人投递。
+        // readiness 标记随入口关闭同步删除（标记由本 server 创建——
+        // 与 kernel.stop 的属主分工见 S5）。
+        let _ = std::fs::remove_file(crate::kernel::intake_marker_path(
+            &self.kernel.data_dir().await,
+        ));
         self.kernel.stop().await;
+        self.shutdown.cancel();
+    }
+
+    /// 防御性强拆（宿主进程等不到 serve 退出、准备 abort serve 任务
+    /// 时用）：只发信号不等待——kernel 与 server 的全部生命周期 token
+    /// 取消，旧 daemon 的通道/conductor/cron 必死；abort 只放弃等
+    /// 待，不放任旧内核与新内核并存（S2）。readiness 标记同步删除
+    /// （intake 已关，"存在 = intake 开放"的契约要对齐）。
+    pub async fn force_shutdown(&self) {
+        self.kernel.close_tokens();
+        let _ = std::fs::remove_file(crate::kernel::intake_marker_path(
+            &self.kernel.data_dir().await,
+        ));
         self.shutdown.cancel();
     }
 

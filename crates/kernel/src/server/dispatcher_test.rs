@@ -458,3 +458,27 @@ async fn run_starting_methods_rejected_after_intake_close() {
 
     shutdown.cancel();
 }
+
+/// readiness 标记生命周期（server 属主）：`server.start()` 在 intake
+/// 全开后建立 `<data_dir>/state/intake`；`KernelServer::shutdown()`（经
+/// serve 的关停 token 触发）随入口关闭删除它。
+#[tokio::test]
+async fn intake_marker_lifecycle_with_server() {
+    let (client, tmp, shutdown) = setup().await;
+    let marker = crate::kernel::intake_marker_path(tmp.path());
+    assert!(
+        marker.exists(),
+        "server start should create the intake marker"
+    );
+    drop(client);
+
+    shutdown.cancel();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while marker.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "intake marker not removed after server shutdown"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}

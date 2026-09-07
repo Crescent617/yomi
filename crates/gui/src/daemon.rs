@@ -31,6 +31,9 @@ enum DaemonSlot {
         /// guarantees the old listener is gone and its pid/socket cleanup
         /// has run, so a follow-up spawn cannot race with it.
         serve_handle: tokio::task::JoinHandle<()>,
+        /// 强拆把手：等待超时、abort serve 任务前调 `force_shutdown`
+        /// ——abort 只放弃等待，token 不取消则旧内核与新内核并存（S2）。
+        server: kernel::server::KernelServer,
     },
     /// We owned the daemon but it is no longer running: a restart failed
     /// after the old server was stopped (e.g. the config file no longer
@@ -227,6 +230,7 @@ async fn spawn_daemon_inner() -> Result<kernel::config::Config> {
         *guard = Some(DaemonSlot::Managed {
             shutdown,
             serve_handle,
+            server,
         });
     }
 
@@ -296,6 +300,7 @@ async fn stop_daemon_inner() -> Result<()> {
     if let DaemonSlot::Managed {
         shutdown,
         mut serve_handle,
+        server,
     } = slot
     {
         shutdown.cancel();
@@ -303,6 +308,8 @@ async fn stop_daemon_inner() -> Result<()> {
             .await
             .is_err()
         {
+            // 同 restart 路径：abort 前先强拆，token 必死（S2）。
+            server.force_shutdown().await;
             serve_handle.abort();
             let _ = serve_handle.await;
         }
@@ -343,6 +350,7 @@ async fn restart_daemon_inner() -> Result<kernel::config::Config> {
     if let DaemonSlot::Managed {
         shutdown,
         mut serve_handle,
+        server,
     } = slot
     {
         // Stop the old server and wait for its task to fully exit, so the
@@ -354,6 +362,10 @@ async fn restart_daemon_inner() -> Result<kernel::config::Config> {
             .is_err()
         {
             tracing::warn!("timed out waiting for old daemon server to exit; aborting it and spawning new one anyway");
+            // 先强拆（取消 kernel+server 全部 token，旧 daemon 的通道/
+            // conductor/cron 必死），再 abort——否则 abort 只放弃等待，
+            // 旧内核活着与新内核并存（S2：重复消费飞书消息、双卡）。
+            server.force_shutdown().await;
             // Abort the stuck task: letting it run would execute its
             // deferred pid/socket cleanup *after* the new daemon bound the
             // same paths, deleting the new daemon's socket file. We clean
