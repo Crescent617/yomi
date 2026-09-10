@@ -41,8 +41,9 @@ const DIR_NAME: &str = "feishu_card_triggers";
 const EVENT_NAME: &str = "card_trigger";
 /// 单次执行上限（与 hooks 同值）。
 const TIMEOUT: Duration = Duration::from_secs(30);
-/// 触发器名长度上限。
-const MAX_NAME_LEN: usize = 64;
+/// 触发器名长度上限：自定值（非 provider 约束——名字只进按钮 value
+/// 与文件路径；文件名硬边界 255 字节，128 留足余量兼挡垃圾超长串）。
+const MAX_NAME_LEN: usize = 128;
 
 /// `ext_<名>` 路由入口（hub 调用）：取数据目录后转 `dispatch`。
 pub(crate) async fn handle_card_action(
@@ -89,8 +90,9 @@ async fn dispatch(
     run(data_dir, channel_name, name, &path, action).await;
 }
 
-/// 触发器名合法性：字母开头、`[a-zA-Z0-9_-]`、≤64（与 tools 命名约束
-/// 同交集）。名字会拼进文件路径，必须挡掉 `.`/`/`/非 ASCII。
+/// 触发器名合法性：字母开头、`[a-zA-Z0-9_-]`、≤128（字符集与 tools
+/// 同交集；长度上限是自选值，见 `MAX_NAME_LEN`）。名字会拼进文件
+/// 路径，必须挡掉 `.`/`/`/非 ASCII。
 fn valid_name(name: &str) -> Option<&str> {
     let ok = !name.is_empty()
         && name.len() <= MAX_NAME_LEN

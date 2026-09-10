@@ -121,9 +121,10 @@ tool error 喂回 agent。示例：`examples/tools/stock_quote/`（python，
 
 `<data_dir>/channels/feishu_card_triggers/<名>` 一个带执行位的文件
 就是一只触发器：卡片按钮的 value 写 `{"action":"ext_<名>", ...}`，
-用户点击按钮即执行（按名路由，一个按钮一个处理器）。执行位开关、
-命名约束（字母开头 `[a-zA-Z0-9_-]`、≤64）与 hook 相同。点击未注册
-的名字会回一条"未知触发器"提示。
+用户点击按钮即执行（按名路由，一个按钮一个处理器）。执行位开关与
+hook 相同；命名约束字符集同 tools（字母开头 `[a-zA-Z0-9_-]`），长度
+上限 128（名字不进模型，非 provider 约束）。点击未注册的名字会回
+一条"未知触发器"提示。
 
 发卡不用 yomi 参与：用同一个 bot 的任意方式发卡即可（如 lark-cli
 发 interactive 消息），按钮回调按应用投递，天然回到 daemon。

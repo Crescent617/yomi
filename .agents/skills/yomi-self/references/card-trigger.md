@@ -16,7 +16,8 @@ $YOMI_DATA_DIR/channels/feishu_card_triggers/
 卡片按钮的 value 写 `{"action":"ext_<名>", ...}`，用户点击即执行对应
 条目。`ext_` 是预留命名空间（内建：`ask_ mb_ act_ bg_ pg_ cfg_
 cron_`；无前缀归审批）。名字约束：字母开头、仅 `[a-zA-Z0-9_-]`、
-≤64——名字拼进文件路径，此校验挡路径穿越。点击未注册/非法名字回
+≤128（长度是自选值非 provider 约束——名字只进按钮 value 与文件
+路径）——名字拼进文件路径，此校验挡路径穿越。点击未注册/非法名字回
 一条 "Unknown card trigger"（非法名不 echo 原文）。无 reload：每次
 点击实时解析，`chmod ±x` 即时生效。
 

@@ -27,6 +27,9 @@ ext.md）并列：同一 spawn 引擎、同一目录与环境变量约定，注�
    分钟有效，覆盖 30s 超时有余）。
 5. `union_id` 顺带透传（一个字段）；`user_id` 与 contact 查询不
    做——权限相关，脚本自理。
+6. 名字长度上限 128（初版 64 照抄 tools 的 provider 上限；触发器名
+   不进模型，真实硬边界只有文件名 255 字节——hrli 拍板放宽，
+   字符集仍与 tools 同交集）。
 
 ## 事件流
 
@@ -36,7 +39,7 @@ ext.md）并列：同一 spawn 引擎、同一目录与环境变量约定，注�
  → ChannelEvent::CardAction
  → hub 用户闸                  # blocked/allowed_users 复用，零新代码
  → ns 前缀路由 `ext_` 分支     # 与 mb_*/ask_*/cfg_* 等并列
- → 名字校验                    # 字母开头 [a-zA-Z0-9_-] ≤64，挡路径穿越
+ → 名字校验                    # 字母开头 [a-zA-Z0-9_-] ≤128，挡路径穿越
  → resolve 注册表              # 带执行位的裸文件，跟随符号链接
  → spawn 引擎                  # 30s、setsid 组杀、stderr ≤64KB
 ```
