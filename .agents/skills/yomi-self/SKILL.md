@@ -1,6 +1,6 @@
 ---
 name: yomi-self
-description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话、cron 和数据。Use when 要 doctor 自检、重启 daemon、看日志、检索/查看/驱动会话、管理 cron 与 workflow/hook/tool 脚本、gc 清理、查 token 用量、跑 headless，或 events/rpc 调试。"
+description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话、cron 和数据。Use when 要 doctor 自检、重启 daemon、看日志、检索/查看/驱动会话、管理 cron 与 workflow/hook/tool/卡片触发器脚本、gc 清理、查 token 用量、跑 headless，或 events/rpc 调试。"
 ---
 
 # yomi 自我管理
@@ -52,6 +52,10 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 ## tool
 
 `$YOMI_DATA_DIR/tools/<名>/` 放 `tool.json` + 可执行 `run` 即注册。契约见 `references/tools.md`。
+
+## 飞书自定义 card Trigger
+
+`$YOMI_DATA_DIR/channels/feishu_card_triggers/<名>` 带执行位的条目即注册（按钮 value 写 `{"action":"ext_<名>",…}`，点击即执行）。契约见 `references/card-trigger.md`。
 
 ## 清理
 

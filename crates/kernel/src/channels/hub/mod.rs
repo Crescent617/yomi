@@ -378,8 +378,8 @@ impl ChannelHub {
                                     }
                                     // 按钮命名空间路由：mb_* 归 mailbox
                                     // 管理面，act_*/bg_*/pg_*/ask_* 各归
-                                    // 其动作面，cfg_* 归设置面板，其余
-                                    // 归权限审批。
+                                    // 其动作面，cfg_* 归设置面板，ext_*
+                                    // 归用户卡片触发器，其余归权限审批。
                                     let ns = action.value["action"].as_str().unwrap_or_default();
                                     if ns.starts_with("ask_") {
                                         let Some(kernel) = kernel_weak.upgrade() else {
@@ -429,6 +429,14 @@ impl ChannelHub {
                                         };
                                         crate::channels::cron_card::handle_card_action(
                                             &name, &config, &kernel, &adapter, action,
+                                        )
+                                        .await;
+                                    } else if ns.starts_with("ext_") {
+                                        let Some(kernel) = kernel_weak.upgrade() else {
+                                            return;
+                                        };
+                                        crate::channels::card_trigger::handle_card_action(
+                                            &name, &kernel, &adapter, &action,
                                         )
                                         .await;
                                     } else {

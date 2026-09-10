@@ -17,6 +17,7 @@ pub(crate) use utils::MAX_RETRY_DELAY;
 
 pub(crate) mod attachments;
 
+pub(crate) mod card_trigger;
 pub(crate) mod comment;
 
 // 目录分组（2026-08-22）：源文件按职责落子目录，模块路径经再导出
@@ -551,12 +552,17 @@ pub struct DocPermissionRequest {
 #[derive(Debug, Clone)]
 pub struct CardAction {
     pub operator_open_id: String,
+    /// Union id of the operator, when the platform provides it.
+    pub operator_union_id: Option<String>,
     /// Chat the callback happened in (for feedback messages), when the
     /// platform provides it.
     pub chat_id: Option<String>,
     /// Message the button card lives in (for in-place card refresh),
     /// when the platform provides it.
     pub message_id: Option<String>,
+    /// Callback token (feishu: delayed card update, 30 min TTL), when
+    /// the platform provides it.
+    pub token: Option<String>,
     /// Button value, e.g. `{"action": "approve"|"deny", "id": N}`.
     pub value: serde_json::Value,
 }

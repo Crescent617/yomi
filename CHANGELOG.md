@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **分类**：`Added` 新能力 / `Changed` 行为变化 / `Fixed` 问题修复 / `Removed` 移除能力。
 - **配置与命令必须点名**：新增或变更配置项、命令时，写出名称与默认值。
 
+## [Unreleased]
+
+### Added
+
+- 新增飞书卡片触发器：在数据目录 `channels/feishu_card_triggers/` 放一个带执行位的 `<名字>` 脚本，卡片按钮的 value 写 `{"action":"ext_<名字>", ...}`，用户点击按钮即执行该脚本；点击未注册的名字会收到一条"未知触发器"提示。
+- 触发器脚本从 stdin 收单行 JSON：点击者的 open_id 与 union_id、chat_id、message_id、按钮 value 全文，以及回调 token（点击后 30 分钟内可用它延时更新卡片，窗口期外可用 message_id 调接口改卡）；单条 30 秒超时，退出码只记日志不影响使用。
+- 触发器脚本注入环境变量 `YOMI_EVENT=card_trigger` 与 `YOMI_STATE_DIR`（`state/channels/feishu_card_triggers/<名字>/`），与 hooks/tools 同一套外挂约定；用法见 docs/EXTENSIONS.md。
+
 ## [0.10.27] - 2026-09-07
 
 ### Added

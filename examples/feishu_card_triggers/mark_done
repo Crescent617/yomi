@@ -1,0 +1,19 @@
+#!/bin/sh
+# mark_done —— 飞书卡片触发器示例：点击后把卡片原地改成"✅ 已处理"。
+#
+# 注册：复制（或软链）到 <data_dir>/channels/feishu_card_triggers/mark_done
+# 并 chmod +x；发卡时按钮 value 写 {"action":"ext_mark_done"}。
+#
+# 改卡走 message_id 路径（任意时刻有效；回调 token 的 30 分钟延时更新
+# 路径见 docs/EXTENSIONS.md）。改卡须发卡应用的身份：`--as bot` 固定
+# bot 身份，且 lark-cli 默认 profile 必须是发卡的那个应用（多 profile
+# 环境用 `lark-cli --profile <名> api …` 显式选）。
+set -eu
+
+input=$(cat)
+msg_id=$(printf '%s' "$input" | jq -r '.message_id // empty')
+[ -n "$msg_id" ] || exit 0
+
+card='{"schema":"2.0","body":{"elements":[{"tag":"markdown","content":"✅ 已处理"}]}}'
+body=$(jq -n --arg c "$card" '{content: $c}')
+lark-cli api PATCH "/open-apis/im/v1/messages/$msg_id" --as bot --data "$body" >/dev/null

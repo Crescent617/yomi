@@ -312,8 +312,10 @@ async fn settings_card_cfg_ctx_callback_and_reset_all() {
 
     let action = |value: serde_json::Value| crate::channels::CardAction {
         operator_open_id: "admin-1".to_string(),
+        operator_union_id: None,
         chat_id: Some("oc_1".to_string()),
         message_id: None,
+        token: None,
         value,
     };
 
@@ -354,8 +356,10 @@ async fn settings_card_cfg_ctx_callback_and_reset_all() {
         &adapter,
         crate::channels::CardAction {
             operator_open_id: "user-1".to_string(),
+            operator_union_id: None,
             chat_id: Some("oc_1".to_string()),
             message_id: None,
+            token: None,
             value: serde_json::json!({"action": "cfg_ctx", "scope": "oc_1", "option": "65.5k (50%)"}),
         },
     )
@@ -489,8 +493,10 @@ async fn settings_card_thread_scope() {
 
     let action = |value: serde_json::Value| crate::channels::CardAction {
         operator_open_id: "admin-1".to_string(),
+        operator_union_id: None,
         chat_id: Some("oc_1".to_string()),
         message_id: None,
+        token: None,
         value,
     };
 
@@ -705,8 +711,10 @@ async fn settings_card_cfg_watch_callback() {
 
     let action = |value: serde_json::Value| crate::channels::CardAction {
         operator_open_id: "admin-1".to_string(),
+        operator_union_id: None,
         chat_id: Some("oc_cfgw".to_string()),
         message_id: None,
+        token: None,
         value,
     };
 
@@ -832,8 +840,10 @@ async fn settings_card_cfg_watch_callback() {
         &adapter,
         crate::channels::CardAction {
             operator_open_id: "user-1".to_string(),
+            operator_union_id: None,
             chat_id: Some("oc_cfgw".to_string()),
             message_id: None,
+            token: None,
             value: serde_json::json!({"action": "cfg_watch", "scope": "oc_cfgw", "dm": false, "option": "on"}),
         },
     )
@@ -5811,8 +5821,10 @@ async fn settings_card_thread_clear_semantics() {
     };
     let action = |value: serde_json::Value| crate::channels::CardAction {
         operator_open_id: "admin-1".to_string(),
+        operator_union_id: None,
         chat_id: Some("oc_1".to_string()),
         message_id: None,
+        token: None,
         value,
     };
 
@@ -10460,8 +10472,10 @@ async fn mailbox_command_show_retract_clear_and_card_actions() {
         &adapter,
         crate::channels::CardAction {
             operator_open_id: "ou_admin".to_string(),
+            operator_union_id: None,
             chat_id: Some("oc_1".to_string()),
             message_id: Some("om_card".to_string()),
+            token: None,
             value: serde_json::json!({"action": "mb_retract", "sid": sid.0, "item": item_id.as_str()}),
         },
     )
@@ -10486,8 +10500,10 @@ async fn mailbox_command_show_retract_clear_and_card_actions() {
         &adapter,
         crate::channels::CardAction {
             operator_open_id: "ou_admin".to_string(),
+            operator_union_id: None,
             chat_id: Some("oc_1".to_string()),
             message_id: Some("om_card".to_string()),
+            token: None,
             value: serde_json::json!({"action": "mb_refresh", "sid": sid.0}),
         },
     )

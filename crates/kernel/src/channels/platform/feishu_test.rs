@@ -1930,9 +1930,10 @@ async fn card_action_payload_is_forwarded() {
         "schema": "2.0",
         "header": { "event_type": "card.action.trigger" },
         "event": {
-            "operator": { "open_id": "ou_admin" },
+            "operator": { "open_id": "ou_admin", "union_id": "on_admin" },
             "action": { "value": { "action": "approve", "id": 3 } },
-            "context": { "open_chat_id": "oc_chat" }
+            "context": { "open_chat_id": "oc_chat" },
+            "token": "c-callback-tok"
         }
     });
 
@@ -1946,7 +1947,9 @@ async fn card_action_payload_is_forwarded() {
         panic!("expected CardAction");
     };
     assert_eq!(action.operator_open_id, "ou_admin");
+    assert_eq!(action.operator_union_id.as_deref(), Some("on_admin"));
     assert_eq!(action.chat_id.as_deref(), Some("oc_chat"));
+    assert_eq!(action.token.as_deref(), Some("c-callback-tok"));
     assert_eq!(action.value, json!({ "action": "approve", "id": 3 }));
 }
 
@@ -1968,6 +1971,8 @@ async fn card_action_bare_body_is_tolerated() {
         panic!("expected CardAction");
     };
     assert_eq!(action.operator_open_id, "ou_admin");
+    assert_eq!(action.operator_union_id, None);
+    assert_eq!(action.token, None);
     assert_eq!(action.value, json!({ "action": "deny", "id": 5 }));
 }
 

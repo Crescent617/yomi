@@ -2,22 +2,26 @@
 
 外挂 = **文件系统注册、kernel 以 spawn 驱动、stdio 契约的外部程序**。
 没有 socket、没有 SDK、没有注册 RPC：把可执行文件放进数据目录的对应
-文件夹，它就开始工作。两个表面，一个引擎：
+文件夹，它就开始工作。三个表面，一个引擎：
 
 | 表面 | 目录 | 干什么 |
 |---|---|---|
 | hook（拦截） | `<data_dir>/hooks/<事件>/` | kernel 事件发生时过闸，可否决 |
 | tool（能力） | `<data_dir>/tools/<名>/` | 给 agent 增加可调用的工具 |
+| 卡片触发器（交互） | `<data_dir>/channels/feishu_card_triggers/<名>/` | 用户点飞书卡片按钮时执行 |
 
 通用规则：执行位即开关（`chmod ±x` 即时生效）、无 reload（每次事件
 readdir，目录是真相）、隐藏项跳过、符号链接跟随（stow/nix 部署友好）。
 每个外挂有自己的持久状态目录（环境变量 `YOMI_STATE_DIR` 指向，daemon
 惰性创建）：hook 为 `<data_dir>/state/hooks/<事件>/<脚本名>/`，tool 为
-`<data_dir>/state/tools/<名>/`——去重水位、缓存、留档都放那。
+`<data_dir>/state/tools/<名>/`，卡片触发器为
+`<data_dir>/state/channels/feishu_card_triggers/<名>/`——去重水位、
+缓存、留档都放那。
 
 子进程统一注入环境变量：`YOMI_EVENT`（事件标识：hook 为 hook point
-名，tool 为 `tool`）、`YOMI_DATA_DIR`、`YOMI_STATE_DIR`、
-`YOMI_SESSION_ID`（daemon 通知点不注入）。`pre_tool_use` 另有兼容变量
+名，tool 为 `tool`，卡片触发器为 `card_trigger`）、`YOMI_DATA_DIR`、
+`YOMI_STATE_DIR`、`YOMI_SESSION_ID`（daemon 通知点与卡片触发器不
+注入）。`pre_tool_use` 另有兼容变量
 `YOMI_HOOK_EVENT`（同 `YOMI_EVENT`；daemon 通知点没有也不继承）。
 回连 yomi 走 CLI（如
 `yomi session cat "$YOMI_SESSION_ID"`），不碰 socket。
@@ -112,6 +116,42 @@ tool error 喂回 agent。示例：`examples/tools/stock_quote/`（python，
 20 行，无 SDK）。
 
 工具表在会话 spawn 时扫描合并；新会话 / `/clear` / idle respawn 后生效。
+
+## 飞书卡片触发器
+
+`<data_dir>/channels/feishu_card_triggers/<名>` 一个带执行位的文件
+就是一只触发器：卡片按钮的 value 写 `{"action":"ext_<名>", ...}`，
+用户点击按钮即执行（按名路由，一个按钮一个处理器）。执行位开关、
+命名约束（字母开头 `[a-zA-Z0-9_-]`、≤64）与 hook 相同。点击未注册
+的名字会回一条"未知触发器"提示。
+
+发卡不用 yomi 参与：用同一个 bot 的任意方式发卡即可（如 lark-cli
+发 interactive 消息），按钮回调按应用投递，天然回到 daemon。
+
+**stdin**（单行 JSON，契约只增不改）：
+
+```json
+{"event":"card_trigger","name":"publish","channel":"feishu",
+ "operator_open_id":"ou_…","operator_union_id":null,
+ "chat_id":"oc_…","message_id":"om_…","token":"c-…",
+ "value":{"action":"ext_publish","id":1}}
+```
+
+**改卡**：`token` 是回调 token，点击后 30 分钟内可用「延时更新消息
+卡片」接口原地改卡；窗口期外用 `message_id` 调「更新消息卡片」接口
+（须发卡应用的身份）。凭证不进 stdin，脚本自行经 lark-cli /
+OpenAPI 调用。`value` 全文透传——发卡时塞进去的 id、状态都在
+里面；要关联会话自己把 sid 塞进 value，脚本再调
+`yomi session send`。
+
+**退出码**：通知型无否决，`0` 成功，非零/超时（固定 30s）只记 warn
+日志。无会话语义：`YOMI_SESSION_ID` 不注入，cwd 为数据目录。
+at-least-once，有副作用的脚本自行幂等。
+
+**权限与安全**：点击先过 channel 的用户闸（`blocked_users` /
+`allowed_users`），不叠加 admin——要更严的管控，脚本拿
+`operator_open_id` 自行判断。`value` 是聊天成员可影响的输入，脚本
+把它当不可信数据（别直接拼进 shell 命令 / SQL）。
 
 ## 与 skill 的分工
 

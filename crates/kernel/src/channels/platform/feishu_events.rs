@@ -605,10 +605,12 @@ impl FeishuAdapter {
                 .as_str()
                 .unwrap_or_default()
                 .to_string(),
+            operator_union_id: body["operator"]["union_id"].as_str().map(str::to_string),
             chat_id: body["context"]["open_chat_id"].as_str().map(str::to_string),
             message_id: body["context"]["open_message_id"]
                 .as_str()
                 .map(str::to_string),
+            token: body["token"].as_str().map(str::to_string),
             value,
         };
         if action.operator_open_id.is_empty() || action.value.is_null() {
