@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **分类**：`Added` 新能力 / `Changed` 行为变化 / `Fixed` 问题修复 / `Removed` 移除能力。
 - **配置与命令必须点名**：新增或变更配置项、命令时，写出名称与默认值。
 
+## [Unreleased]
+
+### Changed
+
+- 飞书卡片触发器的点击不再受 channel 用户闸（`blocked_users` / `allowed_users`）限制：权限改由触发器脚本自行判断（stdin 里有点击者 open_id），内建卡片按钮的闸不变。**注意**：v0.10.28 已装的触发器若此前依赖白名单做权限，升级后须改为在脚本内自查 open_id。
+
 ## [0.10.28] - 2026-09-10
 
 ### Added

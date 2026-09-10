@@ -287,3 +287,30 @@ fn known_event_names_covers_registered_features() {
     assert!(names.contains(&EVENT_DOC_COMMENT));
     assert!(names.contains(&EVENT_WELCOME));
 }
+
+#[test]
+fn card_action_ext_prefix_bypasses_user_gate() {
+    let action = |value: serde_json::Value| CardAction {
+        operator_open_id: "ou_1".to_string(),
+        operator_union_id: None,
+        chat_id: None,
+        message_id: None,
+        token: None,
+        value,
+    };
+    assert!(action(serde_json::json!({"action": "ext_publish"})).bypasses_user_gate());
+    // 空名也豁免过闸——但豁免≠spawn：dispatch 的 valid_name 会拒掉它
+    assert!(action(serde_json::json!({"action": "ext_"})).bypasses_user_gate());
+    // 内建命名空间与无前缀审批不豁免
+    for v in [
+        serde_json::json!({"action": "approve", "id": 1}),
+        serde_json::json!({"action": "cfg_ctx"}),
+        serde_json::json!({"action": "mb_refresh"}),
+        serde_json::json!({"action": "ext"}), // 前缀不完整
+        serde_json::json!({"action": ""}),
+        serde_json::json!({}), // action 非字符串
+        serde_json::json!({"action": 1}),
+    ] {
+        assert!(!action(v.clone()).bypasses_user_gate(), "{v}");
+    }
+}

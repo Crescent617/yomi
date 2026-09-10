@@ -567,6 +567,21 @@ pub struct CardAction {
     pub value: serde_json::Value,
 }
 
+impl CardAction {
+    /// `ext_` 用户卡片触发器的触发器名（`ext_` 前缀剥离后）；非 `ext_`
+    /// 动作返回 `None`。前缀语义的**唯一提取点**——谓词与 dispatch
+    /// 共用，防多处解析漂移。
+    pub(crate) fn trigger_name(&self) -> Option<&str> {
+        self.value["action"].as_str()?.strip_prefix("ext_")
+    }
+
+    /// `ext_` 用户卡片触发器豁免 channel 用户闸：权限归触发器脚本自管
+    /// （`operator_open_id` 在 stdin 里，脚本自行判断），闸不代劳。
+    pub(crate) fn bypasses_user_gate(&self) -> bool {
+        self.trigger_name().is_some()
+    }
+}
+
 /// Runtime info about a channel, for UI listing
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

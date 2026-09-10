@@ -362,19 +362,23 @@ impl ChannelHub {
                                     // Card-action gate: button clicks
                                     // bypass the message gate, so every
                                     // action first re-applies its user
-                                    // rule (blocked / allowed_users).
+                                    // rule (blocked / allowed_users) —
+                                    // 除了 ext_ 触发器：权限归脚本自管，
+                                    // 闸豁免（CardAction::bypasses_user_gate）。
                                     // Admin-gated surfaces (mb_*, doc
                                     // approvals) stack check_admin in
                                     // their own handlers.
-                                    if let Some(deny) = crate::channels::check_user_access(
-                                        &config,
-                                        &action.operator_open_id,
-                                    ) {
-                                        crate::channels::approval::send_action_denial(
-                                            &adapter, &action, deny,
-                                        )
-                                        .await;
-                                        return;
+                                    if !action.bypasses_user_gate() {
+                                        if let Some(deny) = crate::channels::check_user_access(
+                                            &config,
+                                            &action.operator_open_id,
+                                        ) {
+                                            crate::channels::approval::send_action_denial(
+                                                &adapter, &action, deny,
+                                            )
+                                            .await;
+                                            return;
+                                        }
                                     }
                                     // 按钮命名空间路由：mb_* 归 mailbox
                                     // 管理面，act_*/bg_*/pg_*/ask_* 各归

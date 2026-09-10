@@ -30,6 +30,11 @@ ext.md）并列：同一 spawn 引擎、同一目录与环境变量约定，注�
 6. 名字长度上限 128（初版 64 照抄 tools 的 provider 上限；触发器名
    不进模型，真实硬边界只有文件名 255 字节——hrli 拍板放宽，
    字符集仍与 tools 同交集）。
+7. `ext_` 豁免 channel 用户闸（v0.10.28 后发版首日 hrli 拍板）：
+   `blocked_users`/`allowed_users` 不拦触发器点击，权限归脚本自管
+   （`operator_open_id` 进 stdin）——白名单不该挡住想服务闸外用户
+   的触发器；内建卡片面（审批/mb_/cfg_ 等）闸不变。实现为
+   `CardAction::bypasses_user_gate` 单点判断。
 
 ## 事件流
 
@@ -37,7 +42,7 @@ ext.md）并列：同一 spawn 引擎、同一目录与环境变量约定，注�
 飞书 ws（card 帧 / event 帧）
  → forward_card_action        # 增提 union_id、token；value 仍 opaque
  → ChannelEvent::CardAction
- → hub 用户闸                  # blocked/allowed_users 复用，零新代码
+ → hub 用户闸（ext_ 豁免）      # 权限归脚本自管，见决策 7
  → ns 前缀路由 `ext_` 分支     # 与 mb_*/ask_*/cfg_* 等并列
  → 名字校验                    # 字母开头 [a-zA-Z0-9_-] ≤128，挡路径穿越
  → resolve 注册表              # 带执行位的裸文件，跟随符号链接

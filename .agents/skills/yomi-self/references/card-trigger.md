@@ -19,7 +19,9 @@ cron_`；无前缀归审批）。名字约束：字母开头、仅 `[a-zA-Z0-9_-
 ≤128（长度是自选值非 provider 约束——名字只进按钮 value 与文件
 路径）——名字拼进文件路径，此校验挡路径穿越。点击未注册/非法名字回
 一条 "Unknown card trigger"（非法名不 echo 原文）。无 reload：每次
-点击实时解析，`chmod ±x` 即时生效。
+点击实时解析，`chmod ±x` 即时生效。点击不过 channel 用户闸
+（`blocked_users`/`allowed_users` 不拦 `ext_`）：权限策略归脚本，
+拿 `operator_open_id` 自行判断。
 
 发卡不用 yomi 参与：同一 bot 任意方式发卡（lark-cli、OpenAPI），
 回调按应用投递回 daemon。value 其余字段由发卡方自定义，kernel 不
@@ -34,7 +36,7 @@ cron_`；无前缀归审批）。名字约束：字母开头、仅 `[a-zA-Z0-9_-
 | `event` | string | 恒 `"card_trigger"` |
 | `name` | string | 触发器名（`ext_` 已剥离） |
 | `channel` | string | channel 名（多 channel 时分辨来源） |
-| `operator_open_id` | string | 点击者 open_id（已过 channel 用户闸） |
+| `operator_open_id` | string | 点击者 open_id（**不过** channel 用户闸，权限脚本自管） |
 | `operator_union_id` | string\|null | 点击者 union_id |
 | `chat_id` | string\|null | 回调所在聊天 |
 | `message_id` | string\|null | 卡片消息 id（改卡定位） |
