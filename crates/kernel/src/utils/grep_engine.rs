@@ -9,15 +9,23 @@
 //! 文件类型过滤（与 rg 同一份类型表）、multiline（`-U
 //! --multiline-dotall`）。
 //!
+//! 语义对齐原 rg 调用：含隐藏文件但遵守 gitignore（`--hidden`）、排除
+//! VCS 目录（`.git`/`.svn`/`.hg`，含同名文件）、glob 白/黑名单
+//! （gitignore 语义，支持 `!` 与 `{a,b}`）、文件类型过滤（与 rg 同一
+//! 份类型表）、multiline（`-U --multiline-dotall`）、二进制处理
+//! （遍历到的文件探测到 NUL 即停；显式单文件 root 按 convert 把 NUL
+//! 换行符化继续搜——与 rg 对显式文件的策略一致）。
+//!
 //! 与 rg 二进制的已知偏差（对 agent 工具场景无害，刻意接受）：
 //! - 非 UTF-8 内容按 lossy 读（rg 会转码 UTF-16 等编码）；
-//! - 二进制文件：探测到 NUL 即停止该文件的搜索（与 rg 一致），但
-//!   NUL 所在缓冲块内的前置匹配会被一并丢弃（rg 会报告 NUL 偏移
-//!   之前的匹配）；content 模式经 file_errors 给出「binary file
-//!   matches」信号，与 rg 的提示对齐；
-//! - 超长行不做截断（旧实现经 rg --json 调用时 --max-columns 在
-//!   JSON 路径静默无效，长行本就全量进入输出；噪声由下游分页与
-//!   截断预算兜底）；
+//! - 递归遍历中的二进制文件：NUL 所在缓冲块内的前置匹配会被一并
+//!   丢弃（rg 会报告 NUL 偏移之前的匹配）；有命中时经 `file_errors`
+//!   给出「binary file matches」信号，无命中则与 rg 一样静默；
+//! - count + multiline：按 sink 回调次数计（相邻 multiline 匹配被
+//!   grep-searcher 并块，可能比 rg 按正则匹配数的口径少；非
+//!   multiline 时两口径一致）；
+//! - count 遇二进制截断：已收集的部分计数照常返回（rg 对该文件
+//!   整体抑制计数）；
 //! - 单线程遍历：跨文件的匹配顺序是目录序（rg 并行遍历本无序），
 //!   filename 模式下游本按 mtime 重排，无影响；
 //! - 匹配全量收集后由调用方分页（与原「全量读 rg stdout 再分页」的
@@ -109,11 +117,20 @@ pub fn search(
         .build(params.pattern)
         .map_err(|e| SearchError::Pattern(e.to_string()))?;
 
+    // 显式单文件 root：与 rg 对显式文件的策略一致（convert 后静默
+    // 搜索，不发二进制信号）。
+    let explicit_file = root.is_file();
     let mut builder = grep_searcher::SearcherBuilder::new();
     builder
         .line_number(true)
         .multi_line(params.multiline)
-        .binary_detection(grep_searcher::BinaryDetection::quit(0));
+        // 与 rg 同策略：显式单文件 convert（NUL 换行符化，全文可搜）；
+        // 遍历到的文件 quit（探测到 NUL 即停）。
+        .binary_detection(if explicit_file {
+            grep_searcher::BinaryDetection::convert(0)
+        } else {
+            grep_searcher::BinaryDetection::quit(0)
+        });
     if mode == SearchMode::Content {
         builder
             .before_context(params.context_before)
@@ -171,14 +188,14 @@ pub fn search(
                 let hit = &hit_deadline;
                 let n = Cell::new(0usize);
                 let count = &n;
-                let mut sink = grep_searcher::sinks::Lossy(move |_line_number, line| {
+                let mut sink = grep_searcher::sinks::Lossy(move |_line_number, _line| {
                     if deadline_passed() {
                         hit.set(true);
                         return Ok(false);
                     }
-                    // rg -c 的口径是「参与匹配的行数」：multiline 匹配
-                    // 跨 N 行计 N（非 multiline 时每次回调恰一行）。
-                    count.set(count.get() + line.lines().count().max(1));
+                    // 按 sink 回调计匹配块数；相邻 multiline 匹配并块
+                    // 的口径偏差见模块文档。
+                    count.set(count.get() + 1);
                     Ok(true)
                 });
                 match searcher.search_path(&matcher, path, &mut sink) {
@@ -188,19 +205,26 @@ pub fn search(
                 }
             }
             SearchMode::Content => {
+                // 与 rg 一致：二进制信号以「该文件有命中」为前提，搜索前
+                // 记录基数用于判定。
+                let matches_before = content.matches.len();
                 let mut sink = CollectSink {
                     matches: &mut content.matches,
                     path,
                     deadline: params.deadline,
                     hit_deadline: &hit_deadline,
                     binary_hit: false,
+                    quit_on_binary: !explicit_file,
                 };
                 if let Err(e) = searcher.search_path(&matcher, path, &mut sink) {
                     file_errors.push(format!("{}: {e}", path.display()));
                 }
                 // 与 rg 的 "binary file matches (found "\0" byte ...)" 对齐：
-                // 二进制探测截断该文件搜索时给出信号而非静默。
-                if sink.binary_hit {
+                // 遍历到的二进制文件被截断且有命中时给出信号而非静默；
+                // 无命中文件与显式单文件 root（convert 策略）与 rg 一样
+                // 静默。
+                let binary_hit = sink.binary_hit;
+                if binary_hit && !explicit_file && content.matches.len() > matches_before {
                     file_errors.push(format!(
                         "{}: binary file matches (NUL byte detected); results may be incomplete",
                         path.display()
@@ -240,8 +264,9 @@ fn build_walker(root: &Path, params: &SearchParams) -> Result<ignore::Walk, Sear
         .ignore(true)
         .parents(true)
         .filter_entry(|e| {
-            !(e.file_type().is_some_and(|ft| ft.is_dir())
-                && matches!(e.file_name().to_str(), Some(".git" | ".svn" | ".hg")))
+            // 排除任意名为 .git/.svn/.hg 的条目（目录与同名文件，对齐
+            // 原 `!.git` 等 glob 的 basename 语义）。
+            !matches!(e.file_name().to_str(), Some(".git" | ".svn" | ".hg"))
         });
 
     if !params.glob_patterns.is_empty() {
@@ -279,6 +304,9 @@ struct CollectSink<'a> {
     deadline: Option<Instant>,
     hit_deadline: &'a Cell<bool>,
     binary_hit: bool,
+    /// 探测到二进制字节时是否停止该文件（quit 策略）；convert 策略
+    /// （显式单文件）下须返回继续，转换才会生效。
+    quit_on_binary: bool,
 }
 
 impl CollectSink<'_> {
@@ -313,7 +341,7 @@ impl Sink for CollectSink<'_> {
 
     fn binary_data(&mut self, _searcher: &Searcher, _offset: u64) -> Result<bool, Self::Error> {
         self.binary_hit = true;
-        Ok(false) // 与 BinaryDetection::quit 同向：停止该文件
+        Ok(!self.quit_on_binary)
     }
 }
 

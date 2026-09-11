@@ -178,16 +178,66 @@ fn case_insensitive_and_binary_skip() {
 #[test]
 fn binary_file_emits_signal_in_content_mode() {
     let dir = tempfile::TempDir::new().unwrap();
+    // 命中在 NUL 之前的早期缓冲块被收集、NUL 在后期块探测到：
+    // 遍历到的二进制文件有命中 → 发出「binary file matches」信号。
     let bin = dir.path().join("b.bin");
-    std::fs::write(&bin, b"binary\0main\n").unwrap();
+    let mut data = "main\n".repeat(20000).into_bytes(); // 100KB，跨缓冲块
+    data.extend_from_slice(b"\0tail\n");
+    std::fs::write(&bin, data).unwrap();
 
     let report = search(dir.path(), SearchMode::Content, &params("main")).unwrap();
+    let SearchOutcome::Content(result) = report.outcome else {
+        panic!("wrong outcome");
+    };
+    assert!(!result.matches.is_empty(), "matches before NUL are kept");
     assert!(
         report
             .file_errors
             .iter()
             .any(|e| e.contains("binary file matches")),
         "binary signal expected: {:?}",
+        report.file_errors
+    );
+}
+
+#[test]
+fn binary_file_without_match_stays_silent() {
+    let dir = tempfile::TempDir::new().unwrap();
+    // 无命中的 NUL 文件：与 rg 一致，静默跳过、不发信号。
+    let bin = dir.path().join("b.bin");
+    std::fs::write(&bin, b"binary\0data\n").unwrap();
+
+    let report = search(dir.path(), SearchMode::Content, &params("main")).unwrap();
+    let SearchOutcome::Content(result) = report.outcome else {
+        panic!("wrong outcome");
+    };
+    assert!(result.matches.is_empty());
+    assert!(
+        report.file_errors.is_empty(),
+        "no signal without matches: {:?}",
+        report.file_errors
+    );
+}
+
+#[test]
+fn explicit_single_file_root_converts_nul_bytes() {
+    // 显式单文件 root：convert 策略把 NUL 换行符化后继续搜，NUL 之后
+    // 的匹配也能搜到，且与 rg 对显式文件的策略一样不发二进制信号。
+    let dir = tempfile::TempDir::new().unwrap();
+    let bin = dir.path().join("b.bin");
+    std::fs::write(&bin, b"bin\0ary\nmain\n").unwrap();
+
+    let report = search(&bin, SearchMode::Content, &params("main")).unwrap();
+    let SearchOutcome::Content(result) = report.outcome else {
+        panic!("wrong outcome");
+    };
+    assert_eq!(result.matches.len(), 1);
+    // 行号依赖搜索路径（reader 转换后 NUL 计作一行、mmap 按原始
+    // 字节），只断言匹配内容。
+    assert_eq!(result.matches[0].lines.trim_end(), "main");
+    assert!(
+        report.file_errors.is_empty(),
+        "explicit file converts silently: {:?}",
         report.file_errors
     );
 }

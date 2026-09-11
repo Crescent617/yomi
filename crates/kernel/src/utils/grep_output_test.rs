@@ -126,31 +126,3 @@ fn test_ripgrep_result_paginate() {
     assert_eq!(paginated.len(), 3);
     assert!(truncated);
 }
-
-#[test]
-fn test_ripgrep_result_unique_files() {
-    let matches = vec![
-        GrepMatch {
-            path: PathBuf::from("src/main.rs"),
-            line_number: 1,
-            lines: "line 1".to_string(),
-        },
-        GrepMatch {
-            path: PathBuf::from("src/main.rs"),
-            line_number: 2,
-            lines: "line 2".to_string(),
-        },
-        GrepMatch {
-            path: PathBuf::from("src/lib.rs"),
-            line_number: 1,
-            lines: "line 1".to_string(),
-        },
-    ];
-
-    let result = GrepResult { matches };
-
-    let files = result.unique_files();
-    assert_eq!(files.len(), 2);
-    assert_eq!(files[0], PathBuf::from("src/main.rs"));
-    assert_eq!(files[1], PathBuf::from("src/lib.rs"));
-}

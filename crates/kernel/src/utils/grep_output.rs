@@ -29,11 +29,6 @@ impl GrepResult {
         format_matches(&paginated, show_line_numbers)
     }
 
-    /// Get unique file paths from all matches (preserves order of first appearance)
-    pub fn unique_files(&self) -> Vec<PathBuf> {
-        extract_file_paths(&self.matches)
-    }
-
     /// Get unique file paths from paginated matches
     pub fn unique_files_paginated(&self, limit: usize, offset: usize) -> Vec<PathBuf> {
         let (paginated, _) = self.paginate(limit, offset);
