@@ -102,6 +102,11 @@ impl MessageBuffer {
     /// Sanitize the message buffer by removing inconsistent tool call/response pairs.
     /// Removes assistant messages with `tool_calls` that don't have corresponding tool responses,
     /// and removes tool responses that are not immediately after their corresponding assistant.
+    /// `Role::Internal` messages are transparent to chain validation: they
+    /// carry UI metadata (e.g. subagent placeholders persisted at tool
+    /// start) and never reach the provider, so they neither join a chain
+    /// nor break one — otherwise every respawn would strip subagent tool
+    /// chains whose jsonl interleaves them (2026-09-11 对抗 review 发现).
     /// Also removes empty assistant messages (no content, no tool calls) — poison
     /// persisted by a model hiccup (empty completion); replaying them makes strict
     /// gateways 400 every request. Dropping them here lets already-poisoned
@@ -112,7 +117,8 @@ impl MessageBuffer {
         use std::collections::HashSet;
 
         // First pass: find all valid (assistant -> tool chain) groups
-        // A tool response is valid only if it immediately follows its assistant
+        // A tool response is valid only if it follows its assistant with
+        // only Internal messages (transparent) in between.
         let mut to_remove = HashSet::new();
         let n = self.messages.len();
         let mut i = 0;
@@ -150,28 +156,32 @@ impl MessageBuffer {
 
             let tool_call_count = calls.len();
             let mut valid_chain = true;
+            let mut cursor = i + 1;
 
-            for tool_idx in i + 1..=i + tool_call_count {
-                let Some(tool_msg) = self.messages.get(tool_idx) else {
+            while tool_msg_indices.len() < tool_call_count {
+                let Some(next) = self.messages.get(cursor) else {
                     valid_chain = false;
                     break;
                 };
-
-                if tool_msg.role != Role::Tool {
-                    valid_chain = false;
-                    break;
-                }
-
-                tool_msg_indices.push(tool_idx);
-
-                let Some(ref tool_call_id) = tool_msg.tool_call_id else {
-                    valid_chain = false;
-                    break;
-                };
-
-                if !expected_tool_ids.remove(tool_call_id) {
-                    valid_chain = false;
-                    break;
+                match next.role {
+                    // 透明：不参与链、不断链，也不计入移除集。
+                    Role::Internal => cursor += 1,
+                    Role::Tool => {
+                        tool_msg_indices.push(cursor);
+                        let Some(ref tool_call_id) = next.tool_call_id else {
+                            valid_chain = false;
+                            break;
+                        };
+                        if !expected_tool_ids.remove(tool_call_id) {
+                            valid_chain = false;
+                            break;
+                        }
+                        cursor += 1;
+                    }
+                    _ => {
+                        valid_chain = false;
+                        break;
+                    }
                 }
             }
 
@@ -183,12 +193,14 @@ impl MessageBuffer {
             if !valid_chain {
                 to_remove.insert(i);
                 to_remove.extend(tool_msg_indices.iter());
-                i += 1 + tool_msg_indices.len();
+                // cursor 停在断点（未消费）；从断点重扫，Internal 会
+                // 被快速跳过、Tool 作为孤儿标记——每条消息摊销 O(1)。
+                i = cursor;
                 continue;
             }
 
-            // Valid chain - skip past all tool responses
-            i += tool_call_count + 1;
+            // Valid chain - skip past the whole scanned span
+            i = cursor;
         }
 
         if to_remove.is_empty() {

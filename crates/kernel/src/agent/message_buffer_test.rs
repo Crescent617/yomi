@@ -306,3 +306,55 @@ fn test_poison_between_chain_and_tool_removes_all() {
 
     assert_eq!(buffer.len(), 0);
 }
+
+/// Internal 占位消息（subagent metadata，tool start 时由 conductor 持久
+/// 化进 jsonl）对链透明：交错在 assistant 与结果之间、或结果与结果之
+/// 间都不断链——respawn 后 subagent 工具链不再被整组抹掉。
+#[test]
+fn test_internal_placeholder_transparent_to_chain() {
+    let internal = || Message {
+        role: Role::Internal,
+        content: vec![],
+        tool_calls: None,
+        tool_call_id: Some("t1".to_string()),
+        created_at: Utc::now(),
+        token_usage: None,
+        ..Default::default()
+    };
+
+    let mut buffer = MessageBuffer::new();
+    buffer.push(create_assistant_with_tools(vec!["t1", "t2"]));
+    buffer.push(internal());
+    buffer.push(create_tool_response("t1"));
+    buffer.push(internal());
+    buffer.push(create_tool_response("t2"));
+
+    buffer.sanitize();
+
+    assert_eq!(buffer.len(), 5, "Internal must not break the tool chain");
+    assert_eq!(buffer.messages()[1].role, Role::Internal);
+    assert_eq!(buffer.messages()[3].role, Role::Internal);
+}
+
+/// 链不完整时照常剔除 assistant 与已收集结果——Internal 不陪葬（不是
+/// 链成员，留给 UI 重放）。
+#[test]
+fn test_internal_kept_when_chain_removed() {
+    let mut buffer = MessageBuffer::new();
+    buffer.push(create_assistant_with_tools(vec!["t1", "t2"]));
+    buffer.push(Message {
+        role: Role::Internal,
+        content: vec![],
+        tool_calls: None,
+        tool_call_id: None,
+        created_at: Utc::now(),
+        token_usage: None,
+        ..Default::default()
+    });
+    buffer.push(create_tool_response("t1"));
+
+    buffer.sanitize();
+
+    assert_eq!(buffer.len(), 1);
+    assert_eq!(buffer.messages()[0].role, Role::Internal);
+}
