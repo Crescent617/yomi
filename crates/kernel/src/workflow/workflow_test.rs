@@ -158,8 +158,11 @@ async fn run_timeout_kills_and_keeps_partial_output() {
     let dir = workflows_dir(tmp.path());
     std::fs::create_dir_all(&dir).unwrap();
     // 外部 /bin/echo 而不是 sh 内建 echo：内建 stdout 在非 tty 上全缓冲，
-    // SIGKILL 时未 flush 即丢。循环输出 + 3s 超时：并行测试高负载下子
-    // 进程可能数百 ms 后才真正起跑，单次 echo + 短超时曾因此 flake。
+    // SIGKILL 时未 flush 即丢。循环输出保部分输出可见。超时不取短上界：
+    // macOS 对新文件首 exec 的安全评估跨进程串行（~400ms/文件，全套
+    // 件并发 exec 全新脚本时队列可达数秒，2026-09-11 对抗 review 根
+    // 因），3s 曾在全量并行下等不到脚本起跑而 flake——15s 只在病态
+    // 时多等，正常跑仍旧 1s 内拿到 before。
     let path = write_script(
         &dir,
         "hang.sh",
@@ -173,7 +176,7 @@ async fn run_timeout_kills_and_keeps_partial_output() {
         tmp.path(),
         tmp.path(),
         None,
-        Duration::from_secs(3),
+        Duration::from_secs(15),
     )
     .await
     .unwrap();
