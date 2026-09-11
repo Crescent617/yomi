@@ -17,6 +17,12 @@ pub const IS_STEER_META_KEY: &str = "is_steer";
 /// aborted turn (see `Agent::mark_interrupted`).
 pub const INTERRUPTED_META_KEY: &str = "interrupted";
 
+/// Metadata flag on a synthesized tool result persisted when the call was
+/// cancelled (user interrupt / shutdown) before producing a real result
+/// (see `Agent::build_cancelled_result`): lets transcripts and UIs tell a
+/// cancellation apart from a genuine tool error.
+pub const TOOL_CANCELLED_META_KEY: &str = "tool_cancelled";
+
 // ─── Macro: generate a distinct newtype for each ID ───────────────────────
 
 macro_rules! define_id {

@@ -16,6 +16,10 @@
 //!             └─ join_next() loop
 //!                  ├─ emit End event
 //!                  └─ push_message()  — immediately persisted
+//!             └─ on cancel: abort all, drain + persist what finished,
+//!               then persist a synthesized cancelled result for every
+//!               call that never did — the assistant→tool chain stays
+//!               complete, so `sanitize` keeps the batch in context
 //!   └─ finish_tool_batch()           — back to Streaming for the next model round
 //! ```
 
@@ -183,6 +187,39 @@ impl Agent {
         }
     }
 
+    /// Build a cancelled tool result: the call was aborted (user interrupt
+    /// or shutdown) before producing a real result. Shaped like a denied
+    /// result — an error `ToolOutput` wrapped into the `End` event +
+    /// persisted message pair — plus a metadata flag so transcripts and UIs
+    /// can tell a cancellation apart from a genuine tool error.
+    fn build_cancelled_result(
+        &self,
+        call_id: &str,
+        tool_name: &str,
+        message_ids: &BTreeMap<String, MessageId>,
+    ) -> ToolExecutionResult {
+        let message_id = message_ids[call_id].clone();
+        let output = crate::types::ToolOutput::error(CANCELLED_TOOL_OUTPUT_TEXT);
+        let (event, mut message) = build_tool_result(
+            call_id,
+            tool_name,
+            &output,
+            0,
+            message_id.clone(),
+            self.max_tool_output_length,
+        );
+        message.metadata = Some(std::collections::HashMap::from([(
+            crate::types::TOOL_CANCELLED_META_KEY.to_string(),
+            "true".to_string(),
+        )]));
+        ToolExecutionResult {
+            tool_call_id: call_id.to_string(),
+            message_id,
+            event,
+            message,
+        }
+    }
+
     /// Run the permission checker; returns `(approved, denied_results)`.
     async fn check_permissions(
         &self,
@@ -261,7 +298,12 @@ impl Agent {
         }
 
         let cancel_token = self.create_runtime_token();
-        let mut join_set = self.spawn_tool_tasks(approved, message_ids, &cancel_token);
+        let mut join_set = self.spawn_tool_tasks(&approved, message_ids, &cancel_token);
+        // Ids of calls whose result has been persisted in this batch —
+        // filled by both the normal join arm and the post-abort drain, so
+        // the cancel path only synthesizes placeholders for calls that
+        // truly never produced a result (no double-persist).
+        let mut done_ids = HashSet::new();
 
         loop {
             tokio::select! {
@@ -272,9 +314,26 @@ impl Agent {
                     // results that finished before the abort propagated.
                     while let Some(outcome) = join_set.join_next().await {
                         if let Some(result) = Self::unwrap_join_outcome(outcome) {
+                            done_ids.insert(result.tool_call_id.clone());
                             self.emit_and_save_results(vec![result]);
                         }
                     }
+                    // Persist a synthesized cancelled result (call order) for
+                    // every call that never produced one: the assistant→tool
+                    // chain stays complete, so `sanitize` keeps the batch in
+                    // the provider-facing context and the model sees what it
+                    // attempted and where it was interrupted (a dangling call
+                    // would strip the whole chain). On the daemon-shutdown
+                    // path these bus-published messages may be lost with the
+                    // conductor, as can drained results above — the
+                    // direct-written interruption marker remains the
+                    // guaranteed record there.
+                    let cancelled: Vec<_> = approved
+                        .iter()
+                        .filter(|c| !done_ids.contains(c.id.as_str()))
+                        .map(|c| self.build_cancelled_result(&c.id, &c.name, message_ids))
+                        .collect();
+                    self.emit_and_save_results(cancelled);
                     return Err(AgentError::Cancelled("tool execution".into()));
                 }
                 outcome = join_set.join_next() => {
@@ -282,6 +341,7 @@ impl Agent {
                         None => break,   // JoinSet exhausted
                         Some(r) => {
                             let Some(result) = Self::unwrap_join_outcome(r) else { continue; };
+                            done_ids.insert(result.tool_call_id.clone());
                             log_tool_result(&result);
                             self.emit(Event::Tool(result.event));
                             self.push_message(result.message);
@@ -297,7 +357,7 @@ impl Agent {
     /// Spawn one task per approved call.
     fn spawn_tool_tasks(
         &self,
-        calls: Vec<ToolCall>,
+        calls: &[ToolCall],
         message_ids: &BTreeMap<String, MessageId>,
         cancel_token: &tokio_util::sync::CancellationToken,
     ) -> JoinSet<ToolExecutionResult> {
@@ -395,6 +455,12 @@ impl Agent {
 }
 
 // ── free functions ────────────────────────────────────────────────────────────
+
+/// Error text for synthesized cancelled tool results (persisted when a call
+/// is aborted mid-batch). Neutral on the cancel origin — user interrupt and
+/// daemon shutdown both flow through here; `build_tool_result` prepends
+/// "Error: ".
+const CANCELLED_TOOL_OUTPUT_TEXT: &str = "Tool execution cancelled";
 
 /// Assign a fresh `MessageId` to every tool call so that `Start` and `End`
 /// events for the same call share one stable identifier.

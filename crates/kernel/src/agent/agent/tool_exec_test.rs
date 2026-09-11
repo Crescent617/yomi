@@ -46,3 +46,200 @@ async fn preassigned_message_id_is_preserved_by_tool_result() {
         event => panic!("expected tool end event, got {event:?}"),
     }
 }
+
+/// Mid-batch cancel: calls that already finished keep their real results;
+/// every still-running call gets a synthesized cancelled result persisted
+/// (call order, metadata-flagged), so the assistant→tool chain stays
+/// complete and `sanitize` keeps the whole batch in context.
+#[tokio::test]
+async fn cancel_persists_cancelled_results_for_unfinished_calls() {
+    use super::CANCELLED_TOOL_OUTPUT_TEXT;
+    use crate::agent::{Agent, AgentError, AgentShared, AgentSpawnArgs};
+    use crate::tools::{Tool, ToolExecCtx};
+    use crate::types::{Message, Result, Role, SessionId, ToolOutput, TOOL_CANCELLED_META_KEY};
+    use async_trait::async_trait;
+    use serde_json::Value;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::Notify;
+
+    struct FastTool(Arc<Notify>);
+
+    #[async_trait]
+    impl Tool for FastTool {
+        fn name(&self) -> &'static str {
+            "probe_fast"
+        }
+        fn desc(&self) -> &'static str {
+            "returns immediately"
+        }
+        fn schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+        async fn exec(&self, _args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
+            self.0.notify_one();
+            Ok(ToolOutput::text("fast ok"))
+        }
+    }
+
+    struct SlowTool(&'static str);
+
+    #[async_trait]
+    impl Tool for SlowTool {
+        fn name(&self) -> &'static str {
+            self.0
+        }
+        fn desc(&self) -> &'static str {
+            "never completes"
+        }
+        fn schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+        async fn exec(&self, _args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
+            std::future::pending::<()>().await;
+            unreachable!("slow tool never completes")
+        }
+    }
+
+    let shared = Arc::new(AgentShared::new(
+        Arc::new(BTreeMap::new()),
+        "test".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+        None,
+    ));
+    let working_dir = tempfile::tempdir().unwrap();
+    let args = AgentSpawnArgs {
+        base_prompt: "test".to_string(),
+        skills: Vec::new(),
+        history: Vec::new(),
+        session_id: SessionId::new().to_string(),
+        parent_session_id: None,
+        max_iterations: 1,
+        working_dir: working_dir.path().to_path_buf(),
+        cancel_token: None,
+        tool_flags: crate::tools::ToolFlags::new(false),
+        file_state_store: None,
+        tool_blocklist: Vec::new(),
+        max_tool_output_length: 1024,
+        mailbox: Arc::new(crate::comms::Mailbox::new()),
+        input_bus: None,
+        ext_tools: Vec::new(),
+    };
+    let mut agent = Agent::new(&shared, args).await;
+
+    let fast_done = Arc::new(Notify::new());
+    agent.tool_registry.register(FastTool(fast_done.clone()));
+    agent.tool_registry.register(SlowTool("probe_slow_a"));
+    agent.tool_registry.register(SlowTool("probe_slow_b"));
+
+    let mut assistant = Message::assistant("running tools");
+    assistant.tool_calls = Some(vec![
+        ToolCall {
+            id: "call-fast".to_string(),
+            name: "probe_fast".to_string(),
+            arguments: json!({}),
+        },
+        ToolCall {
+            id: "call-slow-a".to_string(),
+            name: "probe_slow_a".to_string(),
+            arguments: json!({}),
+        },
+        ToolCall {
+            id: "call-slow-b".to_string(),
+            name: "probe_slow_b".to_string(),
+            arguments: json!({}),
+        },
+    ]);
+    agent.message_buffer.push_arc(Arc::new(assistant));
+
+    // Cancel once the fast tool has run and its result had a beat to land;
+    // the two slow tools are still pending at that point. The margin is
+    // generous: the fast result must finish wrapping (build_tool_result +
+    // image normalize) and be persisted before the cancel lands, or the
+    // fast assertions below flake on a stalled runner.
+    let cancel = agent.cancel_token.clone();
+    tokio::spawn(async move {
+        fast_done.notified().await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        cancel.cancel();
+    });
+
+    let result = tokio::time::timeout(Duration::from_secs(10), agent.handle_execute_tool())
+        .await
+        .expect("tool batch should settle promptly after cancel");
+    assert!(
+        matches!(result, Err(AgentError::Cancelled(_))),
+        "expected cancellation, got {result:?}"
+    );
+
+    // Buffer: one tool result per call — the fast one first (completed
+    // before the cancel), then cancelled placeholders in call order.
+    let tool_call_ids: Vec<&str> = agent
+        .message_buffer
+        .messages()
+        .iter()
+        .filter(|m| m.role == Role::Tool)
+        .map(|m| m.tool_call_id.as_deref().unwrap_or_default())
+        .collect();
+    assert_eq!(tool_call_ids, ["call-fast", "call-slow-a", "call-slow-b"]);
+
+    let tool_msg = |id: &str| {
+        agent
+            .message_buffer
+            .messages()
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some(id))
+            .unwrap_or_else(|| panic!("missing tool result for {id}"))
+            .clone()
+    };
+    let text_of = |m: &Message| match m.content.first() {
+        Some(crate::types::ContentBlock::Text { text }) => text.clone(),
+        other => panic!("expected text content, got {other:?}"),
+    };
+
+    // Completed call: real result, no cancelled flag.
+    let fast = tool_msg("call-fast");
+    assert!(text_of(&fast).contains("fast ok"));
+    assert!(!fast
+        .metadata
+        .as_ref()
+        .is_some_and(|md| md.contains_key(TOOL_CANCELLED_META_KEY)));
+
+    // Unfinished calls: synthesized cancelled results, metadata-flagged.
+    for id in ["call-slow-a", "call-slow-b"] {
+        let msg = tool_msg(id);
+        assert_eq!(
+            text_of(&msg),
+            format!("Error: {CANCELLED_TOOL_OUTPUT_TEXT}")
+        );
+        assert_eq!(
+            msg.metadata
+                .as_ref()
+                .and_then(|md| md.get(TOOL_CANCELLED_META_KEY))
+                .map(String::as_str),
+            Some("true"),
+            "cancelled flag missing on {id}"
+        );
+    }
+
+    // Batch looks fully answered: a respawn finds nothing to re-execute…
+    let (_, pending) = agent.pending_tool_calls().expect("tool batch present");
+    assert!(
+        pending.is_empty(),
+        "cancelled calls must not be re-executed"
+    );
+
+    // …and the complete chain survives the pre-provider sanitize pass.
+    let before = agent.message_buffer.messages().len();
+    agent.message_buffer.sanitize();
+    assert_eq!(agent.message_buffer.messages().len(), before);
+}
