@@ -502,3 +502,104 @@ fn close_dangling_leaves_orphan_tool_untouched() {
     assert!(synthesized.is_empty());
     assert_eq!(out.len(), 3);
 }
+
+#[test]
+fn close_dangling_migrates_late_results_instead_of_resynthesizing() {
+    // 跨 respawn 布局：上轮关账的合成结果 append 在文件尾（marker
+    // 之后）。本轮必须迁移它回批内而非再合成——否则文件每轮 +N。
+    let first_pass = arcs(vec![
+        create_user_message("go"),
+        create_assistant_with_tools(vec!["t1"]),
+        create_user_message("[interrupted: cancelled]"),
+    ]);
+    let (_, synthesized_once) = MessageBuffer::close_dangling_tool_batches(&first_pass, 1000);
+    assert_eq!(synthesized_once.len(), 1);
+    // 模拟落盘布局：原历史（缺口）+ 合成结果 append 尾。
+    let mut persisted = first_pass.clone();
+    persisted.push(Arc::new(synthesized_once.into_iter().next().unwrap()));
+
+    let (closed_twice, synthesized_twice) =
+        MessageBuffer::close_dangling_tool_batches(&persisted, 1000);
+    assert!(
+        synthesized_twice.is_empty(),
+        "late result must be migrated, not re-synthesized: {synthesized_twice:?}"
+    );
+    // 迁移后内存视图：tool 结果回到批内、marker 之前。
+    assert_eq!(closed_twice.len(), 4);
+    assert_eq!(closed_twice[1].role, Role::Assistant);
+    assert_eq!(closed_twice[2].role, Role::Tool);
+    assert_eq!(closed_twice[2].tool_call_id.as_deref(), Some("t1"));
+    assert_eq!(closed_twice[3].role, Role::User);
+    // sanitize 视图完整（无剔除）。
+    assert_eq!(
+        MessageBuffer::sanitized_model_messages(&closed_twice).len(),
+        4
+    );
+}
+
+#[test]
+fn close_dangling_migrates_real_result_written_after_marker() {
+    // 总线乱序：真实结果落盘在 marker 之后——关账迁移真实结果，
+    // 不合成 cancelled 覆盖它。
+    let history = arcs(vec![
+        create_assistant_with_tools(vec!["t1"]),
+        create_user_message("[interrupted: cancelled]"),
+        create_tool_response("t1"),
+    ]);
+    let (out, synthesized) = MessageBuffer::close_dangling_tool_batches(&history, 1000);
+    assert!(synthesized.is_empty());
+    assert_eq!(out.len(), 3);
+    assert_eq!(out[1].role, Role::Tool);
+    let ContentBlock::Text { text } = &out[1].content[0] else {
+        panic!("text block expected");
+    };
+    assert_eq!(
+        text, "result",
+        "real result migrated, not cancelled: {text}"
+    );
+}
+
+#[test]
+fn close_dangling_migrates_result_appearing_before_its_batch() {
+    // 病态乱序：tool 结果写在其 assistant 之前——迁移后顺序修正。
+    let history = arcs(vec![
+        create_tool_response("t1"),
+        create_assistant_with_tools(vec!["t1"]),
+    ]);
+    let (out, synthesized) = MessageBuffer::close_dangling_tool_batches(&history, 1000);
+    assert!(synthesized.is_empty());
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[0].role, Role::Assistant);
+    assert_eq!(out[1].role, Role::Tool);
+    assert_eq!(out[1].tool_call_id.as_deref(), Some("t1"));
+}
+
+#[test]
+fn close_dangling_mixed_migrate_and_synthesize() {
+    // 混合批：t1 真实结果原位、t2 结果迟到在文件尾、t3 真缺口——
+    // 原位保留 + 迁移 + 合成各就其位。
+    let history = arcs(vec![
+        create_assistant_with_tools(vec!["t1", "t2", "t3"]),
+        create_tool_response("t1"),
+        create_user_message("[interrupted: cancelled]"),
+        create_tool_response("t2"),
+    ]);
+    let (out, synthesized) = MessageBuffer::close_dangling_tool_batches(&history, 1000);
+    assert_eq!(synthesized.len(), 1);
+    assert_eq!(synthesized[0].tool_call_id.as_deref(), Some("t3"));
+    // [assistant, t1, t2(迁移), t3(合成), marker]
+    assert_eq!(out.len(), 5);
+    let seq: Vec<_> = out.iter().map(|m| m.role).collect();
+    assert_eq!(
+        seq,
+        [
+            Role::Assistant,
+            Role::Tool,
+            Role::Tool,
+            Role::Tool,
+            Role::User
+        ]
+    );
+    assert_eq!(out[2].tool_call_id.as_deref(), Some("t2"));
+    assert_eq!(out[3].tool_call_id.as_deref(), Some("t3"));
+}

@@ -243,3 +243,71 @@ async fn cancel_persists_cancelled_results_for_unfinished_calls() {
     agent.message_buffer.sanitize();
     assert_eq!(agent.message_buffer.messages().len(), before);
 }
+
+/// respawn 关账后的历史不再触发工具重放（2026-09-11 评审 S3 锁定）：
+/// dangling 批补齐 cancelled 结果后 `pending_tool_calls` 返回空
+/// pending（pure recovery）——「副作用操作默认不做」的语义防回退。
+#[tokio::test]
+async fn closed_out_history_does_not_re_execute_batch() {
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs, MessageBuffer};
+    use crate::types::{Message, SessionId};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    async fn spawn_with_history(history: Vec<Arc<Message>>) -> Agent {
+        let shared = Arc::new(AgentShared::new(
+            Arc::new(BTreeMap::new()),
+            "test".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+            None,
+        ));
+        let working_dir = tempfile::tempdir().unwrap();
+        let args = AgentSpawnArgs {
+            base_prompt: "test".to_string(),
+            skills: Vec::new(),
+            history,
+            session_id: SessionId::new().to_string(),
+            parent_session_id: None,
+            max_iterations: 1,
+            working_dir: working_dir.path().to_path_buf(),
+            cancel_token: None,
+            tool_flags: crate::tools::ToolFlags::new(false),
+            file_state_store: None,
+            tool_blocklist: Vec::new(),
+            max_tool_output_length: 1024,
+            mailbox: Arc::new(crate::comms::Mailbox::new()),
+            input_bus: None,
+            ext_tools: Vec::new(),
+        };
+        Agent::new(&shared, args).await
+    }
+
+    let mut assistant = Message::assistant("running tools");
+    assistant.tool_calls = Some(vec![ToolCall {
+        id: "call-1".to_string(),
+        name: "probe".to_string(),
+        arguments: json!({}),
+    }]);
+    let dangling = vec![Arc::new(Message::user("go")), Arc::new(assistant)];
+
+    // 对照：未关账的 dangling 批会被当作待执行（重放行为——关账
+    // 要消除的正是它）。
+    let agent = spawn_with_history(dangling.clone()).await;
+    let (_, pending) = agent.pending_tool_calls().expect("dangling batch detected");
+    assert_eq!(pending.len(), 1, "raw dangling batch would re-execute");
+
+    // 关账后：pending 为空，pure recovery，不重跑。
+    let (closed, synthesized) = MessageBuffer::close_dangling_tool_batches(&dangling, 1024);
+    assert_eq!(synthesized.len(), 1);
+    let agent = spawn_with_history(closed).await;
+    let (_, pending) = agent.pending_tool_calls().expect("batch still present");
+    assert!(pending.is_empty(), "closed-out batch must not re-execute");
+}
