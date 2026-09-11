@@ -8,8 +8,9 @@
 //! 名单（gitignore 语义，支持 `!` 与 `{a,b}`）、文件类型过滤（与 rg
 //! 同一份类型表）、multiline（`-U --multiline-dotall`）。二进制处理：
 //! 遍历到的文件探测到 NUL 即停（NUL 所在缓冲块内的前置匹配丢弃，
-//! 与 rg 口径相同）；被截断的文件有命中时经 `file_errors` 给出
-//! 「binary file matches」信号，无命中则与 rg 一样静默；显式单文件
+//! 与 rg 口径相同）；content 模式下被截断的文件有命中时经
+//! `file_errors` 给出「binary file matches」信号，无命中则与 rg 一样
+//! 静默；显式单文件
 //! root 按 convert 把 NUL 换行符化后继续搜，与 rg 对显式文件的策略
 //! 一致。
 //!
