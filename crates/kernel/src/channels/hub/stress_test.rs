@@ -343,6 +343,7 @@ fn _type_pin(_: &Arc<InputBus>) {}
 /// watch 会话——前者正常投递，后者 adapter 零流量（无卡、无回复、
 /// 无 typing）。这是「channel 不为观察者说一个字」的单点闸断言。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "stress test — run explicitly with --ignored"]
 async fn watch_session_events_never_reach_delivery() {
     let addr = mock_llm_server().await;
 
@@ -480,6 +481,7 @@ async fn watch_session_events_never_reach_delivery() {
 /// 转恢复方向。转发器按 session 缓存 routing（正结果 2s TTL，文档
 /// 化边界），off 后等缓存过期再发话。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "stress test — run explicitly with --ignored"]
 async fn watch_delivery_gate_kind_at_speech() {
     let addr = mock_llm_server().await;
 
