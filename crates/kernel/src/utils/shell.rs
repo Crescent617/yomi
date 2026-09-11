@@ -134,16 +134,20 @@ fn probe_shell(shell: &AgentShell) -> bool {
                 if !status.success() {
                     return false;
                 }
-                // take(256)：读满即返不等 EOF—— shim 若 spawn 了继承
-                // stdout 的长寿孙进程，EOF 永不至，read_to_string 会
-                // 无限挂起探测（MAGIC 仅 19 字节，256 足够）。
-                let mut out = String::new();
-                let Some(stdout) = child.stdout.take() else {
+                // 单次 read：try_wait 已确认子进程退出，其输出（探针
+                // echo 约 20 字节）已全部落入管道缓冲，一次 read 即返
+                // 不等 EOF——read_to_string/take 都要等写端关闭，
+                // shim 若 spawn 了继承 stdout 的长寿孙进程，EOF 永不
+                // 至，探测会被无限挂起（2026-09-11 评审实测）。
+                let mut buf = [0u8; 256];
+                let Some(mut stdout) = child.stdout.take() else {
                     return false;
                 };
-                if stdout.take(256).read_to_string(&mut out).is_err() {
-                    return false;
-                }
+                let n = match stdout.read(&mut buf) {
+                    Ok(n) => n,
+                    Err(_) => return false,
+                };
+                let out = String::from_utf8_lossy(&buf[..n]);
                 // 精确判定而非 contains：引号保真是该探针的核心属性
                 // ——能执行但篡改引号的 shim（输出残留 \" 或剥掉引号）
                 // 必须判失败。cmd echo 原样回显引号属正确行为。

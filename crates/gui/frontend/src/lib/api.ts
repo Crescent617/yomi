@@ -730,7 +730,10 @@ export async function getDaemonStatus(): Promise<{ managed: boolean }> {
 // ── Connection (local / remote daemon) ───────────────────────────────────
 
 export interface ConnectionInfo {
+  /** Display label: loopback ws/wss folds into "local". */
   mode: "local" | "remote";
+  /** Actual connection shape (data-path behavior follows this). */
+  conn: "local" | "remote";
   addr: string;
   managed: boolean;
 }

@@ -50,7 +50,7 @@
 
   const baseDir = $derived(getSession(session_id)?.project_path ?? null);
   const uniquePaths = $derived([...new Set(paths)]);
-  const isRemote = $derived(connectionState.info?.mode === "remote");
+  const isRemote = $derived(connectionState.info?.conn === "remote");
 
   // Per-image load state: undefined = loading, url = ready, failed = chip.
   // `retryable` marks failures that happened without a workspace path —

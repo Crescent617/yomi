@@ -34,14 +34,22 @@ pub async fn get_daemon_status() -> Result<serde_json::Value, GuiError> {
 fn connection_info_json(mode: &crate::state::ConnectionMode, managed: bool) -> serde_json::Value {
     use crate::state::ConnectionMode;
     // 回环 ws/wss 本质仍是本机 daemon：按 local 显示（地址仍如实展
-    // 示用户连接的端点）。
+    // 示用户连接的端点）。conn 字段保留实际连接形态——附件打开等
+    // 数据路径行为仍按实际模式（Remote 走 RPC 副本），不因显示折
+    // 叠改变（回环 daemon 可能与本机 GUI 不同 data_dir，本地路径
+    // 解析会读错文件）。
     let (mode_label, addr) = match mode {
         ConnectionMode::Local => ("local", crate::daemon::socket_addr().to_string()),
         ConnectionMode::Remote(addr) if mode.displays_as_local() => ("local", addr.to_string()),
         ConnectionMode::Remote(addr) => ("remote", addr.to_string()),
     };
+    let conn = match mode {
+        ConnectionMode::Local => "local",
+        ConnectionMode::Remote(_) => "remote",
+    };
     serde_json::json!({
         "mode": mode_label,
+        "conn": conn,
         "addr": addr,
         "managed": managed,
     })

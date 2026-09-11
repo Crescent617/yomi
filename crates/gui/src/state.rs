@@ -20,7 +20,9 @@ pub enum ConnectionMode {
 impl ConnectionMode {
     /// 显示语义上的「本机」：`Local`，或 ws/wss 地址指向回环
     ///（localhost / 127.0.0.0/8 / ::1）——回环连接本质仍是本机
-    /// daemon，不应显示为远程（2026-09-11 hrli）。
+    /// daemon，不应显示为远程（2026-09-11 hrli）。仅显示语义：
+    /// 附件打开等数据路径行为仍按实际连接模式（Remote 走 RPC
+    /// 副本），消费方经 `conn` 字段取实际形态。
     pub fn displays_as_local(&self) -> bool {
         match self {
             Self::Local => true,
