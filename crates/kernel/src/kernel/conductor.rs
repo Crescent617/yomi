@@ -633,10 +633,15 @@ impl Conductor {
             // 直写与 pool worker 并发写同一 jsonl 有粘行先例（2026-09-11
             // marker 粘行事故）。队列打满=池记 ERROR 丢件，不阻塞
             // spawn（内存历史已补齐；落盘丢失的布局由迁移逻辑在下轮
-            // respawn 幂等兜住）。
+            // respawn 幂等兜住）。无 pool 的退化配置下没有并发写入
+            // 者，直写无粘行风险。
             if let Some(ref pool) = self.agent_shared.persist_pool {
                 for message in closed {
                     pool.dispatch(&sid, persist_pool::PersistJob::Append(message));
+                }
+            } else if let Some(store) = &self.agent_shared.message_store {
+                if let Err(e) = store.append(&sid.0, &closed).await {
+                    tracing::warn!("failed to persist closed tool results: {e}");
                 }
             }
         }
