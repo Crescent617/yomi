@@ -1036,6 +1036,6 @@ fn rpc_body<T: serde::Serialize>(default_code: &str, result: crate::types::Resul
     }
 }
 
-#[cfg(all(test, unix))] // 测试夹具全部建在 unix socket 监听器上；ws 监听器的跨平台覆盖待单独补
+#[cfg(test)]
 #[path = "dispatcher_test.rs"]
 mod tests;

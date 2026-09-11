@@ -1,26 +1,9 @@
 use super::*;
 
 #[test]
-fn test_parse_begin_match_end() {
-    let json = r#"
-{"type":"begin","data":{"path":{"text":"src/main.rs"}}}
-{"type":"match","data":{"path":{"text":"src/main.rs"},"lines":{"text":"fn main()"},"line_number":1,"submatches":[{"match":{"text":"main"},"start":3,"end":7}]}}
-{"type":"end","data":{"path":{"text":"src/main.rs"}}}
-"#;
-
-    let result = parse_json_output(json);
-    assert_eq!(result.files_searched.len(), 1);
-    assert_eq!(result.matches.len(), 1);
-    assert_eq!(result.matches[0].line_number, 1);
-    assert_eq!(result.matches[0].lines, "fn main()");
-    assert_eq!(result.matches[0].submatches.len(), 1);
-    assert_eq!(result.matches[0].submatches[0].text, "main");
-}
-
-#[test]
 fn test_paginate_matches() {
-    let matches: Vec<RgMatch> = (1..=10)
-        .map(|i| RgMatch {
+    let matches: Vec<GrepMatch> = (1..=10)
+        .map(|i| GrepMatch {
             path: PathBuf::from("test.rs"),
             line_number: i,
             lines: format!("line {i}"),
@@ -51,14 +34,14 @@ fn test_paginate_matches() {
 #[test]
 fn test_format_matches() {
     let matches = vec![
-        RgMatch {
+        GrepMatch {
             path: PathBuf::from("src/main.rs"),
             line_number: 1,
             lines: "fn main()".to_string(),
             column: None,
             submatches: vec![],
         },
-        RgMatch {
+        GrepMatch {
             path: PathBuf::from("src/lib.rs"),
             line_number: 10,
             lines: "pub fn foo()".to_string(),
@@ -77,7 +60,7 @@ fn test_format_matches() {
 
 #[test]
 fn test_format_matches_multiline() {
-    let matches = vec![RgMatch {
+    let matches = vec![GrepMatch {
         path: PathBuf::from("src/main.rs"),
         line_number: 1,
         lines: "fn main() {\n    println!(\"hello\");\n}".to_string(),
@@ -97,21 +80,21 @@ fn test_format_matches_multiline() {
 #[test]
 fn test_extract_file_paths() {
     let matches = vec![
-        RgMatch {
+        GrepMatch {
             path: PathBuf::from("src/main.rs"),
             line_number: 1,
             lines: "line 1".to_string(),
             column: None,
             submatches: vec![],
         },
-        RgMatch {
+        GrepMatch {
             path: PathBuf::from("src/main.rs"),
             line_number: 2,
             lines: "line 2".to_string(),
             column: None,
             submatches: vec![],
         },
-        RgMatch {
+        GrepMatch {
             path: PathBuf::from("src/lib.rs"),
             line_number: 1,
             lines: "line 1".to_string(),
@@ -127,28 +110,27 @@ fn test_extract_file_paths() {
 }
 
 #[test]
-fn test_parse_multiline_match() {
-    let json = r#"{"type":"match","data":{"path":{"text":"src/main.rs"},"lines":{"text":"line1\nline2"},"line_number":5}}"#;
-
-    let result = parse_json_output(json);
-    assert_eq!(result.matches.len(), 1);
-    assert_eq!(result.matches[0].lines, "line1\nline2");
-}
-
-#[test]
 fn test_ripgrep_result_is_empty() {
-    let empty = RipgrepResult::default();
+    let empty = GrepResult::default();
     assert!(empty.is_empty());
 
-    let json = r#"{"type":"match","data":{"path":{"text":"src/main.rs"},"lines":{"text":"hello"},"line_number":1}}"#;
-    let result = parse_json_output(json);
+    let result = GrepResult {
+        matches: vec![GrepMatch {
+            path: PathBuf::from("src/main.rs"),
+            line_number: 1,
+            lines: "hello".to_string(),
+            column: None,
+            submatches: vec![],
+        }],
+        files_searched: vec![],
+    };
     assert!(!result.is_empty());
 }
 
 #[test]
 fn test_ripgrep_result_paginate() {
-    let matches: Vec<RgMatch> = (1..=10)
-        .map(|i| RgMatch {
+    let matches: Vec<GrepMatch> = (1..=10)
+        .map(|i| GrepMatch {
             path: PathBuf::from("test.rs"),
             line_number: i,
             lines: format!("line {i}"),
@@ -157,7 +139,7 @@ fn test_ripgrep_result_paginate() {
         })
         .collect();
 
-    let result = RipgrepResult {
+    let result = GrepResult {
         matches,
         files_searched: vec![PathBuf::from("test.rs")],
     };
@@ -170,21 +152,21 @@ fn test_ripgrep_result_paginate() {
 #[test]
 fn test_ripgrep_result_unique_files() {
     let matches = vec![
-        RgMatch {
+        GrepMatch {
             path: PathBuf::from("src/main.rs"),
             line_number: 1,
             lines: "line 1".to_string(),
             column: None,
             submatches: vec![],
         },
-        RgMatch {
+        GrepMatch {
             path: PathBuf::from("src/main.rs"),
             line_number: 2,
             lines: "line 2".to_string(),
             column: None,
             submatches: vec![],
         },
-        RgMatch {
+        GrepMatch {
             path: PathBuf::from("src/lib.rs"),
             line_number: 1,
             lines: "line 1".to_string(),
@@ -193,7 +175,7 @@ fn test_ripgrep_result_unique_files() {
         },
     ];
 
-    let result = RipgrepResult {
+    let result = GrepResult {
         matches,
         files_searched: vec![],
     };

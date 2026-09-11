@@ -1,36 +1,27 @@
-//! Helper for parsing ripgrep JSON output
-//!
-//! Ripgrep's `--json` flag produces structured output that can be parsed
-//! to extract matches, file paths, and metadata without parsing text output.
-//!
-//! Example JSON lines:
-//! ```json
-//! {"type":"begin","data":{"path":{"text":"src/main.rs"}}}
-//! {"type":"match","data":{"path":{"text":"src/main.rs"},"lines":{"text":"fn main()"},"line_number":1}}
-//! {"type":"end","data":{"path":{"text":"src/main.rs"}}}
-//! ```
+//! grep 工具的输出结构与格式化：匹配记录（`GrepMatch`）、结果集
+//! （`GrepResult`）与分页/格式化/文件提取。匹配的产生见
+//! `utils::search`（进程内搜索引擎）。
 
-use serde::Deserialize;
 use std::fmt::Write;
 use std::path::PathBuf;
 
-/// A parsed ripgrep result containing matches and metadata
+/// A parsed search result containing matches and metadata
 #[derive(Debug, Default)]
-pub struct RipgrepResult {
+pub struct GrepResult {
     /// All matches found
-    pub matches: Vec<RgMatch>,
+    pub matches: Vec<GrepMatch>,
     /// Files that were searched (whether they had matches or not)
     pub files_searched: Vec<PathBuf>,
 }
 
-impl RipgrepResult {
+impl GrepResult {
     /// Returns true if there are no matches
     pub fn is_empty(&self) -> bool {
         self.matches.is_empty()
     }
 
     /// Apply pagination to matches
-    pub fn paginate(&self, limit: usize, offset: usize) -> (Vec<RgMatch>, bool) {
+    pub fn paginate(&self, limit: usize, offset: usize) -> (Vec<GrepMatch>, bool) {
         paginate_matches(&self.matches, limit, offset)
     }
 
@@ -52,9 +43,9 @@ impl RipgrepResult {
     }
 }
 
-/// A single match from ripgrep
+/// A single match
 #[derive(Debug, Clone)]
-pub struct RgMatch {
+pub struct GrepMatch {
     /// Absolute or relative path to the file
     pub path: PathBuf,
     /// Line number (1-indexed)
@@ -64,12 +55,12 @@ pub struct RgMatch {
     /// Column byte offset (if available)
     pub column: Option<usize>,
     /// Submatches within the line
-    pub submatches: Vec<RgSubmatch>,
+    pub submatches: Vec<GrepSubmatch>,
 }
 
 /// A submatch within a line
 #[derive(Debug, Clone)]
-pub struct RgSubmatch {
+pub struct GrepSubmatch {
     /// The matched text
     pub text: String,
     /// Start byte offset
@@ -78,124 +69,12 @@ pub struct RgSubmatch {
     pub end: usize,
 }
 
-/// Raw JSON types for deserialization
-#[derive(Deserialize, Debug)]
-#[serde(tag = "type")]
-#[allow(dead_code)]
-enum RgMessage {
-    #[serde(rename = "begin")]
-    Begin { data: BeginData },
-    #[serde(rename = "match")]
-    Match { data: MatchData },
-    #[serde(rename = "context")]
-    Context { data: ContextData },
-    #[serde(rename = "end")]
-    End { data: EndData },
-}
-
-#[allow(dead_code)]
-#[derive(Deserialize, Debug)]
-struct BeginData {
-    path: TextField,
-}
-
-#[derive(Deserialize, Debug)]
-struct MatchData {
-    path: TextField,
-    lines: TextField,
-    line_number: Option<usize>,
-    absolute_offset: Option<usize>,
-    #[serde(default)]
-    submatches: Vec<SubmatchData>,
-}
-
-#[derive(Deserialize, Debug)]
-struct ContextData {
-    path: TextField,
-    lines: TextField,
-    line_number: Option<usize>,
-    absolute_offset: Option<usize>,
-}
-
-#[derive(Deserialize, Debug)]
-#[allow(dead_code)]
-struct EndData {
-    path: TextField,
-}
-
-#[derive(Deserialize, Debug)]
-struct TextField {
-    text: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct SubmatchData {
-    #[serde(rename = "match")]
-    match_field: TextField,
-    start: usize,
-    end: usize,
-}
-
-/// Parse ripgrep JSON output
-///
-/// Each line of the output should be a separate JSON object.
-/// Returns a `RipgrepResult` containing all matches and metadata.
-pub fn parse_json_output(json_lines: &str) -> RipgrepResult {
-    let mut result = RipgrepResult::default();
-
-    for line in json_lines.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        match serde_json::from_str::<RgMessage>(line) {
-            Ok(RgMessage::Begin { data }) => {
-                result.files_searched.push(PathBuf::from(data.path.text));
-            }
-            Ok(RgMessage::Match { data }) => {
-                let submatches = data
-                    .submatches
-                    .into_iter()
-                    .map(|sm| RgSubmatch {
-                        text: sm.match_field.text,
-                        start: sm.start,
-                        end: sm.end,
-                    })
-                    .collect();
-
-                result.matches.push(RgMatch {
-                    path: PathBuf::from(data.path.text),
-                    line_number: data.line_number.unwrap_or(0),
-                    lines: data.lines.text,
-                    column: data.absolute_offset,
-                    submatches,
-                });
-            }
-            Ok(RgMessage::Context { data }) => {
-                // Context lines are treated like matches for display purposes
-                // but have no submatches
-                result.matches.push(RgMatch {
-                    path: PathBuf::from(data.path.text),
-                    line_number: data.line_number.unwrap_or(0),
-                    lines: data.lines.text,
-                    column: data.absolute_offset,
-                    submatches: vec![],
-                });
-            }
-            Ok(RgMessage::End { .. }) => {
-                // Track file completion if needed
-            }
-            Err(e) => {
-                tracing::debug!("Failed to parse ripgrep JSON line: {}", e);
-            }
-        }
-    }
-
-    result
-}
-
 /// Apply limit and offset to matches, return the subset and whether it was truncated
-pub fn paginate_matches(matches: &[RgMatch], limit: usize, offset: usize) -> (Vec<RgMatch>, bool) {
+pub fn paginate_matches(
+    matches: &[GrepMatch],
+    limit: usize,
+    offset: usize,
+) -> (Vec<GrepMatch>, bool) {
     if matches.is_empty() {
         return (Vec::new(), false);
     }
@@ -210,12 +89,12 @@ pub fn paginate_matches(matches: &[RgMatch], limit: usize, offset: usize) -> (Ve
     };
 
     let was_truncated = limit > 0 && remaining > limit;
-    let paginated: Vec<RgMatch> = matches.iter().skip(skip).take(take).cloned().collect();
+    let paginated: Vec<GrepMatch> = matches.iter().skip(skip).take(take).cloned().collect();
 
     (paginated, was_truncated)
 }
 
-/// Format matches as human-readable text (ripgrep style)
+/// Format matches as human-readable text（按文件分组、可选行号）
 ///
 /// Format:
 /// ```text
@@ -226,7 +105,7 @@ pub fn paginate_matches(matches: &[RgMatch], limit: usize, offset: usize) -> (Ve
 /// path/to/another.rs
 /// 56:    matched line
 /// ```
-pub fn format_matches(matches: &[RgMatch], show_line_numbers: bool) -> String {
+pub fn format_matches(matches: &[GrepMatch], show_line_numbers: bool) -> String {
     if matches.is_empty() {
         return "No matches found".to_string();
     }
@@ -270,7 +149,7 @@ pub fn format_matches(matches: &[RgMatch], show_line_numbers: bool) -> String {
 }
 
 /// Extract unique file paths from matches (preserves order of first appearance)
-pub fn extract_file_paths(matches: &[RgMatch]) -> Vec<PathBuf> {
+pub fn extract_file_paths(matches: &[GrepMatch]) -> Vec<PathBuf> {
     let mut seen = std::collections::HashSet::new();
     let mut paths = Vec::new();
 
@@ -284,5 +163,5 @@ pub fn extract_file_paths(matches: &[RgMatch]) -> Vec<PathBuf> {
 }
 
 #[cfg(test)]
-#[path = "rg_helper_test.rs"]
+#[path = "grep_output_test.rs"]
 mod tests;

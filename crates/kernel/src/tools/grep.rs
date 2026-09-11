@@ -1,22 +1,22 @@
 use crate::tools::helper::{get_mtime, get_mtimes_concurrent, FileStateStore};
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
+use crate::utils::grep_engine::{search, SearchMode, SearchOutcome, SearchParams};
+use crate::utils::grep_output::GrepResult;
 use crate::utils::path::expand_tilde;
-use crate::utils::rg_helper::parse_json_output;
 use async_trait::async_trait;
 use serde_json::Value;
 
 use std::fmt::Write;
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::process::Command;
-use tokio::time::timeout;
 
 pub const GREP_TOOL_NAME: &str = "grep";
 const DEFAULT_HEAD_LIMIT: usize = 250;
-const RIPGREP_TIMEOUT: Duration = Duration::from_secs(30);
+const SEARCH_TIMEOUT: Duration = Duration::from_secs(30);
+/// 行长上限（字节）：防 minified 文件噪声（对齐原 --max-columns）。
+const MAX_COLUMNS: usize = 500;
 const TRUNCATED_MSG: &str =
     "\n\n(Results are truncated. Consider using a more specific pattern or increase limit.)";
 
@@ -34,115 +34,7 @@ impl GrepTool {
     }
 }
 
-/// Parameters for building ripgrep command arguments
-struct RgParams<'a> {
-    pattern: &'a str,
-    output_mode: &'a str,
-    context_before: usize,
-    context_after: usize,
-    show_line_numbers: bool,
-    case_insensitive: bool,
-    multiline: bool,
-    glob_pattern: Option<&'a str>,
-    file_type: Option<&'a str>,
-}
-
 impl GrepTool {
-    /// Build ripgrep command arguments
-    fn build_rg_args(params: &RgParams<'_>) -> Vec<String> {
-        let mut args = Vec::new();
-
-        // Always include hidden files
-        args.push("--hidden".to_string());
-
-        // Line length limit to prevent noise from minified files
-        args.push("--max-columns".to_string());
-        args.push("500".to_string());
-
-        // Multiline mode
-        if params.multiline {
-            args.push("-U".to_string());
-            args.push("--multiline-dotall".to_string());
-        }
-
-        // Case insensitive
-        if params.case_insensitive {
-            args.push("-i".to_string());
-        }
-
-        // Output mode flags
-        match params.output_mode {
-            "filename" => {
-                args.push("-l".to_string());
-            }
-            "count" => {
-                args.push("-c".to_string());
-            }
-            _ => {
-                // content mode - use JSON for structured parsing
-                args.push("--json".to_string());
-                if params.show_line_numbers {
-                    args.push("-n".to_string());
-                }
-            }
-        }
-
-        // Context lines (only for content mode)
-        if params.output_mode == "content"
-            && (params.context_before > 0 || params.context_after > 0)
-        {
-            // Use -C if both are same, otherwise use -B and -A
-            if params.context_before == params.context_after {
-                args.push("-C".to_string());
-                args.push(params.context_before.to_string());
-            } else {
-                if params.context_before > 0 {
-                    args.push("-B".to_string());
-                    args.push(params.context_before.to_string());
-                }
-                if params.context_after > 0 {
-                    args.push("-A".to_string());
-                    args.push(params.context_after.to_string());
-                }
-            }
-        }
-
-        // File type filter
-        if let Some(ft) = params.file_type {
-            if !ft.is_empty() {
-                args.push("--type".to_string());
-                args.push(ft.to_string());
-            }
-        }
-
-        // Glob pattern filter - split on spaces but preserve braces
-        if let Some(glob) = params.glob_pattern {
-            let glob_patterns = Self::parse_glob_patterns(glob);
-            for pat in glob_patterns {
-                if !pat.is_empty() {
-                    args.push("--glob".to_string());
-                    args.push(pat);
-                }
-            }
-        }
-
-        // Exclude VCS directories
-        args.push("--glob".to_string());
-        args.push("!.git".to_string());
-        args.push("--glob".to_string());
-        args.push("!.svn".to_string());
-        args.push("--glob".to_string());
-        args.push("!.hg".to_string());
-
-        // Pattern - if it starts with -, use -e to avoid interpretation as flag
-        if params.pattern.starts_with('-') {
-            args.push("-e".to_string());
-        }
-        args.push(params.pattern.to_string());
-
-        args
-    }
-
     /// Parse glob patterns - split on spaces but preserve patterns with braces
     fn parse_glob_patterns(glob: &str) -> Vec<String> {
         let mut patterns = Vec::new();
@@ -184,69 +76,22 @@ impl GrepTool {
         (limited, was_truncated)
     }
 
-    /// Run ripgrep and return output
-    async fn run_ripgrep(
-        &self,
-        args: Vec<String>,
-        search_path: &PathBuf,
-        working_dir: &std::path::Path,
-    ) -> Result<(String, String, i32)> {
-        let mut cmd = Command::new("rg");
-        cmd.args(&args)
-            .current_dir(working_dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        // Add search path as final argument
-        cmd.arg(search_path);
-
-        tracing::debug!("Running ripgrep: rg {}", args.join(" "));
-
-        let output_result = timeout(RIPGREP_TIMEOUT, cmd.output()).await.map_err(|_| {
-            KernelError::tool(format!(
-                "ripgrep timed out after {} seconds",
-                RIPGREP_TIMEOUT.as_secs()
-            ))
-        })?;
-
-        let output = output_result?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-        // ripgrep exit codes:
-        // 0 = matches found
-        // 1 = no matches
-        // 2 = error
-        let code = output.status.code().unwrap_or(-1);
-
-        if code == 2 && !stderr.is_empty() {
-            return Err(KernelError::tool(format!("ripgrep error: {stderr}")));
-        }
-
-        Ok((stdout, stderr, code))
-    }
-
     /// Get file modification time in milliseconds since epoch
     /// Format `filename` output with sorting by mtime
     async fn format_files_output(
         &self,
-        stdout: &str,
+        files: Vec<PathBuf>,
         limit: usize,
         offset: usize,
         working_dir: &std::path::Path,
     ) -> String {
-        let lines: Vec<&str> = stdout.lines().collect();
-
-        if lines.is_empty() {
+        if files.is_empty() {
             return "No files found".to_string();
         }
 
         // Parse file paths and get modification times concurrently with limited concurrency
         // to avoid file descriptor exhaustion when there are many matches
-        let paths: Vec<PathBuf> = lines.into_iter().map(PathBuf::from).collect();
-        let mut files_with_mtime: Vec<(PathBuf, u64)> = get_mtimes_concurrent(paths, None).await;
+        let mut files_with_mtime: Vec<(PathBuf, u64)> = get_mtimes_concurrent(files, None).await;
 
         // Sort by mtime descending (newest first), then by path ascending as tiebreaker
         files_with_mtime.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
@@ -279,24 +124,18 @@ impl GrepTool {
     }
 
     /// Format count output with pagination
-    fn format_count_output(stdout: &str, limit: usize, offset: usize) -> String {
-        let lines: Vec<&str> = stdout.lines().collect();
-
-        if lines.is_empty() {
+    fn format_count_output(counts: &[(PathBuf, usize)], limit: usize, offset: usize) -> String {
+        if counts.is_empty() {
             return "No matches found".to_string();
         }
 
-        let mut total_matches = 0;
-        let mut file_count = 0;
+        let total_matches: usize = counts.iter().map(|(_, n)| n).sum();
+        let file_count = counts.len();
 
-        for line in &lines {
-            if let Some(colon_pos) = line.rfind(':') {
-                if let Ok(count) = line[colon_pos + 1..].parse::<usize>() {
-                    total_matches += count;
-                    file_count += 1;
-                }
-            }
-        }
+        let lines: Vec<String> = counts
+            .iter()
+            .map(|(path, n)| format!("{}:{n}", path.display()))
+            .collect();
 
         // Apply offset and limit
         let (limited, was_truncated) = Self::apply_pagination(&lines, limit, offset);
@@ -322,16 +161,14 @@ impl GrepTool {
         result
     }
 
-    /// Process content mode output using JSON parsing
+    /// Process content mode output
     /// Returns formatted output and the list of files that were displayed
     fn process_content_output(
-        stdout: &str,
+        parsed: &GrepResult,
         limit: usize,
         offset: usize,
         show_line_numbers: bool,
     ) -> (String, Vec<PathBuf>) {
-        let parsed = parse_json_output(stdout);
-
         if parsed.is_empty() {
             return ("No matches found".to_string(), Vec::new());
         }
@@ -354,7 +191,7 @@ impl Tool for GrepTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Search file contents using regex patterns (powered by ripgrep). Supports various output modes, context lines, and file filtering. Respects .gitignore by default. Always searches hidden files."
+        "Search file contents using regex patterns. Supports various output modes, context lines, and file filtering. Respects .gitignore by default. Always searches hidden files."
     }
 
     fn schema(&self) -> Value {
@@ -471,78 +308,69 @@ impl Tool for GrepTool {
             )));
         }
 
-        // Build ripgrep arguments
-        let rg_args = Self::build_rg_args(&RgParams {
-            pattern,
-            output_mode,
-            context_before: ctx_before,
-            context_after: ctx_after,
-            show_line_numbers,
-            case_insensitive,
-            multiline,
-            glob_pattern,
-            file_type,
-        });
+        let mode = match output_mode {
+            "filename" => SearchMode::Files,
+            "count" => SearchMode::Count,
+            _ => SearchMode::Content,
+        };
+        let glob_patterns = Self::parse_glob_patterns(glob_pattern.unwrap_or(""));
+        let pattern = pattern.to_string();
+        let file_type = file_type.map(str::to_string);
+        let deadline = std::time::Instant::now() + SEARCH_TIMEOUT;
+        let root = search_path.clone();
 
-        tracing::debug!("Running ripgrep with args: {:?}", rg_args);
+        // 引擎是同步库：整体放进阻塞线程池，内部按截止时刻自控超时。
+        let report = tokio::task::spawn_blocking(move || {
+            let params = SearchParams {
+                pattern: &pattern,
+                case_insensitive,
+                multiline,
+                context_before: ctx_before,
+                context_after: ctx_after,
+                glob_patterns: &glob_patterns,
+                file_type: file_type.as_deref(),
+                max_columns: MAX_COLUMNS,
+                deadline: Some(deadline),
+            };
+            search(&root, mode, &params)
+        })
+        .await
+        .map_err(|e| KernelError::tool(format!("search task failed: {e}")))?
+        .map_err(|e| KernelError::tool(e.to_string()))?;
 
-        // Run ripgrep
-        let (stdout, stderr, code) = self
-            .run_ripgrep(rg_args, &search_path, &ctx.working_dir)
-            .await?;
-
-        // Handle different output modes
-        let response = if code == 0 || code == 1 {
-            // code 0 = matches found, code 1 = no matches (not an error)
-            match output_mode {
-                "filename" => {
-                    self.format_files_output(
-                        &stdout,
-                        limit.unwrap_or(DEFAULT_HEAD_LIMIT),
-                        offset,
-                        &ctx.working_dir,
-                    )
+        let limit = limit.unwrap_or(DEFAULT_HEAD_LIMIT);
+        let response = match report.outcome {
+            SearchOutcome::Files(files) => {
+                self.format_files_output(files, limit, offset, &ctx.working_dir)
                     .await
-                }
-                "count" => {
-                    Self::format_count_output(&stdout, limit.unwrap_or(DEFAULT_HEAD_LIMIT), offset)
-                }
-                _ => {
-                    // content mode - use JSON parsing for accurate pagination and file tracking
-                    let (response, displayed_files) = Self::process_content_output(
-                        &stdout,
-                        limit.unwrap_or(DEFAULT_HEAD_LIMIT),
-                        offset,
-                        show_line_numbers,
-                    );
-
-                    // Record only the files that were actually displayed (after pagination)
-                    if let Some(ref store) = self.file_state_store {
-                        let mut states = Vec::with_capacity(displayed_files.len());
-                        for file_path in displayed_files {
-                            // Convert relative paths to absolute for recording
-                            let absolute_path = if file_path.is_absolute() {
-                                file_path
-                            } else {
-                                ctx.working_dir.join(file_path)
-                            };
-                            if let Some(mtime) = get_mtime(&absolute_path).await {
-                                states.push((absolute_path, mtime));
-                            }
-                        }
-                        store.record_batch(states).await;
-                    }
-
-                    response
-                }
             }
-        } else {
-            // Unexpected exit code - return stderr as error
-            return Ok(ToolOutput::error(format!(
-                "ripgrep exited with code {code}: {stderr}"
-            )));
+            SearchOutcome::Counts(counts) => Self::format_count_output(&counts, limit, offset),
+            SearchOutcome::Content(parsed) => {
+                let (response, displayed_files) =
+                    Self::process_content_output(&parsed, limit, offset, show_line_numbers);
+
+                // Record only the files that were actually displayed (after pagination)
+                if let Some(ref store) = self.file_state_store {
+                    let mut states = Vec::with_capacity(displayed_files.len());
+                    for file_path in displayed_files {
+                        // Convert relative paths to absolute for recording
+                        let absolute_path = if file_path.is_absolute() {
+                            file_path
+                        } else {
+                            ctx.working_dir.join(file_path)
+                        };
+                        if let Some(mtime) = get_mtime(&absolute_path).await {
+                            states.push((absolute_path, mtime));
+                        }
+                    }
+                    store.record_batch(states).await;
+                }
+
+                response
+            }
         };
 
+        let stderr = report.file_errors.join("\n");
         Ok(ToolOutput::text_with_summary(response, &stderr))
     }
 }

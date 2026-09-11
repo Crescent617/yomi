@@ -8,6 +8,42 @@ use crate::storage::AddFavoriteInput;
 use crate::types::{MessageId, SessionId};
 use tempfile::TempDir;
 
+/// 绑一个 ws 监听器（端口 0 由内核分配），返回读回实际端口后的地址。
+async fn bind_ws(
+    auth: Option<crate::transport::AuthVerifier>,
+) -> (crate::transport::SocketAddr, crate::transport::Listener) {
+    let listener = crate::transport::bind(
+        &crate::transport::SocketAddr::Ws("127.0.0.1:0".into()),
+        auth,
+    )
+    .await
+    .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    (
+        crate::transport::SocketAddr::Ws(format!("127.0.0.1:{port}")),
+        listener,
+    )
+}
+
+/// 夹具监听地址按平台收敛：unix 用 `<tmp>/daemon.sock`（bind 前即知
+/// 地址）；其余平台用 ws，端口 0 由内核分配、bind 后读回实际端口
+/// （transport 的 ws 路径支持端口 0 与 `Listener::local_addr` 读回）。
+async fn bind_platform(
+    tmp: &std::path::Path,
+) -> (crate::transport::SocketAddr, crate::transport::Listener) {
+    #[cfg(unix)]
+    {
+        let addr = crate::transport::SocketAddr::Unix(tmp.join("daemon.sock"));
+        let listener = crate::transport::bind(&addr, None).await.unwrap();
+        (addr, listener)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tmp;
+        bind_ws(None).await
+    }
+}
+
 async fn setup_with_config_path(
     config_path: Option<std::path::PathBuf>,
     restart_tx: Option<tokio::sync::mpsc::Sender<()>>,
@@ -21,8 +57,7 @@ async fn setup_with_config_path(
     let kernel = crate::build_kernel(&config, false).await.unwrap();
     let server = crate::server::KernelServer::with_lifecycle(kernel, config_path, restart_tx);
     server.start(&config).await;
-    let addr = crate::transport::SocketAddr::Unix(tmp.path().join("daemon.sock"));
-    let listener = crate::transport::bind(&addr, None).await.unwrap();
+    let (addr, listener) = bind_platform(tmp.path()).await;
     let shutdown = tokio_util::sync::CancellationToken::new();
     let serve_shutdown = shutdown.clone();
     tokio::spawn(async move {
@@ -250,14 +285,7 @@ async fn setup_ws_auth(
     let auth = Some(crate::transport::auth_verifier(
         &crate::transport::hash_password(password),
     ));
-    let listener = crate::transport::bind(
-        &crate::transport::SocketAddr::Ws("127.0.0.1:0".into()),
-        auth,
-    )
-    .await
-    .unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let addr = crate::transport::SocketAddr::Ws(format!("127.0.0.1:{port}"));
+    let (addr, listener) = bind_ws(auth).await;
     let shutdown = tokio_util::sync::CancellationToken::new();
     let serve_shutdown = shutdown.clone();
     tokio::spawn(async move {
@@ -303,27 +331,30 @@ async fn test_serve_accepts_connections_on_all_listeners() {
     let server = crate::server::KernelServer::with_lifecycle(kernel, None, None);
     server.start(&config).await;
 
-    let unix_addr = crate::transport::SocketAddr::Unix(tmp.path().join("daemon.sock"));
-    let unix_listener = crate::transport::bind(&unix_addr, None).await.unwrap();
-    let ws_listener = crate::transport::bind(
-        &crate::transport::SocketAddr::Ws("127.0.0.1:0".into()),
-        None,
-    )
-    .await
-    .unwrap();
-    let port = ws_listener.local_addr().unwrap().port();
-    let ws_addr = crate::transport::SocketAddr::Ws(format!("127.0.0.1:{port}"));
+    // 门组合按平台选：unix 下一扇 unix 门加一扇 ws 门；其余平台两扇
+    // 都是 ws 门。断言的是「serve 接受所有门」，与传输类型无关。
+    #[cfg(unix)]
+    let (addrs, listeners) = {
+        let unix_addr = crate::transport::SocketAddr::Unix(tmp.path().join("daemon.sock"));
+        let unix_listener = crate::transport::bind(&unix_addr, None).await.unwrap();
+        let (ws_addr, ws_listener) = bind_ws(None).await;
+        (vec![unix_addr, ws_addr], vec![unix_listener, ws_listener])
+    };
+    #[cfg(not(unix))]
+    let (addrs, listeners) = {
+        let (addr_a, listener_a) = bind_ws(None).await;
+        let (addr_b, listener_b) = bind_ws(None).await;
+        (vec![addr_a, addr_b], vec![listener_a, listener_b])
+    };
 
     let shutdown = tokio_util::sync::CancellationToken::new();
     let serve_shutdown = shutdown.clone();
     tokio::spawn(async move {
-        let _ = server
-            .serve(vec![unix_listener, ws_listener], serve_shutdown)
-            .await;
+        let _ = server.serve(listeners, serve_shutdown).await;
     });
 
     // Every bound door accepts and serves its own client.
-    for addr in [&unix_addr, &ws_addr] {
+    for addr in &addrs {
         let client = RemoteKernel::connect(addr).await.unwrap();
         client.check_ready().await.unwrap();
     }
@@ -331,7 +362,7 @@ async fn test_serve_accepts_connections_on_all_listeners() {
     // After shutdown both doors stop accepting.
     shutdown.cancel();
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    for addr in [&unix_addr, &ws_addr] {
+    for addr in &addrs {
         assert!(
             RemoteKernel::connect(addr).await.is_err(),
             "{addr} still accepting after shutdown"
@@ -407,8 +438,7 @@ async fn run_starting_methods_rejected_after_intake_close() {
     let kernel_handle = std::sync::Arc::clone(&kernel);
     let server = crate::server::KernelServer::with_lifecycle(kernel, None, None);
     server.start(&config).await;
-    let addr = crate::transport::SocketAddr::Unix(tmp.path().join("daemon.sock"));
-    let listener = crate::transport::bind(&addr, None).await.unwrap();
+    let (addr, listener) = bind_platform(tmp.path()).await;
     let shutdown = tokio_util::sync::CancellationToken::new();
     tokio::spawn({
         let serve_shutdown = shutdown.clone();

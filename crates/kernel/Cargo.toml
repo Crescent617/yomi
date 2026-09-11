@@ -56,6 +56,8 @@ dashmap = { workspace = true }
 tokio-tungstenite = { workspace = true, features = ["connect", "rustls-tls-native-roots"] }
 croner = { workspace = true }
 mime_guess = { workspace = true }
+grep-regex = { workspace = true }
+grep-searcher = { workspace = true }
 teloxide-core = { workspace = true, optional = true }
 tempfile = { workspace = true }
 

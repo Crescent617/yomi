@@ -58,6 +58,8 @@ serde_yaml = "0.9"
 schemars = { version = "1", features = ["chrono04"] }
 smol_str = "0.3"
 tempfile = "3.0"
+grep-regex = "0.1"
+grep-searcher = "0.1"
 tokio-test = "0.4"
 tracing-appender = "0.2"
 comfy-table = "7.2"
