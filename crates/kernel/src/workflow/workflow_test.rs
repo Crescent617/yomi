@@ -161,8 +161,10 @@ async fn run_timeout_kills_and_keeps_partial_output() {
     // SIGKILL 时未 flush 即丢。循环输出保部分输出可见。超时不取短上界：
     // macOS 对新文件首 exec 的安全评估跨进程串行（~400ms/文件，全套
     // 件并发 exec 全新脚本时队列可达数秒，2026-09-11 对抗 review 根
-    // 因），3s 曾在全量并行下等不到脚本起跑而 flake——15s 只在病态
-    // 时多等，正常跑仍旧 1s 内拿到 before。
+    // 因），3s 曾在全量并行下等不到脚本起跑而 flake。成本模型如实：
+    // 脚本死循环 ⇒ run() 恒在 timeout 返回，15s 是**每次运行的固定
+    // 开销**（套件墙钟 +8s 可见），不是"病态才多等"——用它换 flake
+    // 免疫；再压（如 10s）对 ~5s 观测队尾只剩 2× 头量，不值再赌。
     let path = write_script(
         &dir,
         "hang.sh",
