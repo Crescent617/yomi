@@ -7,7 +7,7 @@ fn temp_dir(tag: &str) -> std::path::PathBuf {
 #[tokio::test]
 async fn memory_pointer_injected_when_project_index_exists() {
     let dir = temp_dir("exists");
-    let mem_dir = dir.join(".agents/memory");
+    let mem_dir = dir.join(".agents").join("memory");
     std::fs::create_dir_all(&mem_dir).unwrap();
     std::fs::write(mem_dir.join("MEMORY.md"), "- fact\n").unwrap();
 

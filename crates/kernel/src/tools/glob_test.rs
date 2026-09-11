@@ -48,7 +48,11 @@ async fn test_glob_tool_recursive() {
     let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
     let result = tool.exec(args, ctx).await.unwrap();
     assert!(result.success());
-    assert!(result.text_content().contains("src/main.rs"));
+    // 输出路径按平台分隔符呈现，归一化后断言。
+    assert!(result
+        .text_content()
+        .replace('\\', "/")
+        .contains("src/main.rs"));
 }
 
 #[tokio::test]

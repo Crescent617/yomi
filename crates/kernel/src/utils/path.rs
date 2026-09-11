@@ -18,7 +18,11 @@ pub fn expand_tilde(path: impl AsRef<str>) -> PathBuf {
     let path = path.as_ref();
     if let Some(stripped) = path.strip_prefix("~/") {
         if let Some(ref home) = *HOME_DIR {
-            return home.join(stripped);
+            // 逐段 join：整体 join 含 `/` 的串会在 Windows 上得到
+            // `C:\home\.agents/skills` 这类混合分隔符路径。
+            return stripped
+                .split('/')
+                .fold((*home).clone(), |p, seg| p.join(seg));
         }
     }
     PathBuf::from(path)

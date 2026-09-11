@@ -238,7 +238,9 @@ async fn process_strip_process_roundtrip_annotates_exactly_once() {
     let second = process_image_blocks(stripped, dir.path()).await;
     let annotations = second
         .iter()
-        .filter(|b| matches!(b, crate::types::ContentBlock::Text { text } if text.starts_with("[image 1: /")))
+        .filter(
+            |b| matches!(b, crate::types::ContentBlock::Text { text } if is_image_annotation(text)),
+        )
         .count();
     assert_eq!(annotations, 1, "no annotation growth: {second:?}");
 }

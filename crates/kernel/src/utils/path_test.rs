@@ -2,14 +2,11 @@ use super::*;
 
 #[test]
 fn test_expand_tilde() {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = HOME_DIR.as_ref().expect("home dir must resolve");
 
     // Test tilde expansion
-    assert_eq!(expand_tilde("~/foo"), PathBuf::from(format!("{home}/foo")));
-    assert_eq!(
-        expand_tilde("~/.yomi"),
-        PathBuf::from(format!("{home}/.yomi"))
-    );
+    assert_eq!(expand_tilde("~/foo"), home.join("foo"));
+    assert_eq!(expand_tilde("~/.yomi"), home.join(".yomi"));
 
     // Test paths without tilde are unchanged
     assert_eq!(
@@ -28,8 +25,8 @@ fn test_expand_tilde() {
 #[test]
 fn test_default_data_dir_expanded() {
     let config = expand_tilde(DEFAULT_DATA_DIR);
-    let home = std::env::var("HOME").unwrap_or_default();
-    assert_eq!(config, PathBuf::from(format!("{home}/.yomi")));
+    let home = HOME_DIR.as_ref().expect("home dir must resolve");
+    assert_eq!(config, home.join(".yomi"));
 }
 
 #[test]
@@ -38,8 +35,8 @@ fn test_default_skill_folders() {
     let folders = default_skill_folders(&data);
 
     assert_eq!(folders.len(), 2);
-    assert!(folders[0].to_string_lossy().ends_with("/.agents/skills"));
-    assert_eq!(folders[1], PathBuf::from("/data/skills"));
+    assert_eq!(folders[0], expand_tilde("~/.agents/skills"));
+    assert_eq!(folders[1], data.join("skills"));
 }
 
 #[test]

@@ -111,7 +111,14 @@ fn is_image_annotation(text: &str) -> bool {
     let Some((digits, suffix)) = rest.split_once(':') else {
         return false;
     };
-    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) && suffix.starts_with(" /")
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    // 注解路径由本机 process_image_blocks 产出，必为绝对路径：unix
+    // `/…`、Windows `C:\…`。此前只认 ` /` 前缀，Windows 注解识别不
+    // 了——strip 失效后注解会累积并泄漏进持久化与前台渲染。
+    let path = suffix.trim().trim_end_matches(']');
+    std::path::Path::new(path).is_absolute()
 }
 
 /// Drop annotation blocks inserted by [`process_image_blocks`] (a

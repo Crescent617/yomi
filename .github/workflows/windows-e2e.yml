@@ -25,6 +25,10 @@ jobs:
       - name: Install protoc
         uses: arduino/setup-protoc@v3
 
+      # grep 工具测试经子进程调 rg（产品对系统 rg 的依赖与之一致）
+      - name: Install ripgrep
+        run: choco install ripgrep -y --no-progress
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:

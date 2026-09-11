@@ -319,7 +319,7 @@ impl<'a> SystemPromptBuilder<'a> {
         // inject nothing, so non-memory projects pay zero prompt cost.
         let mut memory_lines: Vec<String> = Vec::new();
         if let Some(cwd) = self.working_dir {
-            let project_index = cwd.join(".agents/memory/MEMORY.md");
+            let project_index = cwd.join(".agents").join("memory").join("MEMORY.md");
             if tokio::fs::try_exists(&project_index).await.unwrap_or(false) {
                 memory_lines.push(format!("- Project: {}", project_index.display()));
             }
