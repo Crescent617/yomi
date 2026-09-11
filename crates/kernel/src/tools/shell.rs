@@ -1,6 +1,5 @@
 use crate::agent::AgentInput;
 use crate::comms::InputBus;
-use crate::const_concat;
 use crate::tools::helper::truncate::truncate_keep_edges;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, SessionId, ToolOutput};
@@ -95,18 +94,6 @@ impl ShellTool {
 
 /// 按探测到的 shell 组装工具描述；`desc()` 首次调用时执行一次并缓存。
 fn compose_desc() -> String {
-    const BG_GUIDE: &str = const_concat!(
-        r"
-## What is background mode
-- When `background` is true, the command runs at background, and returns immediately with a `task_id`, `pid`, and output file path.
-- The pid can be used to monitor or kill the process externally if needed. The output file contains real-time stdout and stderr of the command, which can be useful for long-running tasks.
-- ",
-        crate::tools::ASYNC_LAUNCH_GUIDE,
-        r"
-
-## When to using background mode
-For long-running commands (e.g. start a server, run a script with unknown duration) to avoid blocking the agent and allow real-time monitoring of the output. For short commands that return quickly, background mode is not necessary."
-    );
     let shell = crate::utils::shell::detect();
     let intro = match shell.kind {
         crate::utils::shell::ShellKind::Posix => {
@@ -134,7 +121,7 @@ For long-running commands (e.g. start a server, run a script with unknown durati
         " Commands run non-interactively (stdin is /dev/null, no controlling terminal), so interactive prompts (e.g. sudo password, ssh confirmation) fail immediately instead of waiting for input."
     };
     format!(
-        "{intro} Reserve exclusively for system commands that require shell execution. Prefer dedicated tools (read, edit, grep) when available. DO NOT use for git push or dangerous operations without explicit user request.{non_interactive}{BG_GUIDE}"
+        "{intro} Reserve exclusively for system commands that require shell execution. Prefer dedicated tools (read, edit, grep) when available. DO NOT use for git push or dangerous operations without explicit user request.{non_interactive} Use `background: true` for long-running commands (servers, scripts of unknown duration) so you can monitor output in real time; short commands should run synchronously. The PID in the launch message can be used to kill the process."
     )
 }
 
