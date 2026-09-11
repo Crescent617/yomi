@@ -47,3 +47,9 @@ jobs:
 
       - name: cargo check (cli + tui)
         run: cargo check -p cli -p tui --locked
+
+      # 与 release.yml 的 Windows 产物构建同款命令：发版前在真机上
+      # 验证 release profile 可构建（opt 路径与 dev 有差，曾踩过
+      # profile 相关的平台坑）。
+      - name: cargo build --release (yomi.exe, release 产物预演)
+        run: cargo build --release --target x86_64-pc-windows-msvc --bin yomi --locked

@@ -39,8 +39,8 @@ jobs:
             os: macos-latest
 
           # ✅ Windows（关键：msvc）
-          # - target: x86_64-pc-windows-msvc
-          #   os: windows-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
 
     steps:
       - uses: actions/checkout@v6
@@ -88,13 +88,20 @@ jobs:
           mkdir -p "$OUT"
           cp "$BIN" "$OUT/"
 
-          tar czf "$OUT.tar.gz" "$OUT"
+          # Windows 产物打 zip（Windows 用户习惯；7z 是 runner 自带），
+          # 其余平台保持 tar.gz。
+          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
+            7z a -tzip "$OUT.zip" "./$OUT" >/dev/null
+          else
+            tar czf "$OUT.tar.gz" "$OUT"
+          fi
 
       - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.target }}
           path: |
             *.tar.gz
+            *.zip
 
   # ==================== GUI 构建 (macOS DMG) ====================
   build-gui:
