@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.30] - 2026-09-11
+
 ### Added
 
 - shell 工具支持 Windows：按 Git Bash → pwsh → powershell → cmd.exe 自动探测解释器（`System32\bash.exe` 会误入 WSL，已排除），也可用 `YOMI_SHELL` 环境变量显式指定。
