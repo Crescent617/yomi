@@ -234,14 +234,10 @@ impl Kernel {
         else {
             return false;
         };
-        match tokio::process::Command::new("kill")
-            .args(["-TERM", "--", &format!("-{}", task.pid)])
-            .status()
-            .await
-        {
-            Ok(status) => status.success(),
+        match crate::utils::process::terminate_tree_by_pid(task.pid) {
+            Ok(()) => true,
             Err(e) => {
-                tracing::warn!(pid = task.pid, error = %e, "failed to SIGTERM background shell");
+                tracing::warn!(pid = task.pid, error = %e, "failed to terminate background shell tree");
                 false
             }
         }

@@ -14,16 +14,6 @@ use tokio::io::AsyncReadExt;
 
 use crate::types::{KernelError, Result};
 
-// POSIX `kill(2)`：与子进程同 linker 命名空间，unix 上始终已链接，手动
-// 声明以避免 libc/nix 依赖。setsid 已收敛到 `utils::process`。
-#[cfg(unix)]
-extern "C" {
-    fn kill(pid: i32, sig: i32) -> i32;
-}
-
-#[cfg(unix)]
-const SIGKILL: i32 = 9;
-
 /// 脚本库目录名（相对 `data_dir`）。
 pub const DIR_NAME: &str = "workflows";
 
@@ -178,11 +168,9 @@ pub async fn run(
         .kill_on_drop(true);
     crate::utils::env::inject_child_env(&mut cmd, Some(data_dir), session_id);
     let started = std::time::Instant::now();
-    // unix: 子进程独立成 session（setsid），超时/收尾时按进程组
-    // （pgid == 子 pid）发 SIGKILL——只杀直接子进程会让 `sleep 60 &`
-    // 型后裔继续持有管道，drain 被拖到地老天荒。
-    crate::utils::process::pre_exec_new_session(&mut cmd);
-    let mut child = cmd.spawn()?;
+    // 进程树由引擎统一建立（unix setsid 进程组 / windows Job Object），
+    // 超时时按树强杀，连 `sleep 60 &` 型后裔一起收。
+    let (mut child, tree) = crate::utils::process::spawn_in_new_tree(&mut cmd)?;
     // 两管各自持续读空：管道不排空，写多的脚本会阻塞在 write 上。
     let buf = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
     let mut drain_out = tokio::spawn(drain(
@@ -198,18 +186,7 @@ pub async fn run(
         Ok(Ok(status)) => (status.code(), false),
         Ok(Err(e)) => return Err(e.into()),
         Err(_) => {
-            #[cfg(unix)]
-            {
-                if let Some(pid) = child.id() {
-                    // 进程组仍在（wait 未返回），按组强杀，连后裔一起。
-                    unsafe { kill(-(pid as i32), SIGKILL) };
-                }
-                let _ = child.wait().await; // 收割僵尸
-            }
-            #[cfg(not(unix))]
-            {
-                let _ = child.kill().await;
-            }
+            crate::utils::process::kill_tree(&mut child, &tree).await;
             (None, true)
         }
     };

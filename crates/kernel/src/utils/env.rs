@@ -14,6 +14,10 @@ pub const YOMI_STATE_DIR: &str = crate::env_name!("STATE_DIR");
 /// 外挂子进程注入的事件标识（值：hook=hook point 名，tool="tool"）。
 pub const YOMI_EVENT: &str = crate::env_name!("EVENT");
 
+/// Agent 命令执行的 shell 解释器覆盖（`utils::shell::detect` 的显式
+/// 指定入口；不设则按平台回退链探测）。
+pub const YOMI_SHELL: &str = crate::env_name!("SHELL");
+
 /// 给 tokio `Command` 注入 yomi 标准环境变量，返回 `&mut` 便于链式。
 /// `None` 的项会被**显式移除**而非保留继承值：父进程自身可能带着这些
 /// 变量（daemon 从 shell 工具里被拉起、测试跑在 yomi 会话内），不主动

@@ -71,6 +71,7 @@ just ci
 
 ### kernel
 - **Env Vars**: should follow prefix `kernel::ENV_PREFIX`
+- **Shell/子进程**: 「执行命令文本」的入口（shell 工具、cron shell job 等）一律经 `utils::shell::detect()` 选解释器（bash 优先；Windows Git Bash→pwsh→powershell→cmd；`YOMI_SHELL` 覆盖）；需要整体收尾的 spawn 一律走 `utils::process::spawn_in_new_tree`（unix setsid 进程组 / windows Job Object），强杀走 `kill_tree` / `terminate_tree_by_pid`。禁止在调用点自写 setsid、extern kill、taskkill。
 - **Channel features**: 平台适配器按同名 cargo feature 裁剪（`feishu` / `telegram`，默认 `all-channels` 全开）；`PlatformConfig` 等 serde 类型不随 feature 门控，编译外平台在 `build_adapter` 报 Config 错误。内建 `web_search` 工具同理（feature `websearch`，默认开；`WEBSEARCH_TOOL_NAME` 不门控，权限解析对扩展提供的同名工具仍生效）
 
 ### gui

@@ -1,10 +1,10 @@
 //! spawn/ — 外挂执行引擎：hooks / tools 共用的子进程运行管线。
 //!
 //! 一次 spawn = 一次调用：stdin 喂字节、stdout/stderr 双管排空（各累积
-//! 上限 [`DRAIN_CAP`]）、超时按进程组 SIGKILL（setsid 由引擎统一加，见
-//! `utils::process::pre_exec_new_session`）、主进程死后双管共享
-//! [`DRAIN_GRACE`] 宽限收尾。调用方只配 `Command` 的 program / cwd /
-//! env——stdio 与 session 化由引擎接管。
+//! 上限见 `spawn_captured_with_cap` 的 `drain_cap`）、超时按进程树强杀
+//! （setsid/Job Object 由 [`crate::utils::process::spawn_in_new_tree`]
+//! 统一建立）、主进程死后双管共享 [`DRAIN_GRACE`] 宽限收尾。调用方只配
+//! `Command` 的 program / cwd / env——stdio 与树管理由引擎接管。
 //!
 //! 故障分两层，调用方各自定策略（hook fail-open、tool fail-closed）：
 //! - [`SpawnError`]：进程没起来 / wait 异常——引擎自身故障；
@@ -16,18 +16,10 @@ use std::time::Duration;
 
 use tokio::io::AsyncReadExt as _;
 
-// POSIX `kill(2)`：同原 hook/mod.rs 的做法，unix 上始终已链接，手动
-// 声明以避免 libc/nix 依赖。setsid 收敛在 `utils::process`。
-#[cfg(unix)]
-extern "C" {
-    fn kill(pid: i32, sig: i32) -> i32;
-}
+use crate::utils::process::{kill_tree, spawn_in_new_tree};
 
-#[cfg(unix)]
-const SIGKILL: i32 = 9;
-
-/// drain 缓冲累积上限：超出继续读（防管道阻塞）但停止累积——坏脚本
-/// `cat hugefile >&2` 不会撑爆内存。
+/// drain 缓冲的默认累积上限：超出继续读（防管道阻塞）但停止累积——
+/// 坏脚本 `cat hugefile >&2` 不会撑爆内存。
 pub const DRAIN_CAP: usize = 64 * 1024;
 
 /// 主进程退出/被杀后 drain 收尾的宽限期。
@@ -38,14 +30,14 @@ pub const DRAIN_GRACE: Duration = Duration::from_secs(2);
 pub struct Captured {
     /// 退出码；超时强杀（或信号终止）为 `None`。
     pub exit_code: Option<i32>,
-    /// 是否因超时被进程组 SIGKILL。
+    /// 是否因超时被进程树强杀。
     pub timed_out: bool,
-    /// 是否因取消被进程组 SIGKILL（与超时同路径，但语义分开：
+    /// 是否因取消被进程树强杀（与超时同路径，但语义分开：
     /// 调用方通常要把取消翻译成自己的取消语义而非"超时"）。
     pub cancelled: bool,
-    /// stdout 捕获（≤ [`DRAIN_CAP`]；用途由调用方决定）。
+    /// stdout 捕获（≤ drain cap；用途由调用方决定）。
     pub stdout: Vec<u8>,
-    /// stderr 捕获（≤ [`DRAIN_CAP`]）。
+    /// stderr 捕获（≤ drain cap）。
     pub stderr: Vec<u8>,
 }
 
@@ -77,17 +69,29 @@ enum Stop {
     Cancelled,
 }
 
-/// 运行一个命令并捕获其输出。
-///
-/// `cmd` 应已配好 program / cwd / env；stdio 由引擎接管（`stdin_bytes`
-/// 为 `Some` 时管道写入，写遇 `BrokenPipe` 静默——脚本不读 stdin 是正常
-/// 场景）。setsid 由引擎统一执行，调用方不要再加。`cancel` 生效时与
-/// 超时同路径按进程组 SIGKILL，返回 [`Captured::cancelled`]。
+/// 运行一个命令并捕获其输出（drain 上限取默认值 [`DRAIN_CAP`]）。
 pub async fn spawn_captured(
     cmd: &mut tokio::process::Command,
     stdin_bytes: Option<&[u8]>,
     timeout: Duration,
     cancel: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<Captured, SpawnError> {
+    spawn_captured_with_cap(cmd, stdin_bytes, timeout, cancel, DRAIN_CAP).await
+}
+
+/// 同 [`spawn_captured`]，但 drain 累积上限由调用方给定——shell 工具
+/// 这类输出预算大的入口可以放宽，hooks 等用默认即可。
+///
+/// `cmd` 应已配好 program / cwd / env；stdio 由引擎接管（`stdin_bytes`
+/// 为 `Some` 时管道写入，写遇 `BrokenPipe` 静默——脚本不读 stdin 是正常
+/// 场景）。进程树由引擎统一建立，调用方不要再加 setsid。`cancel` 生效
+/// 时与超时同路径按树强杀，返回 [`Captured::cancelled`]。
+pub async fn spawn_captured_with_cap(
+    cmd: &mut tokio::process::Command,
+    stdin_bytes: Option<&[u8]>,
+    timeout: Duration,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
+    drain_cap: usize,
 ) -> Result<Captured, SpawnError> {
     cmd.stdin(if stdin_bytes.is_some() {
         Stdio::piped()
@@ -97,10 +101,7 @@ pub async fn spawn_captured(
     .stdout(Stdio::piped())
     .stderr(Stdio::piped())
     .kill_on_drop(true);
-    let mut child = {
-        crate::utils::process::pre_exec_new_session(cmd);
-        cmd.spawn().map_err(SpawnError::Spawn)?
-    };
+    let (mut child, tree) = spawn_in_new_tree(cmd).map_err(SpawnError::Spawn)?;
     // 两管各自持续读空（管道不排空，写多的脚本会阻塞）：缓冲共享——
     // 即使 drain 宽限到期被迫 abort，已捕获的部分仍读得到（后裔持有
     // 管道不见 EOF 的场景）。
@@ -109,10 +110,12 @@ pub async fn spawn_captured(
     let mut drain_out = tokio::spawn(drain(
         child.stdout.take().expect("stdout piped"),
         Arc::clone(&out_buf),
+        drain_cap,
     ));
     let mut drain_err = tokio::spawn(drain(
         child.stderr.take().expect("stderr piped"),
         Arc::clone(&err_buf),
+        drain_cap,
     ));
     // spawn 要求 'static：字节复制一份（memcpy 廉价；昂贵的序列化已在
     // 调用方按批只做一次）。
@@ -143,9 +146,9 @@ pub async fn spawn_captured(
     let (exit_code, timed_out, cancelled) = match stop {
         Stop::Exited(code) => (code, false, false),
         Stop::WaitErr(e) => {
-            // wait 异常 = 子进程状态未知：按组尽力杀（与超时同路径），
+            // wait 异常 = 子进程状态未知：按树尽力杀（与超时同路径），
             // 不留后裔。
-            kill_tree(&mut child).await;
+            kill_tree(&mut child, &tree).await;
             if let Some(w) = &write {
                 w.abort();
             }
@@ -155,7 +158,7 @@ pub async fn spawn_captured(
         }
         Stop::Timeout | Stop::Cancelled => {
             let is_cancel = matches!(stop, Stop::Cancelled);
-            kill_tree(&mut child).await;
+            kill_tree(&mut child, &tree).await;
             (None, !is_cancel, is_cancel)
         }
     };
@@ -181,25 +184,9 @@ pub async fn spawn_captured(
     })
 }
 
-/// 尽力杀整棵树：unix 按进程组 SIGKILL（连后裔；组不存在或已退出则
-/// 静默 ESRCH）并收割僵尸；非 unix 杀主进程。
-async fn kill_tree(child: &mut tokio::process::Child) {
-    #[cfg(unix)]
-    {
-        if let Some(pid) = child.id() {
-            unsafe { kill(-(pid as i32), SIGKILL) };
-        }
-        let _ = child.wait().await;
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = child.kill().await;
-    }
-}
-
-/// 持续读空一根管道并入共享缓冲；累积到 [`DRAIN_CAP`] 后继续读但停止
-/// 累积（防管道阻塞的同时防内存放大）。
-async fn drain<R>(mut pipe: R, buf: Arc<tokio::sync::Mutex<Vec<u8>>>)
+/// 持续读空一根管道并入共享缓冲；累积到 `cap` 后继续读但停止累积
+/// （防管道阻塞的同时防内存放大）。
+async fn drain<R>(mut pipe: R, buf: Arc<tokio::sync::Mutex<Vec<u8>>>, cap: usize)
 where
     R: tokio::io::AsyncRead + Unpin,
 {
@@ -209,7 +196,7 @@ where
             Ok(0) | Err(_) => break,
             Ok(n) => {
                 let mut b = buf.lock().await;
-                let room = DRAIN_CAP.saturating_sub(b.len());
+                let room = cap.saturating_sub(b.len());
                 if room > 0 {
                     b.extend_from_slice(&chunk[..n.min(room)]);
                 }

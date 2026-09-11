@@ -186,12 +186,13 @@ fn build_command_disables_interactive_prompters() {
 #[cfg(unix)]
 #[tokio::test]
 async fn spawned_command_cannot_open_controlling_tty() {
-    // setsid detaches the child from the controlling terminal, so opening
-    // /dev/tty fails — this is what makes sudo/ssh/gpg fail fast instead
-    // of blocking on a hidden password prompt.
+    // setsid（由 spawn_in_new_tree 建立）detaches the child from the
+    // controlling terminal, so opening /dev/tty fails — this is what makes
+    // sudo/ssh/gpg fail fast instead of blocking on a hidden password prompt.
     let mut cmd =
         ShellTool::build_command("echo x < /dev/tty", Path::new("/tmp"), "sess_test", None);
-    let output = cmd.output().await.unwrap();
+    let (child, _tree) = crate::utils::process::spawn_in_new_tree(&mut cmd).unwrap();
+    let output = child.wait_with_output().await.unwrap();
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -207,7 +208,8 @@ async fn spawned_command_reads_eof_on_stdin() {
         "sess_test",
         None,
     );
-    let output = cmd.output().await.unwrap();
+    let (child, _tree) = crate::utils::process::spawn_in_new_tree(&mut cmd).unwrap();
+    let output = child.wait_with_output().await.unwrap();
 
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "got:[]");
@@ -217,8 +219,17 @@ async fn spawned_command_reads_eof_on_stdin() {
 #[tokio::test]
 async fn spawned_command_runs_normally() {
     let mut cmd = ShellTool::build_command("echo hello", Path::new("/tmp"), "sess_test", None);
-    let output = cmd.output().await.unwrap();
+    let (child, _tree) = crate::utils::process::spawn_in_new_tree(&mut cmd).unwrap();
+    let output = child.wait_with_output().await.unwrap();
 
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "hello");
+}
+
+#[test]
+fn desc_reflects_detected_shell() {
+    let tool = ShellTool::new();
+    let desc = crate::tools::Tool::desc(&tool);
+    assert!(desc.contains("interpreter:"), "desc: {desc}");
+    assert!(desc.contains("background"), "desc: {desc}");
 }

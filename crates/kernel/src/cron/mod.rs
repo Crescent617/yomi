@@ -314,9 +314,11 @@ fn shell_command(
     working_dir: Option<&str>,
     data_dir: &std::path::Path,
 ) -> tokio::process::Command {
-    let mut cmd = tokio::process::Command::new("sh");
-    cmd.arg("-c")
-        .arg(command)
+    let shell = crate::utils::shell::detect();
+    let wrapped = shell.wrap_command(command);
+    let mut cmd = tokio::process::Command::new(&shell.path);
+    cmd.args(shell.leading_args())
+        .arg(wrapped.as_ref())
         .current_dir(working_dir.unwrap_or("."))
         .kill_on_drop(true)
         .stdin(std::process::Stdio::null())

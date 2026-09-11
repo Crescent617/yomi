@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **分类**：`Added` 新能力 / `Changed` 行为变化 / `Fixed` 问题修复 / `Removed` 移除能力。
 - **配置与命令必须点名**：新增或变更配置项、命令时，写出名称与默认值。
 
+## [Unreleased]
+
+### Added
+
+- shell 工具支持 Windows：按 Git Bash → pwsh → powershell → cmd.exe 自动探测解释器（`System32\bash.exe` 会误入 WSL，已排除），也可用 `YOMI_SHELL` 环境变量显式指定。
+- Windows 上 shell 命令输出统一按 UTF-8 处理，cmd/PowerShell 下的中文不再乱码。
+
+### Changed
+
+- Windows 上命令超时或被取消时，会结束命令及其全部子进程（此前只结束主进程，后台子进程会残留）。
+- 没有 bash 的精简 Linux 环境（如 Alpine 容器）自动回退到 sh，不再报进程启动失败。
+
 ## [0.10.29] - 2026-09-10
 
 ### Changed

@@ -20,6 +20,7 @@ pub mod process;
 pub mod rg_helper;
 #[cfg(feature = "websearch")]
 pub mod search;
+pub mod shell;
 pub mod signal;
 pub mod spawn;
 pub mod strs;

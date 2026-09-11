@@ -54,6 +54,9 @@ impl ShellToolCtx {
 
 pub struct ShellTool {
     ctx: Option<ShellToolCtx>,
+    /// 首次 `desc()` 时按探测到的 shell 组装并缓存（shell 探测本身是
+    /// 进程级缓存，这里只省重复拼装）。
+    desc: std::sync::OnceLock<String>,
 }
 
 impl Default for ShellTool {
@@ -64,7 +67,10 @@ impl Default for ShellTool {
 
 impl ShellTool {
     pub fn new() -> Self {
-        Self { ctx: None }
+        Self {
+            ctx: None,
+            desc: std::sync::OnceLock::new(),
+        }
     }
 
     #[must_use]
@@ -87,34 +93,59 @@ impl ShellTool {
     }
 }
 
+/// 按探测到的 shell 组装工具描述；`desc()` 首次调用时执行一次并缓存。
+fn compose_desc() -> String {
+    const BG_GUIDE: &str = const_concat!(
+        r"
+## What is background mode
+- When `background` is true, the command runs at background, and returns immediately with a `task_id`, `pid`, and output file path.
+- The pid can be used to monitor or kill the process externally if needed. The output file contains real-time stdout and stderr of the command, which can be useful for long-running tasks.
+- ",
+        crate::tools::ASYNC_LAUNCH_GUIDE,
+        r"
+
+## When to using background mode
+For long-running commands (e.g. start a server, run a script with unknown duration) to avoid blocking the agent and allow real-time monitoring of the output. For short commands that return quickly, background mode is not necessary."
+    );
+    let shell = crate::utils::shell::detect();
+    let intro = match shell.kind {
+        crate::utils::shell::ShellKind::Posix => {
+            format!(
+                "Execute a bash command (interpreter: {}).",
+                shell.path.display()
+            )
+        }
+        crate::utils::shell::ShellKind::PowerShell => {
+            format!(
+                "Execute a PowerShell command (interpreter: {}).",
+                shell.path.display()
+            )
+        }
+        crate::utils::shell::ShellKind::Cmd => {
+            format!(
+                "Execute a cmd.exe command (interpreter: {}).",
+                shell.path.display()
+            )
+        }
+    };
+    let non_interactive = if cfg!(windows) {
+        " Commands run non-interactively (stdin is NUL, no console attached), so interactive prompts (e.g. ssh confirmation) fail immediately instead of waiting for input."
+    } else {
+        " Commands run non-interactively (stdin is /dev/null, no controlling terminal), so interactive prompts (e.g. sudo password, ssh confirmation) fail immediately instead of waiting for input."
+    };
+    format!(
+        "{intro} Reserve exclusively for system commands that require shell execution. Prefer dedicated tools (read, edit, grep) when available. DO NOT use for git push or dangerous operations without explicit user request.{non_interactive}{BG_GUIDE}"
+    )
+}
+
 #[async_trait]
 impl Tool for ShellTool {
     fn name(&self) -> &'static str {
         SHELL_TOOL_NAME
     }
 
-    fn desc(&self) -> &'static str {
-        const BG_GUIDE: &str = const_concat!(
-            r"
-## What is background mode
-- When `background` is true, the command runs at background, and returns immediately with a `task_id`, `pid`, and output file path.
-- The pid can be used to monitor or kill the process externally if needed. The output file contains real-time stdout and stderr of the command, which can be useful for long-running tasks.
-- ",
-            crate::tools::ASYNC_LAUNCH_GUIDE,
-            r"
-
-## When to using background mode
-For long-running commands (e.g. start a server, run a script with unknown duration) to avoid blocking the agent and allow real-time monitoring of the output. For short commands that return quickly, background mode is not necessary."
-        );
-        const_concat!(
-            if cfg!(target_os = "windows") {
-                "Execute a shell command using cmd.exe. Reserve exclusively for system commands that require shell execution. Prefer dedicated tools (read, edit, grep) when available. DO NOT use for git push or dangerous operations without explicit user request."
-            } else {
-                "Execute a bash command. Reserve exclusively for system commands that require shell execution. Prefer dedicated tools (read, edit, grep) when available. DO NOT use for git push or dangerous operations without explicit user request."
-            },
-            " Commands run non-interactively (stdin is /dev/null, no controlling terminal), so interactive prompts (e.g. sudo password, ssh confirmation) fail immediately instead of waiting for input.",
-            BG_GUIDE
-        )
+    fn desc(&self) -> &str {
+        self.desc.get_or_init(compose_desc).as_str()
     }
 
     fn schema(&self) -> Value {
@@ -149,7 +180,7 @@ For long-running commands (e.g. start a server, run a script with unknown durati
             .and_then(|s| if s > 0 { Some(s) } else { None });
         let background = args["background"].as_bool().unwrap_or(false);
 
-        tracing::debug!("Executing bash command: {}", command);
+        tracing::debug!("Executing shell command: {}", command);
 
         let cancel_token = ctx.cancel_token.clone();
         if background {
@@ -177,37 +208,31 @@ For long-running commands (e.g. start a server, run a script with unknown durati
 }
 
 impl ShellTool {
-    /// Get the appropriate shell command for the current platform
-    #[inline]
-    fn shell_command() -> (&'static str, &'static str) {
-        if cfg!(target_os = "windows") {
-            ("cmd.exe", "/C")
-        } else {
-            ("bash", "-c")
-        }
-    }
-
     /// Build the base `Command` for shell execution, hardened for
     /// non-interactive use:
     ///
-    /// - stdin is `/dev/null`, so reads get immediate EOF;
-    /// - on unix the child starts a new session (`setsid`), leaving it with
-    ///   no controlling terminal — programs that prompt via `/dev/tty`
-    ///   (sudo, ssh, gpg, ...) fail fast instead of blocking on a hidden
-    ///   prompt or garbling the TUI;
+    /// - 解释器由 `utils::shell::detect()` 统一选择（bash 优先，Windows
+    ///   Git Bash → pwsh → powershell → cmd），命令文本经
+    ///   `wrap_command` 注入 UTF-8 输出前缀；
+    /// - stdin is null, so reads get immediate EOF;
     /// - env vars disable the remaining interactive prompters (git, ssh);
     /// - yomi 标准环境变量（`YOMI_SESSION_ID` / `YOMI_DATA_DIR`，见
     ///   [`crate::utils::env::inject_child_env`]）让脚本回连 yomi。
+    ///
+    /// 进程树（unix setsid / windows Job Object，让子进程没有控制终端、
+    /// 超时能连后裔一起收）由 `utils::process::spawn_in_new_tree` 在
+    /// spawn 时统一建立，本函数不管。
     fn build_command(
         command: &str,
         working_dir: &std::path::Path,
         session_id: &str,
         data_dir: Option<&std::path::Path>,
     ) -> Command {
-        let (shell, arg) = Self::shell_command();
-        let mut cmd = Command::new(shell);
-        cmd.arg(arg)
-            .arg(command)
+        let shell = crate::utils::shell::detect();
+        let wrapped = shell.wrap_command(command);
+        let mut cmd = Command::new(&shell.path);
+        cmd.args(shell.leading_args())
+            .arg(wrapped.as_ref())
             .current_dir(working_dir)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -229,9 +254,6 @@ impl ShellTool {
             cmd.env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes");
         }
 
-        // 子进程独立成新 session（setsid）：超时/强杀按进程组连后裔一起收。
-        crate::utils::process::pre_exec_new_session(&mut cmd);
-
         cmd
     }
 
@@ -245,48 +267,56 @@ impl ShellTool {
         session_id: &str,
         max_tool_output_length: usize,
     ) -> Result<ToolOutput> {
-        let output_fut =
-            Self::build_command(command, working_dir, session_id, self.data_dir()).output();
-
+        let mut cmd = Self::build_command(command, working_dir, session_id, self.data_dir());
         let timeout_duration = Duration::from_secs(timeout_secs.unwrap_or(300));
-        let output_result = match cancel_token {
-            Some(token) => {
-                tokio::select! {
-                    biased;
-                    () = token.cancelled() => {
-                        tracing::info!("Bash command cancelled: {}", command);
-                        return Ok(ToolOutput::error("Command cancelled"));
-                    }
-                    result = timeout(timeout_duration, output_fut) => result,
-                }
-            }
-            None => timeout(timeout_duration, output_fut).await,
+
+        // drain 上限给足截断所需素材：输出预算的两倍（截断保头尾），
+        // 至少为引擎默认 cap。
+        let drain_cap = max_tool_output_length
+            .saturating_mul(2)
+            .max(crate::utils::spawn::DRAIN_CAP);
+        let captured = match crate::utils::spawn::spawn_captured_with_cap(
+            &mut cmd,
+            None,
+            timeout_duration,
+            cancel_token.as_ref(),
+            drain_cap,
+        )
+        .await
+        {
+            Ok(c) => c,
+            Err(e) => return Err(KernelError::tool(format!("Process error: {e}"))),
         };
 
-        let output = match output_result {
-            Ok(Ok(output)) => output,
-            Ok(Err(e)) => return Err(KernelError::tool(format!("Process error: {e}"))),
-            Err(_) => {
-                tracing::warn!(
-                    "Bash command timed out after {}s: {}",
-                    timeout_duration.as_secs(),
-                    command
-                );
-                return Ok(ToolOutput::error("Command timed out"));
-            }
-        };
-
-        let status = format_exit_status(output.status);
-        let success = output.status.success();
-
-        if success {
-            tracing::debug!("Bash command completed successfully ({status})");
-        } else {
-            tracing::warn!("Bash command failed ({status})");
+        if captured.cancelled {
+            tracing::info!("Shell command cancelled: {}", command);
+            return Ok(ToolOutput::error("Command cancelled"));
+        }
+        if captured.timed_out {
+            tracing::warn!(
+                "Shell command timed out after {}s: {}",
+                timeout_duration.as_secs(),
+                command
+            );
+            return Ok(ToolOutput::error("Command timed out"));
         }
 
-        let stdout_raw = String::from_utf8_lossy(&output.stdout);
-        let stderr_raw = String::from_utf8_lossy(&output.stderr);
+        // exit_code 为 None 仅见于 unix 信号终止（超时/取消已在上面
+        // 分支返回；windows 的 job 强杀同）。
+        let status = match captured.exit_code {
+            Some(code) => format!("exit code: {code}"),
+            None => "killed by signal".to_string(),
+        };
+        let success = captured.exit_code == Some(0);
+
+        if success {
+            tracing::debug!("Shell command completed successfully ({status})");
+        } else {
+            tracing::warn!("Shell command failed ({status})");
+        }
+
+        let stdout_raw = String::from_utf8_lossy(&captured.stdout);
+        let stderr_raw = String::from_utf8_lossy(&captured.stderr);
         let stdout = strip_ansi(&stdout_raw);
         let stderr = strip_ansi(&stderr_raw);
 
@@ -329,8 +359,8 @@ impl ShellTool {
         let output_path_str = output_path.to_string_lossy().to_string();
 
         // Start the process and get PID immediately
-        let child =
-            Self::build_command(command, working_dir, session_id, Some(&ctx.data_dir)).spawn()?;
+        let mut cmd = Self::build_command(command, working_dir, session_id, Some(&ctx.data_dir));
+        let (child, tree) = crate::utils::process::spawn_in_new_tree(&mut cmd)?;
 
         let pid = child.id().unwrap_or(0);
         let tracker_guard = ctx
@@ -352,6 +382,7 @@ impl ShellTool {
         tokio::spawn(async move {
             let result = wait_for_child(
                 child,
+                tree,
                 command_clone,
                 output_path_clone.clone(),
                 timeout_secs,
@@ -447,20 +478,6 @@ fn extract_log_body(log: &str) -> &str {
     body
 }
 
-fn format_exit_status(status: std::process::ExitStatus) -> String {
-    if let Some(code) = status.code() {
-        return format!("exit code: {code}");
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::ExitStatusExt;
-        if let Some(sig) = status.signal() {
-            return format!("killed by signal {sig}");
-        }
-    }
-    "unknown exit status".to_string()
-}
-
 /// Format a single stream with optional truncation and label.
 fn format_stream(text: &str, budget: usize) -> String {
     if text.len() > budget {
@@ -507,11 +524,12 @@ async fn handle_timeout_result(
         tokio::time::error::Elapsed,
     >,
     child: &mut tokio::process::Child,
+    tree: &crate::utils::process::ProcessTree,
 ) -> Result<(i32, bool, bool)> {
     match result {
         Ok(result) => parse_wait_result(result),
         Err(_) => {
-            let _ = child.kill().await;
+            crate::utils::process::kill_tree(child, tree).await;
             Ok((-1, true, false))
         }
     }
@@ -519,6 +537,7 @@ async fn handle_timeout_result(
 
 async fn wait_for_child(
     mut child: tokio::process::Child,
+    tree: crate::utils::process::ProcessTree,
     command: String,
     output_path: std::path::PathBuf,
     timeout_secs: Option<u64>,
@@ -584,13 +603,13 @@ async fn wait_for_child(
                 tokio::select! {
                     biased;
                     () = token.cancelled() => {
-                        let _ = child.kill().await;
+                        crate::utils::process::kill_tree(&mut child, &tree).await;
                         Ok((-1, false, true))
                     }
-                    result = timeout_fut => handle_timeout_result(result, &mut child).await,
+                    result = timeout_fut => handle_timeout_result(result, &mut child, &tree).await,
                 }
             }
-            None => handle_timeout_result(timeout_fut.await, &mut child).await,
+            None => handle_timeout_result(timeout_fut.await, &mut child, &tree).await,
         }
     } else {
         match cancel_token {
@@ -598,7 +617,7 @@ async fn wait_for_child(
                 tokio::select! {
                     biased;
                     () = token.cancelled() => {
-                        let _ = child.kill().await;
+                        crate::utils::process::kill_tree(&mut child, &tree).await;
                         Ok((-1, false, true))
                     }
                     result = child.wait() => parse_wait_result(result),
