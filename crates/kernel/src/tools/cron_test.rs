@@ -414,6 +414,7 @@ async fn delete_job() {
     assert_eq!(v["deleted"], json!(false));
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn trigger_shell_executes_without_recording() {
     let f = fixture(true, false).await;
@@ -446,6 +447,7 @@ async fn trigger_shell_executes_without_recording() {
     assert!(job.last_error.is_none());
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn trigger_shell_failure_is_not_recorded() {
     let f = fixture(true, false).await;

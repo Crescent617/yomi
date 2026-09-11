@@ -266,6 +266,7 @@ mod tests {
         assert_eq!(super::super::SHELL_COMPLETE_EXIT_CODE, 42);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn shell_runner_success_captures_stdout() {
         let out = super::super::run_shell_command("echo hello", None, std::path::Path::new("/d"))
@@ -275,6 +276,7 @@ mod tests {
         assert!(!out.self_complete);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn shell_runner_injects_yomi_data_dir() {
         let out = super::super::run_shell_command(
@@ -288,6 +290,7 @@ mod tests {
         assert_eq!(out.stdout, "dir=/d\nsid=\n");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn shell_runner_complete_exit_code_marks_self_complete() {
         let cmd = format!("echo done; exit {}", super::super::SHELL_COMPLETE_EXIT_CODE);
@@ -298,6 +301,7 @@ mod tests {
         assert!(out.self_complete);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn shell_runner_other_nonzero_is_shell_failed() {
         let err = super::super::run_shell_command(
@@ -310,6 +314,7 @@ mod tests {
         assert!(matches!(err, CronError::ShellFailed(e) if e.contains("boom")));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn shell_runner_signal_death_is_failure_not_self_complete() {
         // Killed by a signal → no exit code → failure, never self-complete.

@@ -206,6 +206,6 @@ pub async fn run(
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "workflow_test.rs"]
 mod tests;

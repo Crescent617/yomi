@@ -313,6 +313,6 @@ fn truncate_chars(s: &str, max: usize) -> String {
     format!("{truncated}…")
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "ext_test.rs"]
 mod tests;

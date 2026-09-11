@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(unix)]
 #[test]
 fn inject_child_env_sets_only_given_vars() {
     let get = |cmd: &tokio::process::Command, key: &str| {
@@ -38,6 +39,7 @@ fn yomi_env_var_names_use_prefix() {
 
 /// `None` 项是显式移除：测试进程自身带着这两个变量时（比如整个测试
 /// 就跑在某个 yomi 会话的 shell 里），子进程不得继承到残留值。
+#[cfg(unix)]
 #[tokio::test]
 async fn inject_child_env_removes_inherited_values() {
     std::env::set_var("YOMI_SESSION_ID", "sess_leak");

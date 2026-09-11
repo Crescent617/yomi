@@ -194,6 +194,6 @@ async fn run(data_dir: &Path, channel: &str, name: &str, path: &Path, action: &C
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "card_trigger_test.rs"]
 mod tests;

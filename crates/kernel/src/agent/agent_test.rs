@@ -1451,6 +1451,7 @@ async fn empty_completion_is_not_persisted_and_fails_turn_cleanly() {
 
 /// 外挂合并（Agent::new 收口）：有效进表、撞内建让位、blocklist 拦截、
 /// 自声明 level 经 `Tool::level` 流露。
+#[cfg(unix)]
 #[tokio::test]
 async fn ext_tools_merge_shadow_and_blocklist() {
     use crate::agent::{Agent, AgentShared, AgentSpawnArgs};

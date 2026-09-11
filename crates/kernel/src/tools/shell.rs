@@ -228,7 +228,24 @@ impl ShellTool {
         session_id: &str,
         data_dir: Option<&std::path::Path>,
     ) -> Command {
-        let shell = crate::utils::shell::detect();
+        Self::build_command_with_shell(
+            crate::utils::shell::detect(),
+            command,
+            working_dir,
+            session_id,
+            data_dir,
+        )
+    }
+
+    /// 用指定的 shell 构造命令（`build_command` 的探测解耦版：Windows
+    /// 实机测试需要逐档 shell 验证，而 `detect()` 是进程级缓存）。
+    fn build_command_with_shell(
+        shell: &crate::utils::shell::AgentShell,
+        command: &str,
+        working_dir: &std::path::Path,
+        session_id: &str,
+        data_dir: Option<&std::path::Path>,
+    ) -> Command {
         let wrapped = shell.wrap_command(command);
         let mut cmd = Command::new(&shell.path);
         cmd.args(shell.leading_args())
@@ -681,3 +698,7 @@ async fn wait_for_child(
 #[cfg(test)]
 #[path = "shell_test.rs"]
 mod tests;
+
+#[cfg(all(test, windows))]
+#[path = "shell_windows_test.rs"]
+mod windows_tests;

@@ -361,6 +361,6 @@ async fn drain<R>(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "spawn_test.rs"]
 mod tests;

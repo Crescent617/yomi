@@ -399,6 +399,6 @@ async fn run_one_daemon_hook(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "hook_test.rs"]
 mod tests;

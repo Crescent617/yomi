@@ -165,6 +165,10 @@ pub fn terminate_tree_by_pid(pid: u32) -> io::Result<()> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "process_test.rs"]
 mod tests;
+
+#[cfg(all(test, windows))]
+#[path = "process_windows_test.rs"]
+mod windows_tests;
