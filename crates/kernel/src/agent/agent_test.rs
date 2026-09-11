@@ -894,7 +894,10 @@ async fn interrupted_marker_closes_pending_tool_batch() {
     // 打断前有 pending；标记后收口。
     assert!(agent.pending_tool_calls().is_some());
     agent
-        .mark_interrupted("daemon restarting — outcome of interrupted work unknown")
+        .mark_interrupted(
+            "daemon restarting — outcome of interrupted work unknown",
+            true,
+        )
         .await;
 
     // 直写落盘：store 里能读回（不依赖事件总线）。
@@ -1535,4 +1538,87 @@ async fn ext_tools_merge_shadow_and_blocklist() {
     assert!(read.level().is_none());
     // blocklist 拦截。
     assert!(agent.tool_registry.get("probe_blocked").is_none());
+}
+
+/// 用户取消路径的 interruption marker 走事件总线（与 cancelled 工具结果同
+/// 通道，有序落盘），不直写 store——直写是 daemon-shutdown 专用（直写与池
+/// worker 并发写同一 jsonl 会交错出坏行，2026-09-11 e2e 实证双丢）。
+#[tokio::test]
+async fn interrupted_marker_user_cancel_stays_off_direct_store_write() {
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs};
+    use crate::types::{Role, SessionId, INTERRUPTED_META_KEY};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    let store_dir = tempfile::tempdir().unwrap();
+    let message_store: Arc<dyn crate::storage::MessageStore> =
+        Arc::new(crate::storage::message::jsonl::JsonlMessageStore::new(
+            store_dir.path().to_path_buf(),
+            store_dir.path().to_path_buf(),
+        ));
+    let shared = Arc::new(AgentShared::new(
+        Arc::new(BTreeMap::new()),
+        "test".to_string(),
+        None,
+        None,
+        None,
+        None,
+        Some(message_store),
+        None,
+        None,
+        Vec::new(),
+        None,
+        None,
+    ));
+
+    let working_dir = tempfile::tempdir().unwrap();
+    let args = AgentSpawnArgs {
+        base_prompt: "test".to_string(),
+        skills: Vec::new(),
+        history: Vec::new(),
+        session_id: SessionId::new().to_string(),
+        parent_session_id: None,
+        max_iterations: 1,
+        working_dir: working_dir.path().to_path_buf(),
+        cancel_token: None,
+        tool_flags: crate::tools::ToolFlags::new(false),
+        file_state_store: None,
+        tool_blocklist: Vec::new(),
+        max_tool_output_length: 1024,
+        mailbox: Arc::new(crate::comms::Mailbox::new()),
+        input_bus: None,
+        ext_tools: Vec::new(),
+    };
+    let mut agent = Agent::new(&shared, args).await;
+
+    agent.mark_interrupted("cancelled", false).await;
+
+    // Buffer 带上 marker（模型与 UI 可见）…
+    let last = agent
+        .message_buffer
+        .messages()
+        .last()
+        .expect("marker in buffer")
+        .clone();
+    assert_eq!(last.role, Role::User);
+    assert_eq!(
+        last.metadata
+            .as_ref()
+            .and_then(|m| m.get(INTERRUPTED_META_KEY))
+            .map(String::as_str),
+        Some("true")
+    );
+    // …但 store 无直写：本测试无 conductor 消费总线，若 marker 走了直写
+    // 这里会读到它。
+    let persisted = shared
+        .message_store
+        .as_ref()
+        .unwrap()
+        .get(&agent.session_id.0)
+        .await
+        .unwrap();
+    assert!(
+        persisted.is_empty(),
+        "user-cancel marker must not bypass the bus: {persisted:?}"
+    );
 }

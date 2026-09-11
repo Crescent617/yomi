@@ -408,10 +408,10 @@ impl Agent {
     async fn handle_cancel(&mut self, context: &str) -> Result<(), AgentError> {
         tracing::info!("{} cancelled", context);
         if self.cancel_token.take_for_shutdown() {
-            self.mark_interrupted("daemon shutdown").await;
+            self.mark_interrupted("daemon shutdown", true).await;
             self.emit_stopped_shutdown();
         } else {
-            self.mark_interrupted("cancelled").await;
+            self.mark_interrupted("cancelled", false).await;
             // Emit cancellation event with operation name
             self.emit_operation_cancelled(context);
         }
@@ -429,28 +429,32 @@ impl Agent {
     /// assistant→tool chain complete; the marker remains the turn-level
     /// interrupt signal and the respawn guard.
     ///
-    /// Persistence is a direct store append, not the MessageAdded event
-    /// bus: on the daemon-shutdown path the conductor (the bus's only
-    /// persister) is already torn down when agents observe the cancel, so a
-    /// bus-published marker would be lost on exactly the path it exists
-    /// for. The buffer is updated in place to avoid a double persist.
-    /// Metadata flags it for UIs to render as a divider/system line.
-    ///
-    /// 直写前先排空持久化池（2026-08-22 复审 should-fix）：jsonl
-    /// append 非原子，直写与池 worker 的 drain/在飞写并发写同一文
-    /// 件会交错出坏行（`read_lines` 静默跳过 → 双丢）；排空后直写
-    /// 还把 marker 顺序顺带改正（落在既有消息之后）。**残余窗口**
-    /// （fresh-eyes 复审）：`wait_drained` 只覆盖**已 dispatch**
-    /// 的写——仍堵在 conductor bus 队列里、尚未分发的
-    /// `MessageAdded` 会在 marker 直写之后才入池落盘，marker 顺序
-    /// 与并发写在该窗口内仍可能存在（与旧码 inline 时代同型）。
-    /// 上界与降级见 `wait_drained`。
-    async fn mark_interrupted(&mut self, reason: &str) {
+    /// Persistence follows the cancel origin (`shutdown` flag):
+    /// - user cancel: published through the `MessageAdded` bus like any
+    ///   other message — the conductor's ordering invariant (单循环顺序
+    ///   dispatch + 池 per-key FIFO + `Stopped` 臂 `wait_idle`) keeps it
+    ///   ordered after the cancelled results emitted moments earlier and
+    ///   durably written before the agent goes idle. A direct store append
+    ///   here raced the pool worker and interleaved bytes on the same
+    ///   jsonl line (2026-09-11 e2e: marker 与 cancelled 结果粘行，
+    ///   `read_lines` 静默跳过 → 双丢，respawn 重跑工具批).
+    /// - daemon shutdown: the conductor (the bus's only persister) may
+    ///   already be torn down, so the marker is a direct store append
+    ///   after `wait_drained` — the guaranteed record on this path;
+    ///   bus-published messages still in flight may be lost with the bus.
+    ///   残余窗口：`wait_drained` 只覆盖**已 dispatch** 的写——仍堵在
+    ///   conductor bus 队列里、尚未分发的 `MessageAdded` 会在 marker 直写
+    ///   之后才入池落盘（shutdown 拆除竞速下多半直接丢失）。
+    async fn mark_interrupted(&mut self, reason: &str, shutdown: bool) {
         let mut msg = Message::user(format!("[interrupted: {reason}]"));
         msg.metadata = Some(std::collections::HashMap::from([(
             crate::types::INTERRUPTED_META_KEY.to_string(),
             "true".to_string(),
         )]));
+        if !shutdown {
+            self.push_message(msg);
+            return;
+        }
         if let Some(store) = &self.shared.message_store {
             if let Some(ref pool) = self.shared.persist_pool {
                 crate::kernel::persist_pool::wait_drained(
@@ -1197,10 +1201,10 @@ impl Agent {
             Err(CompactionError::Cancelled) => {
                 tracing::info!("compaction cancelled");
                 if self.cancel_token.take_for_shutdown() {
-                    self.mark_interrupted("daemon shutdown").await;
+                    self.mark_interrupted("daemon shutdown", true).await;
                     self.emit_stopped_shutdown();
                 } else {
-                    self.mark_interrupted("cancelled").await;
+                    self.mark_interrupted("cancelled", false).await;
                     self.emit_operation_cancelled("compaction");
                 }
                 Err("Compaction was cancelled".to_string())
