@@ -5,6 +5,13 @@ use std::time::Duration;
 
 use super::{spawn_captured, SpawnError, DRAIN_CAP};
 
+/// 进程型用例的统一超时：不取 5s 短上界——macOS 对**新文件首次
+/// exec** 做安全评估（syspolicyd/公证检查，本机实测每文件 ~400ms
+/// 且跨进程串行），套件并发 exec 一批全新脚本时队尾启动延迟可越
+/// 5s 被误杀（2026-09-11 对抗 review 根因实证）。30s 档从不失败；
+/// 超时语义自有 1s 用例覆盖，不依赖这里的短上界。
+const SPAWN_TEST_TIMEOUT: u64 = 30;
+
 fn sh_script(dir: &tempfile::TempDir, name: &str, body: &str) -> std::path::PathBuf {
     let path = dir.path().join(name);
     let mut f = std::fs::File::create(&path).unwrap();
@@ -23,9 +30,14 @@ async fn captures_stdout_stderr_and_exit_code() {
     let dir = tempfile::TempDir::new().unwrap();
     let script = sh_script(&dir, "ok", "echo hello\necho oops >&2\nexit 3\n");
     let mut cmd = tokio::process::Command::new(&script);
-    let c = spawn_captured(&mut cmd, None, Duration::from_secs(5), None)
-        .await
-        .unwrap();
+    let c = spawn_captured(
+        &mut cmd,
+        None,
+        Duration::from_secs(SPAWN_TEST_TIMEOUT),
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(c.exit_code, Some(3));
     assert!(!c.timed_out);
     assert_eq!(String::from_utf8_lossy(&c.stdout).trim(), "hello");
@@ -37,9 +49,14 @@ async fn stdin_roundtrip() {
     let dir = tempfile::TempDir::new().unwrap();
     let script = sh_script(&dir, "cat", "cat\n");
     let mut cmd = tokio::process::Command::new(&script);
-    let c = spawn_captured(&mut cmd, Some(br#"{"a":1}"#), Duration::from_secs(5), None)
-        .await
-        .unwrap();
+    let c = spawn_captured(
+        &mut cmd,
+        Some(br#"{"a":1}"#),
+        Duration::from_secs(SPAWN_TEST_TIMEOUT),
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(c.exit_code, Some(0));
     assert_eq!(String::from_utf8_lossy(&c.stdout).trim(), r#"{"a":1}"#);
 }
@@ -173,10 +190,16 @@ async fn under_cap_capture_is_byte_exact() {
     let dir = tempfile::TempDir::new().unwrap();
     let script = sh_script(&dir, "small", "echo aaa\necho bbb\n");
     let mut cmd = tokio::process::Command::new(&script);
-    let c =
-        super::spawn_captured_with_cap(&mut cmd, None, Duration::from_secs(5), None, 1000, None)
-            .await
-            .unwrap();
+    let c = super::spawn_captured_with_cap(
+        &mut cmd,
+        None,
+        Duration::from_secs(SPAWN_TEST_TIMEOUT),
+        None,
+        1000,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(String::from_utf8_lossy(&c.stdout), "aaa\nbbb\n");
 }
 
@@ -239,7 +262,7 @@ async fn under_cap_creates_no_log_file() {
     let c = super::spawn_captured_with_cap(
         &mut cmd,
         None,
-        Duration::from_secs(5),
+        Duration::from_secs(SPAWN_TEST_TIMEOUT),
         None,
         1000,
         Some(overflow),

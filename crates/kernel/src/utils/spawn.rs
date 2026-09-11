@@ -333,15 +333,17 @@ async fn drain<R>(
                         Ok(mut file) => {
                             let (t1, t2) = s.buf.tail.as_slices();
                             let mut written = 0u64;
-                            let mut ok = true;
+                            let mut write_err = None;
                             for part in [&s.buf.head[..], t1, t2] {
-                                if file.write_all(part).await.is_err() {
-                                    ok = false;
-                                    break;
+                                match file.write_all(part).await {
+                                    Ok(()) => written += part.len() as u64,
+                                    Err(e) => {
+                                        write_err = Some(e);
+                                        break;
+                                    }
                                 }
-                                written += part.len() as u64;
                             }
-                            if ok {
+                            if write_err.is_none() {
                                 s.log = Some(StreamLog {
                                     file,
                                     written,
@@ -356,7 +358,7 @@ async fn drain<R>(
                                     tracing::debug!(path = %path.display(), error = %e, "partial overflow log remove failed");
                                 }
                                 overflow_disabled = true;
-                                tracing::warn!(path = %path.display(), "overflow log initial write failed; overflow disabled for this stream");
+                                tracing::warn!(path = %path.display(), error = ?write_err, "overflow log initial write failed; overflow disabled for this stream");
                             }
                         }
                         Err(e) => {
