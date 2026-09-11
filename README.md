@@ -39,7 +39,6 @@
 
 ### Dependencies
 
-- [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) — for file search
 - [Nerd Font](https://www.nerdfonts.com/) — for UI icons (optional but recommended)
 
 ### Installation
