@@ -20,15 +20,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - shell 工具支持 Windows：按 Git Bash → pwsh → powershell → cmd.exe 自动探测解释器（`System32\bash.exe` 会误入 WSL，已排除），也可用 `YOMI_SHELL` 环境变量显式指定。
 - Windows 上 shell 命令输出统一按 UTF-8 处理，cmd/PowerShell 下的中文不再乱码。
 - 同步 shell 命令输出被截断时，完整输出会保存到临时文件并在结果里给出路径与字节数，可用 read/grep 工具查看全文（文件权限仅 owner 可读；background 日志同步收紧）。
+- grep 搜索工具不再依赖系统安装的 ripgrep：搜索能力已内置，Windows 与无 rg 的精简容器也能直接使用，输出格式与既有习惯一致。
+- Release 新增 Windows 版下载包：`yomi-<版本>-x86_64-pc-windows-msvc.zip`（含 yomi.exe）。
 
 ### Changed
 
 - Windows 上命令超时或被取消时，会结束命令及其全部子进程（此前只结束主进程，后台子进程会残留）。
 - 没有 bash 的精简 Linux 环境（如 Alpine 容器）自动回退到 sh，不再报进程启动失败。
+- 被中断/取消的工具调用在会话恢复时统一补记为「已取消」并保留在对话记录中：此前这类记录可能整段消失，模型会在不知情下重复执行用户已取消的操作（包括写文件、删数据类操作）。
 
 ### Fixed
 
 - 飞书消息的时间戳按本地时区渲染（此前按 UTC，比北京时间慢 8 小时，容易误导对"今天/昨天"的判断）。
+- 取消一批并行工具调用时，未完成的调用现在会落下明确的「已取消」结果记录，对话链保持完整。
+- 重启 daemon 后，子 agent 的工具调用记录不再从模型上下文中整组消失。
 
 ## [0.10.29] - 2026-09-10
 
