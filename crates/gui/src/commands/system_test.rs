@@ -5,6 +5,7 @@ fn connection_info_uses_snake_case_fields_for_local_daemon() {
     let info = connection_info_json(&crate::state::ConnectionMode::Local, true);
 
     assert_eq!(info["mode"], "local");
+    assert_eq!(info["conn"], "local");
     assert_eq!(info["addr"], crate::daemon::socket_addr().to_string());
     assert_eq!(info["managed"], true);
 }
@@ -15,7 +16,21 @@ fn connection_info_reports_remote_daemon() {
     let info = connection_info_json(&crate::state::ConnectionMode::Remote(addr), false);
 
     assert_eq!(info["mode"], "remote");
+    assert_eq!(info["conn"], "remote");
     assert_eq!(info["addr"], "wss://example.com/kernel");
+    assert_eq!(info["managed"], false);
+}
+
+#[test]
+fn connection_info_folds_loopback_remote_into_local_display() {
+    // 回环 ws/wss（用户手连的本机 daemon）：显示标签折为 local，
+    // conn 保留实际形态 remote（附件等数据路径行为依据）。
+    let addr = kernel::transport::SocketAddr::Ws("127.0.0.1:9541".to_string());
+    let info = connection_info_json(&crate::state::ConnectionMode::Remote(addr), false);
+
+    assert_eq!(info["mode"], "local");
+    assert_eq!(info["conn"], "remote");
+    assert_eq!(info["addr"], "ws://127.0.0.1:9541");
     assert_eq!(info["managed"], false);
 }
 

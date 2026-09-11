@@ -106,7 +106,7 @@
   function openConnPopover() {
     connError = null;
     connInput =
-      connInfo?.mode === "remote"
+      connInfo?.conn === "remote"
         ? connInfo.addr
         : (guiPreferences.connection.remote_addr ?? "");
     connToken = guiPreferences.connection.remote_auth_token ?? "";
@@ -272,7 +272,7 @@
       title={connInfo
         ? connInfo.mode === "remote"
           ? `Remote daemon: ${connInfo.addr}`
-          : isWsAddr(connInfo.addr)
+          : connInfo.conn === "local" && isWsAddr(connInfo.addr)
             ? `Default daemon (via YOMI_SOCKET): ${connInfo.addr}`
             : `Local daemon: ${connInfo.addr}`
         : "Connection"}
@@ -281,13 +281,6 @@
       {#if connInfo?.mode === "remote"}
         <Globe class="w-3 h-3" />
         <span class="micro-label text-info">REMOTE</span>
-        <span
-          class="max-w-32 truncate font-mono text-[10px] text-muted-foreground"
-          >{remoteHostLabel(connInfo.addr)}</span
-        >
-      {:else if connInfo && isWsAddr(connInfo.addr)}
-        <Globe class="w-3 h-3" />
-        <span class="micro-label">REMOTE</span>
         <span
           class="max-w-32 truncate font-mono text-[10px] text-muted-foreground"
           >{remoteHostLabel(connInfo.addr)}</span
@@ -310,9 +303,6 @@
             {#if connInfo?.mode === "remote"}
               <Globe class="h-3 w-3 shrink-0 text-info" />
               <span>Remote daemon</span>
-            {:else if connInfo && isWsAddr(connInfo.addr)}
-              <Globe class="h-3 w-3 shrink-0" />
-              <span>Default daemon</span>
             {:else}
               <House class="h-3 w-3 shrink-0" />
               <span>Local daemon</span>
@@ -323,7 +313,7 @@
               class="truncate font-mono text-[10px] text-muted-foreground"
               title={connInfo.addr}
             >
-              {connInfo.addr}{#if connInfo.mode === "local" && isWsAddr(connInfo.addr)}
+              {connInfo.addr}{#if connInfo.conn === "local" && isWsAddr(connInfo.addr)}
                 &nbsp;· via YOMI_SOCKET{/if}
             </div>
           {/if}
