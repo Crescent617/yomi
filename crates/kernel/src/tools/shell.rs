@@ -271,16 +271,22 @@ impl ShellTool {
         let timeout_duration = Duration::from_secs(timeout_secs.unwrap_or(300));
 
         // drain 上限给足截断所需素材：输出预算的两倍（截断保头尾），
-        // 至少为引擎默认 cap。
+        // 至少为引擎默认 cap。超 cap 的流全文落盘（引擎惰性创建：
+        // 未超 cap 零 IO），路径写进 footer 供 read/grep 工具回查。
         let drain_cap = max_tool_output_length
             .saturating_mul(2)
             .max(crate::utils::spawn::DRAIN_CAP);
+        let overflow = Some(crate::utils::spawn::OverflowLog {
+            dir: std::env::temp_dir(),
+            stem: format!("yomi_{}", Self::gen_task_id()),
+        });
         let captured = match crate::utils::spawn::spawn_captured_with_cap(
             &mut cmd,
             None,
             timeout_duration,
             cancel_token.as_ref(),
             drain_cap,
+            overflow,
         )
         .await
         {
@@ -321,8 +327,9 @@ impl ShellTool {
         let stdout = strip_ansi(&stdout_raw);
         let stderr = strip_ansi(&stderr_raw);
 
+        let log_note = format_log_note(&captured.log_files);
         let footer = format!(
-            "\n\n---\n[{status}] Command {}.",
+            "\n\n---\n[{status}] Command {}.{log_note}",
             if success { "completed" } else { "failed" }
         );
 
@@ -420,6 +427,21 @@ impl ShellTool {
             crate::tools::ASYNC_LAUNCH_GUIDE
         )))
     }
+}
+
+/// sync 路径输出超 cap 全文落盘后的引用说明（与 background 路径的
+/// 「Log file:」词汇一致——同一份输出约定，模型见到路径可用 read /
+/// grep 工具回查）。
+fn format_log_note(log_files: &[(std::path::PathBuf, u64)]) -> String {
+    if log_files.is_empty() {
+        return String::new();
+    }
+    let list = log_files
+        .iter()
+        .map(|(path, bytes)| format!("{} ({bytes} bytes)", path.display()))
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("\nLog file: {list} (full output, truncated above)")
 }
 
 fn format_background_result<E: std::fmt::Display>(
@@ -547,7 +569,7 @@ async fn wait_for_child(
     let stdout = child.stdout.take().expect("stdout piped");
     let stderr = child.stderr.take().expect("stderr piped");
 
-    let mut file = File::create(&output_path).await?;
+    let mut file = crate::utils::spawn::open_log_file(&output_path).await?;
     file.write_all(format!("# Command: {command}\n").as_bytes())
         .await?;
     if let Some(t) = timeout_secs {

@@ -1,4 +1,6 @@
-use super::{extract_log_body, format_background_result, format_sync_output, ShellTool};
+use super::{
+    extract_log_body, format_background_result, format_log_note, format_sync_output, ShellTool,
+};
 use crate::tools::format_shell_message;
 use std::ffi::OsStr;
 use std::path::Path;
@@ -224,6 +226,17 @@ async fn spawned_command_runs_normally() {
 
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "hello");
+}
+
+#[test]
+fn log_note_lists_files_only_when_present() {
+    assert_eq!(format_log_note(&[]), "");
+    let note = format_log_note(&[(std::path::PathBuf::from("/tmp/yomi_sh-x_stdout.log"), 40960)]);
+    assert!(
+        note.contains("Log file: /tmp/yomi_sh-x_stdout.log (40960 bytes)"),
+        "{note}"
+    );
+    assert!(note.contains("truncated above"), "{note}");
 }
 
 #[test]

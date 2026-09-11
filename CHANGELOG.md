@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - shell 工具支持 Windows：按 Git Bash → pwsh → powershell → cmd.exe 自动探测解释器（`System32\bash.exe` 会误入 WSL，已排除），也可用 `YOMI_SHELL` 环境变量显式指定。
 - Windows 上 shell 命令输出统一按 UTF-8 处理，cmd/PowerShell 下的中文不再乱码。
+- 同步 shell 命令输出被截断时，完整输出会保存到临时文件并在结果里给出路径与字节数，可用 read/grep 工具查看全文（文件权限仅 owner 可读；background 日志同步收紧）。
 
 ### Changed
 

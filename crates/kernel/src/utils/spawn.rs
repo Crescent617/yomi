@@ -16,12 +16,29 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::AsyncReadExt as _;
+use tokio::io::AsyncWriteExt as _;
 
 use crate::utils::process::{kill_tree, spawn_in_new_tree};
 
 /// drain 缓冲的默认累积上限：超出继续读（防管道阻塞）但停止累积——
 /// 坏脚本 `cat hugefile >&2` 不会撑爆内存。
 pub const DRAIN_CAP: usize = 64 * 1024;
+
+/// 溢出落盘配置（sync shell 用）：某一流（stdout/stderr）累计超 cap
+/// 时，把已捕获内容（此刻内存缓冲仍是完整流）一次性写入
+/// `<dir>/<stem>_<stream>.log` 并开始流式追加——文件自第一字节完整；
+/// 未超 cap 零 IO。unix 权限 0600：命令输出可能含敏感内容。
+#[derive(Clone, Debug)]
+pub struct OverflowLog {
+    pub dir: std::path::PathBuf,
+    pub stem: String,
+}
+
+impl OverflowLog {
+    fn path_for(&self, stream: &str) -> std::path::PathBuf {
+        self.dir.join(format!("{}_{stream}.log", self.stem))
+    }
+}
 
 /// 主进程退出/被杀后 drain 收尾的宽限期。
 pub const DRAIN_GRACE: Duration = Duration::from_secs(2);
@@ -42,6 +59,9 @@ pub struct Captured {
     pub stdout: Vec<u8>,
     /// stderr 捕获（≤ drain cap）。
     pub stderr: Vec<u8>,
+    /// 溢出落盘的文件与字节数（配置了 [`OverflowLog`] 且对应流超 cap
+    /// 时非空）；文件内容自第一字节完整。
+    pub log_files: Vec<(std::path::PathBuf, u64)>,
 }
 
 /// spawn 自身失败（与"外挂执行失败"分层）。
@@ -72,18 +92,20 @@ enum Stop {
     Cancelled,
 }
 
-/// 运行一个命令并捕获其输出（drain 上限取默认值 [`DRAIN_CAP`]）。
+/// 运行一个命令并捕获其输出（drain 上限取默认值 [`DRAIN_CAP`]，
+/// 不落盘）。
 pub async fn spawn_captured(
     cmd: &mut tokio::process::Command,
     stdin_bytes: Option<&[u8]>,
     timeout: Duration,
     cancel: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<Captured, SpawnError> {
-    spawn_captured_with_cap(cmd, stdin_bytes, timeout, cancel, DRAIN_CAP).await
+    spawn_captured_with_cap(cmd, stdin_bytes, timeout, cancel, DRAIN_CAP, None).await
 }
 
 /// 同 [`spawn_captured`]，但 drain 累积上限由调用方给定——shell 工具
-/// 这类输出预算大的入口可以放宽，hooks 等用默认即可。
+/// 这类输出预算大的入口可以放宽，hooks 等用默认即可；`overflow` 配置
+/// 后，超 cap 的流会全文落盘（见 [`OverflowLog`]）。
 ///
 /// `cmd` 应已配好 program / cwd / env；stdio 由引擎接管（`stdin_bytes`
 /// 为 `Some` 时管道写入，写遇 `BrokenPipe` 静默——脚本不读 stdin 是正常
@@ -95,6 +117,7 @@ pub async fn spawn_captured_with_cap(
     timeout: Duration,
     cancel: Option<&tokio_util::sync::CancellationToken>,
     drain_cap: usize,
+    overflow: Option<OverflowLog>,
 ) -> Result<Captured, SpawnError> {
     cmd.stdin(if stdin_bytes.is_some() {
         Stdio::piped()
@@ -105,20 +128,22 @@ pub async fn spawn_captured_with_cap(
     .stderr(Stdio::piped())
     .kill_on_drop(true);
     let (mut child, tree) = spawn_in_new_tree(cmd).map_err(SpawnError::Spawn)?;
-    // 两管各自持续读空（管道不排空，写多的脚本会阻塞）：缓冲共享——
+    // 两管各自持续读空（管道不排空，写多的脚本会阻塞）：状态共享——
     // 即使 drain 宽限到期被迫 abort，已捕获的部分仍读得到（后裔持有
     // 管道不见 EOF 的场景）。
-    let out_buf = Arc::new(tokio::sync::Mutex::new(DrainBuf::default()));
-    let err_buf = Arc::new(tokio::sync::Mutex::new(DrainBuf::default()));
+    let out_state = Arc::new(tokio::sync::Mutex::new(StreamCapture::default()));
+    let err_state = Arc::new(tokio::sync::Mutex::new(StreamCapture::default()));
     let mut drain_out = tokio::spawn(drain(
         child.stdout.take().expect("stdout piped"),
-        Arc::clone(&out_buf),
+        Arc::clone(&out_state),
         drain_cap,
+        overflow.as_ref().map(|o| o.path_for("stdout")),
     ));
     let mut drain_err = tokio::spawn(drain(
         child.stderr.take().expect("stderr piped"),
-        Arc::clone(&err_buf),
+        Arc::clone(&err_state),
         drain_cap,
+        overflow.as_ref().map(|o| o.path_for("stderr")),
     ));
     // spawn 要求 'static：字节复制一份（memcpy 廉价；昂贵的序列化已在
     // 调用方按批只做一次）。
@@ -185,15 +210,37 @@ pub async fn spawn_captured_with_cap(
     );
     drain_out.abort();
     drain_err.abort();
-    let stdout = std::mem::take(&mut *out_buf.lock().await).assemble();
-    let stderr = std::mem::take(&mut *err_buf.lock().await).assemble();
+    let out = std::mem::take(&mut *out_state.lock().await);
+    let err = std::mem::take(&mut *err_state.lock().await);
+    let StreamCapture {
+        buf: out_buf,
+        log: out_log,
+        ..
+    } = out;
+    let StreamCapture {
+        buf: err_buf,
+        log: err_log,
+        ..
+    } = err;
+    let mut log_files = Vec::new();
+    for (log, path) in [
+        (out_log, overflow.as_ref().map(|o| o.path_for("stdout"))),
+        (err_log, overflow.as_ref().map(|o| o.path_for("stderr"))),
+    ] {
+        if let (Some(log), Some(path)) = (log, path) {
+            if !log.failed {
+                log_files.push((path, log.written));
+            }
+        }
+    }
     Ok(Captured {
         exit_code,
         signal,
         timed_out,
         cancelled,
-        stdout,
-        stderr,
+        stdout: out_buf.assemble(),
+        stderr: err_buf.assemble(),
+        log_files,
     })
 }
 
@@ -226,10 +273,42 @@ impl DrainBuf {
     }
 }
 
-/// 持续读空一根管道并入共享缓冲；累积规则见 [`DrainBuf`]。读不停：
-/// 管道不排空，写多的脚本会阻塞在 write 上。
-async fn drain<R>(mut pipe: R, buf: Arc<tokio::sync::Mutex<DrainBuf>>, cap: usize)
-where
+/// 单流捕获状态：内存缓冲 + 已读总量 + 溢出落盘文件。
+#[derive(Default)]
+struct StreamCapture {
+    buf: DrainBuf,
+    total: u64,
+    log: Option<StreamLog>,
+}
+
+struct StreamLog {
+    file: tokio::fs::File,
+    written: u64,
+    /// 落盘写失败（如磁盘满）：停止引用该文件——footer 声称「全文」
+    /// 而文件不完整会误导后续排查。
+    failed: bool,
+}
+
+/// 以 0600（unix）权限创建日志文件：命令输出可能含敏感内容。
+/// spawn 引擎的溢出落盘与 shell 工具的 background 日志共用。
+pub(crate) async fn open_log_file(path: &std::path::Path) -> std::io::Result<tokio::fs::File> {
+    let mut opts = tokio::fs::OpenOptions::new();
+    opts.create(true).write(true).truncate(true);
+    #[cfg(unix)]
+    opts.mode(0o600);
+    opts.open(path).await
+}
+
+/// 持续读空一根管道：内容入内存缓冲（[`DrainBuf`] 规则），首超 cap
+/// 时把已捕获内容（此刻 head+tail 仍是完整流）落盘并开始流式追加，
+/// 文件自第一字节完整。读不停：管道不排空，写多的脚本会阻塞在
+/// write 上。
+async fn drain<R>(
+    mut pipe: R,
+    state: Arc<tokio::sync::Mutex<StreamCapture>>,
+    cap: usize,
+    overflow_path: Option<std::path::PathBuf>,
+) where
     R: tokio::io::AsyncRead + Unpin,
 {
     let half = cap / 2;
@@ -238,7 +317,45 @@ where
         match pipe.read(&mut chunk).await {
             Ok(0) | Err(_) => break,
             Ok(n) => {
-                buf.lock().await.push(&chunk[..n], half);
+                let mut s = state.lock().await;
+                let should_open =
+                    s.log.is_none() && overflow_path.is_some() && s.total + n as u64 > cap as u64;
+                if should_open {
+                    let path = overflow_path.clone().unwrap_or_default();
+                    match open_log_file(&path).await {
+                        Ok(mut file) => {
+                            let (t1, t2) = s.buf.tail.as_slices();
+                            let mut written = 0u64;
+                            let mut ok = true;
+                            for part in [&s.buf.head[..], t1, t2] {
+                                if file.write_all(part).await.is_err() {
+                                    ok = false;
+                                    break;
+                                }
+                                written += part.len() as u64;
+                            }
+                            if ok {
+                                s.log = Some(StreamLog {
+                                    file,
+                                    written,
+                                    failed: false,
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            tracing::debug!(path = %path.display(), error = %e, "overflow log create failed");
+                        }
+                    }
+                }
+                if let Some(log) = &mut s.log {
+                    if log.failed || log.file.write_all(&chunk[..n]).await.is_err() {
+                        log.failed = true;
+                    } else {
+                        log.written += n as u64;
+                    }
+                }
+                s.buf.push(&chunk[..n], half);
+                s.total += n as u64;
             }
         }
     }

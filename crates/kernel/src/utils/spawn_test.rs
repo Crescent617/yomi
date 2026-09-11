@@ -150,9 +150,10 @@ async fn flood_capture_keeps_head_and_tail() {
         "i=1; while [ $i -le 5000 ]; do echo line-$i; i=$((i+1)); done\n",
     );
     let mut cmd = tokio::process::Command::new(&script);
-    let c = super::spawn_captured_with_cap(&mut cmd, None, Duration::from_secs(30), None, 1000)
-        .await
-        .unwrap();
+    let c =
+        super::spawn_captured_with_cap(&mut cmd, None, Duration::from_secs(30), None, 1000, None)
+            .await
+            .unwrap();
     assert_eq!(c.exit_code, Some(0));
     let out = String::from_utf8_lossy(&c.stdout);
     assert!(c.stdout.len() <= 1000, "captured {} bytes", c.stdout.len());
@@ -163,6 +164,7 @@ async fn flood_capture_keeps_head_and_tail() {
         "middle should be dropped: {:.100}",
         out
     );
+    assert!(c.log_files.is_empty(), "no overflow log configured");
 }
 
 /// 输出未超 cap：内容与无界捕获一致（head 即全部，tail 为空）。
@@ -171,8 +173,80 @@ async fn under_cap_capture_is_byte_exact() {
     let dir = tempfile::TempDir::new().unwrap();
     let script = sh_script(&dir, "small", "echo aaa\necho bbb\n");
     let mut cmd = tokio::process::Command::new(&script);
-    let c = super::spawn_captured_with_cap(&mut cmd, None, Duration::from_secs(5), None, 1000)
-        .await
-        .unwrap();
+    let c =
+        super::spawn_captured_with_cap(&mut cmd, None, Duration::from_secs(5), None, 1000, None)
+            .await
+            .unwrap();
     assert_eq!(String::from_utf8_lossy(&c.stdout), "aaa\nbbb\n");
+}
+
+/// 配置溢出落盘 + 输出超 cap：生成自第一字节完整的日志文件；未超的
+/// 流不建文件；unix 权限 0600。
+#[tokio::test]
+async fn overflow_writes_complete_log_file() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let script = sh_script(
+        &dir,
+        "flood",
+        "i=1; while [ $i -le 5000 ]; do echo line-$i; i=$((i+1)); done\n",
+    );
+    let mut cmd = tokio::process::Command::new(&script);
+    let overflow = super::OverflowLog {
+        dir: dir.path().to_path_buf(),
+        stem: "task".to_string(),
+    };
+    let c = super::spawn_captured_with_cap(
+        &mut cmd,
+        None,
+        Duration::from_secs(30),
+        None,
+        1000,
+        Some(overflow),
+    )
+    .await
+    .unwrap();
+    assert_eq!(c.exit_code, Some(0));
+
+    assert_eq!(c.log_files.len(), 1, "only stdout floods");
+    let (path, written) = &c.log_files[0];
+    assert_eq!(path.file_name().unwrap(), "task_stdout.log");
+    let content = std::fs::read_to_string(path).unwrap();
+    assert!(content.starts_with("line-1\n"), "file head lost");
+    assert!(content.ends_with("line-5000\n"), "file tail lost");
+    assert!(content.contains("line-2500\n"), "file middle lost");
+    assert_eq!(*written, content.len() as u64, "written counter");
+    // 内存捕获仍受 cap 约束。
+    assert!(c.stdout.len() <= 1000);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "log file must be owner-only");
+    }
+}
+
+/// 配置溢出落盘但输出未超 cap：零 IO，不建文件。
+#[tokio::test]
+async fn under_cap_creates_no_log_file() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let script = sh_script(&dir, "small", "echo hi\n");
+    let mut cmd = tokio::process::Command::new(&script);
+    let overflow = super::OverflowLog {
+        dir: dir.path().to_path_buf(),
+        stem: "task".to_string(),
+    };
+    let c = super::spawn_captured_with_cap(
+        &mut cmd,
+        None,
+        Duration::from_secs(5),
+        None,
+        1000,
+        Some(overflow),
+    )
+    .await
+    .unwrap();
+    assert!(c.log_files.is_empty());
+    assert!(!dir.path().join("task_stdout.log").exists());
+    assert!(!dir.path().join("task_stderr.log").exists());
 }
