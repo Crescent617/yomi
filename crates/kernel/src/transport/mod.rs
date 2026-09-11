@@ -504,7 +504,10 @@ pub async fn bind(addr: &SocketAddr, auth: Option<AuthVerifier>) -> io::Result<L
             {
                 Err(io::Error::new(
                     io::ErrorKind::Unsupported,
-                    "Unix sockets not supported on this platform",
+                    format!(
+                        "Unix sockets not supported on this platform: {}",
+                        path.display()
+                    ),
                 ))
             }
         }
@@ -540,7 +543,10 @@ pub async fn connect_with_token(addr: &SocketAddr, token: Option<&str>) -> io::R
             {
                 Err(io::Error::new(
                     io::ErrorKind::Unsupported,
-                    "Unix sockets not supported on this platform",
+                    format!(
+                        "Unix sockets not supported on this platform: {}",
+                        path.display()
+                    ),
                 ))
             }
         }

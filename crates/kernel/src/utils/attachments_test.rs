@@ -143,6 +143,7 @@ async fn safe_path_nonexistent() {
     assert!(resolved.is_some());
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn safe_path_traversal_via_symlink() {
     let dir = tempfile::tempdir().unwrap();
