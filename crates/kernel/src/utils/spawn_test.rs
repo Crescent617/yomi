@@ -250,3 +250,57 @@ async fn under_cap_creates_no_log_file() {
     assert!(!dir.path().join("task_stdout.log").exists());
     assert!(!dir.path().join("task_stderr.log").exists());
 }
+
+/// overflow 首次打开失败即永久禁用、绝不重试（drain 直测，无进程无
+/// 墙钟）：缓冲丢中段后若重试，写出的文件缺段却仍会被引用为「full
+/// output」。同步点 = `StreamCapture.total`：open 尝试在同一把锁内
+/// 先于 total 自增——total 到位即失败已处理完，旗标/时序竞态不存在。
+#[tokio::test]
+async fn overflow_open_failure_disables_without_retry() {
+    use tokio::io::AsyncWriteExt as _;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let blocked = dir.path().join("task_stdout.log");
+    std::fs::create_dir(&blocked).unwrap(); // 占位成目录：open 必败
+
+    let (mut w, r) = tokio::io::duplex(64 * 1024);
+    let state = std::sync::Arc::new(tokio::sync::Mutex::new(super::StreamCapture::default()));
+    let drain = tokio::spawn(super::drain(
+        r,
+        std::sync::Arc::clone(&state),
+        500,
+        Some(blocked.clone()),
+    ));
+    let wait_total = |want: u64| {
+        let state = std::sync::Arc::clone(&state);
+        async move {
+            for _ in 0..200 {
+                if state.lock().await.total >= want {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            panic!("drain did not reach total={want}");
+        }
+    };
+
+    // 第一块即越 cap：open 必败 → 禁用。total=900 到位时失败已处理完。
+    w.write_all(&vec![b'x'; 900]).await.unwrap();
+    wait_total(900).await;
+    // 解锁路径：若重试存在，下一块起将成功建出文件。
+    std::fs::remove_dir(&blocked).unwrap();
+    w.write_all(b"more").await.unwrap();
+    wait_total(904).await;
+    drop(w);
+    drain.await.unwrap();
+
+    let s = state.lock().await;
+    assert!(s.log.is_none(), "disabled overflow must not retry");
+    assert!(
+        !blocked.exists(),
+        "retry would have created the log after the unblock"
+    );
+    // 内存捕获照旧 head+tail 截断（无日志可引时输出本身仍是诚实的）。
+    assert_eq!(s.total, 904);
+    assert!(s.buf.head.len() + s.buf.tail.len() <= 500);
+}

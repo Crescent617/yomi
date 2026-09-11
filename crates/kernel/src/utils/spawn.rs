@@ -313,13 +313,20 @@ async fn drain<R>(
 {
     let half = cap / 2;
     let mut chunk = [0u8; 8192];
+    // overflow 落盘只在首超 cap 的第一次尝试成功才成立：失败后内存
+    // 缓冲已开始丢中段，重试写出的文件缺段却仍会被引用为「full
+    // output」——一次失败即永久禁用该流的 overflow（2026-09-11 对抗
+    // review should-fix：宁无日志，不要撒谎的日志）。
+    let mut overflow_disabled = false;
     loop {
         match pipe.read(&mut chunk).await {
             Ok(0) | Err(_) => break,
             Ok(n) => {
                 let mut s = state.lock().await;
-                let should_open =
-                    s.log.is_none() && overflow_path.is_some() && s.total + n as u64 > cap as u64;
+                let should_open = !overflow_disabled
+                    && s.log.is_none()
+                    && overflow_path.is_some()
+                    && s.total + n as u64 > cap as u64;
                 if should_open {
                     let path = overflow_path.clone().unwrap_or_default();
                     match open_log_file(&path).await {
@@ -340,10 +347,21 @@ async fn drain<R>(
                                     written,
                                     failed: false,
                                 });
+                            } else {
+                                // 半成品文件删除（先 drop 句柄：
+                                // Windows 不允许删打开中的文件），
+                                // 不留被误引用的机会。
+                                drop(file);
+                                if let Err(e) = tokio::fs::remove_file(&path).await {
+                                    tracing::debug!(path = %path.display(), error = %e, "partial overflow log remove failed");
+                                }
+                                overflow_disabled = true;
+                                tracing::warn!(path = %path.display(), "overflow log initial write failed; overflow disabled for this stream");
                             }
                         }
                         Err(e) => {
-                            tracing::debug!(path = %path.display(), error = %e, "overflow log create failed");
+                            overflow_disabled = true;
+                            tracing::warn!(path = %path.display(), error = %e, "overflow log create failed; overflow disabled for this stream");
                         }
                     }
                 }
