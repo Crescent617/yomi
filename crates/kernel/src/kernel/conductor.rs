@@ -586,6 +586,25 @@ impl Conductor {
             return;
         }
 
+        // 读历史前先排空该 session 的落盘队列：respawn 常紧跟在
+        // cancel/正常收尾之后，而 marker 与工具结果走总线+池是异步
+        // 落盘——不等排空可能读到缺一截的历史（dangling 工具组随后被
+        // sanitize 剔除，本次中断在新 agent 上下文里无声消失）。
+        // spawn 路径对延迟敏感，上界取 1s（非通用 30s）：超时即退
+        // 回旧竞态，绝不为排空拖住 spawn（2026-09-11 hrli 指令）。
+        // 残余窗口（review 2026-09-11 确认的可接受降级）：只覆盖**已
+        // dispatch** 的写——旧 agent 死前发出、conductor 事件循环尚未
+        // 分发的 `MessageAdded` 仍可能错过（循环被队头阻塞时窗口拉
+        // 大）；彻底的关账需要 conductor 循环内的屏障事件，超出现范围。
+        if let Some(ref pool) = self.agent_shared.persist_pool {
+            persist_pool::wait_drained_within(
+                pool,
+                sid,
+                "spawn history read",
+                std::time::Duration::from_secs(1),
+            )
+            .await;
+        }
         let history = match &self.agent_shared.message_store {
             Some(store) => match store.get_inlined(&sid.0).await {
                 Ok(msgs) => msgs.into_iter().map(Arc::new).collect(),

@@ -1623,3 +1623,83 @@ async fn interrupted_marker_user_cancel_stays_off_direct_store_write() {
         "user-cancel marker must not bypass the bus: {persisted:?}"
     );
 }
+
+/// 用户取消路径 marker 的正半（与 `interrupted_marker_user_cancel_stays_off_direct_store_write`
+/// 配成闭环）：marker 以 `MessageAdded` 事件确实发上了总线——下游
+/// persister（conductor + 池）在正常拓扑下据此落盘。
+#[tokio::test]
+async fn interrupted_marker_user_cancel_is_published_to_bus() {
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs};
+    use crate::types::{Role, SessionId, INTERRUPTED_META_KEY};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    let bus = crate::comms::EventBus::new();
+    let shared = Arc::new(
+        AgentShared::new(
+            Arc::new(BTreeMap::new()),
+            "test".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+            None,
+        )
+        .with_event_bus(bus.clone()),
+    );
+
+    let working_dir = tempfile::tempdir().unwrap();
+    let session_id = SessionId::new().to_string();
+    let args = AgentSpawnArgs {
+        base_prompt: "test".to_string(),
+        skills: Vec::new(),
+        history: Vec::new(),
+        session_id: session_id.clone(),
+        parent_session_id: None,
+        max_iterations: 1,
+        working_dir: working_dir.path().to_path_buf(),
+        cancel_token: None,
+        tool_flags: crate::tools::ToolFlags::new(false),
+        file_state_store: None,
+        tool_blocklist: Vec::new(),
+        max_tool_output_length: 1024,
+        mailbox: Arc::new(crate::comms::Mailbox::new()),
+        input_bus: None,
+        ext_tools: Vec::new(),
+    };
+    let mut agent = Agent::new(&shared, args).await;
+    let mut sub = bus.subscribe(SessionId::from(session_id));
+
+    agent.mark_interrupted("cancelled", false).await;
+
+    // 总线 forwarder 异步投递：轮询直到拿到 marker 的 MessageAdded。
+    let seen = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let (_, envelope) = sub.recv().await.expect("bus closed");
+            if let crate::event::Event::Internal(crate::event::InternalEvent::MessageAdded {
+                message,
+            }) = envelope.event
+            {
+                let flagged = message
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get(INTERRUPTED_META_KEY))
+                    .map(String::as_str)
+                    == Some("true");
+                if message.role == Role::User && flagged {
+                    return true;
+                }
+            }
+        }
+    })
+    .await;
+    assert!(
+        seen.is_ok(),
+        "user-cancel marker must be published as MessageAdded on the bus"
+    );
+}

@@ -434,7 +434,10 @@ impl Agent {
     ///   other message — the conductor's ordering invariant (单循环顺序
     ///   dispatch + 池 per-key FIFO + `Stopped` 臂 `wait_idle`) keeps it
     ///   ordered after the cancelled results emitted moments earlier and
-    ///   durably written before the agent goes idle. A direct store append
+    ///   durably written before the agent goes idle. Saturation caveat:
+    ///   `EventSink::try_send` drops under a full bus, so the marker can
+    ///   be lost there exactly like any other bus message (same blast
+    ///   radius as the final-answer loss the pool design documents). A direct store append
     ///   here raced the pool worker and interleaved bytes on the same
     ///   jsonl line (2026-09-11 e2e: marker 与 cancelled 结果粘行，
     ///   `read_lines` 静默跳过 → 双丢，respawn 重跑工具批).
