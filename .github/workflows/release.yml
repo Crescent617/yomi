@@ -156,6 +156,14 @@ jobs:
           name: gui-dmg
           path: ${{ steps.sha.outputs.dmg }}
 
+  # ==================== GUI 构建 (Windows MSI/NSIS) ====================
+  # 与 windows-e2e.yml 的手动打包共用 .github/workflows/build-gui-windows.yml
+  # 单一定义；产物经 release job 的 merge-multiple 下载随 Release 发布。
+  build-gui-windows:
+    name: Build GUI (Windows)
+    needs: check-precondition
+    uses: ./.github/workflows/build-gui-windows.yml
+
   # ==================== Docker 镜像 (GHCR) ====================
   build-docker:
     name: Build & Push Docker Image
@@ -211,7 +219,7 @@ jobs:
 
   # ==================== 创建 GitHub Release ====================
   release:
-    needs: [build-tui, build-gui]
+    needs: [build-tui, build-gui, build-gui-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write

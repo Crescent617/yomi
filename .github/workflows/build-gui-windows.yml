@@ -1,0 +1,53 @@
+# 可复用 workflow：Windows GUI (tauri) 打包，产出 msi + nsis artifact。
+# 两个消费面共用此单一定义，避免漂移：
+#   - release.yml：tag 发版时构建，产物随 GitHub Release 发布
+#   - windows-e2e.yml：手动触发，不发版验证打包（修复后预演）
+# 产物无 Authenticode 签名（SmartScreen 会提示，按需后续补签名）。
+
+name: build-gui-windows
+
+on:
+  workflow_call:
+
+jobs:
+  build:
+    name: msi + nsis
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            crates/gui/package-lock.json
+            crates/gui/frontend/package-lock.json
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build frontend + tauri (msi + nsis)
+        working-directory: crates/gui
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd frontend && npm ci && npm run build && cd ..
+          npm ci
+          npx tauri build --config '{"build":{"beforeBuildCommand":""}}'
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: gui-windows-installers
+          # bundle 产物在 workspace 根 target/（cargo 共享 target dir），
+          # 与 macOS DMG 的 sha/upload 路径同惯例。
+          path: |
+            target/release/bundle/msi/*.msi
+            target/release/bundle/nsis/*.exe
