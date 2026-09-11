@@ -137,3 +137,42 @@ async fn drain_grace_expiry_keeps_partial_capture() {
         "must not wait out the descendant"
     );
 }
+
+/// 洪泛输出超出 drain cap：保留开头与结尾（各半额度），丢中间——
+/// 构建日志的错误行通常在尾部，不能只截头。
+#[tokio::test]
+async fn flood_capture_keeps_head_and_tail() {
+    let dir = tempfile::TempDir::new().unwrap();
+    // 5000 行、每行 "line-N"：总量约 40KB，cap 给 1000。
+    let script = sh_script(
+        &dir,
+        "flood",
+        "i=1; while [ $i -le 5000 ]; do echo line-$i; i=$((i+1)); done\n",
+    );
+    let mut cmd = tokio::process::Command::new(&script);
+    let c = super::spawn_captured_with_cap(&mut cmd, None, Duration::from_secs(30), None, 1000)
+        .await
+        .unwrap();
+    assert_eq!(c.exit_code, Some(0));
+    let out = String::from_utf8_lossy(&c.stdout);
+    assert!(c.stdout.len() <= 1000, "captured {} bytes", c.stdout.len());
+    assert!(out.starts_with("line-1\n"), "head lost: {:.50}", out);
+    assert!(out.ends_with("line-5000\n"), "tail lost: {:.50}", out);
+    assert!(
+        !out.contains("line-2500"),
+        "middle should be dropped: {:.100}",
+        out
+    );
+}
+
+/// 输出未超 cap：内容与无界捕获一致（head 即全部，tail 为空）。
+#[tokio::test]
+async fn under_cap_capture_is_byte_exact() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let script = sh_script(&dir, "small", "echo aaa\necho bbb\n");
+    let mut cmd = tokio::process::Command::new(&script);
+    let c = super::spawn_captured_with_cap(&mut cmd, None, Duration::from_secs(5), None, 1000)
+        .await
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&c.stdout), "aaa\nbbb\n");
+}

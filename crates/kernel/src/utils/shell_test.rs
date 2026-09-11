@@ -217,9 +217,10 @@ fn leading_args_and_wrapping_per_kind() {
         ps.leading_args(),
         &["-NoProfile", "-NonInteractive", "-Command"]
     );
-    assert!(ps
-        .wrap_command("ls")
-        .starts_with("[Console]::OutputEncoding="));
+    let ps_wrapped = ps.wrap_command("ls");
+    assert!(ps_wrapped.starts_with("[Console]::OutputEncoding="));
+    // -Command 不传播 native 命令退出码：必须显式 exit。
+    assert!(ps_wrapped.ends_with("; exit $LASTEXITCODE"), "{ps_wrapped}");
 
     let cmd = mk(ShellKind::Cmd, "cmd.exe");
     assert_eq!(cmd.leading_args(), &["/D", "/C"]);

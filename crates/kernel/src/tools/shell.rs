@@ -303,9 +303,10 @@ impl ShellTool {
 
         // exit_code 为 None 仅见于 unix 信号终止（超时/取消已在上面
         // 分支返回；windows 的 job 强杀同）。
-        let status = match captured.exit_code {
-            Some(code) => format!("exit code: {code}"),
-            None => "killed by signal".to_string(),
+        let status = match (captured.exit_code, captured.signal) {
+            (Some(code), _) => format!("exit code: {code}"),
+            (None, Some(sig)) => format!("killed by signal {sig}"),
+            (None, None) => "killed by signal".to_string(),
         };
         let success = captured.exit_code == Some(0);
 

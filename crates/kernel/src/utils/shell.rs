@@ -49,18 +49,6 @@ pub struct AgentShell {
 }
 
 impl AgentShell {
-    /// 解释器名（文件名去扩展名），用于工具描述等展示。
-    pub fn name(&self) -> String {
-        self.path.file_stem().map_or_else(
-            || match self.kind {
-                ShellKind::Posix => "sh".into(),
-                ShellKind::PowerShell => "powershell".into(),
-                ShellKind::Cmd => "cmd".into(),
-            },
-            |s| s.to_string_lossy().into_owned(),
-        )
-    }
-
     /// 执行一段命令文本的固定前导参数（命令文本由调用方追加在最后）。
     pub fn leading_args(&self) -> &'static [&'static str] {
         match self.kind {
@@ -74,12 +62,14 @@ impl AgentShell {
     }
 
     /// 包装命令文本：Windows 的两个解释器默认输出非 UTF-8 代码页，
-    /// 统一注入 UTF-8 输出前缀；POSIX 原样返回。
+    /// 统一注入 UTF-8 输出前缀；PowerShell 追加 `exit $LASTEXITCODE`
+    /// ——`-Command` 不传播 native 命令的退出码（`git push` 失败
+    /// PowerShell 仍退出 0），必须显式 exit；POSIX 原样返回。
     pub fn wrap_command<'a>(&self, command: &'a str) -> Cow<'a, str> {
         match self.kind {
             ShellKind::Posix => Cow::Borrowed(command),
             ShellKind::PowerShell => Cow::Owned(format!(
-                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; {command}"
+                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; {command}; exit $LASTEXITCODE"
             )),
             ShellKind::Cmd => Cow::Owned(format!("chcp 65001 >nul & {command}")),
         }
@@ -197,8 +187,10 @@ fn detect_impl(
             }
         }
         Platform::Windows => {
-            let env_path =
-                |key: &str, rest: &str| env_string(key).map(|base| format!("{base}{sep}{rest}"));
+            let env_path = |key: &str, rest: &str| {
+                env_string(key)
+                    .map(|base| format!("{}{sep}{rest}", base.trim_end_matches(['/', '\\'])))
+            };
             let system32 = env_path("SystemRoot", "System32");
             // Git Bash 优先。PATH 里的 `System32\bash.exe` 是 WSL 启动器，
             // 用它命令会跑进 WSL，文件系统视图是错的，必须排除。

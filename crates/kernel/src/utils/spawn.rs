@@ -1,10 +1,11 @@
 //! spawn/ — 外挂执行引擎：hooks / tools 共用的子进程运行管线。
 //!
-//! 一次 spawn = 一次调用：stdin 喂字节、stdout/stderr 双管排空（各累积
-//! 上限见 `spawn_captured_with_cap` 的 `drain_cap`）、超时按进程树强杀
-//! （setsid/Job Object 由 [`crate::utils::process::spawn_in_new_tree`]
-//! 统一建立）、主进程死后双管共享 [`DRAIN_GRACE`] 宽限收尾。调用方只配
-//! `Command` 的 program / cwd / env——stdio 与树管理由引擎接管。
+//! 一次 spawn = 一次调用：stdin 喂字节、stdout/stderr 双管排空（开头
+//! 与结尾各保留一半额度、超出丢中间，额度见 `spawn_captured_with_cap`
+//! 的 `drain_cap`）、超时按进程树强杀（setsid/Job Object 由
+//! [`crate::utils::process::spawn_in_new_tree`] 统一建立）、主进程死后
+//! 双管共享 [`DRAIN_GRACE`] 宽限收尾。调用方只配 `Command` 的
+//! program / cwd / env——stdio 与树管理由引擎接管。
 //!
 //! 故障分两层，调用方各自定策略（hook fail-open、tool fail-closed）：
 //! - [`SpawnError`]：进程没起来 / wait 异常——引擎自身故障；
@@ -30,6 +31,8 @@ pub const DRAIN_GRACE: Duration = Duration::from_secs(2);
 pub struct Captured {
     /// 退出码；超时强杀（或信号终止）为 `None`。
     pub exit_code: Option<i32>,
+    /// 终止信号编号（unix 以外恒 `None`）。
+    pub signal: Option<i32>,
     /// 是否因超时被进程树强杀。
     pub timed_out: bool,
     /// 是否因取消被进程树强杀（与超时同路径，但语义分开：
@@ -63,7 +66,7 @@ impl std::error::Error for SpawnError {}
 
 /// select 的归一支点：退出/超时/取消三个等待臂的统一返回型。
 enum Stop {
-    Exited(Option<i32>),
+    Exited(std::process::ExitStatus),
     WaitErr(std::io::Error),
     Timeout,
     Cancelled,
@@ -105,8 +108,8 @@ pub async fn spawn_captured_with_cap(
     // 两管各自持续读空（管道不排空，写多的脚本会阻塞）：缓冲共享——
     // 即使 drain 宽限到期被迫 abort，已捕获的部分仍读得到（后裔持有
     // 管道不见 EOF 的场景）。
-    let out_buf = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-    let err_buf = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let out_buf = Arc::new(tokio::sync::Mutex::new(DrainBuf::default()));
+    let err_buf = Arc::new(tokio::sync::Mutex::new(DrainBuf::default()));
     let mut drain_out = tokio::spawn(drain(
         child.stdout.take().expect("stdout piped"),
         Arc::clone(&out_buf),
@@ -136,15 +139,24 @@ pub async fn spawn_captured_with_cap(
         tokio::select! {
             biased;
             r = &mut wait => match r {
-                Ok(status) => Stop::Exited(status.code()),
+                Ok(status) => Stop::Exited(status),
                 Err(e) => Stop::WaitErr(e),
             },
             () = async { match cancel { Some(c) => c.cancelled().await, None => std::future::pending().await } } => Stop::Cancelled,
             () = tokio::time::sleep(timeout) => Stop::Timeout,
         }
     };
-    let (exit_code, timed_out, cancelled) = match stop {
-        Stop::Exited(code) => (code, false, false),
+    let (exit_code, signal, timed_out, cancelled) = match stop {
+        Stop::Exited(status) => {
+            #[cfg(unix)]
+            let signal = {
+                use std::os::unix::process::ExitStatusExt as _;
+                status.signal()
+            };
+            #[cfg(not(unix))]
+            let signal = None;
+            (status.code(), signal, false, false)
+        }
         Stop::WaitErr(e) => {
             // wait 异常 = 子进程状态未知：按树尽力杀（与超时同路径），
             // 不留后裔。
@@ -159,7 +171,7 @@ pub async fn spawn_captured_with_cap(
         Stop::Timeout | Stop::Cancelled => {
             let is_cancel = matches!(stop, Stop::Cancelled);
             kill_tree(&mut child, &tree).await;
-            (None, !is_cancel, is_cancel)
+            (None, None, !is_cancel, is_cancel)
         }
     };
     if let Some(w) = &write {
@@ -173,10 +185,11 @@ pub async fn spawn_captured_with_cap(
     );
     drain_out.abort();
     drain_err.abort();
-    let stdout = std::mem::take(&mut *out_buf.lock().await);
-    let stderr = std::mem::take(&mut *err_buf.lock().await);
+    let stdout = std::mem::take(&mut *out_buf.lock().await).assemble();
+    let stderr = std::mem::take(&mut *err_buf.lock().await).assemble();
     Ok(Captured {
         exit_code,
+        signal,
         timed_out,
         cancelled,
         stdout,
@@ -184,22 +197,48 @@ pub async fn spawn_captured_with_cap(
     })
 }
 
-/// 持续读空一根管道并入共享缓冲；累积到 `cap` 后继续读但停止累积
-/// （防管道阻塞的同时防内存放大）。
-async fn drain<R>(mut pipe: R, buf: Arc<tokio::sync::Mutex<Vec<u8>>>, cap: usize)
+/// drain 缓冲：开头与结尾各保留一半额度，超出后丢中间（不插标记，
+/// 截断呈现由调用方负责）——洪泛输出的头（启动信息）与尾（错误行）
+/// 通常都最有价值；无界缓冲则会被 `cat hugefile >&2` 型脚本撑爆内存。
+#[derive(Default)]
+struct DrainBuf {
+    head: Vec<u8>,
+    tail: std::collections::VecDeque<u8>,
+}
+
+impl DrainBuf {
+    fn push(&mut self, bytes: &[u8], half: usize) {
+        let head_room = half.saturating_sub(self.head.len());
+        let (to_head, rest) = bytes.split_at(head_room.min(bytes.len()));
+        self.head.extend_from_slice(to_head);
+        if !rest.is_empty() {
+            self.tail.extend(rest);
+            while self.tail.len() > half {
+                self.tail.pop_front();
+            }
+        }
+    }
+
+    fn assemble(self) -> Vec<u8> {
+        let mut out = self.head;
+        out.extend(self.tail);
+        out
+    }
+}
+
+/// 持续读空一根管道并入共享缓冲；累积规则见 [`DrainBuf`]。读不停：
+/// 管道不排空，写多的脚本会阻塞在 write 上。
+async fn drain<R>(mut pipe: R, buf: Arc<tokio::sync::Mutex<DrainBuf>>, cap: usize)
 where
     R: tokio::io::AsyncRead + Unpin,
 {
+    let half = cap / 2;
     let mut chunk = [0u8; 8192];
     loop {
         match pipe.read(&mut chunk).await {
             Ok(0) | Err(_) => break,
             Ok(n) => {
-                let mut b = buf.lock().await;
-                let room = cap.saturating_sub(b.len());
-                if room > 0 {
-                    b.extend_from_slice(&chunk[..n.min(room)]);
-                }
+                buf.lock().await.push(&chunk[..n], half);
             }
         }
     }

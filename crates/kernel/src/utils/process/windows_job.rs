@@ -20,6 +20,9 @@ type Bool = i32;
 
 const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x2000;
 const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: i32 = 9;
+/// AssignProcessToJobObject 要求的最小访问权限（MSDN）。
+const PROCESS_SET_QUOTA: u32 = 0x0100;
+const PROCESS_TERMINATE: u32 = 0x0001;
 
 #[repr(C)]
 #[derive(Default)]
@@ -65,6 +68,7 @@ const _: () = assert!(
     "JOBOBJECT_EXTENDED_LIMIT_INFORMATION layout drift"
 );
 
+#[link(name = "kernel32")]
 extern "system" {
     fn CreateJobObjectW(attrs: *mut core::ffi::c_void, name: *const u16) -> Handle;
     fn SetInformationJobObject(
@@ -75,7 +79,37 @@ extern "system" {
     ) -> Bool;
     fn AssignProcessToJobObject(job: Handle, process: Handle) -> Bool;
     fn TerminateJobObject(job: Handle, exit_code: u32) -> Bool;
+    fn OpenProcess(access: u32, inherit: Bool, pid: u32) -> Handle;
     fn CloseHandle(handle: Handle) -> Bool;
+}
+
+/// 打开的进程句柄（RAII）。tokio 的 `Child` 在 Windows 上不暴露进程
+/// 句柄（`AsRawHandle` 只实现于 stdio 句柄），按 pid 自行打开。
+pub struct ProcessHandle(Handle);
+
+impl ProcessHandle {
+    /// 以 AssignProcessToJobObject 所需的最小权限打开进程。
+    /// 子进程在 spawn 与本调用之间已退出时打开失败——调用方按降级处理。
+    pub fn open_for_job_assign(pid: u32) -> io::Result<Self> {
+        // SAFETY: 参数平凡；返回句柄由本类型 RAII 管理。
+        let handle = unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) };
+        if handle.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self(handle))
+    }
+
+    /// 裸句柄（有效期随 `self`）。
+    pub fn raw(&self) -> Handle {
+        self.0
+    }
+}
+
+impl Drop for ProcessHandle {
+    fn drop(&mut self) {
+        // SAFETY: 句柄有效且仅在此关闭一次。
+        unsafe { CloseHandle(self.0) };
+    }
 }
 
 /// 一个配置了 KILL_ON_JOB_CLOSE 的 job 句柄。

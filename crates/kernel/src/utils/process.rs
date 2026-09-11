@@ -80,23 +80,27 @@ pub fn spawn_in_new_tree(
     }
     #[cfg(windows)]
     {
-        use std::os::windows::io::AsRawHandle as _;
         // 先 spawn 再 assign：CREATE_SUSPENDED 路线需要主线程句柄才能
         // resume，std/tokio 均不暴露；spawn 与 assign 之间微秒级的窗口
-        // 里子进程建出的后裔不进 job，可接受。
+        // 里子进程建出的后裔不进 job，可接受。tokio 的 Child 在 Windows
+        // 不暴露进程句柄，按 pid 自行 OpenProcess（子进程在此间已退出
+        // 则打开失败，同样降级）。
         let child = cmd.spawn()?;
-        let job = windows_job::JobObject::new_kill_on_close()
-            .and_then(|job| {
-                // SAFETY: tokio Child 的 raw handle 是有效的进程句柄，
-                // 且 child 存活于本次调用期间。
-                unsafe { job.assign_raw(child.as_raw_handle().cast()) }?;
+        let job = child.id().and_then(|pid| {
+            match windows_job::ProcessHandle::open_for_job_assign(pid).and_then(|proc| {
+                let job = windows_job::JobObject::new_kill_on_close()?;
+                // SAFETY: proc 是有效的进程句柄（存活于本闭包期间），
+                // job 挂载后内核自持进程引用，proc 句柄随闭包结束关闭。
+                unsafe { job.assign_raw(proc.raw()) }?;
                 Ok(job)
-            })
-            .map_err(|e| {
-                tracing::debug!(error = %e, "job object unavailable; tree-kill degraded to main process");
-                e
-            })
-            .ok();
+            }) {
+                Ok(job) => Some(job),
+                Err(e) => {
+                    tracing::debug!(error = %e, "job object unavailable; tree-kill degraded to main process");
+                    None
+                }
+            }
+        });
         Ok((child, ProcessTree { job }))
     }
 }
@@ -129,6 +133,14 @@ pub async fn kill_tree(child: &mut tokio::process::Child, tree: &ProcessTree) {
 /// SIGTERM；windows 用 `taskkill /T /F`（该工具按树强杀，无温和档）。
 /// 平台温和度不同，调用方语义统一为「请整棵树尽快退场」。
 pub fn terminate_tree_by_pid(pid: u32) -> io::Result<()> {
+    // unix 上 kill(0, sig) 打的是「调用方自身进程组」——tracker 在
+    // child.id() 缺失时会存入 0，这里兜底防自残。
+    if pid == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "pid 0 has no process tree",
+        ));
+    }
     #[cfg(unix)]
     {
         // SAFETY: 对进程组发信号，组不存在返回 ESRCH，由调用方按失败处理。

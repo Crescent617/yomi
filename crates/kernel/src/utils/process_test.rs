@@ -33,12 +33,21 @@ async fn kill_tree_reaps_whole_group() {
 
     kill_tree(&mut child, &tree).await;
 
-    // 进程组已不存在：kill(1) 信号 0 探测不到任何成员。
-    let probe = std::process::Command::new("kill")
-        .args(["-0", "--", &format!("-{pid}")])
-        .status()
-        .unwrap();
-    assert!(!probe.success(), "process group must be fully reaped");
+    // 进程组已不存在：kill(1) 信号 0 探测不到任何成员。SIGKILL 后
+    // init 收割僵尸是异步的，轮询而非单发（负载下收割有延迟）。
+    let mut reaped = false;
+    for _ in 0..20 {
+        let probe = std::process::Command::new("kill")
+            .args(["-0", "--", &format!("-{pid}")])
+            .status()
+            .unwrap();
+        if !probe.success() {
+            reaped = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(reaped, "process group must be fully reaped");
 }
 
 #[cfg(unix)]
