@@ -29,6 +29,8 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     strategy:
+      # 单平台 leg 失败不取消其他 leg——各产物独立构建。
+      fail-fast: false
       matrix:
         include:
           # Linux
@@ -168,7 +170,9 @@ jobs:
   build-docker:
     name: Build & Push Docker Image
     # 复用 build-tui 的 linux 二进制直接打包，不再用 nix 从头编译（编译曾是本 job 的大头）
+    # linux leg 失败（无 artifact）时跳过而非报错——不 block 其他产物发布。
     needs: [check-precondition, build-tui]
+    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -177,11 +181,19 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v6
+      - name: Download linux artifact
+        id: dl
+        uses: actions/download-artifact@v6
+        continue-on-error: true
         with:
           name: x86_64-unknown-linux-gnu
 
+      - name: Skip when linux artifact missing
+        if: steps.dl.outcome != 'success'
+        run: echo "::warning::linux tui artifact missing (build leg failed); skipping docker image"
+
       - name: Prepare build context
+        if: steps.dl.outcome == 'success'
         run: |
           set -euo pipefail
           tar xzf yomi-*-x86_64-unknown-linux-gnu.tar.gz
@@ -193,8 +205,10 @@ jobs:
           echo "IMAGE=ghcr.io/${OWNER}/yomi" >> "$GITHUB_ENV"
 
       - uses: docker/setup-buildx-action@v3
+        if: steps.dl.outcome == 'success'
 
       - name: Login to GHCR
+        if: steps.dl.outcome == 'success'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -202,6 +216,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build & push
+        if: steps.dl.outcome == 'success'
         uses: docker/build-push-action@v6
         env:
           # 不上传 buildx 构建记录 artifact（0 字节、无法解 zip，
@@ -220,9 +235,18 @@ jobs:
   # ==================== 创建 GitHub Release ====================
   release:
     needs: [build-tui, build-gui, build-gui-windows]
+    # 任一构建 job 失败仍发布存在的产物（缺失产物在 notes 尾部列
+    # 出）；全部构建失败则无产物可发，Detect 步骤会 exit 1 中止。
+    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # 产物存在性输出，供下游 brew job 决定跑还是跳过（job 级 if，
+    # 缺失时显示 skipped 而非失败）。
+    outputs:
+      has_tui_mac: ${{ steps.detect.outputs.has_tui_mac }}
+      has_tui_linux: ${{ steps.detect.outputs.has_tui_linux }}
+      has_dmg: ${{ steps.detect.outputs.has_dmg }}
 
     steps:
       - uses: actions/checkout@v6
@@ -253,6 +277,50 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      # 清点产物：存在性写 outputs（供 brew 下游），缺失名单追加进
+      # release notes；全灭则中止发布（空 release 无意义）。
+      # 产物文件名假设 tag 版本与 crates/gui/tauri.conf.json 同步
+      # （bump-version.py 保证，与 brew-cask 脚本同一假设）。
+      - name: Detect missing artifacts
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          declare -A EXPECTED=(
+            [has_tui_mac]="yomi-${VERSION}-aarch64-apple-darwin.tar.gz"
+            [has_tui_linux]="yomi-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+            [has_tui_win]="yomi-${VERSION}-x86_64-pc-windows-msvc.zip"
+            [has_dmg]="Yomi_${VERSION}_aarch64.dmg"
+            [has_win_msi]="Yomi_${VERSION}_x64_en-US.msi"
+            [has_win_nsis]="Yomi_${VERSION}_x64-setup.exe"
+          )
+          MISSING=()
+          for key in "${!EXPECTED[@]}"; do
+            f="${EXPECTED[$key]}"
+            if [ -f "artifacts/$f" ]; then
+              echo "${key}=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "${key}=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::missing artifact: $f"
+              MISSING+=("$f")
+            fi
+          done
+          shopt -s nullglob
+          files=(artifacts/*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::所有构建产物均缺失，中止发布"
+            exit 1
+          fi
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            {
+              echo ""
+              echo "---"
+              echo "⚠️ 本次发布缺少以下产物（对应构建 job 失败；修复后可重新发版）："
+              for f in "${MISSING[@]}"; do echo "- \`$f\`"; done
+            } >> release-notes.md
+          fi
+
       - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**
@@ -261,6 +329,9 @@ jobs:
   # ==================== 更新 Homebrew Formula (TUI) ====================
   brew-tui:
     needs: [release, check-precondition]
+    # formula 需要 mac+linux 两个 tar.gz；缺失则跳过（skipped）而非失败。
+    # release 自身失败（如上传挂）时 asset 不在，同样跳过。
+    if: always() && needs.release.result == 'success' && needs.release.outputs.has_tui_mac == 'true' && needs.release.outputs.has_tui_linux == 'true'
     runs-on: ubuntu-latest
     env:
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -275,7 +346,10 @@ jobs:
 
   # ==================== 更新 Homebrew Cask (GUI) ====================
   brew-gui:
+    # needs brew-tui 仅为串行 push 同一 tap repo（防 non-fast-forward
+    # 冲突）；always() 使其在 brew-tui 失败/跳过时仍按 DMG 存在性自行决定。
     needs: [release, check-precondition, brew-tui]
+    if: always() && needs.release.result == 'success' && needs.release.outputs.has_dmg == 'true'
     runs-on: ubuntu-latest
     env:
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
