@@ -17,6 +17,38 @@ pub enum ConnectionMode {
     Remote(kernel::transport::SocketAddr),
 }
 
+impl ConnectionMode {
+    /// 显示语义上的「本机」：`Local`，或 ws/wss 地址指向回环
+    ///（localhost / 127.0.0.0/8 / ::1）——回环连接本质仍是本机
+    /// daemon，不应显示为远程（2026-09-11 hrli）。
+    pub fn displays_as_local(&self) -> bool {
+        match self {
+            Self::Local => true,
+            Self::Remote(addr) => is_loopback_socket_addr(addr),
+        }
+    }
+}
+
+/// ws/wss 地址（`host:port` 形态，scheme 在 parse 时已剥）的 host
+/// 部分是否为回环。Unix 变体恒本机。
+fn is_loopback_socket_addr(addr: &kernel::transport::SocketAddr) -> bool {
+    let hostport = match addr {
+        kernel::transport::SocketAddr::Ws(h) | kernel::transport::SocketAddr::Wss(h) => h,
+        kernel::transport::SocketAddr::Unix(_) => return true,
+    };
+    // 剥端口："[::1]:9541" → "::1"；"127.0.0.1:9541" → "127.0.0.1"；
+    // 无端口（病态输入）整体当 host。
+    let host = match hostport.rsplit_once(':') {
+        Some((h, _)) => h,
+        None => hostport.as_str(),
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
 #[derive(Clone)]
 struct ConnectionState {
     kernel: Arc<dyn KernelApi>,
@@ -134,3 +166,7 @@ impl AppState {
         self.pet_enabled.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
+
+#[cfg(test)]
+#[path = "state_test.rs"]
+mod tests;

@@ -32,18 +32,19 @@ pub async fn get_daemon_status() -> Result<serde_json::Value, GuiError> {
 }
 
 fn connection_info_json(mode: &crate::state::ConnectionMode, managed: bool) -> serde_json::Value {
-    match mode {
-        crate::state::ConnectionMode::Local => serde_json::json!({
-            "mode": "local",
-            "addr": crate::daemon::socket_addr().to_string(),
-            "managed": managed,
-        }),
-        crate::state::ConnectionMode::Remote(addr) => serde_json::json!({
-            "mode": "remote",
-            "addr": addr.to_string(),
-            "managed": managed,
-        }),
-    }
+    use crate::state::ConnectionMode;
+    // 回环 ws/wss 本质仍是本机 daemon：按 local 显示（地址仍如实展
+    // 示用户连接的端点）。
+    let (mode_label, addr) = match mode {
+        ConnectionMode::Local => ("local", crate::daemon::socket_addr().to_string()),
+        ConnectionMode::Remote(addr) if mode.displays_as_local() => ("local", addr.to_string()),
+        ConnectionMode::Remote(addr) => ("remote", addr.to_string()),
+    };
+    serde_json::json!({
+        "mode": mode_label,
+        "addr": addr,
+        "managed": managed,
+    })
 }
 
 /// Current daemon connection info (mode + address).

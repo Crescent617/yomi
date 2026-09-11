@@ -134,10 +134,24 @@ fn probe_shell(shell: &AgentShell) -> bool {
                 if !status.success() {
                     return false;
                 }
+                // take(256)：读满即返不等 EOF—— shim 若 spawn 了继承
+                // stdout 的长寿孙进程，EOF 永不至，read_to_string 会
+                // 无限挂起探测（MAGIC 仅 19 字节，256 足够）。
                 let mut out = String::new();
-                return child.stdout.take().is_some_and(|mut s| {
-                    s.read_to_string(&mut out).is_ok() && out.contains(MAGIC)
-                });
+                let Some(stdout) = child.stdout.take() else {
+                    return false;
+                };
+                if stdout.take(256).read_to_string(&mut out).is_err() {
+                    return false;
+                }
+                // 精确判定而非 contains：引号保真是该探针的核心属性
+                // ——能执行但篡改引号的 shim（输出残留 \" 或剥掉引号）
+                // 必须判失败。cmd echo 原样回显引号属正确行为。
+                let trimmed = out.trim_start_matches('\u{feff}').trim();
+                return match shell.kind {
+                    ShellKind::Cmd => trimmed == format!("\"{MAGIC}\""),
+                    _ => trimmed == MAGIC,
+                };
             }
             Ok(None) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(std::time::Duration::from_millis(50));
@@ -264,11 +278,23 @@ fn detect_impl(
             // 除）；PATH 里的 shim 冒名 bash（Scoop busybox 等）对实战
             // 同型的嵌套引号命令会创建进程失败——存在性不够，probe
             // 通过才算数。
+            //
+            // 探针总预算 15s（单候选 5s）：PATH 里挂起 shim 的数量无
+            // 上限，预算耗尽后按「全灭」处理落 cmd 兜底，探测不再拖住
+            // 首次调用。
+            let probe_deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            let probe = |s: &AgentShell| std::time::Instant::now() < probe_deadline && probe(s);
             let find_working = |kind: ShellKind, candidates: Vec<PathBuf>| -> Option<AgentShell> {
-                candidates.into_iter().find_map(|path| {
-                    let s = shell(kind, path);
-                    probe(&s).then_some(s)
-                })
+                // 保序去重（同一 exe 可能经多个 PATH 目录与已知路径
+                // 重复命中，重复探针是纯成本）。
+                let mut seen = std::collections::HashSet::new();
+                candidates
+                    .into_iter()
+                    .filter(|p| seen.insert(p.clone()))
+                    .find_map(|path| {
+                        let s = shell(kind, path);
+                        probe(&s).then_some(s)
+                    })
             };
             let in_path_all = |name: &str| -> Vec<PathBuf> {
                 path_dirs
