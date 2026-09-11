@@ -252,9 +252,16 @@ impl FeishuAdapter {
         } else {
             chrono::DateTime::from_timestamp_millis(ts / 1000)
         };
+        // epoch 解析结果是 DateTime<Utc>：渲染前先转本地时区（与兜底
+        // 分支、comment.rs、cron 打戳一致），否则信封头慢 8 小时且与
+        // 兜底分支时区混用。
         dt.map_or_else(
             || chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-            |dt| dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+            |dt| {
+                dt.with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string()
+            },
         )
     }
 
@@ -325,3 +332,7 @@ pub(crate) fn rewrite_at_tag_segment(segment: &str, out: &mut String) {
     }
     out.push_str(&segment[last..]);
 }
+
+#[cfg(test)]
+#[path = "feishu_text_test.rs"]
+mod tests;

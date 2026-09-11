@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows 上命令超时或被取消时，会结束命令及其全部子进程（此前只结束主进程，后台子进程会残留）。
 - 没有 bash 的精简 Linux 环境（如 Alpine 容器）自动回退到 sh，不再报进程启动失败。
 
+### Fixed
+
+- 飞书消息的时间戳按本地时区渲染（此前按 UTC，比北京时间慢 8 小时，容易误导对"今天/昨天"的判断）。
+
 ## [0.10.29] - 2026-09-10
 
 ### Changed
