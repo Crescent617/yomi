@@ -122,6 +122,8 @@ fn probe_shell(shell: &AgentShell) -> bool {
     } else {
         cmd.arg(wrapped.as_ref());
     }
+    // GUI（windows-subsystem，无 console）下探测 spawn 不得弹窗。
+    crate::utils::process::no_console_window_std(&mut cmd);
     let Ok(mut child) = cmd
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())

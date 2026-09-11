@@ -618,9 +618,11 @@ pub async fn open_in_vscode(path: String) -> Result<(), GuiError> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        std::process::Command::new("code")
-            .arg(&path)
-            .spawn()
+        // code/zed 在 Windows 是 console shim：不设 NO_WINDOW 会闪黑窗。
+        let mut cmd = std::process::Command::new("code");
+        cmd.arg(&path);
+        kernel::utils::process::no_console_window_std(&mut cmd);
+        cmd.spawn()
             .map_err(|e| GuiError::unknown(format!("Failed to open VS Code: {e}")))?;
     }
     Ok(())
@@ -637,9 +639,10 @@ pub async fn open_in_zed(path: String) -> Result<(), GuiError> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        std::process::Command::new("zed")
-            .arg(&path)
-            .spawn()
+        let mut cmd = std::process::Command::new("zed");
+        cmd.arg(&path);
+        kernel::utils::process::no_console_window_std(&mut cmd);
+        cmd.spawn()
             .map_err(|e| GuiError::unknown(format!("Failed to open Zed: {e}")))?;
     }
     Ok(())
@@ -664,12 +667,11 @@ fn find_git_root(start: &std::path::Path) -> Option<std::path::PathBuf> {
 
 /// Run a git command inside `repo_root` and return trimmed stdout.
 fn git_stdout(repo_root: &std::path::Path, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo_root)
-        .env("LC_ALL", "C")
-        .output()
-        .ok()?;
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(args).current_dir(repo_root).env("LC_ALL", "C");
+    // GUI 无 console：Windows 上 spawn git（console 程序）会弹窗。
+    kernel::utils::process::no_console_window_std(&mut cmd);
+    let output = cmd.output().ok()?;
     if !output.status.success() {
         return None;
     }

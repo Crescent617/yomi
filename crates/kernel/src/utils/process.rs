@@ -33,6 +33,43 @@ const SIGTERM: i32 = 15;
 #[cfg(windows)]
 mod windows_job;
 
+/// Windows `CREATE_NO_WINDOW`：spawn console 子进程时不为其创建可
+/// 见控制台窗口。
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Windows：spawn console 子进程时抑制系统为其弹出的新控制台窗口
+/// （`CREATE_NO_WINDOW`）。GUI 是 windows-subsystem 进程、自身无
+/// console——默认行为下系统会给每个 console 子进程（bash/cmd/git/
+/// taskkill……）分配一个可见窗口（2026-09-12 Windows GUI 实测：
+/// shell 探测、agent 命令执行把 terminal 拉了起来）。本仓库所有
+/// spawn 点的 stdio 均已 pipe/null、不依赖 console 交互，故 CLI
+/// 场景（子进程不再继承父 console）亦无行为差异。unix 无此概
+/// 念，no-op。返回 `&mut` 便于链式（同 [`pre_exec_new_session`]）。
+///
+/// 一般不需要直接调用：[`spawn_in_new_tree`] 已在 spawn 前统一处
+/// 理；直 spawn 的少数点（cron、探测、taskkill、GUI git）用本函
+/// 数或 [`no_console_window_std`]。
+pub fn no_console_window(cmd: &mut tokio::process::Command) -> &mut tokio::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.as_std_mut().creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+/// [`no_console_window`] 的 std 版本（同步 spawn 点：shell 探测、
+/// taskkill、GUI 侧 git/编辑器 shim）。
+pub fn no_console_window_std(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 /// 让子进程独立成新 session（`setsid`）：子进程成为新进程组的组长
 /// （pgid == 子 pid），超时/收尾时按组发信号能连后裔一起收。unix
 /// 之外为 no-op。
@@ -80,6 +117,7 @@ pub fn spawn_in_new_tree(
     }
     #[cfg(windows)]
     {
+        no_console_window(cmd);
         // 先 spawn 再 assign：CREATE_SUSPENDED 路线需要主线程句柄才能
         // resume，std/tokio 均不暴露；spawn 与 assign 之间微秒级的窗口
         // 里子进程建出的后裔不进 job，可接受。tokio 的 Child 在 Windows
@@ -151,12 +189,14 @@ pub fn terminate_tree_by_pid(pid: u32) -> io::Result<()> {
     }
     #[cfg(windows)]
     {
-        let status = std::process::Command::new("taskkill")
+        let mut taskkill = std::process::Command::new("taskkill");
+        taskkill
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()?;
+            .stderr(std::process::Stdio::null());
+        no_console_window_std(&mut taskkill);
+        let status = taskkill.status()?;
         if status.success() {
             Ok(())
         } else {

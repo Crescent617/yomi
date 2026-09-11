@@ -331,6 +331,7 @@ fn shell_command(
         .env("PAGER", "cat")
         .env("EDITOR", "true");
     crate::utils::env::inject_child_env(&mut cmd, Some(data_dir), None);
+    crate::utils::process::no_console_window(&mut cmd);
     cmd
 }
 
