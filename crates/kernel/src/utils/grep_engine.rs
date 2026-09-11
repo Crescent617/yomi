@@ -4,23 +4,17 @@
 //! 受益），并省去每次调用的进程启动开销。
 //!
 //! 语义对齐原 rg 调用：含隐藏文件但遵守 gitignore（`--hidden`）、排除
-//! VCS 目录（`.git`/`.svn`/`.hg`）、二进制文件探测到 NUL 即跳过、
-//! 截止时限、glob 白/黑名单（gitignore 语义，支持 `!` 与 `{a,b}`）、
-//! 文件类型过滤（与 rg 同一份类型表）、multiline（`-U
-//! --multiline-dotall`）。
-//!
-//! 语义对齐原 rg 调用：含隐藏文件但遵守 gitignore（`--hidden`）、排除
-//! VCS 目录（`.git`/`.svn`/`.hg`，含同名文件）、glob 白/黑名单
-//! （gitignore 语义，支持 `!` 与 `{a,b}`）、文件类型过滤（与 rg 同一
-//! 份类型表）、multiline（`-U --multiline-dotall`）、二进制处理
-//! （遍历到的文件探测到 NUL 即停；显式单文件 root 按 convert 把 NUL
-//! 换行符化继续搜——与 rg 对显式文件的策略一致）。
+//! VCS 目录（`.git`/`.svn`/`.hg`，含同名文件）、截止时限、glob 白/黑
+//! 名单（gitignore 语义，支持 `!` 与 `{a,b}`）、文件类型过滤（与 rg
+//! 同一份类型表）、multiline（`-U --multiline-dotall`）。二进制处理：
+//! 遍历到的文件探测到 NUL 即停（NUL 所在缓冲块内的前置匹配丢弃，
+//! 与 rg 口径相同）；被截断的文件有命中时经 `file_errors` 给出
+//! 「binary file matches」信号，无命中则与 rg 一样静默；显式单文件
+//! root 按 convert 把 NUL 换行符化后继续搜，与 rg 对显式文件的策略
+//! 一致。
 //!
 //! 与 rg 二进制的已知偏差（对 agent 工具场景无害，刻意接受）：
 //! - 非 UTF-8 内容按 lossy 读（rg 会转码 UTF-16 等编码）；
-//! - 递归遍历中的二进制文件：NUL 所在缓冲块内的前置匹配会被一并
-//!   丢弃（rg 会报告 NUL 偏移之前的匹配）；有命中时经 `file_errors`
-//!   给出「binary file matches」信号，无命中则与 rg 一样静默；
 //! - count + multiline：按 sink 回调次数计（相邻 multiline 匹配被
 //!   grep-searcher 并块，可能比 rg 按正则匹配数的口径少；非
 //!   multiline 时两口径一致）；

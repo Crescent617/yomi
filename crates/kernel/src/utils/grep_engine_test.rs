@@ -254,3 +254,84 @@ fn deadline_returns_timeout() {
         Err(SearchError::Timeout(_))
     ));
 }
+
+#[test]
+fn adjacent_matches_merge_context_without_duplicates() {
+    let dir = tempfile::TempDir::new().unwrap();
+    // 相邻匹配的 context 窗口重叠：输出行合并去重（与 rg -C 一致）。
+    write_file(&dir, "ml.txt", "one\nmatch\ntwo\nmatch\nthree\n");
+    let mut p = params("match");
+    p.context_before = 1;
+    p.context_after = 1;
+    let report = search(dir.path(), SearchMode::Content, &p).unwrap();
+    let SearchOutcome::Content(result) = report.outcome else {
+        panic!("wrong outcome");
+    };
+    let lines: Vec<&str> = result.matches.iter().map(|m| m.lines.trim_end()).collect();
+    assert_eq!(lines, vec!["one", "match", "two", "match", "three"]);
+    let nums: Vec<usize> = result.matches.iter().map(|m| m.line_number).collect();
+    assert_eq!(nums, vec![1, 2, 3, 4, 5], "no duplicated context lines");
+}
+
+#[test]
+fn count_mode_reports_partial_count_on_binary_truncation() {
+    let dir = tempfile::TempDir::new().unwrap();
+    // 文档声明的偏差：count 遇二进制截断时返回已收集的部分计数
+    //（rg 对该文件整体抑制计数）。
+    let bin = dir.path().join("b.bin");
+    let mut data = "main\n".repeat(20000).into_bytes();
+    data.extend_from_slice(b"\0tail\n");
+    std::fs::write(&bin, data).unwrap();
+
+    let report = search(dir.path(), SearchMode::Count, &params("main")).unwrap();
+    let SearchOutcome::Counts(counts) = report.outcome else {
+        panic!("wrong outcome");
+    };
+    assert_eq!(counts.len(), 1);
+    assert!(
+        counts[0].1 > 0 && counts[0].1 < 20000,
+        "partial count kept: {counts:?}"
+    );
+}
+
+#[test]
+fn files_mode_lists_binary_file_with_match_silently() {
+    let dir = tempfile::TempDir::new().unwrap();
+    // files 模式：NUL 后期才出现的二进制文件，前置匹配使其照常列出
+    //（rg -l 同），且 Files 模式无二进制信号。
+    let bin = dir.path().join("b.bin");
+    let mut data = "main\n".repeat(20000).into_bytes();
+    data.extend_from_slice(b"\0tail\n");
+    std::fs::write(&bin, data).unwrap();
+
+    let report = search(dir.path(), SearchMode::Files, &params("main")).unwrap();
+    let SearchOutcome::Files(files) = report.outcome else {
+        panic!("wrong outcome");
+    };
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert!(files[0].ends_with("b.bin"));
+    assert!(
+        report.file_errors.is_empty(),
+        "files mode has no binary signal: {:?}",
+        report.file_errors
+    );
+}
+
+#[test]
+fn parent_gitignore_applies_to_subdirectory_root() {
+    let dir = tempfile::TempDir::new().unwrap();
+    // root 是仓库子目录时，仓库根的 .gitignore 仍然生效
+    //（ignore 库 parents 行为，与 rg 一致）。
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    write_file(&dir, ".gitignore", "inner/\n");
+    write_file(&dir, "sub/inner/c.rs", "secret\n");
+    write_file(&dir, "sub/kept.rs", "secret\n");
+
+    let sub = dir.path().join("sub");
+    let report = search(&sub, SearchMode::Files, &params("secret")).unwrap();
+    let SearchOutcome::Files(files) = report.outcome else {
+        panic!("wrong outcome");
+    };
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert!(files[0].ends_with("kept.rs"));
+}
