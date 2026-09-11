@@ -15,8 +15,6 @@ use std::time::Duration;
 pub const GREP_TOOL_NAME: &str = "grep";
 const DEFAULT_HEAD_LIMIT: usize = 250;
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(30);
-/// 行长上限（字节）：防 minified 文件噪声（对齐原 --max-columns）。
-const MAX_COLUMNS: usize = 500;
 const TRUNCATED_MSG: &str =
     "\n\n(Results are truncated. Consider using a more specific pattern or increase limit.)";
 
@@ -317,7 +315,6 @@ impl Tool for GrepTool {
         let pattern = pattern.to_string();
         let file_type = file_type.map(str::to_string);
         let deadline = std::time::Instant::now() + SEARCH_TIMEOUT;
-        let root = search_path.clone();
 
         // 引擎是同步库：整体放进阻塞线程池，内部按截止时刻自控超时。
         let report = tokio::task::spawn_blocking(move || {
@@ -329,10 +326,9 @@ impl Tool for GrepTool {
                 context_after: ctx_after,
                 glob_patterns: &glob_patterns,
                 file_type: file_type.as_deref(),
-                max_columns: MAX_COLUMNS,
                 deadline: Some(deadline),
             };
-            search(&root, mode, &params)
+            search(&search_path, mode, &params)
         })
         .await
         .map_err(|e| KernelError::tool(format!("search task failed: {e}")))?

@@ -7,8 +7,6 @@ fn test_paginate_matches() {
             path: PathBuf::from("test.rs"),
             line_number: i,
             lines: format!("line {i}"),
-            column: None,
-            submatches: vec![],
         })
         .collect();
 
@@ -38,15 +36,11 @@ fn test_format_matches() {
             path: PathBuf::from("src/main.rs"),
             line_number: 1,
             lines: "fn main()".to_string(),
-            column: None,
-            submatches: vec![],
         },
         GrepMatch {
             path: PathBuf::from("src/lib.rs"),
             line_number: 10,
             lines: "pub fn foo()".to_string(),
-            column: None,
-            submatches: vec![],
         },
     ];
 
@@ -64,8 +58,6 @@ fn test_format_matches_multiline() {
         path: PathBuf::from("src/main.rs"),
         line_number: 1,
         lines: "fn main() {\n    println!(\"hello\");\n}".to_string(),
-        column: None,
-        submatches: vec![],
     }];
 
     let formatted = format_matches(&matches, true);
@@ -84,22 +76,16 @@ fn test_extract_file_paths() {
             path: PathBuf::from("src/main.rs"),
             line_number: 1,
             lines: "line 1".to_string(),
-            column: None,
-            submatches: vec![],
         },
         GrepMatch {
             path: PathBuf::from("src/main.rs"),
             line_number: 2,
             lines: "line 2".to_string(),
-            column: None,
-            submatches: vec![],
         },
         GrepMatch {
             path: PathBuf::from("src/lib.rs"),
             line_number: 1,
             lines: "line 1".to_string(),
-            column: None,
-            submatches: vec![],
         },
     ];
 
@@ -119,10 +105,7 @@ fn test_ripgrep_result_is_empty() {
             path: PathBuf::from("src/main.rs"),
             line_number: 1,
             lines: "hello".to_string(),
-            column: None,
-            submatches: vec![],
         }],
-        files_searched: vec![],
     };
     assert!(!result.is_empty());
 }
@@ -134,15 +117,10 @@ fn test_ripgrep_result_paginate() {
             path: PathBuf::from("test.rs"),
             line_number: i,
             lines: format!("line {i}"),
-            column: None,
-            submatches: vec![],
         })
         .collect();
 
-    let result = GrepResult {
-        matches,
-        files_searched: vec![PathBuf::from("test.rs")],
-    };
+    let result = GrepResult { matches };
 
     let (paginated, truncated) = result.paginate(3, 0);
     assert_eq!(paginated.len(), 3);
@@ -156,29 +134,20 @@ fn test_ripgrep_result_unique_files() {
             path: PathBuf::from("src/main.rs"),
             line_number: 1,
             lines: "line 1".to_string(),
-            column: None,
-            submatches: vec![],
         },
         GrepMatch {
             path: PathBuf::from("src/main.rs"),
             line_number: 2,
             lines: "line 2".to_string(),
-            column: None,
-            submatches: vec![],
         },
         GrepMatch {
             path: PathBuf::from("src/lib.rs"),
             line_number: 1,
             lines: "line 1".to_string(),
-            column: None,
-            submatches: vec![],
         },
     ];
 
-    let result = GrepResult {
-        matches,
-        files_searched: vec![],
-    };
+    let result = GrepResult { matches };
 
     let files = result.unique_files();
     assert_eq!(files.len(), 2);

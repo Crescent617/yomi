@@ -17,7 +17,6 @@ fn params<'a>(pattern: &'a str) -> SearchParams<'a> {
         context_after: 0,
         glob_patterns: &[],
         file_type: None,
-        max_columns: 500,
         deadline: None,
     }
 }
@@ -46,7 +45,6 @@ fn content_mode_collects_matches_with_line_numbers() {
     assert_eq!(result.matches.len(), 1);
     assert_eq!(result.matches[0].line_number, 2);
     assert_eq!(result.matches[0].lines, "fn main() {\n");
-    assert_eq!(result.files_searched.len(), 1);
 }
 
 #[test]
@@ -163,8 +161,9 @@ fn invalid_pattern_is_pattern_error() {
 fn case_insensitive_and_binary_skip() {
     let dir = tempfile::TempDir::new().unwrap();
     write_file(&dir, "a.rs", "fn MAIN() {}\n");
+    // NUL 在前、匹配在后：rg 与引擎都探测到 NUL 即停，后置匹配不报。
     let bin = dir.path().join("b.bin");
-    std::fs::write(&bin, b"main\0binary\n").unwrap();
+    std::fs::write(&bin, b"binary\0main\n").unwrap();
 
     let mut p = params("main");
     p.case_insensitive = true;
@@ -174,6 +173,23 @@ fn case_insensitive_and_binary_skip() {
     };
     assert_eq!(files.len(), 1, "binary file must be skipped: {files:?}");
     assert!(files[0].ends_with("a.rs"));
+}
+
+#[test]
+fn binary_file_emits_signal_in_content_mode() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let bin = dir.path().join("b.bin");
+    std::fs::write(&bin, b"binary\0main\n").unwrap();
+
+    let report = search(dir.path(), SearchMode::Content, &params("main")).unwrap();
+    assert!(
+        report
+            .file_errors
+            .iter()
+            .any(|e| e.contains("binary file matches")),
+        "binary signal expected: {:?}",
+        report.file_errors
+    );
 }
 
 #[test]

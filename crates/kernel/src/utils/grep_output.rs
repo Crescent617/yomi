@@ -1,6 +1,6 @@
 //! grep 工具的输出结构与格式化：匹配记录（`GrepMatch`）、结果集
 //! （`GrepResult`）与分页/格式化/文件提取。匹配的产生见
-//! `utils::search`（进程内搜索引擎）。
+//! `utils::grep_engine`（进程内搜索引擎）。
 
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -10,8 +10,6 @@ use std::path::PathBuf;
 pub struct GrepResult {
     /// All matches found
     pub matches: Vec<GrepMatch>,
-    /// Files that were searched (whether they had matches or not)
-    pub files_searched: Vec<PathBuf>,
 }
 
 impl GrepResult {
@@ -52,21 +50,6 @@ pub struct GrepMatch {
     pub line_number: usize,
     /// The matched line content
     pub lines: String,
-    /// Column byte offset (if available)
-    pub column: Option<usize>,
-    /// Submatches within the line
-    pub submatches: Vec<GrepSubmatch>,
-}
-
-/// A submatch within a line
-#[derive(Debug, Clone)]
-pub struct GrepSubmatch {
-    /// The matched text
-    pub text: String,
-    /// Start byte offset
-    pub start: usize,
-    /// End byte offset
-    pub end: usize,
 }
 
 /// Apply limit and offset to matches, return the subset and whether it was truncated

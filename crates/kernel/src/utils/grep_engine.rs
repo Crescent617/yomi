@@ -11,8 +11,13 @@
 //!
 //! 与 rg 二进制的已知偏差（对 agent 工具场景无害，刻意接受）：
 //! - 非 UTF-8 内容按 lossy 读（rg 会转码 UTF-16 等编码）；
-//! - 超长行（> [`SearchParams::max_columns`] 字节）在 content 模式下
-//!   整条跳过（rg 是计数但不打印，计数口径略有出入）；
+//! - 二进制文件：探测到 NUL 即停止该文件的搜索（与 rg 一致），但
+//!   NUL 所在缓冲块内的前置匹配会被一并丢弃（rg 会报告 NUL 偏移
+//!   之前的匹配）；content 模式经 file_errors 给出「binary file
+//!   matches」信号，与 rg 的提示对齐；
+//! - 超长行不做截断（旧实现经 rg --json 调用时 --max-columns 在
+//!   JSON 路径静默无效，长行本就全量进入输出；噪声由下游分页与
+//!   截断预算兜底）；
 //! - 单线程遍历：跨文件的匹配顺序是目录序（rg 并行遍历本无序），
 //!   filename 模式下游本按 mtime 重排，无影响；
 //! - 匹配全量收集后由调用方分页（与原「全量读 rg stdout 再分页」的
@@ -36,8 +41,6 @@ pub struct SearchParams<'a> {
     /// 已解析好的 glob 列表（gitignore 语义，`!` 为黑名单）。
     pub glob_patterns: &'a [String],
     pub file_type: Option<&'a str>,
-    /// 防 minified 噪声的行长上限（字节；仅 content 模式生效）。
-    pub max_columns: usize,
     /// 截止时刻（超时返回 [`SearchError::Timeout`]）。
     pub deadline: Option<Instant>,
 }
@@ -158,17 +161,24 @@ pub fn search(
                 } else if found {
                     files.push(path.to_path_buf());
                 }
+                // 无匹配文件搜索过程无回调，无法中途打断；读完即查，
+                // 避免一连串无匹配大文件读穿时间预算。
+                if deadline_passed() {
+                    hit_deadline.set(true);
+                }
             }
             SearchMode::Count => {
                 let hit = &hit_deadline;
                 let n = Cell::new(0usize);
                 let count = &n;
-                let mut sink = grep_searcher::sinks::Lossy(move |_line_number, _line| {
+                let mut sink = grep_searcher::sinks::Lossy(move |_line_number, line| {
                     if deadline_passed() {
                         hit.set(true);
                         return Ok(false);
                     }
-                    count.set(count.get() + 1);
+                    // rg -c 的口径是「参与匹配的行数」：multiline 匹配
+                    // 跨 N 行计 N（非 multiline 时每次回调恰一行）。
+                    count.set(count.get() + line.lines().count().max(1));
                     Ok(true)
                 });
                 match searcher.search_path(&matcher, path, &mut sink) {
@@ -178,16 +188,23 @@ pub fn search(
                 }
             }
             SearchMode::Content => {
-                content.files_searched.push(path.to_path_buf());
                 let mut sink = CollectSink {
                     matches: &mut content.matches,
                     path,
-                    max_columns: params.max_columns,
                     deadline: params.deadline,
                     hit_deadline: &hit_deadline,
+                    binary_hit: false,
                 };
                 if let Err(e) = searcher.search_path(&matcher, path, &mut sink) {
                     file_errors.push(format!("{}: {e}", path.display()));
+                }
+                // 与 rg 的 "binary file matches (found "\0" byte ...)" 对齐：
+                // 二进制探测截断该文件搜索时给出信号而非静默。
+                if sink.binary_hit {
+                    file_errors.push(format!(
+                        "{}: binary file matches (NUL byte detected); results may be incomplete",
+                        path.display()
+                    ));
                 }
             }
         }
@@ -259,9 +276,9 @@ fn build_walker(root: &Path, params: &SearchParams) -> Result<ignore::Walk, Sear
 struct CollectSink<'a> {
     matches: &'a mut Vec<GrepMatch>,
     path: &'a Path,
-    max_columns: usize,
     deadline: Option<Instant>,
     hit_deadline: &'a Cell<bool>,
+    binary_hit: bool,
 }
 
 impl CollectSink<'_> {
@@ -270,15 +287,10 @@ impl CollectSink<'_> {
             self.hit_deadline.set(true);
             return false;
         }
-        if bytes.len() > self.max_columns {
-            return true; // 超长行整条跳过（模块文档已述与 rg 的口径偏差）
-        }
         self.matches.push(GrepMatch {
             path: self.path.to_path_buf(),
             line_number: line_number.unwrap_or(0) as usize,
             lines: String::from_utf8_lossy(bytes).into_owned(),
-            column: None,
-            submatches: vec![],
         });
         true
     }
@@ -297,6 +309,11 @@ impl Sink for CollectSink<'_> {
         ctx: &SinkContext<'_>,
     ) -> Result<bool, Self::Error> {
         Ok(self.push(ctx.line_number(), ctx.bytes()))
+    }
+
+    fn binary_data(&mut self, _searcher: &Searcher, _offset: u64) -> Result<bool, Self::Error> {
+        self.binary_hit = true;
+        Ok(false) // 与 BinaryDetection::quit 同向：停止该文件
     }
 }
 
