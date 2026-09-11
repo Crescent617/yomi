@@ -93,10 +93,68 @@ pub fn detect() -> &'static AgentShell {
             std::env::var_os(crate::utils::env::YOMI_SHELL),
             &|key| std::env::var_os(key),
             &|path| path.is_file(),
+            &probe_shell,
         );
         tracing::debug!(shell = %shell.path.display(), kind = ?shell.kind, "detected agent shell");
         shell
     })
+}
+
+/// 候选 shell 的实战同型探针：用它自己的参数与包装执行一条带内嵌
+/// 引号的 echo——「存在」不代表「能跑」：Scoop busybox 的 bash shim
+/// 之类冒名者对嵌套引号命令会创建进程失败（2026-09-11 Windows
+/// 实测）。同步阻塞执行（结果由 OnceLock 缓存，进程生命周期只探
+/// 一轮），单候选 5s 超时防 shim 挂起。
+#[cfg(windows)]
+fn probe_shell(shell: &AgentShell) -> bool {
+    use std::io::Read;
+    const MAGIC: &str = "yomi shell probe ok";
+    let mut cmd = std::process::Command::new(&shell.path);
+    cmd.args(shell.leading_args());
+    let wrapped = shell.wrap_command(&format!("echo \"{MAGIC}\""));
+    // cmd 的 /C 串与 tools/shell 同因 raw_arg 直传；其余走 std 转义。
+    if shell.kind == ShellKind::Cmd {
+        use std::os::windows::process::CommandExt;
+        cmd.raw_arg(wrapped.as_ref());
+    } else {
+        cmd.arg(wrapped.as_ref());
+    }
+    let Ok(mut child) = cmd
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return false;
+                }
+                let mut out = String::new();
+                return child.stdout.take().is_some_and(|mut s| {
+                    s.read_to_string(&mut out).is_ok() && out.contains(MAGIC)
+                });
+            }
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            _ => {
+                let _ = child.kill();
+                return false;
+            }
+        }
+    }
+}
+
+/// unix 候选全是系统组件（/bin/bash、sh），无 shim 冒名场景，不做
+/// 能力探针（探测零成本）。
+#[cfg(not(windows))]
+fn probe_shell(_shell: &AgentShell) -> bool {
+    true
 }
 
 /// 按解释器文件名推断种类；认不出的按 POSIX 方言处理。
@@ -128,13 +186,19 @@ fn starts_with_path(path: &str, prefix: &str, platform: Platform) -> bool {
     }
 }
 
-/// 探测逻辑本体：环境变量与文件存在性全部经闭包注入，测试不碰真
-/// 文件系统即可覆盖两个平台的完整回退链。
+/// 探测逻辑本体：环境变量、文件存在性与候选能力探针全部经闭包注
+/// 入，测试不碰真文件系统/进程即可覆盖两个平台的完整回退链。
+///
+/// `probe` 是实战同型能力验证（用候选自己的参数与包装执行一条带
+/// 内嵌引号的 echo）：Windows 上「文件存在」不够——Scoop busybox
+/// 的 bash shim 之类冒名者对嵌套引号命令会创建进程失败（2026-09-11
+/// 实测）；unix 候选全是系统组件，分支内不调用。
 fn detect_impl(
     platform: Platform,
     override_path: Option<OsString>,
     get_env: &dyn Fn(&str) -> Option<OsString>,
     is_file: &dyn Fn(&Path) -> bool,
+    probe: &dyn Fn(&AgentShell) -> bool,
 ) -> AgentShell {
     if let Some(path) = override_path.filter(|p| !p.is_empty()) {
         let path = PathBuf::from(path);
@@ -195,45 +259,75 @@ fn detect_impl(
                     .map(|base| format!("{}{sep}{rest}", base.trim_end_matches(['/', '\\'])))
             };
             let system32 = env_path("SystemRoot", "System32");
-            // Git Bash 优先。PATH 里的 `System32\bash.exe` 是 WSL 启动器，
-            // 用它命令会跑进 WSL，文件系统视图是错的，必须排除。
-            if let Some(p) = in_path(&["bash.exe"], system32.as_deref()) {
-                return shell(ShellKind::Posix, p);
-            }
-            for candidate in [
-                env_path("ProgramFiles", r"Git\bin\bash.exe"),
-                env_path("ProgramFiles(x86)", r"Git\bin\bash.exe"),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                if is_file(Path::new(&candidate)) {
-                    return shell(ShellKind::Posix, PathBuf::from(candidate));
-                }
-            }
-            if let Some(p) = in_path(&["pwsh.exe"], None).or_else(|| {
-                env_path("ProgramFiles", r"PowerShell\7\pwsh.exe")
-                    .filter(|p| is_file(Path::new(p)))
+            // 候选逐个过能力探针：PATH 里的 `System32\bash.exe` 是 WSL
+            // 启动器（用它命令会跑进 WSL，文件系统视图是错的，必须排
+            // 除）；PATH 里的 shim 冒名 bash（Scoop busybox 等）对实战
+            // 同型的嵌套引号命令会创建进程失败——存在性不够，probe
+            // 通过才算数。
+            let find_working = |kind: ShellKind, candidates: Vec<PathBuf>| -> Option<AgentShell> {
+                candidates.into_iter().find_map(|path| {
+                    let s = shell(kind, path);
+                    probe(&s).then_some(s)
+                })
+            };
+            let in_path_all = |name: &str| -> Vec<PathBuf> {
+                path_dirs
+                    .iter()
+                    .map(|d| format!("{d}{sep}{name}"))
+                    .filter(|c| is_file(Path::new(c)))
                     .map(PathBuf::from)
-            }) {
-                return shell(ShellKind::PowerShell, p);
+                    .collect()
+            };
+            let mut push_known = |candidates: &mut Vec<PathBuf>, known: Option<String>| {
+                if let Some(p) = known.filter(|p| is_file(Path::new(p))).map(PathBuf::from) {
+                    if !candidates.contains(&p) {
+                        candidates.push(p);
+                    }
+                }
+            };
+
+            // Git Bash 优先（排 WSL 的 System32\bash.exe）。
+            let mut bash = in_path_all("bash.exe");
+            bash.retain(|c| {
+                system32
+                    .as_deref()
+                    .is_none_or(|s32| !starts_with_path(&c.to_string_lossy(), s32, platform))
+            });
+            push_known(&mut bash, env_path("ProgramFiles", r"Git\bin\bash.exe"));
+            push_known(
+                &mut bash,
+                env_path("ProgramFiles(x86)", r"Git\bin\bash.exe"),
+            );
+            if let Some(s) = find_working(ShellKind::Posix, bash) {
+                return s;
             }
-            if let Some(p) = in_path(&["powershell.exe"], None).or_else(|| {
+
+            let mut pwsh = in_path_all("pwsh.exe");
+            push_known(
+                &mut pwsh,
+                env_path("ProgramFiles", r"PowerShell\7\pwsh.exe"),
+            );
+            if let Some(s) = find_working(ShellKind::PowerShell, pwsh) {
+                return s;
+            }
+
+            let mut powershell = in_path_all("powershell.exe");
+            push_known(
+                &mut powershell,
                 env_path(
                     "SystemRoot",
                     r"System32\WindowsPowerShell\v1.0\powershell.exe",
-                )
-                .filter(|p| is_file(Path::new(p)))
-                .map(PathBuf::from)
-            }) {
-                return shell(ShellKind::PowerShell, p);
+                ),
+            );
+            if let Some(s) = find_working(ShellKind::PowerShell, powershell) {
+                return s;
             }
-            if let Some(p) = env_path("SystemRoot", r"System32\cmd.exe")
-                .filter(|p| is_file(Path::new(p)))
-                .map(PathBuf::from)
-                .or_else(|| in_path(&["cmd.exe"], None))
-            {
-                return shell(ShellKind::Cmd, p);
+
+            let mut cmd = Vec::new();
+            push_known(&mut cmd, env_path("SystemRoot", r"System32\cmd.exe"));
+            cmd.extend(in_path_all("cmd.exe"));
+            if let Some(s) = find_working(ShellKind::Cmd, cmd) {
+                return s;
             }
             // 兜底裸名：CreateProcess 的默认搜索路径含 System32。
             shell(ShellKind::Cmd, PathBuf::from("cmd.exe"))

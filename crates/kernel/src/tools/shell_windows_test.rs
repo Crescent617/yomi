@@ -163,3 +163,25 @@ async fn powershell_exit_survives_trailing_comment() {
         );
     }
 }
+
+/// 探测选出的 shell 必须通过实战同型验证：执行带内嵌引号的 echo
+/// 成功且输出正确无反斜杠残留（busybox shim 冒名 bash 场景的最终
+/// 防线，2026-09-11 Windows 实测）。
+#[tokio::test]
+async fn detected_shell_executes_quoted_echo() {
+    let shell = crate::utils::shell::detect();
+    let mut cmd =
+        ShellTool::build_command(r#"echo "quoted ok""#, Path::new("C:\\"), "sess_test", None);
+    let out = cmd.output().await.unwrap();
+    assert!(
+        out.status.success(),
+        "{shell:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("quoted ok"), "{shell:?}: {stdout:?}");
+    assert!(
+        !stdout.contains('\\'),
+        "{shell:?}: backslash leaked: {stdout:?}"
+    );
+}

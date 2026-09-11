@@ -42,6 +42,7 @@ fn unix_prefers_path_bash_then_known_paths_then_sh() {
         None,
         &env_of(&[("PATH", "/usr/bin:/bin")]),
         &fake_fs(&["/usr/bin/bash", "/bin/sh"]),
+        &|_| true,
     );
     assert_eq!(shell.path, PathBuf::from("/usr/bin/bash"));
     assert_eq!(shell.kind, ShellKind::Posix);
@@ -52,6 +53,7 @@ fn unix_prefers_path_bash_then_known_paths_then_sh() {
         None,
         &env_of(&[("PATH", "/usr/bin")]),
         &fake_fs(&["/bin/bash", "/bin/sh"]),
+        &|_| true,
     );
     assert_eq!(shell.path, PathBuf::from("/bin/bash"));
 
@@ -61,6 +63,7 @@ fn unix_prefers_path_bash_then_known_paths_then_sh() {
         None,
         &env_of(&[("PATH", "/usr/bin")]),
         &fake_fs(&["/bin/sh"]),
+        &|_| true,
     );
     assert_eq!(shell.path, PathBuf::from("/bin/sh"));
 }
@@ -72,6 +75,7 @@ fn unix_override_wins() {
         Some(OsString::from("/opt/homebrew/bin/bash")),
         &env_of(&[]),
         &fake_fs(&[]),
+        &|_| true,
     );
     assert_eq!(shell.path, PathBuf::from("/opt/homebrew/bin/bash"));
     assert_eq!(shell.kind, ShellKind::Posix);
@@ -91,6 +95,7 @@ fn windows_excludes_wsl_bash_from_path() {
             r"C:\Windows\System32\bash.exe",
             r"C:\Windows\System32\cmd.exe",
         ]),
+        &|_| true,
     );
     assert_eq!(shell.kind, ShellKind::Cmd, "WSL bash must be excluded");
 
@@ -106,6 +111,7 @@ fn windows_excludes_wsl_bash_from_path() {
             r"C:\Windows\System32\bash.exe",
             r"C:\Program Files\Git\bin\bash.exe",
         ]),
+        &|_| true,
     );
     assert_eq!(shell.kind, ShellKind::Posix);
     assert_eq!(
@@ -126,6 +132,7 @@ fn windows_falls_back_through_git_bash_pwsh_powershell_cmd() {
             ("ProgramFiles", r"C:\Program Files"),
         ]),
         &fake_fs(&[r"C:\Program Files\Git\bin\bash.exe"]),
+        &|_| true,
     );
     assert_eq!(shell.kind, ShellKind::Posix);
 
@@ -139,6 +146,7 @@ fn windows_falls_back_through_git_bash_pwsh_powershell_cmd() {
             ("ProgramFiles", r"C:\Program Files"),
         ]),
         &fake_fs(&[r"C:\Program Files\PowerShell\7\pwsh.exe"]),
+        &|_| true,
     );
     assert_eq!(shell.kind, ShellKind::PowerShell);
 
@@ -151,6 +159,7 @@ fn windows_falls_back_through_git_bash_pwsh_powershell_cmd() {
             ("SystemRoot", r"C:\Windows"),
         ]),
         &fake_fs(&[r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"]),
+        &|_| true,
     );
     assert_eq!(shell.kind, ShellKind::PowerShell);
 
@@ -163,11 +172,18 @@ fn windows_falls_back_through_git_bash_pwsh_powershell_cmd() {
             ("SystemRoot", r"C:\Windows"),
         ]),
         &fake_fs(&[r"C:\Windows\System32\cmd.exe"]),
+        &|_| true,
     );
     assert_eq!(shell.kind, ShellKind::Cmd);
 
     // 连 SystemRoot 都没有（异常环境）：裸名 cmd.exe 兜底。
-    let shell = detect_impl(Platform::Windows, None, &env_of(&[]), &fake_fs(&[]));
+    let shell = detect_impl(
+        Platform::Windows,
+        None,
+        &env_of(&[]),
+        &fake_fs(&[]),
+        &|_| true,
+    );
     assert_eq!(shell.kind, ShellKind::Cmd);
     assert_eq!(shell.path, PathBuf::from("cmd.exe"));
 }
@@ -179,6 +195,7 @@ fn windows_override_wins_and_infers_kind() {
         Some(OsString::from(r"D:\tools\pwsh.exe")),
         &env_of(&[]),
         &fake_fs(&[]),
+        &|_| true,
     );
     assert_eq!(shell.kind, ShellKind::PowerShell);
 }
@@ -195,6 +212,7 @@ fn windows_system32_exclusion_tolerates_non_ascii_path_dirs() {
             ("SystemRoot", r"C:\Windows"),
         ]),
         &fake_fs(&[r"C:\用户\tools\bash.exe", r"C:\Windows\System32\cmd.exe"]),
+        &|_| true,
     );
     assert_eq!(shell.kind, ShellKind::Posix);
     assert_eq!(shell.path, PathBuf::from(r"C:\用户\tools\bash.exe"));
@@ -239,4 +257,55 @@ fn powershell_wrap_exit_survives_trailing_comment() {
     let wrapped = ps.wrap_command("git push origin main # 发布");
     let last_line = wrapped.rsplit('\n').next().unwrap();
     assert_eq!(last_line, "exit $LASTEXITCODE", "{wrapped}");
+}
+
+#[test]
+fn windows_skips_impostor_bash_via_probe() {
+    // PATH 第一个是冒名 bash（Scoop busybox shim 之类：存在但对实战
+    // 同型的嵌套引号命令创建进程失败），第二个是真 Git Bash：
+    // probe 毙掉冒名者后落到真身（2026-09-11 Windows 实测场景）。
+    let probe = |s: &super::AgentShell| s.path != Path::new(r"C:\Users\x\scoop\shims\bash.exe");
+    let shell = detect_impl(
+        Platform::Windows,
+        None,
+        &env_of(&[
+            ("PATH", r"C:\Users\x\scoop\shims;C:\Program Files\Git\bin"),
+            ("SystemRoot", r"C:\Windows"),
+        ]),
+        &fake_fs(&[
+            r"C:\Users\x\scoop\shims\bash.exe",
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Windows\System32\cmd.exe",
+        ]),
+        &probe,
+    );
+    assert_eq!(shell.kind, ShellKind::Posix);
+    assert_eq!(
+        shell.path,
+        PathBuf::from(r"C:\Program Files\Git\bin\bash.exe")
+    );
+}
+
+#[test]
+fn windows_all_impostors_fall_through_to_cmd() {
+    // bash/pwsh/powershell 全被 probe 毙：落 cmd 兜底（cmd 候选经
+    // probe 验证为真身）。
+    let probe = |s: &super::AgentShell| s.kind == ShellKind::Cmd;
+    let shell = detect_impl(
+        Platform::Windows,
+        None,
+        &env_of(&[
+            ("PATH", r"C:\Shims;C:\Windows\System32"),
+            ("SystemRoot", r"C:\Windows"),
+        ]),
+        &fake_fs(&[
+            r"C:\Shims\bash.exe",
+            r"C:\Shims\pwsh.exe",
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            r"C:\Windows\System32\cmd.exe",
+        ]),
+        &probe,
+    );
+    assert_eq!(shell.kind, ShellKind::Cmd);
+    assert_eq!(shell.path, PathBuf::from(r"C:\Windows\System32\cmd.exe"));
 }
