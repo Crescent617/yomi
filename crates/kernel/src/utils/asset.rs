@@ -122,7 +122,7 @@ fn is_image_annotation(text: &str) -> bool {
 }
 
 /// Drop annotation blocks inserted by [`process_image_blocks`] (a
-/// `[image N: /…]` Text immediately following an ImageUrl block).
+/// `[image N: <绝对路径>]` Text immediately following an ImageUrl block).
 /// Annotations are model-context decor, not message content: persistence
 /// (jsonl write) and user-facing rendering (live user events) strip them
 /// so the annotation is regenerated exactly once per read-back — never

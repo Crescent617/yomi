@@ -189,13 +189,25 @@ fn strip_drops_annotations_but_keeps_user_text_and_images() {
     let txt = |s: &str| crate::types::ContentBlock::Text {
         text: s.to_string(),
     };
+    // 平台形态的绝对路径：注解谓词按本机 is_absolute 判定，测试数据
+    // 必须用本机绝对路径（unix `/…`、Windows `C:\…`）。
+    let abs = |unix: &str| {
+        if cfg!(windows) {
+            format!(r"C:\{}", unix.trim_start_matches('/').replace('/', "\\"))
+        } else {
+            unix.to_string()
+        }
+    };
     let blocks = vec![
         txt("check this"),
         img(),
-        txt("[image 1: /Users/x/.yomi/assets/ab.jpg]"),
+        txt(&format!(
+            "[image 1: {}]",
+            abs("/Users/x/.yomi/assets/ab.jpg")
+        )),
         txt("and this stays"),
         img(),
-        txt("[image 2: /abs/cd.png]"),
+        txt(&format!("[image 2: {}]", abs("/abs/cd.png"))),
         txt("[image 1: not-an-abs-path]"),
         txt("[image x: /abs]"),
     ];
@@ -212,8 +224,8 @@ fn strip_drops_annotations_but_keeps_user_text_and_images() {
         [
             "check this",
             "and this stays",
-            "[image 1: not-an-abs-path]", // no "N: /" shape → not ours
-            "[image x: /abs]",            // non-digit → not ours
+            "[image 1: not-an-abs-path]", // 非绝对路径 → 非本机注解
+            "[image x: /abs]",            // 序号非数字 → 非本机注解
         ],
         "{texts:?}"
     );
