@@ -106,3 +106,60 @@ async fn each_installed_shell_works() {
         assert!(stdout.contains("中文输出"), "{name}: mojibake: {stdout:?}");
     }
 }
+
+/// cmd 档内嵌双引号不经 std argv 转义损坏（raw_arg 直传）：输出必须
+/// 是带引号的原文，不残留反斜杠。
+#[tokio::test]
+async fn cmd_preserves_embedded_quotes() {
+    let cmd_shell = AgentShell {
+        kind: ShellKind::Cmd,
+        path: PathBuf::from(r"C:\Windows\System32\cmd.exe"),
+    };
+    if !cmd_shell.path.is_file() {
+        return;
+    }
+    let mut cmd = ShellTool::build_command_with_shell(
+        &cmd_shell,
+        r#"echo "a b""#,
+        Path::new("C:\\"),
+        "sess_test",
+        None,
+    );
+    let out = cmd.output().await.unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("\"a b\""), "quotes mangled: {stdout:?}");
+    assert!(!stdout.contains('\\'), "backslash leaked: {stdout:?}");
+}
+
+/// PowerShell 命令末行以 `#` 注释结尾时，`exit $LASTEXITCODE` 仍须
+/// 执行（包装换行隔离的实机验证）：native 失败退出码必须传播，
+/// 不被注释吞掉后误报成功。
+#[tokio::test]
+async fn powershell_exit_survives_trailing_comment() {
+    for path in [
+        r"C:\Program Files\PowerShell\7\pwsh.exe",
+        r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+    ] {
+        let ps = AgentShell {
+            kind: ShellKind::PowerShell,
+            path: PathBuf::from(path),
+        };
+        if !ps.path.is_file() {
+            continue;
+        }
+        let mut cmd = ShellTool::build_command_with_shell(
+            &ps,
+            "cmd /c exit 7 # 模拟失败",
+            Path::new("C:\\"),
+            "sess_test",
+            None,
+        );
+        let out = cmd.output().await.unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(7),
+            "{path}: exit swallowed by trailing comment"
+        );
+    }
+}

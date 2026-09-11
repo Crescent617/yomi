@@ -64,12 +64,15 @@ impl AgentShell {
     /// 包装命令文本：Windows 的两个解释器默认输出非 UTF-8 代码页，
     /// 统一注入 UTF-8 输出前缀；PowerShell 追加 `exit $LASTEXITCODE`
     /// ——`-Command` 不传播 native 命令的退出码（`git push` 失败
-    /// PowerShell 仍退出 0），必须显式 exit；POSIX 原样返回。
+    /// PowerShell 仍退出 0），必须显式 exit。exit 另起一行而非 `;`
+    /// 连接：命令末行若以 `#` 注释结尾，同行追加的 exit 会被注释
+    /// 吞掉，失败命令被误报成功；`$LASTEXITCODE` 跨语句保持，换行
+    /// 不影响取值。POSIX 原样返回。
     pub fn wrap_command<'a>(&self, command: &'a str) -> Cow<'a, str> {
         match self.kind {
             ShellKind::Posix => Cow::Borrowed(command),
             ShellKind::PowerShell => Cow::Owned(format!(
-                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; {command}; exit $LASTEXITCODE"
+                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; {command}\nexit $LASTEXITCODE"
             )),
             ShellKind::Cmd => Cow::Owned(format!("chcp 65001 >nul & {command}")),
         }

@@ -248,9 +248,9 @@ impl ShellTool {
     ) -> Command {
         let wrapped = shell.wrap_command(command);
         let mut cmd = Command::new(&shell.path);
-        cmd.args(shell.leading_args())
-            .arg(wrapped.as_ref())
-            .current_dir(working_dir)
+        cmd.args(shell.leading_args());
+        Self::append_wrapped(&mut cmd, shell.kind, &wrapped);
+        cmd.current_dir(working_dir)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -272,6 +272,29 @@ impl ShellTool {
         }
 
         cmd
+    }
+
+    /// 追加包装后的命令串。Windows 上 cmd 的 `/C` 串须 `raw_arg`
+    /// 直传：std 的 argv 转义把内嵌 `"` 变成 `\"`，而 cmd 只做首尾
+    /// 引号剥离、不认该转义（`echo "a b"` 会残留反斜杠、带引号的
+    /// 程序路径启动失败）。pwsh/powershell 按 CommandLineToArgvW
+    /// 规则解析 argv，std 转义能被正确还原，保持 `.arg`。
+    #[cfg(windows)]
+    fn append_wrapped(cmd: &mut Command, kind: crate::utils::shell::ShellKind, wrapped: &str) {
+        use std::os::windows::process::CommandExt;
+        match kind {
+            crate::utils::shell::ShellKind::Cmd => {
+                cmd.as_std_mut().raw_arg(wrapped);
+            }
+            _ => {
+                cmd.arg(wrapped);
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn append_wrapped(cmd: &mut Command, _kind: crate::utils::shell::ShellKind, wrapped: &str) {
+        cmd.arg(wrapped);
     }
 
     /// Execute command synchronously and return output directly

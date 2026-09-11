@@ -219,10 +219,24 @@ fn leading_args_and_wrapping_per_kind() {
     );
     let ps_wrapped = ps.wrap_command("ls");
     assert!(ps_wrapped.starts_with("[Console]::OutputEncoding="));
-    // -Command 不传播 native 命令退出码：必须显式 exit。
-    assert!(ps_wrapped.ends_with("; exit $LASTEXITCODE"), "{ps_wrapped}");
+    // -Command 不传播 native 命令退出码：必须显式 exit；exit 另起
+    // 一行，命令末行的 `#` 注释吞不掉它。
+    assert!(ps_wrapped.ends_with("\nexit $LASTEXITCODE"), "{ps_wrapped}");
 
     let cmd = mk(ShellKind::Cmd, "cmd.exe");
     assert_eq!(cmd.leading_args(), &["/D", "/C"]);
     assert_eq!(cmd.wrap_command("dir"), "chcp 65001 >nul & dir");
+}
+
+#[test]
+fn powershell_wrap_exit_survives_trailing_comment() {
+    // 命令末行以 `#` 注释结尾：PowerShell 注释持续到行尾，若 exit
+    // 与命令同行会被吞掉（失败命令误报成功）；exit 必须独占末行。
+    let ps = super::AgentShell {
+        kind: ShellKind::PowerShell,
+        path: PathBuf::from("pwsh.exe"),
+    };
+    let wrapped = ps.wrap_command("git push origin main # 发布");
+    let last_line = wrapped.rsplit('\n').next().unwrap();
+    assert_eq!(last_line, "exit $LASTEXITCODE", "{wrapped}");
 }
