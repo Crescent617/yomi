@@ -53,8 +53,8 @@ async fn preassigned_message_id_is_preserved_by_tool_result() {
 /// complete and `sanitize` keeps the whole batch in context.
 #[tokio::test]
 async fn cancel_persists_cancelled_results_for_unfinished_calls() {
-    use super::CANCELLED_TOOL_OUTPUT_TEXT;
     use crate::agent::{Agent, AgentError, AgentShared, AgentSpawnArgs};
+    use crate::tools::executor::CANCELLED_TOOL_OUTPUT_TEXT;
     use crate::tools::{Tool, ToolExecCtx};
     use crate::types::{Message, Result, Role, SessionId, ToolOutput, TOOL_CANCELLED_META_KEY};
     use async_trait::async_trait;

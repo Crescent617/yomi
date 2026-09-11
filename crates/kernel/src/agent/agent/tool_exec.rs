@@ -187,11 +187,11 @@ impl Agent {
         }
     }
 
-    /// Build a cancelled tool result: the call was aborted (user interrupt
-    /// or shutdown) before producing a real result. Shaped like a denied
-    /// result — an error `ToolOutput` wrapped into the `End` event +
-    /// persisted message pair — plus a metadata flag so transcripts and UIs
-    /// can tell a cancellation apart from a genuine tool error.
+    /// Build a cancelled tool result for a call aborted mid-batch (user
+    /// interrupt or shutdown). Thin wrapper over the shared
+    /// `executor::build_cancelled_result`, binding the pre-assigned
+    /// `MessageId` (shared with the `Start` event) and this agent's
+    /// output cap.
     fn build_cancelled_result(
         &self,
         call_id: &str,
@@ -199,19 +199,12 @@ impl Agent {
         message_ids: &BTreeMap<String, MessageId>,
     ) -> ToolExecutionResult {
         let message_id = message_ids[call_id].clone();
-        let output = crate::types::ToolOutput::error(CANCELLED_TOOL_OUTPUT_TEXT);
-        let (event, mut message) = build_tool_result(
+        let (event, message) = crate::tools::executor::build_cancelled_result(
             call_id,
             tool_name,
-            &output,
-            0,
             message_id.clone(),
             self.max_tool_output_length,
         );
-        message.metadata = Some(std::collections::HashMap::from([(
-            crate::types::TOOL_CANCELLED_META_KEY.to_string(),
-            "true".to_string(),
-        )]));
         ToolExecutionResult {
             tool_call_id: call_id.to_string(),
             message_id,
@@ -455,12 +448,6 @@ impl Agent {
 }
 
 // ── free functions ────────────────────────────────────────────────────────────
-
-/// Error text for synthesized cancelled tool results (persisted when a call
-/// is aborted mid-batch). Neutral on the cancel origin — user interrupt and
-/// daemon shutdown both flow through here; `build_tool_result` prepends
-/// "Error: ".
-const CANCELLED_TOOL_OUTPUT_TEXT: &str = "Tool execution cancelled";
 
 /// Assign a fresh `MessageId` to every tool call so that `Start` and `End`
 /// events for the same call share one stable identifier.

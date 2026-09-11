@@ -107,6 +107,39 @@ pub fn build_tool_result(
     (event, message)
 }
 
+/// Error text for synthesized cancelled tool results. Neutral on the
+/// cancel origin — user interrupt, daemon shutdown and respawn-side
+/// close-out all flow through here; `build_tool_result` prepends
+/// "Error: ".
+pub const CANCELLED_TOOL_OUTPUT_TEXT: &str = "Tool execution cancelled";
+
+/// Build the `End` event + persisted message pair for a cancelled tool
+/// call: an error `ToolOutput` plus a metadata flag so transcripts and
+/// UIs can tell a cancellation apart from a genuine tool error. Single
+/// source for both the abort site (`tool_exec`) and the respawn-side
+/// close-out (`MessageBuffer::close_dangling_tool_batches`).
+pub fn build_cancelled_result(
+    call_id: &str,
+    tool_name: &str,
+    message_id: MessageId,
+    max_tool_output_length: usize,
+) -> (ToolEvent, Message) {
+    let output = ToolOutput::error(CANCELLED_TOOL_OUTPUT_TEXT);
+    let (event, mut message) = build_tool_result(
+        call_id,
+        tool_name,
+        &output,
+        0,
+        message_id,
+        max_tool_output_length,
+    );
+    message.metadata = Some(std::collections::HashMap::from([(
+        crate::types::TOOL_CANCELLED_META_KEY.to_string(),
+        "true".to_string(),
+    )]));
+    (event, message)
+}
+
 /// Log a completed tool result.
 pub fn log_tool_result(result: &ToolExecutionResult) {
     if let ToolEvent::End {

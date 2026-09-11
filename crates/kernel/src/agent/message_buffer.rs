@@ -1,4 +1,4 @@
-use crate::types::Message;
+use crate::types::{Message, MessageId};
 use std::sync::Arc;
 
 /// Simple message buffer for agent conversation history
@@ -97,6 +97,73 @@ impl MessageBuffer {
         };
         buffer.sanitize();
         buffer.messages
+    }
+
+    /// Close out dangling tool batches in a loaded history: every assistant
+    /// `tool_calls` entry without a matching tool result gets a synthesized
+    /// cancelled result inserted at the close-out point (before the next
+    /// chain-breaking message, or at the end).
+    ///
+    /// 统一兜底所有缺口成因：cancel 路径的合成 cancelled 结果与
+    /// interruption marker 同走可丢总线（饱和时双丢）、进程崩溃、
+    /// shutdown 拆除竞速。补齐后 assistant→tool 链完整，`sanitize`
+    /// 不再整组剔除中断痕迹，模型对「这批调用已取消」知情——重发与否
+    /// 是模型的知情决策，而非痕迹被抹后的无意识重跑。与 `sanitize`
+    /// 同口径：`Role::Internal` 对链透明（不打断开放批、不参与核销）。
+    /// 幂等：已关账的批不产生新消息。
+    ///
+    /// Returns the closed-out history plus the synthesized messages, in
+    /// the same relative order (the caller persists the latter).
+    pub fn close_dangling_tool_batches(
+        messages: &[Arc<Message>],
+        max_tool_output_length: usize,
+    ) -> (Vec<Arc<Message>>, Vec<Message>) {
+        use crate::types::Role;
+
+        let mut out: Vec<Arc<Message>> = Vec::with_capacity(messages.len());
+        let mut synthesized: Vec<Message> = Vec::new();
+        // 当前未关账批的剩余调用（最近一个带 tool_calls 的 assistant）。
+        let mut open: Vec<crate::types::ToolCall> = Vec::new();
+
+        for msg in messages {
+            match msg.role {
+                // 透明：不打断开放批（与 sanitize 同口径）。
+                Role::Internal => out.push(msg.clone()),
+                Role::Tool => {
+                    if let Some(id) = msg.tool_call_id.as_deref() {
+                        if let Some(pos) = open.iter().position(|c| c.id == id) {
+                            open.remove(pos);
+                        }
+                    }
+                    out.push(msg.clone());
+                }
+                // 其他任何角色打断链：先把开放批关账（合成结果插在该
+                // 消息之前——abort 时 cancelled 结果本就先于 marker
+                // 落盘，时序一致），再开新批（若新 assistant 带调用）。
+                _ => {
+                    close_open_batch(
+                        &mut open,
+                        max_tool_output_length,
+                        &mut out,
+                        &mut synthesized,
+                    );
+                    if msg.role == Role::Assistant {
+                        if let Some(calls) = msg.tool_calls.as_ref().filter(|tc| !tc.is_empty()) {
+                            open = calls.clone();
+                        }
+                    }
+                    out.push(msg.clone());
+                }
+            }
+        }
+        // 历史末尾的 dangling 批：尾部关账。
+        close_open_batch(
+            &mut open,
+            max_tool_output_length,
+            &mut out,
+            &mut synthesized,
+        );
+        (out, synthesized)
     }
 
     /// Sanitize the message buffer by removing inconsistent tool call/response pairs.
@@ -213,6 +280,26 @@ impl MessageBuffer {
             i += 1;
             keep
         });
+    }
+}
+
+/// Drain the open batch: append a synthesized cancelled result per
+/// remaining call to both the closed-out history and the persist list.
+fn close_open_batch(
+    open: &mut Vec<crate::types::ToolCall>,
+    max_tool_output_length: usize,
+    out: &mut Vec<Arc<Message>>,
+    synthesized: &mut Vec<Message>,
+) {
+    for call in open.drain(..) {
+        let (_, message) = crate::tools::executor::build_cancelled_result(
+            &call.id,
+            &call.name,
+            MessageId::new(),
+            max_tool_output_length,
+        );
+        out.push(Arc::new(message.clone()));
+        synthesized.push(message);
     }
 }
 

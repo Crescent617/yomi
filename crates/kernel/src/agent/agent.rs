@@ -440,7 +440,9 @@ impl Agent {
     ///   radius as the final-answer loss the pool design documents). A direct store append
     ///   here raced the pool worker and interleaved bytes on the same
     ///   jsonl line (2026-09-11 e2e: marker 与 cancelled 结果粘行，
-    ///   `read_lines` 静默跳过 → 双丢，respawn 重跑工具批).
+    ///   `read_lines` 静默跳过 → 双丢)。双丢的最终兜底在 respawn 侧：
+    ///   `MessageBuffer::close_dangling_tool_batches` 对任何缺口批统一
+    ///   补合成 cancelled 结果，中断痕迹不会从模型上下文里消失。
     /// - daemon shutdown: the conductor (the bus's only persister) may
     ///   already be torn down, so the marker is a direct store append
     ///   after `wait_drained` — the guaranteed record on this path;

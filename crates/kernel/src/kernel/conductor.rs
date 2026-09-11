@@ -588,14 +588,14 @@ impl Conductor {
 
         // 读历史前先排空该 session 的落盘队列：respawn 常紧跟在
         // cancel/正常收尾之后，而 marker 与工具结果走总线+池是异步
-        // 落盘——不等排空可能读到缺一截的历史（dangling 工具组随后被
-        // sanitize 剔除，本次中断在新 agent 上下文里无声消失）。
-        // spawn 路径对延迟敏感，上界取 1s（非通用 30s）：超时即退
-        // 回旧竞态，绝不为排空拖住 spawn（2026-09-11 hrli 指令）。
-        // 残余窗口（review 2026-09-11 确认的可接受降级）：只覆盖**已
-        // dispatch** 的写——旧 agent 死前发出、conductor 事件循环尚未
-        // 分发的 `MessageAdded` 仍可能错过（循环被队头阻塞时窗口拉
-        // 大）；彻底的关账需要 conductor 循环内的屏障事件，超出现范围。
+        // 落盘——不等排空可能读到缺一截的历史。spawn 路径对延迟敏
+        // 感，上界取 1s（非通用 30s）：超时即退回旧竞态，绝不为排
+        // 空拖住 spawn（2026-09-11 hrli 指令）。
+        // 排空只是 fast path，正确性不依赖它：下方
+        // `close_dangling_tool_batches` 关账对任何形状的缺口历史
+        // （含总线饱和双丢、排空窗口未覆盖的在途写）统一补齐 cancelled
+        // 结果，dangling 批永远不会以「痕迹被 sanitize 抹掉」的方式
+        // 进入新 agent 上下文。
         if let Some(ref pool) = self.agent_shared.persist_pool {
             persist_pool::wait_drained_within(
                 pool,
@@ -612,6 +612,29 @@ impl Conductor {
             },
             None => Vec::new(),
         };
+
+        // respawn 关账：给历史里 dangling 工具批补合成 cancelled 结果
+        //（cancel 合成结果与 interruption marker 饱和双丢、进程崩溃、
+        // shutdown 竞速的统一兜底）——链完整后 sanitize 不再整组剔除
+        // 中断痕迹，模型对「这批调用已取消」知情，重发与否是模型的
+        // 知情决策而非痕迹被抹后的无意识重跑。落盘失败不阻塞 spawn：
+        // 内存历史已补齐，下次 respawn 幂等重补。
+        let (history, closed) = crate::agent::MessageBuffer::close_dangling_tool_batches(
+            &history,
+            self.agent_config.max_tool_output_length,
+        );
+        if !closed.is_empty() {
+            tracing::info!(
+                session = %sid.0,
+                closed = closed.len(),
+                "closed dangling tool batch results on respawn"
+            );
+            if let Some(store) = &self.agent_shared.message_store {
+                if let Err(e) = store.append(&sid.0, &closed).await {
+                    tracing::warn!("failed to persist closed tool results: {e}");
+                }
+            }
+        }
 
         let session_info = match self.agent_shared.session_store.as_ref() {
             Some(s) => s.get(sid).await.ok().flatten(),

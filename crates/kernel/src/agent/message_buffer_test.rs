@@ -358,3 +358,147 @@ fn test_internal_kept_when_chain_removed() {
     assert_eq!(buffer.len(), 1);
     assert_eq!(buffer.messages()[0].role, Role::Internal);
 }
+
+// ── close_dangling_tool_batches ─────────────────────────────────────────────
+
+fn arcs(msgs: Vec<Message>) -> Vec<Arc<Message>> {
+    msgs.into_iter().map(Arc::new).collect()
+}
+
+fn internal_message() -> Message {
+    Message {
+        role: Role::Internal,
+        content: vec![ContentBlock::Text {
+            text: "meta".to_string(),
+        }],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn close_dangling_noop_on_complete_batch() {
+    let history = arcs(vec![
+        create_user_message("go"),
+        create_assistant_with_tools(vec!["t1"]),
+        create_tool_response("t1"),
+    ]);
+    let (out, synthesized) = MessageBuffer::close_dangling_tool_batches(&history, 1000);
+    assert!(synthesized.is_empty());
+    assert_eq!(out.len(), history.len());
+}
+
+#[test]
+fn close_dangling_appends_cancelled_at_end() {
+    let history = arcs(vec![
+        create_user_message("go"),
+        create_assistant_with_tools(vec!["t1", "t2"]),
+    ]);
+    let (out, synthesized) = MessageBuffer::close_dangling_tool_batches(&history, 1000);
+    assert_eq!(synthesized.len(), 2);
+    assert_eq!(out.len(), 4);
+    // 合成结果紧跟 assistant 批，顺序与调用一致。
+    assert_eq!(out[2].role, Role::Tool);
+    assert_eq!(out[2].tool_call_id.as_deref(), Some("t1"));
+    assert_eq!(out[3].tool_call_id.as_deref(), Some("t2"));
+    // cancelled 格式：metadata flag + error 文本。
+    let meta = out[2].metadata.as_ref().unwrap();
+    assert_eq!(
+        meta.get(crate::types::TOOL_CANCELLED_META_KEY)
+            .map(String::as_str),
+        Some("true")
+    );
+    let ContentBlock::Text { text } = &out[2].content[0] else {
+        panic!("text block expected");
+    };
+    assert!(text.contains("Tool execution cancelled"), "{text}");
+    // 落库列表与历史内嵌同内容同序。
+    assert_eq!(synthesized[0].tool_call_id.as_deref(), Some("t1"));
+    assert_eq!(synthesized[1].tool_call_id.as_deref(), Some("t2"));
+    // 补齐后 sanitize 不再剔除该批。
+    let view = MessageBuffer::sanitized_model_messages(&out);
+    assert_eq!(view.len(), 4);
+}
+
+#[test]
+fn close_dangling_partial_batch_only_synthesizes_missing() {
+    let history = arcs(vec![
+        create_assistant_with_tools(vec!["t1", "t2"]),
+        create_tool_response("t1"),
+    ]);
+    let (out, synthesized) = MessageBuffer::close_dangling_tool_batches(&history, 1000);
+    assert_eq!(synthesized.len(), 1);
+    assert_eq!(synthesized[0].tool_call_id.as_deref(), Some("t2"));
+    assert_eq!(out.len(), 3);
+    assert_eq!(out[2].tool_call_id.as_deref(), Some("t2"));
+}
+
+#[test]
+fn close_dangling_inserts_before_interruption_marker() {
+    // 双丢场景形状：assistant 批后只有 marker（user），cancelled 结果
+    // 缺失 → 合成结果插在 marker 之前（abort 的真实时序）。
+    let history = arcs(vec![
+        create_assistant_with_tools(vec!["t1"]),
+        create_user_message("[interrupted: cancelled]"),
+    ]);
+    let (out, synthesized) = MessageBuffer::close_dangling_tool_batches(&history, 1000);
+    assert_eq!(synthesized.len(), 1);
+    assert_eq!(out.len(), 3);
+    assert_eq!(out[1].role, Role::Tool);
+    assert_eq!(out[2].role, Role::User);
+}
+
+#[test]
+fn close_dangling_internal_is_transparent() {
+    // Internal 不打断开放批：assistant → Internal（缺口）→ 关账发生
+    // 在下一个断链消息前，Internal 原样保留。
+    let history = arcs(vec![
+        create_assistant_with_tools(vec!["t1"]),
+        internal_message(),
+        create_user_message("next"),
+    ]);
+    let (out, synthesized) = MessageBuffer::close_dangling_tool_batches(&history, 1000);
+    assert_eq!(synthesized.len(), 1);
+    assert_eq!(out.len(), 4);
+    assert_eq!(out[1].role, Role::Internal);
+    assert_eq!(out[2].role, Role::Tool);
+    assert_eq!(out[3].role, Role::User);
+}
+
+#[test]
+fn close_dangling_multiple_batches_each_closed() {
+    let history = arcs(vec![
+        create_assistant_with_tools(vec!["a1"]),
+        create_user_message("u"),
+        create_assistant_with_tools(vec!["b1", "b2"]),
+    ]);
+    let (out, synthesized) = MessageBuffer::close_dangling_tool_batches(&history, 1000);
+    assert_eq!(synthesized.len(), 3);
+    let ids: Vec<_> = synthesized
+        .iter()
+        .map(|m| m.tool_call_id.as_deref().unwrap())
+        .collect();
+    assert_eq!(ids, ["a1", "b1", "b2"]);
+}
+
+#[test]
+fn close_dangling_idempotent_on_second_pass() {
+    let history = arcs(vec![create_assistant_with_tools(vec!["t1"])]);
+    let (once, first) = MessageBuffer::close_dangling_tool_batches(&history, 1000);
+    assert_eq!(first.len(), 1);
+    let (_, second) = MessageBuffer::close_dangling_tool_batches(&once, 1000);
+    assert!(second.is_empty(), "second pass must be a no-op");
+}
+
+#[test]
+fn close_dangling_leaves_orphan_tool_untouched() {
+    // 孤儿 tool（无对应 assistant 批）不属于任何开放批：原样保留
+    //（剔除它是 sanitize 的职责，关账不管）。
+    let history = arcs(vec![
+        create_tool_response("ghost"),
+        create_assistant_with_tools(vec!["t1"]),
+        create_tool_response("t1"),
+    ]);
+    let (out, synthesized) = MessageBuffer::close_dangling_tool_batches(&history, 1000);
+    assert!(synthesized.is_empty());
+    assert_eq!(out.len(), 3);
+}
