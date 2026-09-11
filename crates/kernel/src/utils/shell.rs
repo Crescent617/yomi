@@ -111,7 +111,10 @@ fn probe_shell(shell: &AgentShell) -> bool {
     const MAGIC: &str = "yomi shell probe ok";
     let mut cmd = std::process::Command::new(&shell.path);
     cmd.args(shell.leading_args());
-    let wrapped = shell.wrap_command(&format!("echo \"{MAGIC}\""));
+    // 拆开绑定：wrap_command 返回的 Cow 借用命令串，format! 临时值
+    // 若内联会在语句末释放（E0716，Windows 编译期）。
+    let echo_cmd = format!("echo \"{MAGIC}\"");
+    let wrapped = shell.wrap_command(&echo_cmd);
     // cmd 的 /C 串与 tools/shell 同因 raw_arg 直传；其余走 std 转义。
     if shell.kind == ShellKind::Cmd {
         use std::os::windows::process::CommandExt;
@@ -308,7 +311,7 @@ fn detect_impl(
                     .map(PathBuf::from)
                     .collect()
             };
-            let mut push_known = |candidates: &mut Vec<PathBuf>, known: Option<String>| {
+            let push_known = |candidates: &mut Vec<PathBuf>, known: Option<String>| {
                 if let Some(p) = known.filter(|p| is_file(Path::new(p))).map(PathBuf::from) {
                     if !candidates.contains(&p) {
                         candidates.push(p);
