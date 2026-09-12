@@ -240,9 +240,15 @@ fn log_note_lists_files_only_when_present() {
 }
 
 #[test]
-fn desc_reflects_detected_shell() {
+fn desc_is_platform_independent() {
     let tool = ShellTool::new();
     let desc = crate::tools::Tool::desc(&tool);
-    assert!(desc.contains("interpreter:"), "desc: {desc}");
+    // 解释器路径/种类走 base prompt 的 Environment 段，desc 保持静态。
+    assert!(desc.contains("shell command"), "desc: {desc}");
     assert!(desc.contains("background"), "desc: {desc}");
+    assert!(!desc.contains("interpreter:"), "desc: {desc}");
+    assert!(
+        desc.contains(crate::tools::ASYNC_LAUNCH_GUIDE),
+        "desc: {desc}"
+    );
 }

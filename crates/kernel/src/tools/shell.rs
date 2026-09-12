@@ -1,5 +1,6 @@
 use crate::agent::AgentInput;
 use crate::comms::InputBus;
+use crate::const_concat;
 use crate::tools::helper::truncate::truncate_keep_edges;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, SessionId, ToolOutput};
@@ -53,9 +54,6 @@ impl ShellToolCtx {
 
 pub struct ShellTool {
     ctx: Option<ShellToolCtx>,
-    /// 首次 `desc()` 时按探测到的 shell 组装并缓存（shell 探测本身是
-    /// 进程级缓存，这里只省重复拼装）。
-    desc: std::sync::OnceLock<String>,
 }
 
 impl Default for ShellTool {
@@ -66,10 +64,7 @@ impl Default for ShellTool {
 
 impl ShellTool {
     pub fn new() -> Self {
-        Self {
-            ctx: None,
-            desc: std::sync::OnceLock::new(),
-        }
+        Self { ctx: None }
     }
 
     #[must_use]
@@ -92,38 +87,14 @@ impl ShellTool {
     }
 }
 
-/// 按探测到的 shell 组装工具描述；`desc()` 首次调用时执行一次并缓存。
-fn compose_desc() -> String {
-    let shell = crate::utils::shell::detect();
-    let intro = match shell.kind {
-        crate::utils::shell::ShellKind::Posix => {
-            format!(
-                "Execute a bash command (interpreter: {}).",
-                shell.path.display()
-            )
-        }
-        crate::utils::shell::ShellKind::PowerShell => {
-            format!(
-                "Execute a PowerShell command (interpreter: {}).",
-                shell.path.display()
-            )
-        }
-        crate::utils::shell::ShellKind::Cmd => {
-            format!(
-                "Execute a cmd.exe command (interpreter: {}).",
-                shell.path.display()
-            )
-        }
-    };
-    let non_interactive = if cfg!(windows) {
-        " Commands run non-interactively (stdin is NUL, no console attached), so interactive prompts (e.g. ssh confirmation) fail immediately instead of waiting for input."
-    } else {
-        " Commands run non-interactively (stdin is /dev/null, no controlling terminal), so interactive prompts (e.g. sudo password, ssh confirmation) fail immediately instead of waiting for input."
-    };
-    format!(
-        "{intro} Reserve exclusively for system commands that require shell execution. Prefer dedicated tools (read, edit, grep) when available. DO NOT use for git push or dangerous operations without explicit user request.{non_interactive} Use `background: true` for long-running commands (servers, scripts of unknown duration) so you can monitor output in real time; short commands should run synchronously. The PID in the launch message can be used to kill the process."
-    )
-}
+/// 工具描述为平台无关的静态文本：解释器种类与路径随机器变，由 base
+/// prompt 的 Environment 段（prompt/mod.rs）按会话告知模型，工具文档
+/// 本身全平台一致（跨机器 prompt 缓存与快照稳定）。
+const DESC: &str = const_concat!(
+    "Execute a shell command. Use it only for tasks that genuinely require the shell; for reading, editing, or searching files, prefer the dedicated read, edit, and grep tools. Do not run dangerous operations (e.g. git push, rm -rf) without explicit user request. Commands run non-interactively (stdin is closed, no terminal attached), so interactive prompts (e.g. sudo password, ssh confirmation) fail immediately instead of waiting for input.\n\nUse `background: true` for long-running commands (servers, scripts of unknown duration) so you can monitor output in real time; short commands should run synchronously. ",
+    crate::tools::ASYNC_LAUNCH_GUIDE,
+    " The PID in the launch message can be used to kill the process."
+);
 
 #[async_trait]
 impl Tool for ShellTool {
@@ -132,7 +103,7 @@ impl Tool for ShellTool {
     }
 
     fn desc(&self) -> &str {
-        self.desc.get_or_init(compose_desc).as_str()
+        DESC
     }
 
     fn schema(&self) -> Value {
@@ -150,7 +121,7 @@ impl Tool for ShellTool {
                 },
                 "background": {
                     "type": "boolean",
-                    "description": format!("Run command in background. When true, returns immediately with task_id, pid, and output file path. {} Output will be sent via notification when complete.", crate::tools::ASYNC_LAUNCH_GUIDE),
+                    "description": "Run command in background. When true, returns immediately with task_id, pid, and output file path. Output will be sent via notification when complete.",
                     "default": false
                 }
             },

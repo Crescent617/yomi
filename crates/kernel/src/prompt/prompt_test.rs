@@ -43,6 +43,22 @@ async fn memory_pointer_absent_without_project_index() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+#[tokio::test]
+async fn environment_section_names_detected_shell() {
+    // shell 工具 desc 平台无关，解释器种类/路径由 Environment 段告知。
+    // kind 映射在此独立复制一份——impl 的三臂若写错（方言标错，Windows
+    // 上模型会按错误方言写命令），本断言才会红。
+    let prompt = SystemPromptBuilder::new().base_prompt("base").build().await;
+    let shell = crate::utils::shell::detect();
+    let kind = match shell.kind {
+        crate::utils::shell::ShellKind::Posix => "posix",
+        crate::utils::shell::ShellKind::PowerShell => "powershell",
+        crate::utils::shell::ShellKind::Cmd => "cmd",
+    };
+    let needle = format!("Shell: {} ({kind})", shell.path.display());
+    assert!(prompt.contains(&needle), "missing `{needle}` in:\n{prompt}");
+}
+
 #[test]
 fn contract_sections_matrix() {
     // attachments on + channel-routed → 两段都在

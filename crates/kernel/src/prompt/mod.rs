@@ -368,6 +368,15 @@ impl<'a> SystemPromptBuilder<'a> {
             std::env::consts::OS,
             std::env::consts::ARCH
         );
+        // shell 工具的执行解释器：工具 desc 保持平台无关（见
+        // tools/shell.rs 的 DESC 注释），种类与路径在此处按会话告知。
+        let shell = crate::utils::shell::detect();
+        let shell_kind = match shell.kind {
+            crate::utils::shell::ShellKind::Posix => "posix",
+            crate::utils::shell::ShellKind::PowerShell => "powershell",
+            crate::utils::shell::ShellKind::Cmd => "cmd",
+        };
+        let _ = write!(prompt, "\nShell: {} ({shell_kind})", shell.path.display());
         if let Some(session_id) = self.session_id {
             let _ = write!(prompt, "\nSession: {session_id}");
         }
