@@ -22,11 +22,34 @@ jobs:
           fi
           echo "✅ HOMEBREW_TAP_TOKEN is set (length: ${#HOMEBREW_TAP_TOKEN})"
 
+  # ==================== 先行创建 Release ====================
+  # 各构建 job 完成后随即向此 release 上架自己的产物（即建即发：
+  # mac 编译完不用等 Windows）；缺失产物由 audit 收尾标注。
+  create-release:
+    name: Create Release
+    needs: check-precondition
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      # 从 CHANGELOG.md 抽取本版本 section 作为 GitHub Release 的 release note
+      - name: Extract release notes from CHANGELOG
+        shell: bash
+        run: bash ./scripts/extract-release-notes.sh "${GITHUB_REF_NAME#v}" release-notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: release-notes.md
+
   # ==================== TUI 构建 ====================
   build-tui:
     name: Build TUI ${{ matrix.target }}
-    needs: check-precondition
+    needs: [check-precondition, create-release]
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
 
     strategy:
       # 单平台 leg 失败不取消其他 leg——各产物独立构建。
@@ -105,11 +128,21 @@ jobs:
             *.tar.gz
             *.zip
 
+      # 即建即发：本 leg 产物随即上架 release（softprops 按 tag 找
+      # create-release 已建的 release 追加 asset，重传覆盖默认开启）。
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            yomi-*.tar.gz
+            yomi-*.zip
+
   # ==================== GUI 构建 (macOS DMG) ====================
   build-gui:
     name: Build GUI (macOS)
-    needs: check-precondition
+    needs: [check-precondition, create-release]
     runs-on: macos-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
 
@@ -158,13 +191,39 @@ jobs:
           name: gui-dmg
           path: ${{ steps.sha.outputs.dmg }}
 
+      # 即建即发：DMG 随即上架（此时 Windows 产物可能还在构建）。
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.sha.outputs.dmg }}
+
   # ==================== GUI 构建 (Windows MSI/NSIS) ====================
   # 与 windows-e2e.yml 的手动打包共用 .github/workflows/build-gui-windows.yml
   # 单一定义；产物经 release job 的 merge-multiple 下载随 Release 发布。
   build-gui-windows:
     name: Build GUI (Windows)
-    needs: check-precondition
+    needs: [check-precondition, create-release]
     uses: ./.github/workflows/build-gui-windows.yml
+
+  # reusable 只负责构建（windows-e2e 共用，不该上架）；发布是
+  # release.yml 的事——下载 artifact 随即上架。
+  upload-gui-windows:
+    name: Upload Windows installers to Release
+    needs: [create-release, build-gui-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          name: gui-windows-installers
+      # artifact 内是嵌套两层（upload-artifact 多 path 按 LCA 保留
+      # 目录结构：msi/*.msi + nsis/*.exe）——必须递归通配，根目录
+      # 通配会零匹配而 softprops 只 warn 不 fail（静默断供）。
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            **/Yomi_*.msi
+            **/Yomi_*-setup.exe
 
   # ==================== Docker 镜像 (GHCR) ====================
   build-docker:
@@ -232,113 +291,91 @@ jobs:
           cache-from: type=gha,scope=yomi-docker
           cache-to: type=gha,mode=max,scope=yomi-docker
 
-  # ==================== 创建 GitHub Release ====================
-  release:
-    needs: [build-tui, build-gui, build-gui-windows]
-    # 任一构建 job 失败仍发布存在的产物（缺失产物在 notes 尾部列
-    # 出）；全部构建失败则无产物可发，Detect 步骤会 exit 1 中止。
+  # ==================== 收尾清点 ====================
+  # 全部构建结束后清点 release 资产：缺失名单重写进 notes（从
+  # CHANGELOG 重抽干净 notes 再追加——retry 补齐产物后 notes 自动
+  # 恢复干净）。产物本身已由各构建 job 即建即发。
+  audit:
+    name: Audit release assets
+    needs: [build-tui, build-gui, upload-gui-windows]
     if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    # 产物存在性输出，供下游 brew job 决定跑还是跳过（job 级 if，
-    # 缺失时显示 skipped 而非失败）。
-    outputs:
-      has_tui_mac: ${{ steps.detect.outputs.has_tui_mac }}
-      has_tui_linux: ${{ steps.detect.outputs.has_tui_linux }}
-      has_dmg: ${{ steps.detect.outputs.has_dmg }}
-
     steps:
       - uses: actions/checkout@v6
 
-      # 从 CHANGELOG.md 抽取本版本 section 作为 GitHub Release 的 release note
-      - name: Extract release notes from CHANGELOG
+      - name: Report missing assets into release notes
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          awk -v ver="$VERSION" '
-            /^## \[/ {
-              if (found) exit
-              if (index($0, "## [" ver "]") == 1) found=1
-              next
-            }
-            found && !started && /^[[:space:]]*$/ { next }
-            found { started=1; out = out $0 "\n" }
-            END { sub(/\n+$/, "", out); if (out != "") print out }
-          ' CHANGELOG.md > release-notes.md
-          if [ ! -s release-notes.md ]; then
-            echo "::warning::CHANGELOG.md 中未找到 [${VERSION}] 的条目，Release 将没有 release note"
-          fi
-          cat release-notes.md
-
-      - uses: actions/download-artifact@v6
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      # 清点产物：存在性写 outputs（供 brew 下游），缺失名单追加进
-      # release notes；全灭则中止发布（空 release 无意义）。
-      # 产物文件名假设 tag 版本与 crates/gui/tauri.conf.json 同步
-      # （bump-version.py 保证，与 brew-cask 脚本同一假设）。
-      - name: Detect missing artifacts
-        id: detect
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
-          declare -A EXPECTED=(
-            [has_tui_mac]="yomi-${VERSION}-aarch64-apple-darwin.tar.gz"
-            [has_tui_linux]="yomi-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
-            [has_tui_win]="yomi-${VERSION}-x86_64-pc-windows-msvc.zip"
-            [has_dmg]="Yomi_${VERSION}_aarch64.dmg"
-            [has_win_msi]="Yomi_${VERSION}_x64_en-US.msi"
-            [has_win_nsis]="Yomi_${VERSION}_x64-setup.exe"
+          EXPECTED=(
+            "yomi-${VERSION}-aarch64-apple-darwin.tar.gz"
+            "yomi-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+            "yomi-${VERSION}-x86_64-pc-windows-msvc.zip"
+            "Yomi_${VERSION}_aarch64.dmg"
+            "Yomi_${VERSION}_x64_en-US.msi"
+            "Yomi_${VERSION}_x64-setup.exe"
           )
+          ASSETS=$(gh release view "${GITHUB_REF_NAME}" --repo "${{ github.repository }}" --json assets --jq '.assets[].name')
           MISSING=()
-          for key in "${!EXPECTED[@]}"; do
-            f="${EXPECTED[$key]}"
-            if [ -f "artifacts/$f" ]; then
-              echo "${key}=true" >> "$GITHUB_OUTPUT"
+          for f in "${EXPECTED[@]}"; do
+            if grep -qx "$f" <<< "$ASSETS"; then
+              echo "present: $f"
             else
-              echo "${key}=false" >> "$GITHUB_OUTPUT"
-              echo "::warning::missing artifact: $f"
+              echo "::warning::missing asset: $f"
               MISSING+=("$f")
             fi
           done
-          shopt -s nullglob
-          files=(artifacts/*)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "::error::所有构建产物均缺失，中止发布"
-            exit 1
-          fi
+          bash ./scripts/extract-release-notes.sh "$VERSION" release-notes.md
           if [ ${#MISSING[@]} -gt 0 ]; then
             {
               echo ""
               echo "---"
-              echo "⚠️ 本次发布缺少以下产物（对应构建 job 失败；修复后可重新发版）："
+              echo "⚠️ 本次发布缺少以下产物（对应构建 job 失败；修复后 re-run failed 会自动补齐并刷新本说明）："
               for f in "${MISSING[@]}"; do echo "- \`$f\`"; done
             } >> release-notes.md
           fi
-
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/**
-          body_path: release-notes.md
+          gh release edit "${GITHUB_REF_NAME}" --repo "${{ github.repository }}" --notes-file release-notes.md
 
   # ==================== 更新 Homebrew Formula (TUI) ====================
   brew-tui:
-    needs: [release, check-precondition]
-    # formula 需要 mac+linux 两个 tar.gz；缺失则跳过（skipped）而非失败。
-    # release 自身失败（如上传挂）时 asset 不在，同样跳过。
-    if: always() && needs.release.result == 'success' && needs.release.outputs.has_tui_mac == 'true' && needs.release.outputs.has_tui_linux == 'true'
+    # build-tui 完成（其尾部已即建即发）后自行 gate：formula 需要
+    # mac+linux 两个 tar.gz 都在 release 上；缺则跳过（不红）。
+    needs: [create-release, build-tui, check-precondition]
+    if: always()
     runs-on: ubuntu-latest
     env:
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
     steps:
       - uses: actions/checkout@v6
 
+      - name: Gate on tui assets
+        id: gate
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          ok=true
+          for p in aarch64-apple-darwin x86_64-unknown-linux-gnu; do
+            url="https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/yomi-${VERSION}-${p}.tar.gz"
+            # asset 刚上传存在秒级 404 窗口/瞬时网络抖动：重试后再判缺失
+            found=false
+            for i in 1 2 3 4 5; do
+              curl -fsI "$url" >/dev/null && { found=true; break; }
+              sleep 15
+            done
+            if [ "$found" = false ]; then
+              echo "::warning::missing release asset: $url"
+              ok=false
+            fi
+          done
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+
       - name: Release TUI to Homebrew
+        if: steps.gate.outputs.ok == 'true'
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
@@ -347,9 +384,9 @@ jobs:
   # ==================== 更新 Homebrew Cask (GUI) ====================
   brew-gui:
     # needs brew-tui 仅为串行 push 同一 tap repo（防 non-fast-forward
-    # 冲突）；always() 使其在 brew-tui 失败/跳过时仍按 DMG 存在性自行决定。
-    needs: [release, check-precondition, brew-tui]
-    if: always() && needs.release.result == 'success' && needs.release.outputs.has_dmg == 'true'
+    # 冲突）；always() 使其在 brew-tui 失败/跳过时仍按 DMG gate 自行决定。
+    needs: [create-release, build-gui, check-precondition, brew-tui]
+    if: always()
     runs-on: ubuntu-latest
     env:
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -357,13 +394,26 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Download DMG from Release
+        id: dmg
+        continue-on-error: true
         run: |
+          set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           DMG_URL="https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/Yomi_${VERSION}_aarch64.dmg"
-          curl -fsL -o Yomi.dmg "$DMG_URL"
+          # asset 刚上传存在秒级 404 窗口/瞬时网络抖动：重试后再判缺失
+          for i in 1 2 3 4 5; do
+            curl -fsL -o Yomi.dmg "$DMG_URL" && break
+            [ "$i" = 5 ] && exit 1
+            sleep 15
+          done
           echo "DMG_SHA256=$(sha256sum Yomi.dmg | cut -d' ' -f1)" >> "$GITHUB_ENV"
 
+      - name: Skip when DMG missing
+        if: steps.dmg.outcome != 'success'
+        run: echo "::warning::DMG not on release (macOS build failed); skipping cask update"
+
       - name: Release GUI to Homebrew
+        if: steps.dmg.outcome == 'success'
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
