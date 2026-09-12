@@ -15,6 +15,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.31] - 2026-09-12
+
+### Added
+
+- Release 新增 Windows GUI 安装包：`Yomi_<版本>_x64_en-US.msi` 与 `Yomi_<版本>_x64-setup.exe`（暂无签名，SmartScreen 可能提示）。
+
+### Changed
+
+- Release 产物改为各自构建完成即陆续上架：macOS 包不再等 Windows 包构建结束，单一产物构建失败也不影响其他产物发布。
+- shell 工具的描述文案精简约一半，agent 每轮对话的上下文占用随之减少。
+
+### Fixed
+
+- Windows 上 shell 解释器探测改为实际执行验证：busybox 等同名「冒名」bash 会被识别并跳过，自动回退到下一个可用解释器（此前存在即选中，命令直接失败）。
+- Windows GUI 启动与使用过程中不再弹出黑色控制台窗口（此前 shell 探测、命令执行、git 调用等都会拉起终端窗口）。
+- Windows GUI 连接地址为 localhost、127.x 等本机回环地址时，状态栏显示 local 而非 remote（此前按 ws 地址形式误判为远程）。
+
 ## [0.10.30] - 2026-09-11
 
 ### Added
