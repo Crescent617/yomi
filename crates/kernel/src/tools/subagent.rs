@@ -9,10 +9,11 @@ use std::sync::Arc;
 
 pub const SUBAGENT_TOOL_NAME: &str = "agent";
 
-/// sync/async 取消返回的统一提示：取消 ≠ 失败，会话与上下文保留，
+/// sync/async 取消返回的统一提示：取消 ≠ 失败（e2e 实证：不点明是用户
+/// 打断时 parent 会虚构任务级原因并当真汇报），会话与上下文保留，
 /// parent 可用 `post_message` 以同一 agent id 唤醒续做（2026-09-13）。
-const RESUME_HINT: &str =
-    "cancelled — session preserved; use `post_message` with this agent's ID to resume or redirect it";
+const RESUME_HINT: &str = "cancelled by the user — session preserved; \
+    use `post_message` with this agent's ID to resume or redirect it";
 
 /// Tool for spawning sub-agents to handle specific tasks
 #[derive(Clone)]

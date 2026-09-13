@@ -529,6 +529,10 @@ async fn sync_cancel_without_output_hints_post_message_resume() {
     .await;
     assert!(text.contains("cancelled"), "{text}");
     assert!(
+        text.contains("by the user"),
+        "cancel result must attribute the interruption to the user: {text}"
+    );
+    assert!(
         text.contains("post_message"),
         "cancel result must point to post_message resume: {text}"
     );
