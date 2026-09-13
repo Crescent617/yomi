@@ -165,14 +165,43 @@ impl FeishuAdapter {
 
     /// Concatenate a post message's title and paragraph text runs (posts
     /// in other locales degrade to `[post]`).
+    ///
+    /// Prefers the node's `content_v2` raw-markdown runs when present
+    /// (API-fetched posts): rendered runs drop link hrefs entirely —
+    /// `[t](yomi://…)` degrades to bare `t`, losing the URL — while the
+    /// raw markdown keeps every inline semantic (`[t](url)`, `**`,
+    /// `<at user_id=…>`). Live-event payloads and older API shapes carry
+    /// no `content_v2`; those fall back to rendered runs.
     pub(crate) fn extract_post_text(content: &serde_json::Value) -> String {
         let node = Self::post_node(content);
-        let mut parts = Vec::new();
-        if let Some(title) = node["title"]
+        let title = node["title"]
             .as_str()
             .map(str::trim)
-            .filter(|t| !t.is_empty())
-        {
+            .filter(|t| !t.is_empty());
+        if let Some(paragraphs) = node["content_v2"].as_array() {
+            let lines: Vec<String> = paragraphs
+                .iter()
+                .map(|para| {
+                    para.as_array()
+                        .map(|runs| {
+                            runs.iter()
+                                .filter_map(|r| r["text"].as_str())
+                                .collect::<String>()
+                        })
+                        .unwrap_or_default()
+                })
+                .filter(|line| !line.is_empty())
+                .collect();
+            if !lines.is_empty() {
+                let body = Self::dedup_bare_links(&lines.join("\n"));
+                return match title {
+                    Some(t) => format!("{t}\n{body}"),
+                    None => body,
+                };
+            }
+        }
+        let mut parts = Vec::new();
+        if let Some(title) = title {
             parts.push(title.to_string());
         }
         if let Some(paragraphs) = node["content"].as_array() {
@@ -191,6 +220,22 @@ impl FeishuAdapter {
             }
         }
         parts.join("\n")
+    }
+
+    /// Collapse markdown links whose anchor text IS the URL (`[X](X)` →
+    /// `X`): auto-linked bare URLs would otherwise read twice. Real links
+    /// (anchor ≠ URL) keep their `[text](url)` form.
+    fn dedup_bare_links(text: &str) -> String {
+        static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let re = RE.get_or_init(|| regex::Regex::new(r#"\[([^\]\n]+)\]\(([^)\s]+)\)"#).unwrap());
+        re.replace_all(text, |caps: &regex::Captures| {
+            if caps[1] == caps[2] {
+                caps[1].to_string()
+            } else {
+                caps[0].to_string()
+            }
+        })
+        .into_owned()
     }
 
     /// Collect the `image_key`s of a post's `img` runs, in paragraph order.

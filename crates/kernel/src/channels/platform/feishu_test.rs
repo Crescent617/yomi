@@ -689,6 +689,86 @@ fn extract_post_text_falls_back_to_bare_form() {
 }
 
 #[test]
+fn extract_post_text_prefers_content_v2_raw_markdown() {
+    // API-fetched posts carry content_v2 (raw markdown) next to rendered
+    // runs: rendered runs drop hrefs entirely (non-http schemes degrade
+    // to bare text), the raw markdown keeps them.
+    let content = json!({
+        "zh_cn": {
+            "title": "",
+            "content": [[
+                { "tag": "text", "text": "问题" },
+                { "tag": "text", "text": "\n" },
+                { "tag": "text", "text": "—— 请直接「回复」本条作答" }
+            ]],
+            "content_v2": [[
+                { "tag": "md", "text": "**问题**\n[—— 请直接「回复」本条作答](yomi://call_tool/post_message/sess_1)" }
+            ]]
+        }
+    });
+
+    assert_eq!(
+        super::FeishuAdapter::extract_post_text(&content),
+        "**问题**\n[—— 请直接「回复」本条作答](yomi://call_tool/post_message/sess_1)"
+    );
+}
+
+#[test]
+fn extract_post_text_dedups_bare_links() {
+    // `[X](X)` (auto-linked bare URL) collapses to X; anchor ≠ URL keeps
+    // the full markdown form.
+    let content = json!({
+        "zh_cn": {
+            "title": "",
+            "content": [[{ "tag": "text", "text": "https://example.com" }]],
+            "content_v2": [[
+                { "tag": "md", "text": "见 [https://example.com](https://example.com) 与 [文档](https://example.com/doc)" }
+            ]]
+        }
+    });
+
+    assert_eq!(
+        super::FeishuAdapter::extract_post_text(&content),
+        "见 https://example.com 与 [文档](https://example.com/doc)"
+    );
+}
+
+#[test]
+fn extract_post_text_content_v2_joins_title() {
+    // Non-empty title rides above the content_v2 body.
+    let content = json!({
+        "zh_cn": {
+            "title": " 周报 ",
+            "content": [[{ "tag": "text", "text": "正文" }]],
+            "content_v2": [[{ "tag": "md", "text": "**正文**" }]]
+        }
+    });
+
+    assert_eq!(
+        super::FeishuAdapter::extract_post_text(&content),
+        "周报\n**正文**"
+    );
+}
+
+#[test]
+fn extract_post_text_empty_content_v2_falls_back_to_rendered() {
+    // content_v2 present but yielding no text: fall through to rendered
+    // runs rather than returning empty.
+    let content = json!({
+        "zh_cn": {
+            "title": "t",
+            "content": [[{ "tag": "text", "text": "rendered" }]],
+            "content_v2": []
+        }
+    });
+
+    assert_eq!(
+        super::FeishuAdapter::extract_post_text(&content),
+        "t\nrendered"
+    );
+}
+
+#[test]
 fn extract_history_content_reads_card_markdown() {
     // Schema 2.0 card: markdown elements concatenated, panels skipped.
     let item = json!({
