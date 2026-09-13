@@ -429,6 +429,122 @@ async fn sync_result_comes_from_event_stream_not_store() {
     );
 }
 
+/// 驱动一次 sync spawn，可选先投一条 assistant 文本，再以给定
+/// `StopReason` 收尾，返回工具输出文本。
+async fn run_sync_until_stop(partial: Option<&str>, reason: crate::event::StopReason) -> String {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    run_migrations(&pool).await.unwrap();
+    let session_store: Arc<dyn SessionStore> = Arc::new(SqliteSessionStore::new(pool));
+    let parent_id = SessionId::from("parent_session");
+    session_store
+        .create(NewSession::new(parent_id.clone()))
+        .await
+        .unwrap();
+
+    let event_bus = EventBus::new();
+    let shared = Arc::new(
+        AgentShared::new(
+            Default::default(),
+            String::new(),
+            None,
+            None,
+            None,
+            Some(Arc::clone(&session_store)),
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+            None,
+        )
+        .with_event_bus(Arc::clone(&event_bus)),
+    );
+    let input_bus = InputBus::new();
+    let tool = SubagentTool::new(shared, input_bus.clone(), parent_id.clone());
+    let mut input_subscriber = input_bus.subscribe_all();
+
+    let exec = tokio::spawn(async move {
+        tool.exec(
+            serde_json::json!({
+                "description": "cancel me",
+                "prompt": "work",
+                "wait_for_completion": true,
+            }),
+            ToolExecCtx::new("call_1", ".", parent_id.as_str()),
+        )
+        .await
+    });
+    let (subagent_id, _) = input_subscriber.recv().await.unwrap();
+
+    if let Some(text) = partial {
+        let msg = Arc::new(crate::types::Message {
+            role: crate::types::Role::Assistant,
+            content: vec![crate::types::ContentBlock::Text {
+                text: text.to_string(),
+            }],
+            ..Default::default()
+        });
+        event_bus
+            .publish(
+                subagent_id.clone(),
+                crate::event::Envelope::new(
+                    subagent_id.clone(),
+                    crate::event::Event::Internal(crate::event::InternalEvent::MessageAdded {
+                        message: msg,
+                    }),
+                ),
+            )
+            .unwrap();
+    }
+    event_bus
+        .publish(
+            subagent_id.clone(),
+            crate::event::Envelope::new(
+                subagent_id.clone(),
+                crate::event::Event::Agent(crate::event::AgentEvent::Lifecycle {
+                    state: crate::event::AgentStatus::Stopped { reason },
+                }),
+            ),
+        )
+        .unwrap();
+
+    let out = exec.await.unwrap().unwrap();
+    output_text(&out)
+}
+
+/// sync 取消的返回必须指出：会话保留、可用 `post_message` 以同一
+/// agent id 唤醒续做（原裸 "cancelled" 让 parent 无从得知可恢复）。
+#[tokio::test]
+async fn sync_cancel_without_output_hints_post_message_resume() {
+    let text = run_sync_until_stop(
+        None,
+        crate::event::StopReason::Cancelled {
+            operation: Some("streaming".to_string()),
+        },
+    )
+    .await;
+    assert!(text.contains("cancelled"), "{text}");
+    assert!(
+        text.contains("post_message"),
+        "cancel result must point to post_message resume: {text}"
+    );
+}
+
+#[tokio::test]
+async fn sync_cancel_keeps_partial_output_and_hint() {
+    let text = run_sync_until_stop(
+        Some("做了一半的答案"),
+        crate::event::StopReason::Cancelled { operation: None },
+    )
+    .await;
+    assert!(text.contains("做了一半的答案"), "{text}");
+    assert!(text.contains("post_message"), "{text}");
+}
+
 /// 发版评审 should-fix：async 等待被取消时回收 claim——否则 subagent
 /// 幸存完成后 conductor 消费残留 claim 跳过转运，答案蒸发。
 #[tokio::test]
@@ -501,4 +617,126 @@ async fn async_cancel_reclaims_subagent_claim() {
         );
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
+
+    // 发给 parent 的取消 steer 同样带 post_message 唤醒提示（与 sync 一致）。
+    let (target, input) =
+        tokio::time::timeout(std::time::Duration::from_secs(3), input_subscriber.recv())
+            .await
+            .expect("cancel steer must be published")
+            .unwrap();
+    assert_eq!(target, parent_id);
+    let crate::agent::AgentInput::Steer(blocks) = input else {
+        panic!("expected Steer input for the cancel notification");
+    };
+    let text: String = blocks.iter().filter_map(|b| b.as_text()).collect();
+    assert!(text.contains("cancelled"), "{text}");
+    assert!(
+        text.contains("post_message"),
+        "async cancel steer must point to post_message resume: {text}"
+    );
+}
+
+/// async 直接取消 subagent（非等待臂取消）：Stopped(Cancelled) 收尾时
+/// 部分产出保留、提示不丢（review nit：该分支原无覆盖）。
+#[tokio::test]
+async fn async_direct_cancel_keeps_partial_output_and_hint() {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    run_migrations(&pool).await.unwrap();
+    let session_store: Arc<dyn SessionStore> = Arc::new(SqliteSessionStore::new(pool));
+    let parent_id = SessionId::from("parent_session");
+    session_store
+        .create(NewSession::new(parent_id.clone()))
+        .await
+        .unwrap();
+
+    let event_bus = EventBus::new();
+    let shared = Arc::new(
+        AgentShared::new(
+            Default::default(),
+            String::new(),
+            None,
+            None,
+            None,
+            Some(Arc::clone(&session_store)),
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+            None,
+        )
+        .with_event_bus(Arc::clone(&event_bus)),
+    );
+    let input_bus = InputBus::new();
+    let tool = SubagentTool::new(shared, input_bus.clone(), parent_id.clone());
+    let mut input_subscriber = input_bus.subscribe_all();
+    let cancel = tokio_util::sync::CancellationToken::new();
+
+    let out = tool
+        .exec(
+            serde_json::json!({
+                "description": "direct cancel",
+                "prompt": "run in background",
+                "wait_for_completion": false,
+            }),
+            crate::tools::ToolExecCtx {
+                cancel_token: Some(cancel.clone()),
+                ..ToolExecCtx::new("call_1", ".", parent_id.as_str())
+            },
+        )
+        .await
+        .unwrap();
+    assert!(output_text(&out).contains("spawned in background"));
+
+    // recv 到任务 steer 即保证 run_subagent 已订阅事件流。
+    let (subagent_id, _) = input_subscriber.recv().await.unwrap();
+    let msg = Arc::new(crate::types::Message {
+        role: crate::types::Role::Assistant,
+        content: vec![crate::types::ContentBlock::Text {
+            text: "async 半成品".to_string(),
+        }],
+        ..Default::default()
+    });
+    event_bus
+        .publish(
+            subagent_id.clone(),
+            crate::event::Envelope::new(
+                subagent_id.clone(),
+                crate::event::Event::Internal(crate::event::InternalEvent::MessageAdded {
+                    message: msg,
+                }),
+            ),
+        )
+        .unwrap();
+    event_bus
+        .publish(
+            subagent_id.clone(),
+            crate::event::Envelope::new(
+                subagent_id.clone(),
+                crate::event::Event::Agent(crate::event::AgentEvent::Lifecycle {
+                    state: crate::event::AgentStatus::Stopped {
+                        reason: crate::event::StopReason::Cancelled { operation: None },
+                    },
+                }),
+            ),
+        )
+        .unwrap();
+
+    let (target, input) =
+        tokio::time::timeout(std::time::Duration::from_secs(3), input_subscriber.recv())
+            .await
+            .expect("cancel steer must be published")
+            .unwrap();
+    assert_eq!(target, parent_id);
+    let crate::agent::AgentInput::Steer(blocks) = input else {
+        panic!("expected Steer input for the cancel notification");
+    };
+    let text: String = blocks.iter().filter_map(|b| b.as_text()).collect();
+    assert!(text.contains("async 半成品"), "{text}");
+    assert!(text.contains("cancelled"), "{text}");
+    assert!(text.contains("post_message"), "{text}");
 }

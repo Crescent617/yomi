@@ -9,6 +9,11 @@ use std::sync::Arc;
 
 pub const SUBAGENT_TOOL_NAME: &str = "agent";
 
+/// sync/async 取消返回的统一提示：取消 ≠ 失败，会话与上下文保留，
+/// parent 可用 `post_message` 以同一 agent id 唤醒续做（2026-09-13）。
+const RESUME_HINT: &str =
+    "cancelled — session preserved; use `post_message` with this agent's ID to resume or redirect it";
+
 /// Tool for spawning sub-agents to handle specific tasks
 #[derive(Clone)]
 pub struct SubagentTool {
@@ -542,10 +547,21 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                             &session_id,
                             format!("Task '{description}' failed:\n{output}\n[error: {e}]"),
                         ),
-                        SubAgentStatus::Cancelled => agent_prefix(
-                            &session_id,
-                            format!("Task '{description}' cancelled:\n{output}\n[cancelled]"),
-                        ),
+                        SubAgentStatus::Cancelled => {
+                            if output.is_empty() {
+                                agent_prefix(
+                                    &session_id,
+                                    format!("Task '{description}' {RESUME_HINT}"),
+                                )
+                            } else {
+                                agent_prefix(
+                                    &session_id,
+                                    format!(
+                                        "Task '{description}' cancelled:\n{output}\n[{RESUME_HINT}]"
+                                    ),
+                                )
+                            }
+                        }
                     };
                     if let Err(e) = self_clone.input_bus.publish(
                         self_clone.parent_session_id.clone(),
@@ -575,11 +591,11 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                     }
                     SubAgentStatus::Cancelled => {
                         if output.is_empty() {
-                            ToolOutput::text(agent_prefix(&session_id, "cancelled"))
+                            ToolOutput::text(agent_prefix(&session_id, RESUME_HINT))
                         } else {
                             ToolOutput::text(agent_prefix(
                                 &session_id,
-                                format!("{output}\n\n[cancelled]"),
+                                format!("{output}\n\n[{RESUME_HINT}]"),
                             ))
                         }
                     }
