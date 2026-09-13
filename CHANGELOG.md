@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.33] - 2026-09-13
+
 ### Changed
 - 历史回填与引用注入的飞书富文本（post）消息保留链接地址与 markdown 格式：此前链接只显示锚文字、地址丢失，agent 无法打开；现以 markdown 链接形式完整呈现，锚文本与地址相同的链接只显示一次。
 
