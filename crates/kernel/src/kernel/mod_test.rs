@@ -955,37 +955,6 @@ async fn stop_does_not_respawn_queued_run() {
     );
 }
 
-/// readiness 标记属主（S5）：标记由 server 创建；不带 server 的本地
-/// kernel 退出（`stop()`）**不得**删除它——否则与 daemon 共享
-/// `data_dir` 的本地进程（`yomi run`/`tui --fg`）会摘掉在役 daemon 的
-/// readiness。
-#[tokio::test]
-async fn local_kernel_stop_preserves_intake_marker() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let mut config = crate::config::Config {
-        data_dir: tmp.path().to_path_buf(),
-        ..Default::default()
-    };
-    config.gc.auto = false;
-    config.finalize();
-
-    let kernel = crate::build_kernel(&config, false).await.unwrap();
-    kernel.start();
-
-    let marker = super::intake_marker_path(tmp.path());
-    std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
-    std::fs::write(&marker, b"").unwrap();
-    assert!(kernel.intake_open());
-
-    kernel.stop().await;
-
-    assert!(!kernel.intake_open());
-    assert!(
-        marker.exists(),
-        "local kernel stop must not remove the server-owned intake marker"
-    );
-}
-
 // ── ext_route（内存回退路径）──────────────────────────────────────────
 
 #[tokio::test]

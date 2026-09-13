@@ -134,11 +134,6 @@ impl KernelServer {
     }
 
     pub async fn start(&self, config: &crate::config::Config) {
-        // readiness 标记（K8s probe）：boot 先清 crash 残留——intake
-        // 开放前文件必须不存在。
-        let intake_marker = crate::kernel::intake_marker_path(&self.kernel.data_dir().await);
-        let _ = std::fs::remove_file(&intake_marker);
-
         self.kernel.start();
 
         if let Some(store) = self.kernel.cron_store.as_ref() {
@@ -186,13 +181,6 @@ impl KernelServer {
         // buffers events, and forwards them to real-time subscribers.
         self.start_event_forwarder(self.shutdown.child_token());
         self.start_subscriber_sweeper(self.shutdown.child_token());
-
-        // intake 全部开放——建立 readiness 标记；`kernel.stop()` 第一
-        // 步（关入口）会删除它。
-        if let Some(parent) = intake_marker.parent() {
-            let _ = std::fs::create_dir_all(parent);
-            let _ = std::fs::write(&intake_marker, b"");
-        }
     }
 
     fn start_event_forwarder(&self, cancel: tokio_util::sync::CancellationToken) {
@@ -339,11 +327,6 @@ impl KernelServer {
         // wire event forwarder / cron worker / 连接都挂在这个 token
         // 上，它们必须活到 kernel.stop() 返回，否则终态事件
         // （Stopped → 状态卡 PATCH / 客户端通知）无人投递。
-        // readiness 标记随入口关闭同步删除（标记由本 server 创建——
-        // 与 kernel.stop 的属主分工见 S5）。
-        let _ = std::fs::remove_file(crate::kernel::intake_marker_path(
-            &self.kernel.data_dir().await,
-        ));
         self.kernel.stop().await;
         self.shutdown.cancel();
     }
@@ -351,13 +334,9 @@ impl KernelServer {
     /// 防御性强拆（宿主进程等不到 serve 退出、准备 abort serve 任务
     /// 时用）：只发信号不等待——kernel 与 server 的全部生命周期 token
     /// 取消，旧 daemon 的通道/conductor/cron 必死；abort 只放弃等
-    /// 待，不放任旧内核与新内核并存（S2）。readiness 标记同步删除
-    /// （intake 已关，"存在 = intake 开放"的契约要对齐）。
+    /// 待，不放任旧内核与新内核并存（S2）。
     pub async fn force_shutdown(&self) {
         self.kernel.close_tokens();
-        let _ = std::fs::remove_file(crate::kernel::intake_marker_path(
-            &self.kernel.data_dir().await,
-        ));
         self.shutdown.cancel();
     }
 

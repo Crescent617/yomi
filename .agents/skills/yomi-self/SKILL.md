@@ -74,4 +74,4 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 
 ## deployment
 
-容器/K8s readiness 探针（`state/intake` 健康标记）：见 `references/deployment.md`。
+容器/K8s readiness 探针（`yomi rpc hello` 握手探测）：见 `references/deployment.md`。

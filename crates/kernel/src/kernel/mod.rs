@@ -106,13 +106,6 @@ pub struct Kernel {
 
 const SESSION_JSONL_CHUNK_BYTES: u64 = 256 * 1024;
 
-/// readiness 标记文件（K8s probe）：`<data_dir>/state/intake`，
-/// 存在 = intake 开放。boot 清残留、intake 全开后建立、`stop()`
-/// 第一步删除——探针 `test -f` 即可。
-pub(crate) fn intake_marker_path(data_dir: &std::path::Path) -> std::path::PathBuf {
-    data_dir.join("state").join("intake")
-}
-
 /// Wall-clock duration until the next local midnight (fallback: 24h).
 /// Recomputed before every auto-gc sleep, so clock changes and OS
 /// suspend/resume self-correct on the next iteration.
@@ -654,10 +647,7 @@ impl Kernel {
     /// 落盘写不被进程退出截断；只需"立即信号"的场景请直接取消
     /// `shutdown` token。
     pub async fn stop(&self) {
-        // ① 关入口。readiness 标记的删除在 KernelServer::shutdown——
-        // 标记由 server 创建，kernel 不越属主（S5：不带 server 的本地
-        // kernel 与 daemon 共享 data_dir 时，本地退出不得摘掉 daemon
-        // 的 readiness）。
+        // ① 关入口。
         self.intake.cancel();
         // ② 排空在跑 run。
         self.stop_active_runs().await;

@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- 移除数据目录的 `state/intake` 健康标记文件；K8s readiness 探针改用 `yomi rpc hello`，握手成功即就绪。
+
 ## [0.10.31] - 2026-09-12
 
 ### Added

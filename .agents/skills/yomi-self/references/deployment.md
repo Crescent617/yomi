@@ -1,10 +1,16 @@
 # deployment 契约
 
-## readiness 标记
+## readiness 探针
 
-`<data_dir>/state/intake`：**存在 = intake 开放**（可接活）。K8s
-readiness 探针 `exec: ["test", "-f", "<该文件>"]` 即可。
+K8s readiness 探针：`exec: ["yomi", "rpc", "hello"]`——与 daemon
+完成 wire 握手即 exit 0（就绪）；连不上或握手失败 exit 非 0。
+建议配 `timeoutSeconds: 3` 兜底连接挂起。
 
-生命周期：daemon 完整启动（通道+cron+RPC 起完）后创建；开始关停时
-率先删除；boot 先清残留。不带 server 的本地进程（`yomi run`/`tui`）
-不创建也不删除，共享 `data_dir` 不会误摘。
+语义：
+
+- 探的是真 round-trip：进程死、启动未完成（listener 未 bind）、
+  握手失败（协议版本不匹配、daemon 卡死）均报未就绪。
+- 无状态文件，异常退出（SIGKILL/OOM/断电）无残留问题。
+- 正常关停期间握手仍成功（intake 闸不拦握手）——Pod 摘流量靠
+  K8s Terminating（SIGTERM 即从 endpoints 移除），不依赖
+  readiness 失败。
