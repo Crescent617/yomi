@@ -846,6 +846,26 @@ fn extract_history_content_keeps_sticker_file_key() {
     assert_eq!(text, "[sticker]");
 }
 
+/// Files keep name + key in history context — quoting a file message
+/// (or expanding a `merge_forward` containing one) must not lose them.
+#[test]
+fn extract_history_content_keeps_file_name_and_key() {
+    let item = json!({
+        "msg_type": "file",
+        "body": { "content": r#"{"file_key":"fk_x","file_name":"全文献.zip"}"# }
+    });
+    let (text, image_keys) = super::FeishuAdapter::extract_history_content(&item);
+    assert_eq!(text, "[file: 全文献.zip (key: fk_x)]");
+    assert!(image_keys.is_empty());
+
+    let item = json!({
+        "msg_type": "audio",
+        "body": { "content": r#"{"file_key":"aud_x"}"# }
+    });
+    let (text, _) = super::FeishuAdapter::extract_history_content(&item);
+    assert_eq!(text, "[audio (key: aud_x)]");
+}
+
 /// A `merge_forward` in a history LIST stays a bare placeholder — the list
 /// API never inlines sub-messages, so expansion only happens via
 /// `fetch_message` (single get, children ride along).
@@ -1249,6 +1269,74 @@ async fn sticker_event_is_forwarded_with_file_key() {
     assert!(msg.image_keys.is_empty());
 }
 
+#[tokio::test]
+async fn file_event_is_forwarded_with_name_and_key() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let event = receive_event(
+        "file",
+        &json!({ "file_key": "fk_x", "file_name": "全文献.zip" }),
+    );
+
+    let msg_id = adapter.parse_event_json(&event, &tx).await.unwrap();
+
+    assert_eq!(msg_id.as_deref(), Some("om_1"));
+    let msg = expect_message(rx.try_recv().expect("file message forwarded"));
+    assert_eq!(
+        msg.raw_text.as_deref(),
+        Some("[file: 全文献.zip (key: fk_x)]")
+    );
+    assert!(msg.image_keys.is_empty());
+}
+
+#[tokio::test]
+async fn file_event_without_name_keeps_key() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let event = receive_event("file", &json!({ "file_key": "fk_x" }));
+
+    adapter.parse_event_json(&event, &tx).await.unwrap();
+
+    let msg = expect_message(rx.try_recv().expect("file message forwarded"));
+    assert_eq!(msg.raw_text.as_deref(), Some("[file (key: fk_x)]"));
+}
+
+#[tokio::test]
+async fn audio_event_is_forwarded_with_key() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let event = receive_event("audio", &json!({ "file_key": "aud_x", "duration": 3000 }));
+
+    let msg_id = adapter.parse_event_json(&event, &tx).await.unwrap();
+
+    assert_eq!(msg_id.as_deref(), Some("om_1"));
+    let msg = expect_message(rx.try_recv().expect("audio message forwarded"));
+    assert_eq!(msg.raw_text.as_deref(), Some("[audio (key: aud_x)]"));
+}
+
+#[tokio::test]
+async fn media_event_is_forwarded_with_name_and_key() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let event = receive_event(
+        "media",
+        &json!({ "file_key": "mv_x", "file_name": "clip.mp4", "duration": 5000 }),
+    );
+
+    let msg_id = adapter.parse_event_json(&event, &tx).await.unwrap();
+
+    assert_eq!(msg_id.as_deref(), Some("om_1"));
+    let msg = expect_message(rx.try_recv().expect("media message forwarded"));
+    assert_eq!(
+        msg.raw_text.as_deref(),
+        Some("[media: clip.mp4 (key: mv_x)]")
+    );
+}
+
 /// `merge_forward` event with the platform's raw (non-JSON) fixed content
 /// string and a caller-chosen message id.
 fn merge_forward_event(msg_id: &str) -> serde_json::Value {
@@ -1307,7 +1395,9 @@ async fn unknown_event_without_text_is_ignored() {
     let stub = StubFeishu::start().await;
     let adapter = stub_adapter(&stub.base_url);
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-    let event = receive_event("audio", &json!({ "file_key": "aud_x" }));
+    // hongbao (red packet): a real platform type we intentionally don't
+    // surface — unknown types still drop without a trace.
+    let event = receive_event("hongbao", &json!({ "text": "" }));
 
     let msg_id = adapter.parse_event_json(&event, &tx).await.unwrap();
 

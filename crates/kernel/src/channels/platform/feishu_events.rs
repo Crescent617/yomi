@@ -257,6 +257,12 @@ impl FeishuAdapter {
                     .map_or_else(|| "[sticker]".to_string(), |k| format!("[sticker: {k}]")),
                 Vec::new(),
             ),
+            // Attachments keep their key inline so the agent can download
+            // the body itself (lark im dl with the header's msg_id).
+            "file" | "audio" | "media" => (
+                Self::attachment_placeholder(msg_type, &content_json),
+                Vec::new(),
+            ),
             _ => (String::new(), Vec::new()),
         };
         // Cards and merge_forwards defer their content to the fetch below,

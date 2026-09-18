@@ -46,6 +46,7 @@ impl FeishuAdapter {
             "sticker" => content["file_key"]
                 .as_str()
                 .map_or_else(|| "[sticker]".to_string(), |k| format!("[sticker: {k}]")),
+            "file" | "audio" | "media" => Self::attachment_placeholder(msg_type, &content),
             other => format!("[{other}]"),
         };
         let image_keys = match msg_type {
@@ -57,6 +58,20 @@ impl FeishuAdapter {
             _ => Vec::new(),
         };
         (text, image_keys)
+    }
+
+    /// Placeholder for attachment messages (file/audio/media): the key
+    /// rides inline so the agent can fetch the body post-gate (`lark im
+    /// dl`, keyed by the header's `msg_id` + this key).
+    pub(crate) fn attachment_placeholder(msg_type: &str, content: &serde_json::Value) -> String {
+        let name = content["file_name"].as_str();
+        let key = content["file_key"].as_str();
+        match (name, key) {
+            (Some(n), Some(k)) => format!("[{msg_type}: {n} (key: {k})]"),
+            (None, Some(k)) => format!("[{msg_type} (key: {k})]"),
+            (Some(n), None) => format!("[{msg_type}: {n}]"),
+            (None, None) => format!("[{msg_type}]"),
+        }
     }
 
     /// Expand a `merge_forward` get-message response: the API inlines the
