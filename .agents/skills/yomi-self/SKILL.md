@@ -1,6 +1,6 @@
 ---
 name: yomi-self
-description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话、cron 和数据。Use when 要 doctor 自检、重启 daemon、看日志、检索/查看/驱动会话、管理 cron 与 workflow/hook/tool/卡片触发器脚本、gc 清理、查 token 用量、跑 headless，或 events/rpc 调试。"
+description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话、cron 和数据。Use when 要 doctor 自检、重启 daemon、看日志、检索/查看/驱动会话、管理 cron 与 workflow/hook/tool/卡片触发器脚本、gc 清理、查 token 用量、跑 headless、配 web search 引擎，或 events/rpc 调试。"
 ---
 
 # yomi 自我管理
@@ -19,6 +19,10 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 ## 配置
 
 - `yomi config show` / `get` / `set`；`set` 之后必须 `daemon restart` 生效。
+
+## web search
+
+内建 `web_search`：引擎按 env 配置串行 fallback（SearXNG → Kimi → Serper → Brave → DDG/Bing 兜底）。配置与坑见 `references/websearch.md`。
 
 ## 会话
 
