@@ -94,7 +94,7 @@ const DESC: &str = const_concat!(
     "Execute a shell command. Use it only for tasks that genuinely require the shell; for reading, editing, or searching files, prefer the dedicated read, edit, and grep tools. Do not run dangerous operations (e.g. git push, rm -rf) without explicit user request. Commands run non-interactively (stdin is closed, no terminal attached), so interactive prompts (e.g. sudo password, ssh confirmation) fail immediately instead of waiting for input.\n\nUse `background: true` for long-running commands (servers, scripts of unknown duration) so you can monitor output in real time; short commands should run synchronously. ",
     crate::tools::ASYNC_LAUNCH_GUIDE,
     " The PID in the launch message can be used to kill the process.",
-    " A command can also return images to you: print a line `yomi://image/<path>` (alone on its own line) and the image content is attached to the result (max 10 per call, png/jpeg/gif/webp). Examples: `browser screenshot -s /tmp/x.jpg && echo yomi://image//tmp/x.jpg` (absolute path — note the doubled slash); `browser screenshot -s x.jpg && echo yomi://image/x.jpg` (relative to the working directory)."
+    " A command can also return images to you: print `yomi://image/<path>` alone on a line and the image content is attached to the result."
 );
 
 #[async_trait]
