@@ -25,10 +25,22 @@
 - **TUI** — minimalist terminal interface for seamless interaction
 - **GUI** — desktop app built with Tauri for a richer experience
 - **Channels** — Feishu/Telegram integration in daemon mode: every chat gets its own persistent agent session (see [Channels](#channels-im-integration))
+- **Self-management** — the agent operates itself through its own CLI, via the bundled [`yomi-self`](.agents/skills/yomi-self/SKILL.md) skill (see [Self-management](#self-management))
 - **Extensions** — drop executables into `hooks/` or `tools/` directories: gate tool calls, add custom tools, or hook daemon lifecycle (see [`docs/EXTENSIONS.md`](docs/EXTENSIONS.md))
 - **Tools** — built-in file operations (read/write/edit), glob/grep, shell command execution, and more
 - **Configurable** — context window, agent tools, and LLM provider settings
 - **Safe by default** — all operations require user confirmation except in YOLO mode
+
+## Self-management
+
+Yomi ships with the [`yomi-self`](.agents/skills/yomi-self/SKILL.md) skill — the agent operates itself through its own CLI, no human in the middle:
+
+- `yomi doctor` health gates and daemon restarts, including safe self-restart
+- cross-session full-text search, history inspection, and steering sibling sessions mid-run
+- cron jobs, gc cleanup, token usage
+- headless runs, plus events/rpc for low-level debugging
+
+Ask it to "restart yourself" or "find the session where we discussed X" — it knows how.
 
 ## Quick Start
 
