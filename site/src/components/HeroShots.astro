@@ -1,6 +1,5 @@
 ---
 import { Image } from 'astro:assets';
-import tuiImg from '../assets/tui-demo1.png';
 import guiWelcome from '../assets/gui-demo1.png';
 import guiUsage from '../assets/gui-usage.png';
 import guiAutomation from '../assets/gui-automation.png';
@@ -54,15 +53,6 @@ const slideStyle = (i: number) =>
       </span>
     </figcaption>
   </figure>
-
-  <figure
-    class="shot shot-tui absolute -bottom-10 -left-4 w-3/5 overflow-hidden rounded-xl border border-line shadow-2xl sm:-left-10"
-  >
-    <Image src={tuiImg} alt="Yomi TUI — minimalist terminal interface" class="w-full" />
-    <figcaption class="micro-label absolute right-3 top-3 rounded border border-line/70 bg-bg/70 px-2 py-1 text-muted backdrop-blur">
-      TUI
-    </figcaption>
-  </figure>
 </div>
 
 <style>
@@ -108,17 +98,8 @@ const slideStyle = (i: number) =>
       rise 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.1s backwards,
       float 8s ease-in-out 1.2s infinite;
   }
-  .shot-tui {
-    transform: perspective(1200px) rotateY(5deg) rotateX(1deg);
-    animation:
-      rise 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.35s backwards,
-      float 9.5s ease-in-out 1.8s infinite;
-  }
   .shots:hover .shot-gui {
     transform: perspective(1400px) rotateY(-2.5deg) rotateX(0.5deg);
-  }
-  .shots:hover .shot-tui {
-    transform: perspective(1200px) rotateY(1.5deg);
   }
 
   @keyframes rise {
@@ -137,8 +118,7 @@ const slideStyle = (i: number) =>
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    .shot-gui,
-    .shot-tui {
+    .shot-gui {
       animation: none;
     }
     .slide:first-child {

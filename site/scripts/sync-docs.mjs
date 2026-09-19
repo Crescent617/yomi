@@ -5,7 +5,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const site = dirname(fileURLToPath(import.meta.url));
-const jobs = [['../../docs/CONFIG.md', '../src/content/docs/config.md']];
+const jobs = [
+  ['../../docs/CONFIG.md', '../src/content/docs/config.md'],
+  ['../../CHANGELOG.md', '../src/content/docs/changelog.md'],
+];
 
 for (const [from, to] of jobs) {
   const dest = join(site, to);
