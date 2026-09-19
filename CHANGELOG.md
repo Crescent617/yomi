@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.34] - 2026-09-18
+
+### Fixed
+- 飞书文件、语音与媒体消息不再静默丢弃：此前发送这类附件并 @bot 会被完全忽略、日志零痕迹；现以带资源标识的占位文本转发（如 `[file: 报告.zip (key: fk_x)]`），agent 可按标识自行下载附件。
+
 ## [0.10.33] - 2026-09-13
 
 ### Changed
