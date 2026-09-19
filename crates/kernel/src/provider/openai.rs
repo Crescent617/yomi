@@ -33,80 +33,144 @@ impl OpenAIProvider {
     }
 
     fn convert_messages(messages: &[Arc<Message>]) -> Vec<OpenAIMessage> {
-        messages
+        // Chat Completions rejects image blocks in `tool` role messages
+        // ("Image URLs are only allowed for messages with role 'user'").
+        // Images from tool results are buffered and flushed as a single
+        // trailing `user` message once the contiguous run of tool messages
+        // ends, so tool messages still immediately follow the assistant
+        // tool_calls message as the API requires.
+        fn flush_pending_images(
+            out: &mut Vec<OpenAIMessage>,
+            pending: &mut Vec<OpenAIContentBlock>,
+        ) {
+            if pending.is_empty() {
+                return;
+            }
+            let mut blocks = Vec::with_capacity(pending.len() + 1);
+            blocks.push(OpenAIContentBlock {
+                type_: "text".into(),
+                text: Some("[Images from preceding tool results]".into()),
+                image_url: None,
+            });
+            blocks.append(pending);
+            out.push(OpenAIMessage {
+                role: "user".into(),
+                content: OpenAIContent::Blocks(blocks),
+                reasoning_content: None,
+                tool_calls: None,
+                tool_call_id: None,
+            });
+        }
+
+        let mut out = Vec::with_capacity(messages.len());
+        let mut pending_images: Vec<OpenAIContentBlock> = Vec::new();
+
+        for m in messages
             .iter()
-            .filter(|m| !matches!(m.as_ref().role, Role::Internal))
-            .map(|m| {
-                let m = m.as_ref();
+            .map(|m| m.as_ref())
+            .filter(|m| !matches!(m.role, Role::Internal))
+        {
+            // A non-tool message ends the contiguous tool run: flush any
+            // buffered tool-result images before it.
+            if m.role != Role::Tool {
+                flush_pending_images(&mut out, &mut pending_images);
+            }
 
-                let blocks: Vec<_> = m
-                    .content
-                    .iter()
-                    .filter_map(|c| match c {
-                        crate::types::ContentBlock::Text { text } if !text.is_empty() => {
-                            Some(OpenAIContentBlock {
-                                type_: "text".into(),
-                                text: Some(text.clone()),
-                                image_url: None,
-                            })
+            let mut blocks: Vec<OpenAIContentBlock> = Vec::new();
+            let pending_before = pending_images.len();
+            for c in &m.content {
+                match c {
+                    crate::types::ContentBlock::Text { text } if !text.is_empty() => {
+                        blocks.push(OpenAIContentBlock {
+                            type_: "text".into(),
+                            text: Some(text.clone()),
+                            image_url: None,
+                        });
+                    }
+                    crate::types::ContentBlock::ImageUrl { image_url } => {
+                        let block = OpenAIContentBlock {
+                            type_: "image_url".into(),
+                            text: None,
+                            image_url: Some(OpenAIImageUrl {
+                                url: image_url.url.clone(),
+                                detail: image_url.detail.clone(),
+                            }),
+                        };
+                        if m.role == Role::Tool {
+                            pending_images.push(block);
+                        } else {
+                            blocks.push(block);
                         }
-                        crate::types::ContentBlock::ImageUrl { image_url } => {
-                            Some(OpenAIContentBlock {
-                                type_: "image_url".into(),
-                                text: None,
-                                image_url: Some(OpenAIImageUrl {
-                                    url: image_url.url.clone(),
-                                    detail: image_url.detail.clone(),
-                                }),
-                            })
-                        }
-                        _ => None,
-                    })
-                    .collect();
-
-                let reasoning_content = m
-                    .content
-                    .iter()
-                    .find_map(|c| match c {
-                        crate::types::ContentBlock::Thinking { thinking, .. } => {
-                            Some(thinking.clone())
-                        }
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-
-                let role = match m.role {
-                    Role::System => "system",
-                    Role::User => "user",
-                    Role::Assistant => "assistant",
-                    Role::Tool => "tool",
-                    Role::Internal => unreachable!("Internal messages should be filtered out"),
-                };
-
-                let tool_calls = m.tool_calls.as_ref().map(|calls| {
-                    calls
-                        .iter()
-                        .map(|c| OpenAIToolCall {
-                            index: None,
-                            id: Some(c.id.clone()),
-                            type_: Some("function".into()),
-                            function: OpenAIFunction {
-                                name: Some(c.name.clone()),
-                                arguments: Some(c.arguments.to_string()),
-                            },
-                        })
-                        .collect()
-                });
-
-                OpenAIMessage {
-                    role: role.into(),
-                    content: OpenAIContent::Blocks(blocks),
-                    reasoning_content: Some(reasoning_content),
-                    tool_calls,
-                    tool_call_id: m.tool_call_id.clone(),
+                    }
+                    _ => {}
                 }
-            })
-            .collect()
+            }
+
+            // A tool message whose text was emptied by image extraction still
+            // needs content; point the model at the follow-up message.
+            if m.role == Role::Tool && blocks.is_empty() && pending_images.len() > pending_before {
+                blocks.push(OpenAIContentBlock {
+                    type_: "text".into(),
+                    text: Some("[image(s) attached in the following user message]".into()),
+                    image_url: None,
+                });
+            }
+            // A genuinely empty tool message sends an empty content array,
+            // which strict endpoints may reject — mirror the Anthropic
+            // provider's explicit placeholder.
+            if m.role == Role::Tool && blocks.is_empty() {
+                blocks.push(OpenAIContentBlock {
+                    type_: "text".into(),
+                    text: Some("(no output)".into()),
+                    image_url: None,
+                });
+            }
+
+            let reasoning_content = m
+                .content
+                .iter()
+                .find_map(|c| match c {
+                    crate::types::ContentBlock::Thinking { thinking, .. } => Some(thinking.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+
+            let role = match m.role {
+                Role::System => "system",
+                Role::User => "user",
+                Role::Assistant => "assistant",
+                Role::Tool => "tool",
+                Role::Internal => unreachable!("Internal messages should be filtered out"),
+            };
+
+            let tool_calls = m.tool_calls.as_ref().map(|calls| {
+                calls
+                    .iter()
+                    .map(|c| OpenAIToolCall {
+                        index: None,
+                        id: Some(c.id.clone()),
+                        type_: Some("function".into()),
+                        function: OpenAIFunction {
+                            name: Some(c.name.clone()),
+                            arguments: Some(c.arguments.to_string()),
+                        },
+                    })
+                    .collect()
+            });
+
+            out.push(OpenAIMessage {
+                role: role.into(),
+                content: OpenAIContent::Blocks(blocks),
+                reasoning_content: Some(reasoning_content),
+                tool_calls,
+                tool_call_id: m.tool_call_id.clone(),
+            });
+        }
+
+        // Tool run at the very end of the history: flush remaining images.
+        flush_pending_images(&mut out, &mut pending_images);
+
+        out
     }
 
     fn convert_tools(tools: &[Arc<ToolDefinition>]) -> Vec<OpenAITool> {
@@ -155,6 +219,10 @@ impl Provider for OpenAIProvider {
 
         // Calls from Agent/Compactor resolve this before entering the provider.
         // The provider itself only serializes the supplied config.
+        let messages = &crate::utils::image::cap_request_images(
+            messages,
+            crate::utils::image::MAX_REQUEST_IMAGES,
+        );
         let request_body = OpenAIRequest {
             model: config.model_id.clone(),
             messages: Self::convert_messages(messages),

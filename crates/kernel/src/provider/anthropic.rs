@@ -46,10 +46,26 @@ impl AnthropicProvider {
                         Self::convert_content_blocks(&m.content)
                     } else {
                         tracing::debug!("Converting tool result message with tool_call_id: {}", tool_call_id);
-                        let text_content = m.text_content();
+                        // tool_result content is a block array so images in the
+                        // tool result reach the model. Thinking blocks must not
+                        // leak into tool results — keep only text/image blocks.
+                        let mut blocks = Self::convert_content_blocks(&m.content);
+                        blocks.retain(|b| {
+                            matches!(
+                                b,
+                                AnthropicContent::Text { .. } | AnthropicContent::Image { .. }
+                            )
+                        });
+                        // An empty string/array content may be rejected by the
+                        // API; fall back to an explicit placeholder.
+                        if blocks.is_empty() {
+                            blocks.push(AnthropicContent::Text {
+                                text: "(no output)".to_string(),
+                            });
+                        }
                         vec![AnthropicContent::ToolResult {
                             tool_use_id: tool_call_id.clone(),
-                            content: text_content,
+                            content: blocks,
                         }]
                     }
                 } else {
@@ -146,6 +162,13 @@ impl AnthropicProvider {
                                 data: base64_data,
                             },
                         });
+                    } else {
+                        // Non-data URLs (http/https) are not forwarded; make
+                        // the drop visible instead of silently losing context.
+                        tracing::warn!(
+                            url = %image_url.url,
+                            "image dropped: only data: URLs are forwarded to Anthropic"
+                        );
                     }
                 }
                 // ContentBlock::Audio is not supported by Anthropic API, skip it
@@ -220,6 +243,10 @@ impl Provider for AnthropicProvider {
                 .collect::<Vec<_>>()
         );
 
+        let messages = &crate::utils::image::cap_request_images(
+            messages,
+            crate::utils::image::MAX_REQUEST_IMAGES,
+        );
         let messages = Self::convert_messages(messages);
 
         // Debug: log converted messages to verify tool result formatting
@@ -636,7 +663,9 @@ enum AnthropicContent {
     ToolResult {
         #[serde(rename = "tool_use_id")]
         tool_use_id: String,
-        content: String,
+        /// The Anthropic API accepts a block array here (text/image);
+        /// using it so tool results can carry images back to the model.
+        content: Vec<AnthropicContent>,
     },
     Thinking {
         thinking: String,

@@ -419,3 +419,95 @@ fn structure_corrupt_gif_flattens_instead_of_passing_through() {
     let url = format!("data:image/gif;base64,{}", encode_base64(&gif));
     assert_eq!(normalize_data_url(&url), None);
 }
+
+// ==== cap_request_images ====
+
+fn img_msg(url: &str) -> Arc<Message> {
+    Arc::new(Message {
+        role: crate::types::Role::Tool,
+        content: vec![ContentBlock::ImageUrl {
+            image_url: crate::types::ImageUrl {
+                url: url.into(),
+                detail: None,
+            },
+        }],
+        tool_call_id: Some("c".into()),
+        ..Default::default()
+    })
+}
+
+fn image_count(messages: &[Arc<Message>]) -> usize {
+    messages
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .filter(|b| matches!(b, ContentBlock::ImageUrl { .. }))
+        .count()
+}
+
+#[test]
+fn cap_request_images_under_budget_passes_through() {
+    let messages = vec![
+        img_msg("data:image/png;base64,QQ=="),
+        img_msg("data:image/png;base64,Qg=="),
+    ];
+    let capped = cap_request_images(&messages, 3);
+    assert_eq!(image_count(&capped), 2);
+    // 未超预算：消息级零克隆（共享 Arc）。
+    assert!(Arc::ptr_eq(&capped[0], &messages[0]));
+}
+
+#[test]
+fn cap_request_images_keeps_newest_replaces_oldest() {
+    let messages: Vec<Arc<Message>> = (0..5)
+        .map(|i| img_msg(&format!("data:image/png;base64,{i}")))
+        .collect();
+    let capped = cap_request_images(&messages, 2);
+
+    assert_eq!(image_count(&capped), 2);
+    // 最旧三张换成占位文本，最新两张保留。
+    for (i, m) in capped.iter().enumerate() {
+        match &m.content[0] {
+            ContentBlock::Text { text } => {
+                assert!(i < 3, "index {i} unexpectedly replaced");
+                assert!(text.contains("request image budget"), "{text}");
+            }
+            ContentBlock::ImageUrl { image_url } => {
+                assert!(i >= 3, "index {i} unexpectedly kept");
+                assert!(image_url.url.ends_with(&i.to_string()));
+            }
+            other => panic!("unexpected block: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn cap_request_images_within_message_keeps_trailing_blocks() {
+    // 一条消息 3 图 + 更早一条 1 图，预算 2：后一条保留靠后的 2 张，
+    // 更早一条整体换占位。
+    let early = img_msg("data:image/png;base64,old");
+    let late = Arc::new(Message {
+        role: crate::types::Role::Tool,
+        content: ["a", "b", "c"]
+            .iter()
+            .map(|s| ContentBlock::ImageUrl {
+                image_url: crate::types::ImageUrl {
+                    url: format!("data:image/png;base64,{s}"),
+                    detail: None,
+                },
+            })
+            .collect(),
+        tool_call_id: Some("c".into()),
+        ..Default::default()
+    });
+    let capped = cap_request_images(&[early, late], 2);
+
+    assert_eq!(image_count(&capped), 2);
+    assert!(matches!(&capped[0].content[0], ContentBlock::Text { .. }));
+    assert!(matches!(&capped[1].content[0], ContentBlock::Text { .. }));
+    assert!(
+        matches!(&capped[1].content[1], ContentBlock::ImageUrl { image_url } if image_url.url.ends_with('b'))
+    );
+    assert!(
+        matches!(&capped[1].content[2], ContentBlock::ImageUrl { image_url } if image_url.url.ends_with('c'))
+    );
+}

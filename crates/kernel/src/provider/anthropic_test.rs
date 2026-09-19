@@ -258,7 +258,10 @@ fn test_convert_tool_result_message() {
             content,
         } => {
             assert_eq!(tool_use_id, "tool_123");
-            assert_eq!(content, "File contents here");
+            assert!(
+                matches!(&content[..], [AnthropicContent::Text { text }] if text == "File contents here"),
+                "Expected [Text] content, got {content:?}"
+            );
         }
         _ => panic!(
             "Expected ToolResult content block, got {:?}",
@@ -280,6 +283,93 @@ fn test_convert_tool_result_message() {
         json.contains("\"type\":\"tool_result\""),
         "JSON should have correct type, got: {json}"
     );
+}
+
+#[test]
+fn test_convert_tool_result_with_image() {
+    // Tool result carrying text + an image: both must reach the model as
+    // tool_result content blocks (image as base64 source).
+    let messages: Vec<Arc<Message>> = vec![Arc::new(Message {
+        role: Role::Tool,
+        content: vec![
+            ContentBlock::Text {
+                text: "screenshot captured".to_string(),
+            },
+            ContentBlock::ImageUrl {
+                image_url: crate::types::ImageUrl {
+                    url: "data:image/png;base64,QUJD".to_string(),
+                    detail: None,
+                },
+            },
+        ],
+        tool_calls: None,
+        tool_call_id: Some("tool_img".to_string()),
+        created_at: Utc::now(),
+        token_usage: None,
+        ..Default::default()
+    })];
+
+    let converted = AnthropicProvider::convert_messages(&messages);
+    assert_eq!(converted.len(), 1);
+    match &converted[0].content[0] {
+        AnthropicContent::ToolResult { content, .. } => {
+            assert_eq!(content.len(), 2, "Expected [Text, Image], got {content:?}");
+            assert!(
+                matches!(&content[0], AnthropicContent::Text { text } if text == "screenshot captured")
+            );
+            match &content[1] {
+                AnthropicContent::Image { source } => {
+                    assert_eq!(source.type_, "base64");
+                    assert_eq!(source.media_type, "image/png");
+                    assert_eq!(source.data, "QUJD");
+                }
+                other => panic!("Expected Image block, got {other:?}"),
+            }
+
+            // Wire format: content serializes as an array of typed blocks
+            let json = serde_json::to_value(&converted[0].content[0]).unwrap();
+            assert!(json["content"].is_array(), "got: {json}");
+            assert_eq!(json["content"][0]["type"], "text");
+            assert_eq!(json["content"][1]["type"], "image");
+            assert_eq!(json["content"][1]["source"]["media_type"], "image/png");
+        }
+        other => panic!("Expected ToolResult content block, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_convert_tool_result_drops_thinking_and_falls_back_when_empty() {
+    // Thinking blocks must not leak into tool_result content; if nothing
+    // sendable remains, fall back to a "(no output)" placeholder.
+    let messages: Vec<Arc<Message>> = vec![Arc::new(Message {
+        role: Role::Tool,
+        content: vec![
+            ContentBlock::Thinking {
+                thinking: "internal".to_string(),
+                signature: Some("sig".to_string()),
+            },
+            ContentBlock::Text {
+                text: String::new(),
+            },
+        ],
+        tool_calls: None,
+        tool_call_id: Some("tool_empty".to_string()),
+        created_at: Utc::now(),
+        token_usage: None,
+        ..Default::default()
+    })];
+
+    let converted = AnthropicProvider::convert_messages(&messages);
+    assert_eq!(converted.len(), 1);
+    match &converted[0].content[0] {
+        AnthropicContent::ToolResult { content, .. } => {
+            assert!(
+                matches!(&content[..], [AnthropicContent::Text { text }] if text == "(no output)"),
+                "Expected [(no output)] fallback, got {content:?}"
+            );
+        }
+        other => panic!("Expected ToolResult content block, got {other:?}"),
+    }
 }
 
 #[test]
@@ -635,5 +725,40 @@ fn test_stream_state_token_usage_with_cache() {
             );
         }
         _ => panic!("Expected TokenUsage item, got {:?}", items[0]),
+    }
+}
+
+#[test]
+fn test_convert_tool_result_http_image_dropped_text_kept() {
+    // http URL 图无法转 base64 source：丢弃（有 warn 日志），文本保留。
+    let messages: Vec<Arc<Message>> = vec![Arc::new(Message {
+        role: Role::Tool,
+        content: vec![
+            ContentBlock::Text {
+                text: "see attached".to_string(),
+            },
+            ContentBlock::ImageUrl {
+                image_url: crate::types::ImageUrl {
+                    url: "https://example.com/x.png".to_string(),
+                    detail: None,
+                },
+            },
+        ],
+        tool_call_id: Some("tool_http".to_string()),
+        created_at: Utc::now(),
+        token_usage: None,
+        ..Default::default()
+    })];
+
+    let converted = AnthropicProvider::convert_messages(&messages);
+    assert_eq!(converted.len(), 1);
+    match &converted[0].content[0] {
+        AnthropicContent::ToolResult { content, .. } => {
+            assert!(
+                matches!(&content[..], [AnthropicContent::Text { text }] if text == "see attached"),
+                "http image must be dropped, text kept; got {content:?}"
+            );
+        }
+        other => panic!("expected ToolResult, got {other:?}"),
     }
 }

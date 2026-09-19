@@ -121,7 +121,61 @@ fn test_convert_tool_result() {
     match &items[0] {
         InputItem::FunctionCallOutput { call_id, output } => {
             assert_eq!(call_id, "call_abc");
-            assert_eq!(output, "file1\nfile2");
+            assert!(
+                matches!(output, ToolOutput::Text(t) if t == "file1\nfile2"),
+                "Expected text output, got {output:?}"
+            );
+        }
+        other => panic!("Expected FunctionCallOutput, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_convert_tool_result_with_image() {
+    // Tool result with text + image must use the array output form so the
+    // image reaches the model (OpenAPI: output = string | [input_text |
+    // input_image | input_file]).
+    let messages = vec![Arc::new(Message {
+        role: Role::Tool,
+        content: vec![
+            ContentBlock::Text {
+                text: "screenshot captured".into(),
+            },
+            ContentBlock::ImageUrl {
+                image_url: ImageUrl {
+                    url: "data:image/png;base64,AAAA".into(),
+                    detail: None,
+                },
+            },
+        ],
+        tool_call_id: Some("call_img".into()),
+        ..Default::default()
+    })];
+
+    let items = OpenAIResponseProvider::convert_messages(&messages);
+    assert_eq!(items.len(), 1);
+    match &items[0] {
+        InputItem::FunctionCallOutput { call_id, output } => {
+            assert_eq!(call_id, "call_img");
+            match output {
+                ToolOutput::Parts(parts) => {
+                    assert_eq!(parts.len(), 2, "Expected [InputText, InputImage]");
+                    assert!(
+                        matches!(&parts[0], ContentPart::InputText { text } if text == "screenshot captured")
+                    );
+                    assert!(
+                        matches!(&parts[1], ContentPart::InputImage { image_url, .. } if image_url == "data:image/png;base64,AAAA")
+                    );
+                }
+                ToolOutput::Text(_) => panic!("Expected Parts output, got {output:?}"),
+            }
+
+            // Wire format: output serializes as an array of typed parts
+            let json = serde_json::to_value(&items[0]).unwrap();
+            assert!(json["output"].is_array(), "got: {json}");
+            assert_eq!(json["output"][0]["type"], "input_text");
+            assert_eq!(json["output"][1]["type"], "input_image");
+            assert_eq!(json["output"][1]["image_url"], "data:image/png;base64,AAAA");
         }
         other => panic!("Expected FunctionCallOutput, got {other:?}"),
     }
@@ -230,7 +284,7 @@ fn test_convert_tools_flat_format() {
 fn test_input_item_wire_format() {
     let item = InputItem::FunctionCallOutput {
         call_id: "call_1".into(),
-        output: "ok".into(),
+        output: ToolOutput::Text("ok".into()),
     };
     let json = serde_json::to_value(&item).unwrap();
     assert_eq!(json["type"], "function_call_output");
@@ -855,4 +909,36 @@ fn test_assembler_non_function_call_items_ignored() {
         .unwrap();
     assert!(items.is_empty());
     assert!(assembler.partial_calls.is_empty());
+}
+
+#[test]
+fn test_convert_tool_output_image_only_uses_parts() {
+    // 纯图无文本的 tool 结果：output 必须用数组形式（string 形式会丢图）。
+    let messages = vec![Arc::new(Message {
+        role: Role::Tool,
+        content: vec![ContentBlock::ImageUrl {
+            image_url: ImageUrl {
+                url: "data:image/png;base64,QUJD".into(),
+                detail: None,
+            },
+        }],
+        tool_call_id: Some("call_1".into()),
+        ..Default::default()
+    })];
+
+    let items = OpenAIResponseProvider::convert_messages(&messages);
+    assert_eq!(items.len(), 1);
+    match &items[0] {
+        InputItem::FunctionCallOutput {
+            output: ToolOutput::Parts(parts),
+            ..
+        } => {
+            assert_eq!(parts.len(), 1);
+            assert!(
+                matches!(&parts[0], ContentPart::InputImage { image_url, .. } if image_url == "data:image/png;base64,QUJD"),
+                "expected InputImage part, got {parts:?}"
+            );
+        }
+        other => panic!("expected FunctionCallOutput Parts, got {other:?}"),
+    }
 }

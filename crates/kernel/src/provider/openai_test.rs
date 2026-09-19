@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::{ContentBlock, ImageUrl, ToolCall};
 
 #[test]
 fn test_parse_choice_level_usage_with_cached_tokens() {
@@ -546,4 +547,290 @@ fn test_assembler_usage_without_delta() {
             finish_reason: Some(FinishReason::MaxTokens),
         } if response_id.as_deref() == Some("chatcmpl-test")
     ));
+}
+
+// ==== convert_messages: tool-result image handling ====
+
+fn assistant_with_tool_call(call_id: &str) -> Arc<Message> {
+    Arc::new(Message {
+        role: Role::Assistant,
+        content: vec![],
+        tool_calls: Some(vec![ToolCall {
+            id: call_id.into(),
+            name: "screenshot".into(),
+            arguments: serde_json::json!({}),
+        }]),
+        ..Default::default()
+    })
+}
+
+fn tool_msg(call_id: &str, content: Vec<ContentBlock>) -> Arc<Message> {
+    Arc::new(Message {
+        role: Role::Tool,
+        content,
+        tool_call_id: Some(call_id.into()),
+        ..Default::default()
+    })
+}
+
+fn image_block(url: &str) -> ContentBlock {
+    ContentBlock::ImageUrl {
+        image_url: ImageUrl {
+            url: url.into(),
+            detail: None,
+        },
+    }
+}
+
+fn blocks_of(msg: &OpenAIMessage) -> &[OpenAIContentBlock] {
+    match &msg.content {
+        OpenAIContent::Blocks(blocks) => blocks,
+        OpenAIContent::Text(_) => panic!("Expected Blocks content, got {:?}", msg.content),
+    }
+}
+
+#[test]
+fn test_convert_tool_message_with_image_moves_image_to_user_message() {
+    let messages = vec![
+        assistant_with_tool_call("call_1"),
+        tool_msg(
+            "call_1",
+            vec![
+                ContentBlock::Text {
+                    text: "screenshot captured".into(),
+                },
+                image_block("data:image/png;base64,QUJD"),
+            ],
+        ),
+    ];
+
+    let converted = OpenAIProvider::convert_messages(&messages);
+    assert_eq!(converted.len(), 3);
+    assert_eq!(converted[0].role, "assistant");
+
+    // Tool message keeps only text; the API rejects image_url in tool messages
+    assert_eq!(converted[1].role, "tool");
+    let blocks = blocks_of(&converted[1]);
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].type_, "text");
+    assert!(blocks[0].image_url.is_none());
+
+    // The image is flushed as a trailing user message
+    assert_eq!(converted[2].role, "user");
+    assert!(converted[2].tool_call_id.is_none());
+    assert!(converted[2].tool_calls.is_none());
+    assert!(converted[2].reasoning_content.is_none());
+    let blocks = blocks_of(&converted[2]);
+    assert_eq!(blocks.len(), 2);
+    assert_eq!(blocks[0].type_, "text");
+    assert_eq!(
+        blocks[0].text.as_deref(),
+        Some("[Images from preceding tool results]")
+    );
+    assert_eq!(blocks[1].type_, "image_url");
+    assert_eq!(
+        blocks[1].image_url.as_ref().unwrap().url,
+        "data:image/png;base64,QUJD"
+    );
+}
+
+#[test]
+fn test_convert_consecutive_tool_messages_flush_single_user_message() {
+    let messages = vec![
+        assistant_with_tool_call("call_1"),
+        tool_msg(
+            "call_1",
+            vec![
+                ContentBlock::Text { text: "one".into() },
+                image_block("https://example.com/a.png"),
+            ],
+        ),
+        tool_msg(
+            "call_2",
+            vec![
+                ContentBlock::Text { text: "two".into() },
+                image_block("data:image/png;base64,QUJD"),
+            ],
+        ),
+    ];
+
+    let converted = OpenAIProvider::convert_messages(&messages);
+    // assistant, tool, tool, user — the tool run stays contiguous
+    assert_eq!(converted.len(), 4);
+    assert_eq!(converted[0].role, "assistant");
+    assert_eq!(converted[1].role, "tool");
+    assert_eq!(converted[2].role, "tool");
+    assert_eq!(converted[3].role, "user");
+
+    let blocks = blocks_of(&converted[3]);
+    assert_eq!(blocks.len(), 3, "header text + 2 images");
+    assert_eq!(
+        blocks[1].image_url.as_ref().unwrap().url,
+        "https://example.com/a.png"
+    );
+    assert_eq!(
+        blocks[2].image_url.as_ref().unwrap().url,
+        "data:image/png;base64,QUJD"
+    );
+}
+
+#[test]
+fn test_convert_tool_message_without_image_unchanged() {
+    let messages = vec![
+        assistant_with_tool_call("call_1"),
+        tool_msg(
+            "call_1",
+            vec![ContentBlock::Text {
+                text: "plain output".into(),
+            }],
+        ),
+    ];
+
+    let converted = OpenAIProvider::convert_messages(&messages);
+    assert_eq!(converted.len(), 2);
+    assert_eq!(converted[1].role, "tool");
+    let blocks = blocks_of(&converted[1]);
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].text.as_deref(), Some("plain output"));
+}
+
+#[test]
+fn test_convert_tool_image_flushed_before_next_non_tool_message() {
+    let messages = vec![
+        assistant_with_tool_call("call_1"),
+        tool_msg("call_1", vec![image_block("data:image/png;base64,QUJD")]),
+        Arc::new(Message::assistant("done")),
+    ];
+
+    let converted = OpenAIProvider::convert_messages(&messages);
+    // assistant, tool, user(images), assistant — flush lands right after the
+    // tool run, before the following non-tool message
+    assert_eq!(converted.len(), 4);
+    assert_eq!(converted[0].role, "assistant");
+    assert_eq!(converted[1].role, "tool");
+    assert_eq!(converted[2].role, "user");
+    assert_eq!(converted[3].role, "assistant");
+
+    // The image-only tool message got a placeholder text
+    let blocks = blocks_of(&converted[1]);
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(
+        blocks[0].text.as_deref(),
+        Some("[image(s) attached in the following user message]")
+    );
+}
+
+#[test]
+fn test_convert_flushes_pending_images_before_following_user_message() {
+    let messages = vec![
+        assistant_with_tool_call("call_1"),
+        tool_msg("call_1", vec![image_block("data:image/png;base64,QUJD")]),
+        Arc::new(Message::user("next question")),
+    ];
+
+    let converted = OpenAIProvider::convert_messages(&messages);
+    assert_eq!(converted.len(), 4);
+    assert_eq!(converted[1].role, "tool");
+    assert_eq!(converted[2].role, "user");
+    assert!(blocks_of(&converted[2])
+        .iter()
+        .any(|b| b.type_ == "image_url"));
+    assert_eq!(converted[3].role, "user");
+    assert!(
+        blocks_of(&converted[3]).iter().all(|b| b.type_ == "text"),
+        "original user message must not gain images"
+    );
+}
+
+#[test]
+fn test_convert_internal_message_does_not_break_tool_run() {
+    let messages = vec![
+        Arc::new(Message {
+            role: Role::Assistant,
+            content: vec![],
+            tool_calls: Some(vec![
+                ToolCall {
+                    id: "call_1".into(),
+                    name: "a".into(),
+                    arguments: serde_json::json!({}),
+                },
+                ToolCall {
+                    id: "call_2".into(),
+                    name: "b".into(),
+                    arguments: serde_json::json!({}),
+                },
+            ]),
+            ..Default::default()
+        }),
+        tool_msg("call_1", vec![ContentBlock::Text { text: "one".into() }]),
+        Arc::new(Message {
+            role: Role::Internal,
+            content: vec![ContentBlock::Text {
+                text: "internal note".into(),
+            }],
+            ..Default::default()
+        }),
+        tool_msg("call_2", vec![image_block("data:image/png;base64,QUJD")]),
+    ];
+
+    let converted = OpenAIProvider::convert_messages(&messages);
+    // Internal 被过滤且不打断 tool run：assistant, tool, tool, flushed user。
+    assert_eq!(converted.len(), 4);
+    assert_eq!(converted[1].role, "tool");
+    assert_eq!(converted[2].role, "tool");
+    assert_eq!(converted[3].role, "user");
+    assert!(blocks_of(&converted[3])
+        .iter()
+        .any(|b| b.type_ == "image_url"));
+}
+
+#[test]
+fn test_convert_two_tool_runs_each_flush_their_own_images() {
+    let messages = vec![
+        assistant_with_tool_call("call_1"),
+        tool_msg("call_1", vec![image_block("data:image/png;base64,QQ==")]),
+        Arc::new(Message::user("between runs")),
+        assistant_with_tool_call("call_2"),
+        tool_msg("call_2", vec![image_block("data:image/png;base64,Qg==")]),
+    ];
+
+    let converted = OpenAIProvider::convert_messages(&messages);
+    let roles: Vec<&str> = converted.iter().map(|m| m.role.as_str()).collect();
+    assert_eq!(
+        roles,
+        [
+            "assistant",
+            "tool",
+            "user",
+            "user",
+            "assistant",
+            "tool",
+            "user"
+        ]
+    );
+    // 第一段 run 的 flush 只含第一张图，第二段 flush 只含第二张。
+    let first = blocks_of(&converted[2]);
+    let last = blocks_of(&converted[6]);
+    assert_eq!(
+        first[1].image_url.as_ref().unwrap().url,
+        "data:image/png;base64,QQ=="
+    );
+    assert_eq!(
+        last[1].image_url.as_ref().unwrap().url,
+        "data:image/png;base64,Qg=="
+    );
+}
+
+#[test]
+fn test_convert_empty_tool_message_gets_no_output_placeholder() {
+    let messages = vec![
+        assistant_with_tool_call("call_1"),
+        tool_msg("call_1", vec![]),
+    ];
+
+    let converted = OpenAIProvider::convert_messages(&messages);
+    assert_eq!(converted.len(), 2);
+    let blocks = blocks_of(&converted[1]);
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].text.as_deref(), Some("(no output)"));
 }

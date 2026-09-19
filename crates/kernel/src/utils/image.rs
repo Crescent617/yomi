@@ -1,6 +1,9 @@
 //! Image utilities for reading and converting images to data URLs
 
 use std::path::Path;
+use std::sync::Arc;
+
+use crate::types::{ContentBlock, Message};
 
 /// Maximum image file size (10MB)
 pub const MAX_IMAGE_SIZE: u64 = 10 * 1024 * 1024;
@@ -19,6 +22,70 @@ const EMBED_MAX_DIMENSION: u32 = 1568;
 /// (~1.15MP). Together with the long-edge cap, API-side resampling never
 /// happens: what we send is exactly what the model sees.
 const EMBED_MAX_PIXELS: u32 = 1_150_000;
+
+/// Max images forwarded to the model in a single request, counted across
+/// the entire message history. Anthropic caps a request at 100 images for
+/// 200k-context models (more for larger-context tiers) — the tightest
+/// published limit; keep generous margin so no request can 400 and wedge
+/// the session. Per-tool-result caps (`image_marker`) bound each burst,
+/// but bursts accumulate over history.
+pub const MAX_REQUEST_IMAGES: usize = 50;
+
+/// Enforce [`MAX_REQUEST_IMAGES`] on a message list: the newest `max`
+/// images pass through, older ones are replaced in place with a text
+/// placeholder so the model knows content was elided (and can re-read the
+/// file if it still needs it). Under budget this is a no-op (cheap Arc
+/// clone of the list, messages shared).
+pub fn cap_request_images(messages: &[Arc<Message>], max: usize) -> Vec<Arc<Message>> {
+    let total = messages
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .filter(|b| matches!(b, ContentBlock::ImageUrl { .. }))
+        .count();
+    if total <= max {
+        return messages.to_vec();
+    }
+    let mut remaining = max;
+    let mut out: Vec<Arc<Message>> = messages.to_vec();
+    // 新→旧放行 max 张；更旧的同一消息内也保留靠后的 block。
+    for i in (0..out.len()).rev() {
+        let imgs = out[i]
+            .content
+            .iter()
+            .filter(|b| matches!(b, ContentBlock::ImageUrl { .. }))
+            .count();
+        if imgs == 0 {
+            continue;
+        }
+        if imgs <= remaining {
+            remaining -= imgs;
+            continue;
+        }
+        let mut drop_n = imgs - remaining;
+        remaining = 0;
+        let mut m = (*out[i]).clone();
+        m.content = m
+            .content
+            .into_iter()
+            .map(|b| match b {
+                ContentBlock::ImageUrl { .. } if drop_n > 0 => {
+                    drop_n -= 1;
+                    ContentBlock::Text {
+                        text: format!("[image omitted: request image budget ({max})]"),
+                    }
+                }
+                other => other,
+            })
+            .collect();
+        out[i] = Arc::new(m);
+    }
+    tracing::warn!(
+        total,
+        max,
+        "request image budget exceeded: oldest images replaced with placeholders"
+    );
+    out
+}
 
 /// Supported image MIME types
 pub const SUPPORTED_IMAGE_TYPES: &[(&str, &[u8])] = &[
@@ -129,10 +196,19 @@ fn normalize_bytes(data: &[u8]) -> crate::types::Result<Option<String>> {
         return gif_first_frame_to_data_url(data).map(Some);
     }
     let within_bytes = data.len() <= MAX_EMBED_IMAGE_BYTES;
-    // Header-only dimension read — no pixel decode for compliant images.
+    // Header-only dimension read — cheap, but only a pre-filter.
     let within_res = read_dimensions(data).is_some_and(|(w, h)| within_model_resolution(w, h));
     if within_bytes && within_res {
-        return Ok(None);
+        // 头合法 ≠ 像素可解码（截断/损坏的图 IHDR 完好、IDAT 缺失）。
+        // 坏图透传会把整个模型请求打成 400，且随落库每轮重放——透传前
+        // 必须全量解码验证；解码失败落入下方重压缩路径报出正式错误。
+        if image::load_from_memory(data).is_ok() {
+            return Ok(None);
+        }
+        tracing::warn!(
+            bytes = data.len(),
+            "image passes header checks but fails pixel decode"
+        );
     }
 
     let img = image::load_from_memory(data)

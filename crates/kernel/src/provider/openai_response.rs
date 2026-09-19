@@ -77,9 +77,20 @@ impl OpenAIResponseProvider {
                             );
                             continue;
                         }
+                        // Text/image blocks map 1:1 onto input_text/input_image
+                        // parts; use the array form only when images are present.
+                        let parts = Self::convert_user_content(&m.content);
+                        let output = if parts
+                            .iter()
+                            .any(|p| matches!(p, ContentPart::InputImage { .. }))
+                        {
+                            ToolOutput::Parts(parts)
+                        } else {
+                            ToolOutput::Text(m.text_content())
+                        };
                         items.push(InputItem::FunctionCallOutput {
                             call_id: call_id.clone(),
-                            output: m.text_content(),
+                            output,
                         });
                     } else {
                         tracing::warn!(
@@ -203,6 +214,10 @@ impl Provider for OpenAIResponseProvider {
 
         // Calls from Agent/Compactor resolve this before entering the provider.
         // The provider itself only serializes the supplied config.
+        let messages = &crate::utils::image::cap_request_images(
+            messages,
+            crate::utils::image::MAX_REQUEST_IMAGES,
+        );
         let request_body = ResponsesRequest {
             model: config.model_id.clone(),
             input: Self::convert_messages(messages),
@@ -747,8 +762,20 @@ enum InputItem {
     },
     FunctionCallOutput {
         call_id: String,
-        output: String,
+        output: ToolOutput,
     },
+}
+
+/// Output of a `function_call_output` item. Per `OpenAI`'s `OpenAPI` spec
+/// (`FunctionToolCallOutput.output`), this is `oneOf` a plain string or a
+/// list of `input_text` / `input_image` / `input_file` parts; images in
+/// tool results therefore require the array form. Pure-text results keep
+/// the string form for wire compatibility.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum ToolOutput {
+    Text(String),
+    Parts(Vec<ContentPart>),
 }
 
 #[derive(Debug, Serialize)]
