@@ -252,3 +252,89 @@ fn desc_is_platform_independent() {
         "desc: {desc}"
     );
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn exec_sync_image_marker_attaches_image() {
+    // 协议见 utils::image_marker：marker 独占一行即随结果回传图片，
+    // 相对路径按本次调用的工作目录解析。
+    let dir = tempfile::TempDir::new().unwrap();
+    let png = crate::utils::image::test_utils::noisy_png(16, 16);
+    tokio::fs::write(dir.path().join("shot.png"), &png)
+        .await
+        .unwrap();
+
+    let tool = ShellTool::new();
+    let ctx = crate::tools::ToolExecCtx::new("call_1", dir.path(), "sess_test");
+    let out = crate::tools::Tool::exec(
+        &tool,
+        serde_json::json!({"command": "echo yomi://image/shot.png"}),
+        ctx,
+    )
+    .await
+    .unwrap();
+
+    assert!(out.success(), "{}", out.text_content());
+    let text = out.text_content();
+    let abs = dir.path().join("shot.png");
+    assert!(
+        text.contains(&format!(
+            "[Image: {} | Size: {} bytes]",
+            abs.display(),
+            png.len()
+        )),
+        "{text}"
+    );
+    assert!(text.contains("exit code: 0"), "{text}");
+    assert!(out.contents.iter().any(|b| b.is_image()), "{text}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn exec_sync_without_marker_has_no_image_block() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let tool = ShellTool::new();
+    let ctx = crate::tools::ToolExecCtx::new("call_1", dir.path(), "sess_test");
+    let out = crate::tools::Tool::exec(&tool, serde_json::json!({"command": "echo plain"}), ctx)
+        .await
+        .unwrap();
+
+    assert!(out.success());
+    assert!(!out.contents.iter().any(|b| b.is_image()));
+    assert!(out.text_content().contains("plain"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn exec_sync_marker_survives_text_truncation() {
+    // marker 提取在文本截断之前：输出噪声把文本顶到截断，行尾 marker
+    // 仍应交出图片 block。
+    let dir = tempfile::TempDir::new().unwrap();
+    let png = crate::utils::image::test_utils::noisy_png(16, 16);
+    tokio::fs::write(dir.path().join("shot.png"), &png)
+        .await
+        .unwrap();
+
+    let tool = ShellTool::new();
+    let mut ctx = crate::tools::ToolExecCtx::new("call_1", dir.path(), "sess_test");
+    ctx.max_tool_output_length = 1000;
+    let out = crate::tools::Tool::exec(
+        &tool,
+        serde_json::json!({"command": "python3 -c \"print('a'*5000)\"; echo yomi://image/shot.png"}),
+        ctx,
+    )
+    .await
+    .unwrap();
+
+    assert!(out.success(), "{}", out.text_content());
+    assert!(
+        out.contents.iter().any(|b| b.is_image()),
+        "{}",
+        out.text_content()
+    );
+    assert!(
+        out.text_content().len() <= 1200,
+        "{}",
+        out.text_content().len()
+    );
+}

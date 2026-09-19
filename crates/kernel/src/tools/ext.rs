@@ -10,6 +10,9 @@
 //! 命名约束取各 provider 的最紧交集（OpenAI 函数名只允许 `[a-zA-Z0-9_-]`
 //! 且字母开头）；目录名唯一 ⇒ 外挂撞外挂不可能，撞内建在 Agent 合并时
 //! 让位（agent.rs，warn 跳过）。
+//!
+//! 图片回传：脚本在 stdout 打印一行 `yomi://image/<路径>`（独占一行），
+//! 图片即随工具结果交给模型（协议见 `utils::image_marker` 模块文档）。
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -134,17 +137,28 @@ impl Tool for SpawnTool {
         match captured.exit_code {
             Some(0) => {
                 let stdout = String::from_utf8_lossy(&captured.stdout).into_owned();
+                // `yomi://image/` marker：脚本可借此把图片直接交回模型
+                // （协议见 utils::image_marker 模块文档）。相对路径按本
+                // 次调用的工作目录解析。
+                let collected =
+                    crate::utils::image_marker::collect_image_markers(&stdout, &ctx.working_dir)
+                        .await;
                 let budget = ctx.max_tool_output_length;
-                let text = if stdout.len() > budget {
+                let text = if collected.text.len() > budget {
                     crate::tools::helper::truncate::truncate_keep_edges(
-                        &stdout,
+                        &collected.text,
                         budget,
                         "\n... [truncated] ...\n",
                     )
                 } else {
-                    stdout
+                    collected.text
                 };
-                Ok(ToolOutput::text(text))
+                let mut contents = vec![crate::types::ToolOutputBlock::Text { text }];
+                contents.extend(collected.images);
+                Ok(ToolOutput {
+                    contents,
+                    is_error: false,
+                })
             }
             other => {
                 warn!(tool = %self.name, exit_code = ?other, stderr = %stderr.trim(), "ext tool: failed");

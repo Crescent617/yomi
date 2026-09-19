@@ -191,3 +191,72 @@ async fn exec_entry_deleted_after_scan_is_tool_error() {
     assert!(text.contains("[ext:gone]"), "{text}");
     assert!(text.contains("spawn failed"), "{text}");
 }
+
+/// 图片 marker 协议：脚本 stdout 里的 `yomi://image/<路径>` 行被提取为
+/// 图片 block（相对路径按调用工作目录解析），其余文本原样保留。
+#[tokio::test]
+async fn exec_image_marker_attaches_image() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let png = crate::utils::image::test_utils::noisy_png(16, 16);
+    std::fs::write(dir.path().join("shot.png"), &png).unwrap();
+    write_tool(
+        dir.path(),
+        "shooter",
+        MANIFEST,
+        Some("echo done\necho yomi://image/shot.png\n"),
+        true,
+    );
+    let tools = scan(dir.path()).await;
+    let out = tools[0]
+        .exec(serde_json::json!({}), ctx(dir.path()))
+        .await
+        .unwrap();
+
+    assert!(out.success());
+    let text = text_of(&out);
+    assert!(text.contains("done"), "{text}");
+    let abs = dir.path().join("shot.png");
+    assert!(
+        text.contains(&format!(
+            "[Image: {} | Size: {} bytes]",
+            abs.display(),
+            png.len()
+        )),
+        "{text}"
+    );
+    let url = out
+        .contents
+        .iter()
+        .find_map(|b| match b {
+            crate::types::ToolOutputBlock::Image { url, .. } => Some(url.as_str()),
+            crate::types::ToolOutputBlock::Text { .. } => None,
+        })
+        .expect("image block");
+    assert!(url.starts_with("data:image/png;base64,"), "{url}");
+}
+
+/// marker 指向的文件读不到：降级为文本说明，不算工具错误。
+#[tokio::test]
+async fn exec_image_marker_missing_file_is_unavailable_note() {
+    let dir = tempfile::TempDir::new().unwrap();
+    write_tool(
+        dir.path(),
+        "broken",
+        MANIFEST,
+        Some("echo yomi://image/nope.png\n"),
+        true,
+    );
+    let tools = scan(dir.path()).await;
+    let out = tools[0]
+        .exec(serde_json::json!({}), ctx(dir.path()))
+        .await
+        .unwrap();
+
+    assert!(out.success());
+    assert!(
+        text_of(&out).contains("[Image unavailable: nope.png | not found]"),
+        "{}",
+        text_of(&out)
+    );
+    assert!(!out.contents.iter().any(|b| b.is_image()));
+}

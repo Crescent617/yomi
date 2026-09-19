@@ -41,6 +41,22 @@ $YOMI_DATA_DIR/tools/stock_quote/
 | `YOMI_DATA_DIR` | 数据目录 | 定位 yomi 资产 |
 | `YOMI_STATE_DIR` | `<data_dir>/state/tools/<名>/` | 持久状态目录（缓存/留档），daemon 惰性创建 |
 
+## 图片回传
+
+脚本可把图片直接交给模型（不用打印路径让模型再 read）：在 stdout 打印一行 marker
+
+```
+yomi://image/<路径>
+```
+
+- 必须独占一行（行首不能有空白，无 caption 等后缀语法）；路径即行尾原文，空格/中文/`&`/`%` 都不用转义。
+- 相对路径按本次调用的工作目录解析；脚本内部自己 chdir 过的，打印绝对路径。`~` 可用来指 home。
+- 支持 png/jpeg/gif/webp，单文件 ≤10MB；动图 GIF 拍平首帧；超长边/超像素自动降采样（长边 ≤1568px）。
+- 每次调用最多 10 张，超出的 marker 换成 `[Image omitted: ...]` 说明。
+- 文件读不到不算工具失败：marker 行变成 `[Image unavailable: <路径> | <原因>]`，模型可据此改用 read/shell 自查。
+- 老版本内核不认识 marker：模型看到的是一行文本路径，可自行 read，协议向后兼容。
+- shell 工具同协议（任何命令都能用）；desc 里声明"本工具返回图片"可让模型对 context 增长有预期。
+
 ## 示例
 
 yomi 仓库 `examples/tools/stock_quote/`（python3，约 20 行：读 stdin JSON → 取 `args.symbol` → 输出结果）。

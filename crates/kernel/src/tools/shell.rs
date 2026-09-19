@@ -93,7 +93,8 @@ impl ShellTool {
 const DESC: &str = const_concat!(
     "Execute a shell command. Use it only for tasks that genuinely require the shell; for reading, editing, or searching files, prefer the dedicated read, edit, and grep tools. Do not run dangerous operations (e.g. git push, rm -rf) without explicit user request. Commands run non-interactively (stdin is closed, no terminal attached), so interactive prompts (e.g. sudo password, ssh confirmation) fail immediately instead of waiting for input.\n\nUse `background: true` for long-running commands (servers, scripts of unknown duration) so you can monitor output in real time; short commands should run synchronously. ",
     crate::tools::ASYNC_LAUNCH_GUIDE,
-    " The PID in the launch message can be used to kill the process."
+    " The PID in the launch message can be used to kill the process.",
+    " A command can also return images to you: print a line `yomi://image/<path>` (alone on its own line) and the image content is attached to the result (max 10 per call, png/jpeg/gif/webp). Examples: `browser screenshot -s /tmp/x.jpg && echo yomi://image//tmp/x.jpg` (absolute path — note the doubled slash); `browser screenshot -s x.jpg && echo yomi://image/x.jpg` (relative to the working directory)."
 );
 
 #[async_trait]
@@ -325,6 +326,12 @@ impl ShellTool {
         let stdout = strip_ansi(&stdout_raw);
         let stderr = strip_ansi(&stderr_raw);
 
+        // `yomi://image/` marker（协议见 utils::image_marker 模块文档）：
+        // 在截断前提取，marker 行不会被保头尾截掉；图片不占文本预算。
+        // 相对路径按本次调用的 working_dir 解析。
+        let collected =
+            crate::utils::image_marker::collect_image_markers(&stdout, working_dir).await;
+
         let log_note = format_log_note(&captured.log_files);
         let footer = format!(
             "\n\n---\n[{status}] Command {}.{log_note}",
@@ -332,10 +339,19 @@ impl ShellTool {
         );
 
         let total_budget = max_tool_output_length.saturating_sub(footer.len());
-        let content = format_sync_output(&stdout, &stderr, total_budget);
+        let content = format_sync_output(&collected.text, &stderr, total_budget);
 
         let output_text = format!("{content}{footer}");
-        Ok(ToolOutput::text(output_text))
+        if collected.images.is_empty() {
+            Ok(ToolOutput::text(output_text))
+        } else {
+            let mut contents = vec![crate::types::ToolOutputBlock::Text { text: output_text }];
+            contents.extend(collected.images);
+            Ok(ToolOutput {
+                contents,
+                is_error: false,
+            })
+        }
     }
 
     /// Execute command in background and send its completion as a steer message.
