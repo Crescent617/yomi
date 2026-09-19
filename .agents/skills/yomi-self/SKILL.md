@@ -19,6 +19,7 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 ## 配置
 
 - `yomi config show` / `get` / `set`；`set` 之后必须 `daemon restart` 生效。
+- **socket 鉴权（ws 远端 attach）**：daemon 只听 unix socket 或明文 ws——TLS 靠反代终结，客户端连 `wss://`。鉴权在 ws Upgrade 握手查 `Authorization: Bearer`：daemon 端 `yomi daemon auth-hash --generate` 生成 `blake3:<hex>` 写入 `socket_auth_hash`（或 env `YOMI_SOCKET_AUTH_HASH`），客户端 env 设 `YOMI_SOCKET_AUTH` 明文 token；不过即 401（映射 PermissionDenied）。unix socket 不查（靠文件权限）。**ws 监听未配鉴权 = 端口可达即完整 RPC（含 shell 执行），daemon 启动会警告**。`YOMI_EXTRA_SOCKET` 可加第二个监听（如 `ws://0.0.0.0:57231` 供反代），同样按 `socket_auth_hash` 校验。`tcp://` 已移除，裸 `host:port` 一律按 ws 解析；Windows 默认 IPC = `ws://127.0.0.1:57231`。设计决策见仓库 `docs/design/socket-auth.md`。
 
 ## web search
 
