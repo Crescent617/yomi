@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.37] - 2026-09-21
+
 ### Added
 - 新增 hook 事件 `turn_start` / `turn_end`：agent 开始处理一条消息与该轮处理完毕（含取消、失败、rewind）时各触发一次，可用于审计留档、记忆固化等自动化；契约见 `docs/EXTENSIONS.md`，示例见 `examples/hooks/turn_end/10-audit`。
 
