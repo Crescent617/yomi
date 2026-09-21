@@ -133,10 +133,12 @@ fn watch_section_states_the_contract() {
     assert!(section.contains("non-command message"));
     // The hard boundary: nothing it outputs reaches the chat.
     assert!(section.contains("never posted"));
-    // The only way out: speak via skill — no operational hints (the
-    // skill list is in the prompt, headers carry the anchors), and no
-    // scripted defaults for when to speak.
+    // The only way out: speak via skill — stated as an exclusivity
+    // contract (only skill-sent messages are visible). No operational
+    // hints (the skill list is in the prompt, headers carry the
+    // anchors), and no scripted defaults for when to speak.
     assert!(section.contains("speak via skill"));
+    assert!(section.contains("only messages sent through a skill are visible"));
     assert!(!section.contains("[msg_id:"));
     assert!(!section.contains("usually respond"));
     assert!(!section.contains("silence"));

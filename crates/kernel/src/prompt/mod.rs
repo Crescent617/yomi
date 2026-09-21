@@ -50,7 +50,8 @@ pub fn strip_end_turn_marker(text: &str) -> &str {
 /// mapping kind `watch`). Deliberately minimal: state the mode (every
 /// message is mirrored for observation), the hard boundary (nothing the
 /// session outputs reaches the chat), and the only way out (speak via
-/// skill). No operational hints — the skill list is in the prompt
+/// skill — stated as exclusivity: only skill-sent messages are visible,
+/// 2026-09-21 hrli 要求强调). No operational hints — the skill list is in the prompt
 /// already, and the message headers carry the reply anchors; when to
 /// speak is the agent's own judgement. Appended to the base prompt by
 /// the conductor at spawn (while the routing row's kind is `watch`), so
@@ -62,7 +63,8 @@ pub(crate) fn watch_section(channel_name: &str, chat_id: &str) -> String {
          non-command message here is mirrored to you for observation.\n\
          Nothing you output reaches the chat: your reply text is never posted, and no cards or \
          reactions mark your runs.\n\
-         If you think a reply is needed, speak via skill."
+         If you think a reply is needed, speak via skill — only messages sent through a \
+         skill are visible to the chat."
     )
 }
 
