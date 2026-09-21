@@ -618,3 +618,151 @@ async fn symlink_to_dir_form_is_followed() {
         std::fs::read_to_string(tmp.path().join("state/hooks/pre_tool_use/10-link/ran")).unwrap();
     assert_eq!(ran, "linked\n");
 }
+
+// ── run_session_point（turn_start/turn_end 通知点）────────────────────
+
+/// 会话级通知点：字典序串行、payload 原样送达、env 契约（`YOMI_EVENT`=
+/// point、`YOMI_SESSION_ID` 注入、`YOMI_HOOK_EVENT` 显式移除）、进程
+/// cwd = 会话工作目录（区别于数据目录）。
+#[cfg(unix)]
+#[tokio::test]
+async fn session_point_runs_in_order_and_delivers_contract() {
+    let data = tempdir();
+    let work = tempdir();
+    let dir = point_dir(data.path(), POINT_TURN_START);
+    std::fs::create_dir_all(&dir).unwrap();
+    let order = data.path().join("order.txt");
+    write_script(
+        &dir,
+        "20-second",
+        &format!(
+            "echo second >> {}; cat > \"$YOMI_STATE_DIR/stdin.json\"; exit 0\n",
+            order.display()
+        ),
+        true,
+    );
+    write_script(
+        &dir,
+        "10-first",
+        &format!(
+            "echo first >> {}; printf '%s|%s|%s' \"$YOMI_EVENT\" \"${{YOMI_HOOK_EVENT:-unset}}\" \"$YOMI_SESSION_ID\" > \"$YOMI_STATE_DIR/env\"; pwd > \"$YOMI_STATE_DIR/pwd\"; exit 0\n",
+            order.display()
+        ),
+        true,
+    );
+    write_script(&dir, "30-off", "exit 0\n", false); // 无执行位：跳过
+
+    let payload = serde_json::to_vec(&TurnStartInput {
+        session_id: "sess_t1".to_string(),
+        cwd: work.path().to_string_lossy().into_owned(),
+        hook_event_name: POINT_TURN_START,
+        user_msg_id: "msg_42".to_string(),
+        is_steer: false,
+        input_preview: "hello".to_string(),
+    })
+    .unwrap();
+    run_session_point(
+        data.path(),
+        POINT_TURN_START,
+        "sess_t1",
+        work.path(),
+        &payload,
+    )
+    .await;
+
+    assert_eq!(std::fs::read_to_string(&order).unwrap(), "first\nsecond\n");
+    let env =
+        std::fs::read_to_string(data.path().join("state/hooks/turn_start/10-first/env")).unwrap();
+    assert_eq!(env, "turn_start|unset|sess_t1");
+    // 进程 cwd = 会话工作目录（macOS /var → /private/var，比 canonicalize）。
+    let pwd =
+        std::fs::read_to_string(data.path().join("state/hooks/turn_start/10-first/pwd")).unwrap();
+    assert_eq!(
+        pwd.trim(),
+        std::fs::canonicalize(work.path())
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
+    );
+    // payload 原样送达每条 hook。
+    let got: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            data.path()
+                .join("state/hooks/turn_start/20-second/stdin.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(got["hook_event_name"], "turn_start");
+    assert_eq!(got["user_msg_id"], "msg_42");
+    assert_eq!(got["session_id"], "sess_t1");
+    assert_eq!(got["cwd"], work.path().to_string_lossy().as_ref());
+    assert_eq!(got["is_steer"], false);
+    assert_eq!(got["input_preview"], "hello");
+}
+
+/// 通知型语义：前者非零只留痕，不中断后续脚本（fail-open，无短路）。
+#[cfg(unix)]
+#[tokio::test]
+async fn session_point_failure_does_not_break_chain() {
+    let tmp = tempdir();
+    let dir = point_dir(tmp.path(), POINT_TURN_END);
+    std::fs::create_dir_all(&dir).unwrap();
+    let ran = tmp.path().join("ran.txt");
+    write_script(&dir, "10-boom", "echo why >&2\nexit 3\n", true);
+    write_script(
+        &dir,
+        "20-next",
+        &format!("echo next >> {}; exit 0\n", ran.display()),
+        true,
+    );
+    run_session_point(tmp.path(), POINT_TURN_END, "sess_t", tmp.path(), b"{}").await;
+    assert_eq!(std::fs::read_to_string(&ran).unwrap(), "next\n");
+}
+
+/// 目录不存在/为空 = 无操作（agent 热路径上不得因此失败）。
+#[tokio::test]
+async fn session_point_missing_dir_is_noop() {
+    let tmp = tempdir();
+    run_session_point(tmp.path(), POINT_TURN_END, "sess_t", tmp.path(), b"{}").await;
+}
+
+/// 单条超时被强杀、不阻塞后续（直接用短超时跑底层 runner）。
+#[cfg(unix)]
+#[tokio::test]
+async fn session_point_timeout_kills_and_continues() {
+    let tmp = tempdir();
+    let slow = write_script(tmp.path(), "slow", "sleep 5\n", true);
+    let started = std::time::Instant::now();
+    run_one_notify_hook(
+        "slow",
+        &slow,
+        b"{}",
+        POINT_TURN_END,
+        tmp.path(),
+        tmp.path(),
+        Some("sess_t"),
+        Duration::from_millis(200),
+    )
+    .await;
+    assert!(started.elapsed() < Duration::from_secs(3));
+}
+
+/// `turn_end` payload 序列化契约：`error` 仅 failed 时出现（`skip_serializing_if`）。
+#[test]
+fn turn_end_payload_omits_error_unless_failed() {
+    let mk = |stop_reason: &str, error: Option<String>| TurnEndInput {
+        session_id: "s".to_string(),
+        cwd: "w".to_string(),
+        hook_event_name: POINT_TURN_END,
+        user_msg_id: "m".to_string(),
+        stop_reason: stop_reason.to_string(),
+        duration_ms: 3,
+        iterations: 1,
+        error,
+    };
+    let ok = serde_json::to_value(mk("completed", None)).unwrap();
+    assert!(ok.get("error").is_none());
+    let failed = serde_json::to_value(mk("failed", Some("boom".to_string()))).unwrap();
+    assert_eq!(failed["error"], "boom");
+}

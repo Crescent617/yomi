@@ -1,5 +1,6 @@
-//! hook/ — 文件系统 hook（Gate 端口 `pre_tool_use` + daemon 生命周期
-//! 通知点 `daemon_up`/`daemon_down` 的脚本形态）。
+//! hook/ — 文件系统 hook（Gate 端口 `pre_tool_use`、turn 生命周期通知点
+//! `turn_start`/`turn_end` + daemon 生命周期通知点
+//! `daemon_up`/`daemon_down` 的脚本形态）。
 //!
 //! 目录即注册表，零配置文件：`<data_dir>/hooks/<point>/` 下的条目按
 //! **条目名**字典序串行执行——条目为带执行位的裸文件，或含带执行位
@@ -62,6 +63,27 @@ pub(crate) const POINT_PRE_TOOL_USE: &str = "pre_tool_use";
 pub(crate) const POINT_DAEMON_UP: &str = "daemon_up";
 pub(crate) const POINT_DAEMON_DOWN: &str = "daemon_down";
 
+/// turn 生命周期 hook point（通知型，无否决语义）：
+/// - `turn_start`：agent 从 Idle 进 Streaming、锚定一条 user 消息开工时
+///   触发（`Agent::start_turn_if_needed` 创建 Turn 成功后）；queued 消息
+///   出队、idle 态 steer 注入都走这条路。mid-turn 的 steer 插队不新开
+///   turn，不触发。
+/// - `turn_end`：turn 关闭时触发（任何非 Idle 态 → Idle，外加 rewind
+///   取消与 loop 退出防御）。**不变量：每次 `turn_start` 恰好配一次
+///   `turn_end`**，`stop_reason` 区分出路（`completed`/`failed`/
+///   `cancelled`/`shutdown`/`max_iterations`/`rewound`；`unknown` 为防御
+///   兜底，出现即内核漏了路径，带 warn 日志）。进程被杀（SIGKILL/崩溃）
+///   例外：`turn_end` 不保证——`turn_start` 才是持久标记。
+///
+/// 与 gate 的差异：无否决（退出码只记日志，fail-open）、带会话语义
+/// （cwd = 会话工作目录、注入 `YOMI_SESSION_ID`、stdin 有 `user_msg_id`
+/// 等字段）；调用方 await 全链——同 session 同点串行保序，记忆固化类
+/// hook 依赖这个序。subagent 走同一套 agent loop，其 turn 同样触发
+/// （payload 的 `session_id` 区分）。多 session 并发时同名 hook 的
+/// state 目录共享，脚本须按 `session_id` 自分命名空间。
+pub(crate) const POINT_TURN_START: &str = "turn_start";
+pub(crate) const POINT_TURN_END: &str = "turn_end";
+
 /// 子进程注入的 hook point 标识（值 = 目录名）。
 pub(crate) const YOMI_HOOK_EVENT: &str = crate::env_name!("HOOK_EVENT");
 
@@ -82,6 +104,38 @@ pub struct PreToolUseInput {
     pub hook_event_name: &'static str,
     pub tool_name: String,
     pub tool_input: serde_json::Value,
+}
+
+/// `turn_start` stdin 负载。`input_preview` 必须自带：user 消息走 bus
+/// 异步落盘，hook 触发瞬间 `session cat` 可能还读不到这条新消息。
+#[derive(Debug, serde::Serialize)]
+pub struct TurnStartInput {
+    pub session_id: String,
+    pub cwd: String,
+    pub hook_event_name: &'static str,
+    /// 锚定本 turn 的 user 消息 id（= checkpoint id = rewind 目标）。
+    pub user_msg_id: String,
+    /// 锚定消息是否 steer 注入。
+    pub is_steer: bool,
+    /// 锚定消息的首个文本块预览（换行压平，截断 200 字符）。
+    pub input_preview: String,
+}
+
+/// `turn_end` stdin 负载。`error` 仅 `stop_reason == "failed"` 时存在。
+#[derive(Debug, serde::Serialize)]
+pub struct TurnEndInput {
+    pub session_id: String,
+    pub cwd: String,
+    pub hook_event_name: &'static str,
+    pub user_msg_id: String,
+    /// `completed`/`failed`/`cancelled`/`shutdown`/`max_iterations`/
+    /// `rewound`（`unknown` = 内核路径遗漏的防御兜底）。
+    pub stop_reason: String,
+    pub duration_ms: u64,
+    /// 本 turn 经历的 agent loop 迭代数（模型回合+工具回合合计）。
+    pub iterations: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// 单个 tool call 的裁决结果。
@@ -353,48 +407,105 @@ pub async fn run_daemon_point(data_dir: &Path, point: &str) {
     let payload = serde_json::to_vec(&payload).expect("daemon hook payload serializes");
     info!(point, count = hooks.len(), "daemon hook: running");
     for (name, hook) in &hooks {
-        run_one_daemon_hook(name, hook, &payload, point, data_dir).await;
+        run_one_notify_hook(
+            name,
+            hook,
+            &payload,
+            point,
+            data_dir,
+            data_dir,
+            None,
+            HOOK_TIMEOUT,
+        )
+        .await;
     }
 }
 
-/// 执行单个 daemon hook：通知语义，结果只留痕（warn/debug），不反馈给
-/// 任何调用方。
-async fn run_one_daemon_hook(
+/// 跑一个会话级通知 hook point（`turn_start`/`turn_end`）：与 daemon
+/// 通知点同一套语义——按条目名字典序串行、无否决（退出码只留痕）、
+/// fail-open、单条 30s 硬顶不接取消；差异在会话语义：进程 cwd = 会话
+/// 工作目录，注入 `YOMI_SESSION_ID`（hook 可回连 CLI，如
+/// `yomi session cat "$YOMI_SESSION_ID"`）。调用方 await 全链兑现
+/// "同 session 同点有序"。payload 由调用方序列化好（每点结构不同）。
+pub async fn run_session_point(
+    data_dir: &Path,
+    point: &str,
+    session_id: &str,
+    working_dir: &Path,
+    payload: &[u8],
+) {
+    let hooks = match list_hooks(&point_dir(data_dir, point), point).await {
+        Ok(h) => h,
+        Err(e) => {
+            warn!(point, error = %e, "session hook: failed to list hooks, skipping");
+            return;
+        }
+    };
+    if hooks.is_empty() {
+        return;
+    }
+    debug!(point, count = hooks.len(), "session hook: running");
+    for (name, hook) in &hooks {
+        run_one_notify_hook(
+            name,
+            hook,
+            payload,
+            point,
+            working_dir,
+            data_dir,
+            Some(session_id),
+            HOOK_TIMEOUT,
+        )
+        .await;
+    }
+}
+
+/// 执行单个通知型 hook：结果只留痕（warn/debug），不反馈给任何调用方。
+/// `session_id = None` 即 daemon 语义（`YOMI_SESSION_ID` 显式移除）。
+#[allow(clippy::too_many_arguments)]
+async fn run_one_notify_hook(
     name: &str,
     path: &Path,
     stdin_json: &[u8],
     point: &str,
+    cwd: &Path,
     data_dir: &Path,
+    session_id: Option<&str>,
+    timeout: Duration,
 ) {
     let state_dir = data_dir.join("state").join(DIR_NAME).join(point).join(name);
     crate::utils::env::ensure_state_dir("hook", name, &state_dir).await;
     let mut cmd = tokio::process::Command::new(path);
-    cmd.current_dir(data_dir)
+    cmd.current_dir(cwd)
         .env(crate::utils::env::YOMI_EVENT, point)
-        // 防残留：`YOMI_HOOK_EVENT` 是 pre_tool_use 的兼容变量，daemon
-        // 点不注入——父进程若从 hook 环境继承，显式清掉。
+        // 防残留：`YOMI_HOOK_EVENT` 是 pre_tool_use 的兼容变量，通知点
+        // 不注入——父进程若从 hook 环境继承，显式清掉。
         .env_remove(YOMI_HOOK_EVENT);
-    crate::utils::env::inject_child_env(&mut cmd, Some(data_dir), None);
+    crate::utils::env::inject_child_env(&mut cmd, Some(data_dir), session_id);
     crate::utils::env::inject_state_dir(&mut cmd, Some(&state_dir));
-    let captured =
-        match crate::utils::spawn::spawn_captured(&mut cmd, Some(stdin_json), HOOK_TIMEOUT, None)
-            .await
-        {
-            Ok(c) => c,
-            Err(e) => {
-                warn!(hook = %path.display(), point, error = %e, "daemon hook: engine failed");
-                return;
-            }
-        };
+    let captured = match crate::utils::spawn::spawn_captured(
+        &mut cmd,
+        Some(stdin_json),
+        timeout,
+        None,
+    )
+    .await
+    {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(hook = %path.display(), point, error = %e, "notify hook: engine failed");
+            return;
+        }
+    };
     if captured.timed_out {
-        warn!(hook = %path.display(), point, timeout_ms = HOOK_TIMEOUT.as_millis(), "daemon hook: timed out (killed)");
+        warn!(hook = %path.display(), point, timeout_ms = timeout.as_millis(), "notify hook: timed out (killed)");
         return;
     }
     match captured.exit_code {
-        Some(0) => debug!(hook = %path.display(), point, "daemon hook: ok"),
+        Some(0) => debug!(hook = %path.display(), point, "notify hook: ok"),
         other => {
             let stderr = String::from_utf8_lossy(&captured.stderr);
-            warn!(hook = %path.display(), point, exit_code = ?other, stderr = %stderr.trim(), "daemon hook: failed (ignored)");
+            warn!(hook = %path.display(), point, exit_code = ?other, stderr = %stderr.trim(), "notify hook: failed (ignored)");
         }
     }
 }

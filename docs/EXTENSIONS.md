@@ -37,6 +37,8 @@ tools 同约定——伴生文件放进自己包里，`dirname "$0"` 即得；st
 | 事件 | 触发 | 语义 |
 |---|---|---|
 | `pre_tool_use` | 每次工具调用前 | **闸门**：可否决（exit 2） |
+| `turn_start` | agent 锚定一条 user 消息开工时 | 通知：turn 生命周期开始 |
+| `turn_end` | turn 关闭时（含取消/失败/rewind） | 通知：turn 生命周期结束 |
 | `daemon_up` | daemon 服务就绪**后**（socket 已在服务） | 通知：随 yomi 启动其他进程 |
 | `daemon_down` | daemon 关停流程**中**（拆除前） | 通知：随 yomi 停止其他进程 |
 
@@ -58,8 +60,41 @@ session；`YOMI_SESSION_ID` 不注入。）
 
 **退出码**：`0`=放行；`2`=否决，stderr 即原因（带 `[hook:<文件名>]`
 前缀回流给 agent）；其他非零/超时（固定 30s）= hook 自身故障，
-**fail-open 放行** + warn 日志——否决必须是显式行为。daemon 事件无
-否决语义：退出码只记日志，不影响 daemon 也不中断后续脚本。
+**fail-open 放行** + warn 日志——否决必须是显式行为。通知型事件
+（`turn_*`、daemon）无否决语义：退出码只记日志，不影响流程也不
+中断后续脚本。
+
+**turn 生命周期钩子**：turn = agent 锚定一条 user 消息到回到 Idle
+的完整周期（= checkpoint 粒度）。**不变量：每次 `turn_start` 恰好配
+一次 `turn_end`**；`stop_reason` 区分出路（`completed`/`failed`/
+`cancelled`/`shutdown`/`max_iterations`/`rewound`；`unknown` 是内核
+路径遗漏的防御兜底，正常不应出现）。进程被 SIGKILL/崩溃是例外：
+`turn_end` 不保证到达，攒状态的脚本把 `turn_start` 当持久标记用。
+同 session 同点的 hook 串行保序（内核 await 全链）；不同 session
+并发——同名 hook 的 state 目录跨 session 共享，落盘请按
+`session_id` 分文件。subagent 的 turn 同样触发（payload 里
+`session_id` 区分）。几个边界语义：
+
+- mid-turn 的 steer 插队**不**新开 turn；idle 态的 steer 会开 turn
+  （`is_steer=true`）。
+- `user_msg_id` 可重复：`/continue`、rewind 后重做都会以同一锚消息
+  再开 turn——去重不能只看 msg id，配 `turn_end` 成对计数。
+- `input_preview` 必须取自 payload：锚定消息经 bus 异步落盘，
+  `turn_start` 触发瞬间 `session cat` 可能还读不到它。
+
+```json
+// turn_start
+{"session_id":"sess_…","cwd":"/work/dir","hook_event_name":"turn_start",
+ "user_msg_id":"msg_…","is_steer":false,"input_preview":"前 200 字符…"}
+// turn_end
+{"session_id":"sess_…","cwd":"/work/dir","hook_event_name":"turn_end",
+ "user_msg_id":"msg_…","stop_reason":"completed","duration_ms":12345,
+ "iterations":7}
+```
+
+`error` 字段仅 `stop_reason == "failed"` 时出现。进程 cwd = 会话工作
+目录，注入 `YOMI_SESSION_ID`（可回连 CLI 干活，如 turn_end 里
+`session cat` 抽记忆）。示例：`examples/hooks/turn_end/10-audit`。
 
 **生命周期钩子的用法**：`daemon_up` 在后台跑、不挡开机，脚本可立即回连
 CLI；要常驻进程就在脚本里放后台（`nohup … &`），脚本本身立即返回。

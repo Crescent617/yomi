@@ -33,6 +33,8 @@ pub struct Turn {
     pub session_id: String,
     /// User message summary for checkpoint display
     summary: String,
+    /// When the turn started (for `turn_end` hook `duration_ms`)
+    started_at: std::time::Instant,
     tracked_files: Mutex<Vec<TrackedFile>>,
     store: Arc<dyn CheckpointStore>,
     /// Checkpoint directory path
@@ -63,10 +65,16 @@ impl Turn {
             user_msg_id,
             session_id,
             summary: summary.into(),
+            started_at: std::time::Instant::now(),
             tracked_files: Mutex::new(Vec::new()),
             store,
             checkpoint_dir,
         }
+    }
+
+    /// Elapsed time since the turn started, in milliseconds.
+    pub fn elapsed_ms(&self) -> u64 {
+        u64::try_from(self.started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 
     /// Get the objects directory for this checkpoint

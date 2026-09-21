@@ -18,6 +18,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, Instrument};
 
+/// `turn_start` hook payload 里 `input_preview` 的字符数上限。
+const TURN_HOOK_INPUT_PREVIEW_CHARS: usize = 200;
+
 /// Input messages that can be sent to an Agent
 #[derive(Clone)]
 pub enum AgentInput {
@@ -89,6 +92,10 @@ pub struct Agent {
     current_model_config: Option<Arc<crate::provider::ModelConfig>>,
     /// Whether the current user-initiated run already used its truncation recovery.
     auto_continue_used: bool,
+    /// 最近一次 `Stopped` 的原因：lifecycle 事件推迟到 turn 收尾后
+    /// 才发（见 `complete_turn_if_needed`），期间原因存这里（消费时
+    /// take）。所有原因记录必须经 `note_stopped` 收口。
+    last_stop_reason: Option<StopReason>,
 }
 
 impl Agent {
@@ -202,6 +209,7 @@ impl Agent {
             current_provider: None,
             current_model_config: None,
             auto_continue_used: false,
+            last_stop_reason: None,
         }
     }
 
@@ -285,14 +293,15 @@ impl Agent {
                         "reached max iterations during streaming, cancelling and returning to waiting for input"
                     );
                     // Notify TUI that max iterations reached
-                    self.emit(Event::Agent(AgentEvent::Lifecycle {
-                        state: AgentStatus::Stopped {
-                            reason: StopReason::MaxIterations {
-                                reached: self.max_iterations,
-                            },
-                        },
-                    }));
+                    self.note_stopped(StopReason::MaxIterations {
+                        reached: self.max_iterations,
+                    });
                     self.context.transition_to(AgentState::Idle);
+                    // max_iterations 算 turn 结束（2026-09-21 拍板）：关
+                    // turn（建 checkpoint + fire turn_end）。此前 continue
+                    // 跳过收尾——checkpoint 不建、旧 turn 悬挂，下一条消息
+                    // 的 turn 还会锚到上一条消息上。
+                    self.complete_turn_if_needed(state).await;
                     continue;
                 }
 
@@ -350,11 +359,17 @@ impl Agent {
                         }));
                         // steer 插队
                         let steers = self.mailbox.try_pull_steer(20).await;
-                        if !steers.is_empty() {
+                        if steers.is_empty() {
+                            self.handle_streaming_with_retry().await
+                        } else {
                             self.emit_mailbox_changed().await;
-                            self.inject_user_message(steers, true).await?;
+                            // 错误走臂内 result（不用 `?`）：`?` 会直接
+                            // 退出 start_loop，跳过循环底部的 turn 收尾。
+                            match self.inject_user_message(steers, true).await {
+                                Ok(()) => self.handle_streaming_with_retry().await,
+                                Err(e) => Err(e),
+                            }
                         }
-                        self.handle_streaming_with_retry().await
                     }
                     AgentState::ExecutingTool => {
                         tracing::debug!("executing tools");
@@ -363,13 +378,23 @@ impl Agent {
                     AgentState::Compacting => {
                         tracing::warn!("Unexpected Compacting state in main loop; returning to Idle");
                         self.context.transition_to(AgentState::Idle);
-                        continue;
+                        // 不 continue：落到循环底部统一收尾（防御——若有
+                        // 悬挂 turn 在此关闭，保证 turn_end 恰好一次）。
+                        Ok(())
                     }
                 };
 
                 // Handle state transition after execution
                 if let Err(e) = result {
                     if e.is_shutdown() {
+                        // 防御（AgentError::Shutdown 目前无构造点）：loop
+                        // 退出前若有悬挂 turn 也按 shutdown 关闭——
+                        // turn_start 发过就必须有 turn_end。原因（若有）
+                        // 同样兑现为 Stopped，不带出循环。
+                        self.complete_current_turn("shutdown", None).await;
+                        if let Some(reason) = self.last_stop_reason.take() {
+                            self.emit_lifecycle_stopped(reason);
+                        }
                         break;
                     }
                     tracing::warn!("error in main loop: {}", e);
@@ -385,6 +410,15 @@ impl Agent {
                             AgentState::Compacting => crate::event::ErrorPhase::Compaction,
                         };
                         self.emit_error(phase, &e.to_string(), false);
+
+                        // 未经 fail_agent 的错误路径没有 Stopped 事件：
+                        // 给 turn_end 补上 failed 原因（已有则不覆盖；
+                        // 无 turn 活跃时不留，避免陈旧原因错配给下一 turn）。
+                        if self.current_turn.is_some() && self.last_stop_reason.is_none() {
+                            self.last_stop_reason = Some(StopReason::Failed {
+                                error: e.to_string(),
+                            });
+                        }
 
                         // Recover to Idle for non-Idle states
                         if self.context.current_state() != AgentState::Idle {
@@ -403,17 +437,18 @@ impl Agent {
         result
     }
 
-    /// Handle cancellation - emits `Stopped` with the cancel origin's
-    /// reason (user /stop vs kernel shutdown), transitions state, Ok(())
+    /// Handle cancellation - notes the `Stopped` reason with the cancel
+    /// origin (user /stop vs kernel shutdown; event deferred to turn
+    /// wind-down), transitions state, Ok(())
     async fn handle_cancel(&mut self, context: &str) -> Result<(), AgentError> {
         tracing::info!("{} cancelled", context);
         if self.cancel_token.take_for_shutdown() {
             self.mark_interrupted("daemon shutdown", true).await;
-            self.emit_stopped_shutdown();
+            self.note_stopped_shutdown();
         } else {
             self.mark_interrupted("cancelled", false).await;
             // Emit cancellation event with operation name
-            self.emit_operation_cancelled(context);
+            self.note_operation_cancelled(context);
         }
         self.context.transition_to(AgentState::Idle);
         Ok(())
@@ -477,30 +512,96 @@ impl Agent {
     }
 
     /// Complete current turn if transitioning from non-Idle to Idle.
+    ///
+    /// `Stopped` 事件在 turn 全关（checkpoint + `turn_end` hook 链）
+    /// 之后发射——它是"run 彻底结束"的对外信号（2026-09-21 拍板）。
     async fn complete_turn_if_needed(&mut self, from_state: AgentState) {
-        if from_state == AgentState::Idle {
-            return;
-        }
         if self.context.current_state() != AgentState::Idle {
             return;
         }
-        if let Some(turn) = self.current_turn.take() {
-            if let Err(e) = turn.complete().await {
-                tracing::warn!("Failed to complete turn: {}", e);
+        if self.current_turn.is_none() || from_state == AgentState::Idle {
+            // 无 turn 可关时的原因出口：idle 路径也会留 Stopped 原因
+            // （如 standalone compact 被取消）——到 Idle 即发，不留给
+            // 下一 turn。
+            if let Some(reason) = self.last_stop_reason.take() {
+                self.emit_lifecycle_stopped(reason);
             }
+            return;
+        }
+        let reason = self.last_stop_reason.take();
+        let (stop_reason, error) = match &reason {
+            Some(StopReason::Completed { .. }) => ("completed", None),
+            Some(StopReason::Cancelled { .. }) => ("cancelled", None),
+            Some(StopReason::Shutdown) => ("shutdown", None),
+            Some(StopReason::Failed { error }) => ("failed", Some(error.clone())),
+            Some(StopReason::MaxIterations { .. }) => ("max_iterations", None),
+            None => {
+                // 防御兜底：正常出路都经 `note_stopped` / 循环底部 Err 臂
+                // 留原因；走到这说明内核漏了路径，warn 留痕以便排查。
+                tracing::warn!("turn ended without a recorded stop reason");
+                ("unknown", None)
+            }
+        };
+        self.complete_current_turn(stop_reason, error).await;
+        self.emit_lifecycle_stopped(reason.unwrap_or(StopReason::Failed {
+            error: "internal: turn ended without a recorded stop reason".to_string(),
+        }));
+    }
+
+    /// 关闭当前 turn：建 checkpoint（尽力）+ fire `turn_end` hook。
+    /// "`turn_start` 恰好配一次 `turn_end`" 的主要兑现点（其余：`rewind` 的
+    /// `cancel` 分支、loop 退出的 `is_shutdown` 防御）。
+    async fn complete_current_turn(&mut self, stop_reason: &'static str, error: Option<String>) {
+        let Some(turn) = self.current_turn.take() else {
+            return;
+        };
+        if let Err(e) = turn.complete().await {
+            tracing::warn!("Failed to complete turn: {}", e);
+        }
+        self.fire_turn_end(&turn, stop_reason, error).await;
+    }
+
+    /// fire `turn_end` hook：通知型、`fail-open`，await 全链兑现同 session
+    /// 同点串行保序。checkpoint 建成与否都发——turn 结束是事实，
+    /// checkpoint 失败已在上面留痕。
+    async fn fire_turn_end(
+        &self,
+        turn: &super::turn::Turn,
+        stop_reason: &str,
+        error: Option<String>,
+    ) {
+        let payload = crate::hook::TurnEndInput {
+            session_id: self.session_id.0.to_string(),
+            cwd: self.working_dir.to_string_lossy().into_owned(),
+            hook_event_name: crate::hook::POINT_TURN_END,
+            user_msg_id: turn.user_msg_id.as_str().to_string(),
+            stop_reason: stop_reason.to_string(),
+            duration_ms: turn.elapsed_ms(),
+            iterations: self.context.iteration_count(),
+            error,
+        };
+        match serde_json::to_vec(&payload) {
+            Ok(json) => {
+                crate::hook::run_session_point(
+                    &self.data_dir,
+                    crate::hook::POINT_TURN_END,
+                    self.session_id.as_str(),
+                    &self.working_dir,
+                    &json,
+                )
+                .await;
+            }
+            Err(e) => tracing::warn!("turn_end payload serialize failed: {e}"),
         }
     }
 
-    /// Helper to emit `AgentEvent::Lifecycle(Stopped(Failed))` and return Ok.
-    /// This stops the agent gracefully without entering the outer error recovery loop.
-    async fn fail_agent(&self, context: &str, error: AgentError) -> Result<(), AgentError> {
+    /// Helper to note `Stopped(Failed)` (event deferred to turn wind-down)
+    /// and return the error. This stops the agent gracefully without
+    /// entering the outer error recovery loop.
+    async fn fail_agent(&mut self, context: &str, error: AgentError) -> Result<(), AgentError> {
         let error_msg = format!("{context}: {error}");
         tracing::error!("failed: {}", error_msg);
-        self.emit(Event::Agent(AgentEvent::Lifecycle {
-            state: AgentStatus::Stopped {
-                reason: StopReason::Failed { error: error_msg },
-            },
-        }));
+        self.note_stopped(StopReason::Failed { error: error_msg });
         Err(error)
     }
 
@@ -529,33 +630,40 @@ impl Agent {
         }));
     }
 
-    /// Emit operation cancelled event
-    fn emit_operation_cancelled(&self, operation: &str) {
+    /// 记录 `Stopped` 原因（不发射）：lifecycle 事件统一推迟到 turn
+    /// 收尾（checkpoint + `turn_end` hook）完成后由
+    /// `complete_turn_if_needed` 发射——headless CLI 看到 `Stopped` 即
+    /// 退出关停 kernel，发射若早于收尾，hook 链会被进程退出截断
+    /// （2026-09-21 e2e 实证：checkpoint 落盘而 turn_end 未触发）。
+    /// 原因只存最近一次，消费即 take——不会把上一 turn 的错配给下一
+    /// turn。重复记录（如压缩取消后 fail_agent 再记 Failed）后者为准，
+    /// 事件只发一次。
+    fn note_stopped(&mut self, reason: StopReason) {
+        self.last_stop_reason = Some(reason);
+    }
+
+    /// `Stopped` lifecycle 事件的唯一发射口。
+    fn emit_lifecycle_stopped(&self, reason: StopReason) {
         self.emit(Event::Agent(AgentEvent::Lifecycle {
-            state: AgentStatus::Stopped {
-                reason: StopReason::Cancelled {
-                    operation: Some(operation.to_string()),
-                },
-            },
+            state: AgentStatus::Stopped { reason },
         }));
     }
 
-    /// Emit `Stopped` with the shutdown reason (kernel going down).
-    fn emit_stopped_shutdown(&self) {
-        self.emit(Event::Agent(AgentEvent::Lifecycle {
-            state: AgentStatus::Stopped {
-                reason: StopReason::Shutdown,
-            },
-        }));
+    /// Note operation cancelled (event deferred to turn wind-down).
+    fn note_operation_cancelled(&mut self, operation: &str) {
+        self.note_stopped(StopReason::Cancelled {
+            operation: Some(operation.to_string()),
+        });
     }
 
-    /// Emit `Stopped` lifecycle event with completed reason.
-    fn emit_stopped_completed(&self, finish_reason: Option<crate::types::FinishReason>) {
-        self.emit(Event::Agent(AgentEvent::Lifecycle {
-            state: AgentStatus::Stopped {
-                reason: StopReason::Completed { finish_reason },
-            },
-        }));
+    /// Note `Stopped` with the shutdown reason (kernel going down).
+    fn note_stopped_shutdown(&mut self) {
+        self.note_stopped(StopReason::Shutdown);
+    }
+
+    /// Note `Stopped` with completed reason.
+    fn note_stopped_completed(&mut self, finish_reason: Option<crate::types::FinishReason>) {
+        self.note_stopped(StopReason::Completed { finish_reason });
     }
 
     /// Emit user message event to frontend.
@@ -606,6 +714,11 @@ impl Agent {
     /// Returns first 50 chars of the first text block, handling unicode boundaries.
     /// Replaces newlines with spaces to ensure single-line summary.
     fn extract_summary(content: &[crate::types::ContentBlock]) -> String {
+        Self::extract_preview(content, 50)
+    }
+
+    /// 首个文本块的单行预览：换行压平后按字符截断（UTF-8 安全）。
+    fn extract_preview(content: &[crate::types::ContentBlock], max_chars: usize) -> String {
         let text = content
             .iter()
             .find_map(|block| match block {
@@ -617,31 +730,76 @@ impl Agent {
         // Replace all line endings with spaces to ensure single-line summary
         let text = text.replace(['\n', '\r'], " ");
 
-        // Truncate to 50 chars
-        crate::utils::strs::truncate_by_chars(&text, 50, "...")
+        crate::utils::strs::truncate_by_chars(&text, max_chars, "...")
     }
 
     /// Start a new turn if not already in one.
     async fn start_turn_if_needed(&mut self) {
-        if self.current_turn.is_none() {
-            if let Some(msg) = self.message_buffer.messages().iter().rfind(|m| {
-                m.role == crate::types::Role::User
-                    && !m
+        if self.current_turn.is_some() {
+            return;
+        }
+        // 在不可变借用内一次取齐，避免与后面对 self 的可变写入冲突。
+        let found =
+            self.message_buffer
+                .messages()
+                .iter()
+                .rfind(|m| {
+                    m.role == crate::types::Role::User
+                        && !m.metadata.as_ref().is_some_and(|meta| {
+                            meta.contains_key(crate::types::INTERRUPTED_META_KEY)
+                        })
+                })
+                .map(|msg| {
+                    let is_steer = msg
                         .metadata
                         .as_ref()
-                        .is_some_and(|meta| meta.contains_key(crate::types::INTERRUPTED_META_KEY))
-            }) {
-                // Extract summary from user message content
-                let summary = Self::extract_summary(&msg.content);
-                let turn = Arc::new(super::turn::Turn::new(
-                    msg.id.clone(),
-                    self.session_id.0.clone(),
-                    summary,
-                    self.checkpoint_store.clone(),
+                        .and_then(|meta| meta.get(crate::types::IS_STEER_META_KEY))
+                        .is_some_and(|value| value == "true");
+                    (
+                        msg.id.clone(),
+                        Self::extract_summary(&msg.content),
+                        is_steer,
+                        Self::extract_preview(&msg.content, TURN_HOOK_INPUT_PREVIEW_CHARS),
+                    )
+                });
+        let Some((msg_id, summary, is_steer, input_preview)) = found else {
+            return;
+        };
+        // 新 turn = 新原因周期：清掉可能残留（正常路径消费即 take，
+        // 这里兜异常路径的保险）。
+        self.last_stop_reason = None;
+        let turn = Arc::new(super::turn::Turn::new(
+            msg_id.clone(),
+            self.session_id.0.clone(),
+            summary,
+            self.checkpoint_store.clone(),
+            &self.data_dir,
+        ));
+        self.current_turn = Some(turn);
+
+        // turn_start hook（通知型，fail-open）。锚定消息经 bus 异步
+        // 落盘，此刻 `session cat` 可能还读不到它——preview 必须随
+        // payload 自带。
+        let payload = crate::hook::TurnStartInput {
+            session_id: self.session_id.0.to_string(),
+            cwd: self.working_dir.to_string_lossy().into_owned(),
+            hook_event_name: crate::hook::POINT_TURN_START,
+            user_msg_id: msg_id.as_str().to_string(),
+            is_steer,
+            input_preview,
+        };
+        match serde_json::to_vec(&payload) {
+            Ok(json) => {
+                crate::hook::run_session_point(
                     &self.data_dir,
-                ));
-                self.current_turn = Some(turn);
+                    crate::hook::POINT_TURN_START,
+                    self.session_id.as_str(),
+                    &self.working_dir,
+                    &json,
+                )
+                .await;
             }
+            Err(e) => tracing::warn!("turn_start payload serialize failed: {e}"),
         }
     }
 
@@ -657,6 +815,11 @@ impl Agent {
             if let Err(e) = turn.cancel().await {
                 tracing::warn!("Failed to cancel turn on rewind: {}", e);
             }
+            // rewind 取消的 turn 也算 turn 结束（reason=rewound）——
+            // turn_start 发过就必须有 turn_end。原因槽一并清掉：本
+            // turn 作废，里面的原因不得留给下一 turn。
+            self.last_stop_reason = None;
+            self.fire_turn_end(&turn, "rewound", None).await;
         }
 
         // Rewind is keyed by message id on two independent stores: the live
@@ -1207,10 +1370,10 @@ impl Agent {
                 tracing::info!("compaction cancelled");
                 if self.cancel_token.take_for_shutdown() {
                     self.mark_interrupted("daemon shutdown", true).await;
-                    self.emit_stopped_shutdown();
+                    self.note_stopped_shutdown();
                 } else {
                     self.mark_interrupted("cancelled", false).await;
-                    self.emit_operation_cancelled("compaction");
+                    self.note_operation_cancelled("compaction");
                 }
                 Err("Compaction was cancelled".to_string())
             }
@@ -1361,13 +1524,9 @@ impl Agent {
                 "inconsistent model stream completion: finish_reason={finish_reason:?}, has_tool_calls={has_tool_calls}"
             );
             tracing::error!("{error}");
-            self.emit(Event::Agent(AgentEvent::Lifecycle {
-                state: AgentStatus::Stopped {
-                    reason: StopReason::Failed {
-                        error: error.clone(),
-                    },
-                },
-            }));
+            self.note_stopped(StopReason::Failed {
+                error: error.clone(),
+            });
             self.context.transition_to(AgentState::Idle);
             return Ok(());
         }
@@ -1398,7 +1557,7 @@ impl Agent {
                         ?finish_reason,
                         "model stopped again after auto-continue; not continuing a second time"
                     );
-                    self.emit_stopped_completed(finish_reason);
+                    self.note_stopped_completed(finish_reason);
                     self.context.transition_to(AgentState::Idle);
                 }
                 return Ok(());
@@ -1406,18 +1565,14 @@ impl Agent {
             Some(FinishReason::PauseTurn) => {
                 let error = "Anthropic pause_turn requires preserving server-side tool state, which is not supported";
                 tracing::error!("{error}");
-                self.emit(Event::Agent(AgentEvent::Lifecycle {
-                    state: AgentStatus::Stopped {
-                        reason: StopReason::Failed {
-                            error: error.to_string(),
-                        },
-                    },
-                }));
+                self.note_stopped(StopReason::Failed {
+                    error: error.to_string(),
+                });
                 self.context.transition_to(AgentState::Idle);
                 return Ok(());
             }
             Some(FinishReason::Refusal) => {
-                self.emit_stopped_completed(finish_reason);
+                self.note_stopped_completed(finish_reason);
                 self.context.transition_to(AgentState::Idle);
                 return Ok(());
             }
@@ -1427,7 +1582,7 @@ impl Agent {
             }
         }
 
-        self.emit_stopped_completed(finish_reason);
+        self.note_stopped_completed(finish_reason);
         self.context.transition_to(AgentState::Idle);
         Ok(())
     }

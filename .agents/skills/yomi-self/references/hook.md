@@ -5,7 +5,7 @@
 ## 目录布局
 
 ```
-$YOMI_DATA_DIR/hooks/pre_tool_use/   # gate 点（另有 daemon_up/daemon_down 通知点，见末节）
+$YOMI_DATA_DIR/hooks/pre_tool_use/   # gate 点（另有 turn_start/turn_end 与 daemon_up/daemon_down 通知点，见末节）
 ├── 10-guard                         # 带执行位即生效（裸文件形态）
 ├── 15-pkg/                          # 目录形态：内含带执行位的 run 即生效，
 │   ├── run                          #   伴生文件放同目录（dirname "$0" 即包目录）
@@ -71,6 +71,51 @@ exit 2
 ## 与 Claude Code 的已知差异
 
 无 `transcript_path` 字段；超时固定 30s（CC 默认 60s，30–60s 的慢 guard 语义反转：CC 否决、此处 fail-open）；不支持 CC 的 stdout JSON 高级协议（`permissionDecision`）；非 0/2 退出码的 stderr 不进用户界面（CC 会展示）。
+
+## turn 生命周期 hook
+
+通知型点（v0.10.37 起），无否决语义：退出码只记 warn 日志，fail-open，
+不中断后续脚本。turn = agent 锚定一条 user 消息到回到 Idle 的完整周期
+（= checkpoint 粒度）。
+
+| 点 | 触发 |
+|---|---|
+| `turn_start` | 锚定 user 消息开工时（Idle→Streaming，`Turn` 创建成功） |
+| `turn_end` | turn 关闭时（任何非 Idle→Idle，外加 rewind 取消与 loop 退出防御） |
+
+**不变量：每次 `turn_start` 恰好配一次 `turn_end`**；SIGKILL/崩溃例外
+（`turn_end` 不保证，攒状态的脚本把 `turn_start` 当持久标记）。同
+session 同点串行保序（内核 await 全链）；跨 session 并发——同名 hook
+的 state 目录共享，落盘按 `session_id` 分文件。subagent 的 turn 同样
+触发（`session_id` 区分）。
+
+stdin（单行 JSON，契约只增不改）：
+
+```json
+// turn_start
+{"session_id":"sess_…","cwd":"/work/dir","hook_event_name":"turn_start",
+ "user_msg_id":"msg_…","is_steer":false,"input_preview":"前 200 字符…"}
+// turn_end（error 字段仅 failed 时出现）
+{"session_id":"sess_…","cwd":"/work/dir","hook_event_name":"turn_end",
+ "user_msg_id":"msg_…","stop_reason":"completed","duration_ms":12345,
+ "iterations":7}
+```
+
+`stop_reason`：`completed`/`failed`/`cancelled`/`shutdown`/
+`max_iterations`/`rewound`（`unknown` = 内核路径遗漏的防御兜底，正常
+不应出现）。
+
+边界语义：mid-turn 的 steer 插队**不**新开 turn（idle 态 steer 会，
+`is_steer=true`）；`user_msg_id` 可重复（`/continue`、rewind 后重做
+以同一锚消息再开 turn——去重不能只看 msg id）；`input_preview` 必须
+取自 payload（锚定消息经 bus 异步落盘，`session cat` 此刻可能还读
+不到）。进程 cwd = 会话工作目录，注入 `YOMI_SESSION_ID`（可回连
+CLI），`YOMI_HOOK_EVENT` 不注入。
+
+配套时序（同版落地）：`Stopped` lifecycle 事件推迟到 turn 全关
+（checkpoint + `turn_end` hook 链）之后发射——headless `yomi run`
+看到 `Stopped` 即退出，顺序反了 hook 会被进程退出截断；事件消费者
+看到的"结束"= 真正全部结束。示例：`examples/hooks/turn_end/10-audit`。
 
 ## daemon 生命周期 hook
 

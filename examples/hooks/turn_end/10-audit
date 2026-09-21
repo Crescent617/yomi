@@ -1,0 +1,19 @@
+#!/bin/sh
+# 外挂示例·hook（turn 生命周期通知）：每个 turn 结束时往审计日志追加
+# 一行（session/原因/耗时/迭代数），并给失败的 turn 单独留档。
+# 部署：cp 到 <data_dir>/hooks/turn_end/10-audit 并 chmod +x。
+# 契约：stdin 单行 JSON（user_msg_id/stop_reason/duration_ms/iterations/
+# error）；退出码只记日志——通知型无否决，想拦操作用 pre_tool_use。
+# 注意：state 目录跨 session 共享，落盘按 session_id 分文件；stdin
+# 只能读一次——先存盘，后续一律从文件读。
+PAYLOAD="$YOMI_STATE_DIR/last-payload.json"
+cat > "$PAYLOAD" || exit 0
+
+jq -r '"\(.session_id)\t\(.user_msg_id)\t\(.stop_reason)\t\(.duration_ms)ms\titer=\(.iterations)"' \
+  "$PAYLOAD" >> "$YOMI_STATE_DIR/audit.log" || exit 0
+
+# 失败的 turn 连 payload 一起单独留一份，便于事后排查。
+jq -e '.stop_reason == "failed"' "$PAYLOAD" >/dev/null 2>&1 || exit 0
+mkdir -p "$YOMI_STATE_DIR/failed"
+cp "$PAYLOAD" "$YOMI_STATE_DIR/failed/$(date +%s).json"
+exit 0

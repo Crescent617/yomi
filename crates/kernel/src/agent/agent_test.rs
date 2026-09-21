@@ -1427,6 +1427,12 @@ async fn empty_completion_is_not_persisted_and_fails_turn_cleanly() {
     );
 
     // ...but the turn must surface as Failed, not silently Completed.
+    // `Stopped` 的发射点在 turn 收尾（2026-09-21 起：先 checkpoint +
+    // turn_end hook，再发事件）——方法层驱动须显式收尾一次；这里
+    // handle_streaming 内部已转 Idle，直接走无 turn 的原因出口。
+    agent
+        .complete_turn_if_needed(crate::agent::AgentState::Streaming)
+        .await;
     let mut failed_error = None;
     while let Ok(Some((_, envelope))) =
         tokio::time::timeout(Duration::from_secs(2), subscriber.recv()).await
@@ -1702,4 +1708,345 @@ async fn interrupted_marker_user_cancel_is_published_to_bus() {
         seen.is_ok(),
         "user-cancel marker must be published as MessageAdded on the bus"
     );
+}
+
+// ── turn_start / turn_end hook 接线（2026-09-21）────────────────────
+//
+// 不变量：每次 turn_start 恰好配一次 turn_end，stop_reason 区分出路。
+// 这里在方法层驱动（start_turn_if_needed / complete_turn_if_needed /
+// process_rewind），hook 脚本统一为捕获器：stdin 追加落 state 目录。
+
+#[cfg(unix)]
+struct TurnHookHarness {
+    agent: crate::agent::Agent,
+    msg_id: crate::types::MessageId,
+    data: std::path::PathBuf,
+    work: std::path::PathBuf,
+    _data_dir: tempfile::TempDir,
+    _working_dir: tempfile::TempDir,
+}
+
+#[cfg(unix)]
+async fn build_turn_hook_agent(session_id: &str) -> TurnHookHarness {
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs};
+    use std::collections::BTreeMap;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::sync::Arc;
+
+    let data_dir = tempfile::tempdir().unwrap();
+    let working_dir = tempfile::tempdir().unwrap();
+    for point in ["turn_start", "turn_end"] {
+        let dir = data_dir.path().join("hooks").join(point);
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("00-cap");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\n{ cat; echo; } >> \"$YOMI_STATE_DIR/stdin.jsonl\"\nexit 0\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let mut models = BTreeMap::new();
+    models.insert(
+        "test".to_string(),
+        crate::provider::ModelConfig {
+            name: "test".to_string(),
+            model_id: "test-id".to_string(),
+            ..Default::default()
+        },
+    );
+    let shared = Arc::new(AgentShared::with_data_dir(
+        Arc::new(models),
+        "test".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+        None,
+        data_dir.path().to_path_buf(),
+    ));
+    let args = AgentSpawnArgs {
+        base_prompt: "test".to_string(),
+        skills: Vec::new(),
+        history: Vec::new(),
+        session_id: session_id.to_string(),
+        parent_session_id: None,
+        max_iterations: 100,
+        working_dir: working_dir.path().to_path_buf(),
+        cancel_token: None,
+        tool_flags: crate::tools::ToolFlags::new(false),
+        file_state_store: None,
+        tool_blocklist: Vec::new(),
+        max_tool_output_length: 1024,
+        mailbox: Arc::new(crate::comms::Mailbox::new()),
+        input_bus: None,
+        ext_tools: Vec::new(),
+    };
+    let mut agent = Agent::new(&shared, args).await;
+    let msg = crate::types::Message::user("hello turn hooks");
+    let msg_id = msg.id.clone();
+    agent.push_user_message(msg);
+    TurnHookHarness {
+        agent,
+        msg_id,
+        data: data_dir.path().to_path_buf(),
+        work: working_dir.path().to_path_buf(),
+        _data_dir: data_dir,
+        _working_dir: working_dir,
+    }
+}
+
+#[cfg(unix)]
+fn hook_payloads(data: &std::path::Path, point: &str) -> Vec<serde_json::Value> {
+    let path = data
+        .join("state/hooks")
+        .join(point)
+        .join("00-cap/stdin.jsonl");
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn turn_start_fires_with_full_payload() {
+    let mut h = build_turn_hook_agent("sess_th").await;
+    h.agent.start_turn_if_needed().await;
+    assert!(h.agent.current_turn.is_some());
+
+    let payloads = hook_payloads(&h.data, "turn_start");
+    assert_eq!(payloads.len(), 1);
+    let p = &payloads[0];
+    assert_eq!(p["session_id"], "sess_th");
+    assert_eq!(p["cwd"], h.work.to_string_lossy().as_ref());
+    assert_eq!(p["hook_event_name"], "turn_start");
+    assert_eq!(p["user_msg_id"], h.msg_id.as_str());
+    assert_eq!(p["is_steer"], false);
+    assert_eq!(p["input_preview"], "hello turn hooks");
+    assert!(hook_payloads(&h.data, "turn_end").is_empty());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn turn_end_completed_fires_once_with_checkpoint() {
+    let mut h = build_turn_hook_agent("sess_th").await;
+    h.agent.start_turn_if_needed().await;
+    h.agent
+        .note_stopped_completed(Some(crate::types::FinishReason::Stop));
+    h.agent
+        .context
+        .transition_to(crate::agent::AgentState::Idle);
+    h.agent
+        .complete_turn_if_needed(crate::agent::AgentState::Streaming)
+        .await;
+
+    assert!(h.agent.current_turn.is_none());
+    let payloads = hook_payloads(&h.data, "turn_end");
+    assert_eq!(payloads.len(), 1);
+    let p = &payloads[0];
+    assert_eq!(p["hook_event_name"], "turn_end");
+    assert_eq!(p["stop_reason"], "completed");
+    assert_eq!(p["user_msg_id"], h.msg_id.as_str());
+    assert!(p.get("error").is_none());
+    assert!(p["duration_ms"].as_u64().is_some());
+    assert!(p["iterations"].as_u64().is_some());
+    // checkpoint 已建。
+    let cps = h
+        .agent
+        .checkpoint_store
+        .get_session_checkpoints(&h.agent.session_id)
+        .await
+        .unwrap();
+    assert_eq!(cps.len(), 1);
+    assert_eq!(cps[0].message_id, h.msg_id.as_str());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn turn_end_failed_carries_error() {
+    let mut h = build_turn_hook_agent("sess_th").await;
+    h.agent.start_turn_if_needed().await;
+    // fail_agent 路径：Stopped(Failed) 事件 + 原因留槽。
+    let _ = h
+        .agent
+        .fail_agent("ctx", crate::agent::AgentError::Other("boom".to_string()))
+        .await;
+    h.agent
+        .context
+        .transition_to(crate::agent::AgentState::Idle);
+    h.agent
+        .complete_turn_if_needed(crate::agent::AgentState::Streaming)
+        .await;
+
+    let payloads = hook_payloads(&h.data, "turn_end");
+    assert_eq!(payloads.len(), 1);
+    assert_eq!(payloads[0]["stop_reason"], "failed");
+    assert_eq!(payloads[0]["error"], "ctx: boom");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn turn_end_cancelled_and_max_iterations_reasons() {
+    // cancelled
+    let mut h = build_turn_hook_agent("sess_th").await;
+    h.agent.start_turn_if_needed().await;
+    h.agent.note_operation_cancelled("streaming");
+    h.agent
+        .context
+        .transition_to(crate::agent::AgentState::Idle);
+    h.agent
+        .complete_turn_if_needed(crate::agent::AgentState::Streaming)
+        .await;
+    let payloads = hook_payloads(&h.data, "turn_end");
+    assert_eq!(payloads.len(), 1);
+    assert_eq!(payloads[0]["stop_reason"], "cancelled");
+
+    // max_iterations：算 turn 结束，checkpoint 必须建（2026-09-21 修洞前
+    // 此路径 continue 跳过收尾，checkpoint 与 turn_end 都缺）。
+    let mut h = build_turn_hook_agent("sess_th").await;
+    h.agent.start_turn_if_needed().await;
+    h.agent
+        .note_stopped(crate::event::StopReason::MaxIterations { reached: 3 });
+    h.agent
+        .context
+        .transition_to(crate::agent::AgentState::Idle);
+    h.agent
+        .complete_turn_if_needed(crate::agent::AgentState::Streaming)
+        .await;
+    let payloads = hook_payloads(&h.data, "turn_end");
+    assert_eq!(payloads.len(), 1);
+    assert_eq!(payloads[0]["stop_reason"], "max_iterations");
+    let cps = h
+        .agent
+        .checkpoint_store
+        .get_session_checkpoints(&h.agent.session_id)
+        .await
+        .unwrap();
+    assert_eq!(cps.len(), 1, "max_iterations must close the checkpoint too");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn turn_end_unknown_reason_is_defensive_fallback() {
+    let mut h = build_turn_hook_agent("sess_th").await;
+    h.agent.start_turn_if_needed().await;
+    // 不留任何原因直接结束：正常路径不会这样，兜底必须顶住且恰好一次。
+    h.agent
+        .context
+        .transition_to(crate::agent::AgentState::Idle);
+    h.agent
+        .complete_turn_if_needed(crate::agent::AgentState::Streaming)
+        .await;
+    let payloads = hook_payloads(&h.data, "turn_end");
+    assert_eq!(payloads.len(), 1);
+    assert_eq!(payloads[0]["stop_reason"], "unknown");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn rewind_fires_turn_end_rewound() {
+    let mut h = build_turn_hook_agent("sess_th").await;
+    h.agent.start_turn_if_needed().await;
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    h.agent
+        .process_rewind(h.msg_id.clone(), crate::checkpoint::RewindTarget::Both, tx)
+        .await
+        .unwrap();
+    rx.recv().await.unwrap().unwrap();
+
+    assert!(h.agent.current_turn.is_none());
+    let payloads = hook_payloads(&h.data, "turn_end");
+    assert_eq!(payloads.len(), 1);
+    assert_eq!(payloads[0]["stop_reason"], "rewound");
+    assert_eq!(payloads[0]["user_msg_id"], h.msg_id.as_str());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn turn_hooks_exactly_once_per_turn_including_restart() {
+    let mut h = build_turn_hook_agent("sess_th").await;
+    for _ in 0..2 {
+        h.agent.start_turn_if_needed().await;
+        h.agent.note_stopped_completed(None);
+        h.agent
+            .context
+            .transition_to(crate::agent::AgentState::Idle);
+        h.agent
+            .complete_turn_if_needed(crate::agent::AgentState::Streaming)
+            .await;
+        // /continue 语义：回到 Streaming，同一锚消息再次开 turn。
+        h.agent
+            .context
+            .transition_to(crate::agent::AgentState::Streaming);
+    }
+    let starts = hook_payloads(&h.data, "turn_start");
+    let ends = hook_payloads(&h.data, "turn_end");
+    assert_eq!(starts.len(), 2);
+    assert_eq!(ends.len(), 2);
+    // 同一锚消息可重复开 turn（文档化语义，hook 须容忍）。
+    assert_eq!(starts[0]["user_msg_id"], starts[1]["user_msg_id"]);
+    assert_eq!(ends[0]["stop_reason"], "completed");
+    assert_eq!(ends[1]["stop_reason"], "completed");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn mid_turn_steer_stays_in_turn_next_turn_anchors_to_it() {
+    let mut h = build_turn_hook_agent("sess_th").await;
+    h.agent.start_turn_if_needed().await;
+    // mid-turn steer 插队：turn 已存在，不新开 turn、不触发 hook。
+    h.agent
+        .inject_user_message(
+            vec![crate::types::ContentBlock::Text {
+                text: "steer note".to_string(),
+            }],
+            true,
+        )
+        .await
+        .unwrap();
+    h.agent.start_turn_if_needed().await;
+    assert_eq!(hook_payloads(&h.data, "turn_start").len(), 1);
+
+    h.agent.note_stopped_completed(None);
+    h.agent
+        .context
+        .transition_to(crate::agent::AgentState::Idle);
+    h.agent
+        .complete_turn_if_needed(crate::agent::AgentState::Streaming)
+        .await;
+    // 下一 turn 锚定 buffer 里最近一条 user 消息 = 那条 steer。
+    h.agent
+        .context
+        .transition_to(crate::agent::AgentState::Streaming);
+    h.agent.start_turn_if_needed().await;
+
+    let starts = hook_payloads(&h.data, "turn_start");
+    assert_eq!(starts.len(), 2);
+    assert_eq!(starts[0]["is_steer"], false);
+    assert_eq!(starts[1]["is_steer"], true);
+    assert_ne!(starts[0]["user_msg_id"], starts[1]["user_msg_id"]);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn no_turn_end_without_turn_and_stale_reason_cleared() {
+    let mut h = build_turn_hook_agent("sess_th").await;
+    // 无 turn 时残留原因（如 Idle 臂错误恢复）不得错配、不得触发 hook。
+    h.agent.last_stop_reason = Some(crate::event::StopReason::Failed {
+        error: "stale".to_string(),
+    });
+    h.agent
+        .complete_turn_if_needed(crate::agent::AgentState::Streaming)
+        .await;
+    assert!(h.agent.last_stop_reason.is_none());
+    assert!(hook_payloads(&h.data, "turn_end").is_empty());
 }

@@ -51,7 +51,7 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 
 ## hook
 
-`$YOMI_DATA_DIR/hooks/<事件>/` 下带执行位的条目即注册（事件点：`pre_tool_use`、`daemon_up`、`daemon_down`）。契约见 `references/hook.md`。
+`$YOMI_DATA_DIR/hooks/<事件>/` 下带执行位的条目即注册（事件点：`pre_tool_use`、`turn_start`、`turn_end`、`daemon_up`、`daemon_down`）。契约见 `references/hook.md`。
 
 ## tool
 
