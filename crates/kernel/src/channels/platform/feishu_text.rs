@@ -22,7 +22,10 @@ impl FeishuAdapter {
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or_default();
         let text = match msg_type {
-            "text" => content["text"].as_str().unwrap_or("").to_string(),
+            "text" => rewrite_user_mention_keys(
+                content["text"].as_str().unwrap_or(""),
+                item["mentions"].as_array(),
+            ),
             "post" => {
                 let text = Self::extract_post_text(&content);
                 if text.is_empty() {
@@ -208,7 +211,9 @@ impl FeishuAdapter {
                 .filter(|line| !line.is_empty())
                 .collect();
             if !lines.is_empty() {
-                let body = Self::dedup_bare_links(&lines.join("\n"));
+                // content_v2 原文里的 `<at user_id=…>` 标签一并落成中性
+                // 契约（可读、可回环出站）。
+                let body = rewrite_card_at_tags(&Self::dedup_bare_links(&lines.join("\n")));
                 return match title {
                     Some(t) => format!("{t}\n{body}"),
                     None => body,
@@ -225,7 +230,19 @@ impl FeishuAdapter {
                     .as_array()
                     .map(|runs| {
                         runs.iter()
-                            .filter_map(|r| r["text"].as_str())
+                            .map(|r| {
+                                // at run 无 text 字段，按 id+name 落成中
+                                // 性契约（否则渲染态 mention 整段丢失）。
+                                if r["tag"].as_str() == Some("at") {
+                                    let id = r["user_id"].as_str().unwrap_or("");
+                                    let name = r["user_name"].as_str().unwrap_or("");
+                                    if id.is_empty() {
+                                        return name.to_string();
+                                    }
+                                    return format!("<@{id}>{name}");
+                                }
+                                r["text"].as_str().unwrap_or("").to_string()
+                            })
                             .collect::<String>()
                     })
                     .unwrap_or_default();
@@ -339,6 +356,35 @@ impl FeishuAdapter {
     }
 }
 
+/// Rewrite Feishu's literal `@_user_N` mention placeholders into the
+/// platform-neutral `<@open_id>名字` contract (name appended when the
+/// payload carries one; bare `<@open_id>` otherwise). Feishu delivers
+/// text messages with unreadable `@_user_1` markers plus a `mentions`
+/// array mapping each key to `{id.open_id, name}` — the rewrite makes
+/// mentions human-readable AND round-trippable: the neutral form is
+/// exactly what the outbound path (`utils::rewrite_mentions`) turns back
+/// into a real at-tag, so quoting/relaying the text preserves the target.
+/// Only keys listed in `mentions` are touched (a literal `@_user_1`
+/// typed by hand has no array entry and stays verbatim). Idempotent for
+/// any text without listed keys.
+pub(crate) fn rewrite_user_mention_keys(
+    text: &str,
+    mentions: Option<&Vec<serde_json::Value>>,
+) -> String {
+    mentions
+        .into_iter()
+        .flatten()
+        .fold(text.to_string(), |acc, mention| {
+            let (Some(key), Some(open_id)) =
+                (mention["key"].as_str(), mention["id"]["open_id"].as_str())
+            else {
+                return acc;
+            };
+            let name = mention["name"].as_str().unwrap_or("");
+            acc.replace(key, &format!("<@{open_id}>{name}"))
+        })
+}
+
 pub(crate) fn strip_bot_mention(
     text: &str,
     mentions: Option<&Vec<serde_json::Value>>,
@@ -373,11 +419,12 @@ pub(crate) fn rewrite_card_at_tags(text: &str) -> String {
 pub(crate) fn rewrite_at_tag_segment(segment: &str, out: &mut String) {
     use std::fmt::Write as _;
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    // `<at id=ou_x>name</at>` or `<at id="ou_x">name</at>` — id bounded like
-    // the neutral contract (`{1,64}`); the name is any non-`<` text.
+    // `<at id=ou_x>name</at>` / `<at user_id=ou_x>name</at>`（post 的
+    // content_v2 原文形态），id 可带引号——id 边界同中性契约
+    // (`{1,64}`)；name 为任意非 `<` 文本。
     let re = RE.get_or_init(|| {
         regex::Regex::new(
-            r#"<at\s+id=(?:"([A-Za-z0-9_\-]{1,64})"|([A-Za-z0-9_\-]{1,64}))>([^<]*)</at>"#,
+            r#"<at\s+(?:user_)?id=(?:"([A-Za-z0-9_\-]{1,64})"|([A-Za-z0-9_\-]{1,64}))>([^<]*)</at>"#,
         )
         .unwrap()
     });

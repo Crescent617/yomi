@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 新增 hook 事件 `turn_start` / `turn_end`：agent 开始处理一条消息与该轮处理完毕（含取消、失败、rewind）时各触发一次，可用于审计留档、记忆固化等自动化；契约见 `docs/EXTENSIONS.md`，示例见 `examples/hooks/turn_end/10-audit`。
 
 ### Changed
+- 飞书消息里的 @ 提及在 agent 上下文与历史引用中显示为真实 open_id+名字（如 `<@ou_xxx>张三`），不再是不知所云的 `@_user_1` 占位符；提及对象可以被 agent 直接引用回 @。
 - 会话的"运行结束"事件推迟到该轮完全收尾后发出，收尾期间会话状态显示为 `winding_down`（算运行中）：daemon 关停与渠道回复都会等收尾完成，结束回调类 hook 不再被 headless 进程退出或关停截断。
 - 达到迭代上限（max_iterations）时现在会正常创建检查点并结束该轮（此前该轮状态悬挂，且下一条消息的检查点会错锚到上一条消息）。
 

@@ -2397,3 +2397,88 @@ fn build_card_rewrites_mentions() {
     assert!(card.contains("<at id=ou_abc></at>"), "{card}");
     assert!(card.contains("`<@ou_x>`"), "{card}");
 }
+
+/// 入站 mention 端到端：live 事件的 `@_user_N` 占位符在 content 与
+/// `raw_text` 里都落成中性契约；content 保留 bot 自己的（agent 看得见
+/// 自己被 @），`raw_text` 仍先剥 bot key（闸/命令语义不变）。
+#[tokio::test]
+async fn text_event_mentions_resolve_to_neutral_contract() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    *adapter.bot_open_id.lock().await = Some("ou_bot".to_string());
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let mut event = receive_event("text", &json!({ "text": "@_user_1 叫 @_user_2 看下这个" }));
+    event["event"]["message"]["mentions"] = json!([
+        { "key": "@_user_1", "id": { "open_id": "ou_bot" }, "name": "小嘟" },
+        { "key": "@_user_2", "id": { "open_id": "ou_alice" }, "name": "爱丽丝" },
+    ]);
+
+    adapter.parse_event_json(&event, &tx).await.unwrap();
+
+    let msg = expect_message(rx.try_recv().expect("text message forwarded"));
+    assert_eq!(
+        msg.raw_text.as_deref(),
+        Some("叫 <@ou_alice>爱丽丝 看下这个"),
+        "raw_text: bot key stripped, others rewritten"
+    );
+    let crate::types::ContentBlock::Text { text } = &msg.content[0] else {
+        panic!("expected text block");
+    };
+    assert!(
+        text.contains("<@ou_bot>小嘟 叫 <@ou_alice>爱丽丝 看下这个"),
+        "content keeps bot mention in readable form: {text}"
+    );
+}
+
+/// 历史文本消息：item 级 `mentions` 同样落地（`quoted_message` /
+/// `recent_chat_history` 不再出现 `@_user_1`）。
+#[test]
+fn extract_history_content_text_rewrites_mentions() {
+    let item = json!({
+        "msg_type": "text",
+        "body": { "content": json!({ "text": "@_user_1 之前说的" }).to_string() },
+        "mentions": [
+            { "key": "@_user_1", "id": { "open_id": "ou_alice" }, "name": "爱丽丝" }
+        ]
+    });
+    let (text, keys) = super::FeishuAdapter::extract_history_content(&item);
+    assert_eq!(text, "<@ou_alice>爱丽丝 之前说的");
+    assert!(keys.is_empty());
+}
+
+/// post 的 `content_v2` 原文里 `<at user_id=…>` 落成中性契约。
+#[test]
+fn extract_post_text_content_v2_rewrites_at_tags() {
+    let content = json!({
+        "zh_cn": {
+            "title": "",
+            "content": [[{ "tag": "text", "text": "ignored" }]],
+            "content_v2": [[
+                { "tag": "md", "text": "请 <at user_id=\"ou_alice\">爱丽丝</at> 与 <at user_id=ou_bob>Bob</at> 看" }
+            ]]
+        }
+    });
+    assert_eq!(
+        super::FeishuAdapter::extract_post_text(&content),
+        "请 <@ou_alice>爱丽丝 与 <@ou_bob>Bob 看"
+    );
+}
+
+/// post 渲染态 fallback：at run（无 text 字段）不再整段丢失。
+#[test]
+fn extract_post_text_rendered_at_run_is_kept() {
+    let content = json!({
+        "zh_cn": {
+            "title": "",
+            "content": [[
+                { "tag": "text", "text": "叫 " },
+                { "tag": "at", "user_id": "ou_alice", "user_name": "爱丽丝" },
+                { "tag": "text", "text": " 看" }
+            ]]
+        }
+    });
+    assert_eq!(
+        super::FeishuAdapter::extract_post_text(&content),
+        "叫 <@ou_alice>爱丽丝 看"
+    );
+}

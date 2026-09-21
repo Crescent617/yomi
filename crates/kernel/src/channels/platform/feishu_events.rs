@@ -41,7 +41,7 @@ pub(crate) const FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_
 // ── Types ────────────────────────────────────────────────────────────
 
 use crate::channels::feishu::{api_err, FeishuAdapter};
-use crate::channels::feishu_text::strip_bot_mention;
+use crate::channels::feishu_text::{rewrite_user_mention_keys, strip_bot_mention};
 
 impl FeishuAdapter {
     /// Handle one binary frame. The `write` lock is held only around the
@@ -355,10 +355,15 @@ impl FeishuAdapter {
         let header = format!(
             "[{ts}]{from_part}[chat_id: {chat_id}][msg_id: {msg_id}]{thread_part}{root_part}[platform: feishu]"
         );
-        let formatted = if text.is_empty() {
+        // 入站 mention 占位符（`@_user_N`）统一落成中性契约
+        // `<@open_id>名字`：content 用全量改写（含 bot 自己的 key——
+        // agent 看得见自己被 @）；raw_text 先剥 bot key（闸与命令解析
+        // 的既有语义）再改写其余。
+        let readable_text = rewrite_user_mention_keys(&text, message["mentions"].as_array());
+        let formatted = if readable_text.is_empty() {
             header
         } else {
-            format!("{header}\n{text}")
+            format!("{header}\n{readable_text}")
         };
 
         info!(
@@ -373,11 +378,14 @@ impl FeishuAdapter {
             "Feishu message"
         );
 
-        let raw_text = strip_bot_mention(
-            &text,
-            message["mentions"].as_array(),
-            bot_open_id.as_deref(),
-        );
+        let raw_text = {
+            let stripped = strip_bot_mention(
+                &text,
+                message["mentions"].as_array(),
+                bot_open_id.as_deref(),
+            );
+            rewrite_user_mention_keys(&stripped, message["mentions"].as_array())
+        };
 
         // Images are NOT downloaded here — keys travel with the message
         // for post-gate download (see `ChannelMessage::image_keys`).
