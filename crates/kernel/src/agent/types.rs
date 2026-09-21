@@ -343,6 +343,14 @@ impl AgentExecutionContext {
         *self.inner.state_tx.borrow()
     }
 
+    /// 订阅实时状态（watch 通道，写入即同步——不走事件循环）：
+    /// conductor 的活跃镜像直接持这份接收端，/stop 臂与 daemon 关停
+    /// 读到的永远是活状态（2026-09-21 R2 评审根治：经事件循环同步
+    /// 的镜像在条目移除后冻结，延等判定形同虚设）。
+    pub fn subscribe(&self) -> tokio::sync::watch::Receiver<AgentState> {
+        self.inner.state_tx.subscribe()
+    }
+
     pub fn increment_iteration(&self) {
         self.inner.iteration_count.fetch_add(1, Ordering::SeqCst);
     }

@@ -177,3 +177,20 @@ fn rendered_system_prompt_substitutes_every_placeholder_occurrence() {
         "You are Claw. Obey Claw's user."
     );
 }
+
+/// 活状态镜像机制钉（2026-09-21 R2 评审 Major）：watch 接收端与
+/// 事件循环解耦——transition 同步可达，不经过任何中间同步者。
+#[tokio::test]
+async fn state_watch_reflects_transitions_synchronously() {
+    let ctx = AgentExecutionContext::new(AgentState::Idle, None);
+    let rx = ctx.subscribe();
+    ctx.transition_to(AgentState::Streaming);
+    assert_eq!(*rx.borrow(), AgentState::Streaming);
+    ctx.transition_to(AgentState::WindingDown);
+    assert_eq!(*rx.borrow(), AgentState::WindingDown);
+    // 克隆出的第二个接收端同样实时（conductor 持一份、事件循环不需
+    // 再同步镜像）。
+    let rx2 = ctx.subscribe();
+    ctx.transition_to(AgentState::Idle);
+    assert_eq!(*rx2.borrow(), AgentState::Idle);
+}

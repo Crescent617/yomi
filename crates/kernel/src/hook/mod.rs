@@ -468,8 +468,9 @@ pub async fn run_session_point(
     }
 }
 
-/// 每 session 一条的 hook 链锁（跨 point 共用：`turn_end`(A) 必须排在
-/// `turn_start`(B) 前，这是跨点顺序）。
+/// 每 session 一条的 hook 链锁（跨 point 共用）：保证的是**不并
+/// 发**（两条链互斥串行，共享 state 目录不会并发写），不是因果序
+/// ——旧 agent 被 detach/卡住时新链可先获锁（病理窗口，文档化）。
 fn session_chain_lock(session_id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
     static LOCKS: std::sync::OnceLock<
         dashmap::DashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>,

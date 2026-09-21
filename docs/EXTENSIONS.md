@@ -79,7 +79,7 @@ hook 链**串行是结构保证**（内核按 session 加锁，跨 agent respawn
 
 **收尾窗口对外可见**：turn 收尾（checkpoint + hook 链）期间 session
 状态是 `winding_down`（非 Idle，算 running）——daemon 关停会等它
-（1min 上界）、渠道回复与 subagent 转运在 hook 链后才发出、
+（35s 上界，join_all 并行）、渠道回复与 subagent 转运在 hook 链后才发出、
 `Stopped` 事件在 hook 链完成后才到达。已知限制：hook 条数无上限，
 `/stop` 后若链总耗时超过约 35s（5s + 一条的上界），conductor 仍
 detach respawn——此时 hook 链仍由 session 锁保序，但旧 turn 迟到

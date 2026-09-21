@@ -22,10 +22,19 @@ impl FeishuAdapter {
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or_default();
         let text = match msg_type {
-            "text" => rewrite_user_mention_keys(
-                content["text"].as_str().unwrap_or(""),
-                item["mentions"].as_array(),
-            ),
+            "text" => {
+                let raw = content["text"].as_str().unwrap_or("");
+                // 命令行保持原始形态交给下游过滤器（hub `is_command_text`
+                // 只认 `@_user_N` 形态）——若先改写成中性契约，`@bot
+                // /clear` 会漏过过滤进入历史（`/bind` 还会带出 session
+                // id；2026-09-21 评审 Major）。判定与过滤分离：此处只
+                // 负责"别提前换形"。
+                if crate::channels::hub::command::is_command_text(raw) {
+                    raw.to_string()
+                } else {
+                    rewrite_user_mention_keys(raw, item["mentions"].as_array())
+                }
+            }
             "post" => {
                 let text = Self::extract_post_text(&content);
                 if text.is_empty() {
@@ -364,25 +373,106 @@ impl FeishuAdapter {
 /// mentions human-readable AND round-trippable: the neutral form is
 /// exactly what the outbound path (`utils::rewrite_mentions`) turns back
 /// into a real at-tag, so quoting/relaying the text preserves the target.
+/// Boundary-safe `str::replace` for mention keys: `@_user_1` is a prefix
+/// of `@_user_10` — a hit immediately followed by an ASCII alphanumeric
+/// or `_` (key 字符集，更长的 key 必然以此延续）是假命中，原样保留并
+/// 继续扫描。步进按 key 首字符的 UTF-8 长度（不假设 ASCII——服务端
+/// 哪天发来多字节起首的 key 也不会切出半个字符）。
+fn replace_key_bounded(text: &str, key: &str, replacement: &str) -> String {
+    if key.is_empty() {
+        return text.to_string();
+    }
+    let step = key.chars().next().map_or(1, char::len_utf8);
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(pos) = rest.find(key) {
+        let after = &rest[pos + key.len()..];
+        let false_hit = after
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+        if false_hit {
+            out.push_str(&rest[..pos + step]); // 保留首字符，从其后继续找
+            rest = &rest[pos + step..];
+        } else {
+            out.push_str(&rest[..pos]);
+            out.push_str(replacement);
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// name 是用户可控输入：角括号改写为全角（伪造中性标签注入出站的
+/// 路——`<@…>` 会被 `rewrite_mentions` 当真提及），控制字符直接滤掉
+/// （换行可伪造信封/引用标记行）。反引号等 markdown 字符只影响出站
+/// 渲染降级，不阻断。
+fn sanitize_mention_name(name: &str) -> String {
+    name.chars()
+        .filter(|c| !c.is_control())
+        .map(|c| match c {
+            '<' => '〈',
+            '>' => '〉',
+            other => other,
+        })
+        .collect()
+}
+
+/// Rewrite Feishu's literal `@_user_N` mention placeholders into the
+/// platform-neutral `<@open_id>名字` contract (name appended when the
+/// payload carries one; bare `<@open_id>` otherwise). Feishu delivers
+/// text messages with unreadable `@_user_1` markers plus a `mentions`
+/// array mapping each key to `{id.open_id, name}` — the rewrite makes
+/// mentions human-readable AND round-trippable: the neutral form is
+/// exactly what the outbound path (`utils::rewrite_mentions`) turns back
+/// into a real at-tag, so quoting/relaying the text preserves the target.
 /// Only keys listed in `mentions` are touched (a literal `@_user_1`
-/// typed by hand has no array entry and stays verbatim). Idempotent for
-/// any text without listed keys.
+/// typed by hand has no array entry and stays verbatim)。**单遍替换**：
+/// replacement 文本不再复扫——name 里若藏着其他 key 形态（如显示名
+/// 就叫 `@_user_2`）也不会连锁替换出原文没有的提及。
 pub(crate) fn rewrite_user_mention_keys(
     text: &str,
     mentions: Option<&Vec<serde_json::Value>>,
 ) -> String {
-    mentions
+    let entries: Vec<(&str, String)> = mentions
         .into_iter()
         .flatten()
-        .fold(text.to_string(), |acc, mention| {
-            let (Some(key), Some(open_id)) =
-                (mention["key"].as_str(), mention["id"]["open_id"].as_str())
-            else {
-                return acc;
-            };
-            let name = mention["name"].as_str().unwrap_or("");
-            acc.replace(key, &format!("<@{open_id}>{name}"))
+        .filter_map(|mention| {
+            let key = mention["key"].as_str()?;
+            let open_id = mention["id"]["open_id"].as_str()?;
+            let name = sanitize_mention_name(mention["name"].as_str().unwrap_or(""));
+            Some((key, format!("<@{open_id}>{name}")))
         })
+        .collect();
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while !rest.is_empty() {
+        // 所有 key 中最早出现的边界有效匹配。
+        let mut best: Option<(usize, &str, &str)> = None;
+        for (key, replacement) in &entries {
+            let Some(pos) = rest.find(key) else { continue };
+            let after = &rest[pos + key.len()..];
+            let false_hit = after
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+            if false_hit {
+                continue;
+            }
+            if best.as_ref().is_none_or(|(bp, _, _)| pos < *bp) {
+                best = Some((pos, key, replacement));
+            }
+        }
+        let Some((pos, key, replacement)) = best else {
+            out.push_str(rest);
+            break;
+        };
+        out.push_str(&rest[..pos]);
+        out.push_str(replacement);
+        rest = &rest[pos + key.len()..];
+    }
+    out
 }
 
 pub(crate) fn strip_bot_mention(
@@ -398,7 +488,9 @@ pub(crate) fn strip_bot_mention(
         .flatten()
         .filter(|mention| mention["id"]["open_id"].as_str() == Some(bot_open_id))
         .filter_map(|mention| mention["key"].as_str())
-        .fold(text.to_string(), |text, key| text.replace(key, ""))
+        .fold(text.to_string(), |text, key| {
+            replace_key_bounded(&text, key, "")
+        })
         .trim()
         .to_string()
 }

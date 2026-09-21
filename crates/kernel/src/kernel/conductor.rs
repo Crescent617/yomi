@@ -40,7 +40,9 @@ pub struct ActiveSessionSnapshot {
 struct ActiveAgent {
     handle: JoinHandle<()>,
     cancel_token: crate::agent::CancelToken,
-    state: Mutex<AgentState>,
+    /// 活状态镜像（agent context 的 watch 接收端，写入即同步——不经
+    /// 事件循环，条目移除前摘除也不会冻结）。
+    state: tokio::sync::watch::Receiver<AgentState>,
     permission_state: Option<crate::permission::PermissionState>,
 }
 
@@ -133,9 +135,9 @@ impl Conductor {
                             });
                         }
                         Event::Agent(AgentEvent::StateChanged { state }) => {
-                            if let Some(agent) = self.active.get(&sid) {
-                                *agent.state.lock().unwrap_or_else(|e| e.into_inner()) = state;
-                            }
+                            // 活跃状态镜像由 agent context 的 watch 直供
+                            //（不再经本循环同步——移除条目后镜像冻结、
+                            // 延等判定失效的 R2 根治）。
                             let _ = self.notification_bus.send(Notification::StateChanged {
                                 session_id: sid.clone(),
                                 status: state,
@@ -241,9 +243,7 @@ impl Conductor {
     }
 
     pub fn get_state(&self, sid: &SessionId) -> Option<AgentState> {
-        self.active
-            .get(sid)
-            .map(|a| *a.state.lock().unwrap_or_else(|e| e.into_inner()))
+        self.active.get(sid).map(|a| *a.state.borrow())
     }
 
     /// Whether the session's agent task is live and in an active (non-idle)
@@ -252,8 +252,7 @@ impl Conductor {
     /// event-gap timeout — never false-positives on slow tools.
     pub fn is_running(&self, sid: &SessionId) -> bool {
         self.active.get(sid).is_some_and(|agent| {
-            !agent.handle.is_finished()
-                && *agent.state.lock().unwrap_or_else(|e| e.into_inner()) != AgentState::Idle
+            !agent.handle.is_finished() && *agent.state.borrow() != AgentState::Idle
         })
     }
 
@@ -275,25 +274,28 @@ impl Conductor {
 
     /// daemon 关停专用：取消全部 agent 并等它们真正退出——与 /stop 的
     /// 5s detach 分叉：关停没有交互响应诉求，只有"别截断 turn 收尾"
-    /// 诉求（2026-09-21 评审 M1 根治：此前经 input_bus 走 /stop 臂，
-    /// 条目先移除、等待悬空，进程在 turn_end hook 链途中退出）。
-    /// 原地取消后移除并并行等待，总上界 35s（一条 hook 的 30s 硬顶 +
-    /// 余量）——idle agent 毫秒即退，只有收尾中的才吃宽限；预算与
-    /// `stop_active_runs` 的 1min 总额互参。
-    pub async fn shutdown_all_agents(&self) -> usize {
+    /// 诉求（2026-09-21 评审 M1 根治：此前经 `input_bus` 走 /stop 臂，
+    /// 条目先移除、等待悬空，进程在 `turn_end` hook 链途中退出）。
+    /// 原地取消后移除并并行等待（`join_all`，wall time = 最慢一条），
+    /// 总上界 35s（一条 hook 的 30s 硬顶 + 余量）——idle agent 毫秒
+    /// 即退，只有收尾中的才吃宽限。
+    /// 返回取消时是否有非 idle 的 agent（调用方据此决定要不要留终
+    /// 态事件投递 grace；纯 idle 关停零开销）。
+    pub async fn shutdown_all_agents(&self) -> bool {
         let sids: Vec<SessionId> = self.active.iter().map(|e| e.key().clone()).collect();
         let mut handles = Vec::new();
+        let mut had_active_run = false;
         for sid in sids {
             if let Some((_, agent)) = self.active.remove(&sid) {
+                had_active_run = had_active_run || *agent.state.borrow() != AgentState::Idle;
                 agent.cancel_token.cancel_for_shutdown();
                 handles.push(agent.handle);
             }
         }
         if handles.is_empty() {
-            return 0;
+            return false;
         }
-        let count = handles.len();
-        tracing::info!(count, "cancelling agents before shutdown");
+        tracing::info!(count = handles.len(), "cancelling agents before shutdown");
         if tokio::time::timeout(
             std::time::Duration::from_secs(35),
             futures::future::join_all(handles),
@@ -303,7 +305,7 @@ impl Conductor {
         {
             tracing::warn!("timed out waiting for agents to wind down; continuing shutdown");
         }
-        count
+        had_active_run
     }
 
     /// Snapshot sessions whose agent task is still live and not idle.
@@ -314,7 +316,7 @@ impl Conductor {
                 if agent.handle.is_finished() {
                     return None;
                 }
-                let state = *agent.state.lock().unwrap_or_else(|e| e.into_inner());
+                let state = *agent.state.borrow();
                 (state != AgentState::Idle).then(|| ActiveSessionSnapshot {
                     session_id: agent.key().clone(),
                     state,
@@ -375,8 +377,10 @@ impl Conductor {
                         // 再等一条 hook 的上界：此时 detach 会让旧 agent
                         // 的 hook 链/Stopped 与 respawn 的新 turn 并发
                         // 乱序（2026-09-21 评审 M2）。
-                        let winding_down = *agent.state.lock().unwrap_or_else(|e| e.into_inner())
-                            == crate::agent::AgentState::WindingDown;
+                        // 活镜像（watch 直供）：延等判定在 /stop 主路径
+                        // 真实生效，不是 remove 后的冻结值。
+                        let winding_down =
+                            *agent.state.borrow() == crate::agent::AgentState::WindingDown;
                         if winding_down
                             && tokio::time::timeout(std::time::Duration::from_secs(30), &mut handle)
                                 .await
@@ -900,6 +904,7 @@ impl Conductor {
             .with_ext_tools(ext_tools);
 
         let agent = Agent::new(&shared, args).await;
+        let state_watch = agent.state_watch();
 
         // 过闸后二次检查（B1）：上方异步段（history/prompt/Agent::new）
         // 可能跨越 intake 关闭——此处到 insert 无 await，逃逸窗口缩到
@@ -929,7 +934,7 @@ impl Conductor {
             ActiveAgent {
                 handle,
                 cancel_token,
-                state: Mutex::new(AgentState::Idle),
+                state: state_watch,
                 permission_state: shared.permission_state.clone(),
             },
         );

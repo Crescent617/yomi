@@ -413,6 +413,7 @@ async fn drive_event_loop(
     events: &mut kernel::comms::EventBusSubscriber,
     state: &mut RunState,
     args: &RunArgs,
+    daemon_mode: bool,
 ) -> Result<RunOutcome> {
     let deadline = args
         .timeout
@@ -431,11 +432,19 @@ async fn drive_event_loop(
         tokio::select! {
             biased;
             _ = tokio::signal::ctrl_c() => {
-                let _ = kernel.cancel(session_id).await;
+                // daemon 模式必须预取消（stop 管不到远端会话）；本地
+                // 内核不预取消——预取消走 /stop 臂会移除条目，随后的
+                // kernel.stop() 反而无人可 join，runtime drop 截断
+                // turn_end hook 链（2026-09-21 R2 评审）。
+                if daemon_mode {
+                    let _ = kernel.cancel(session_id).await;
+                }
                 break state.finish(RunStatus::Cancelled, None);
             }
             () = timeout => {
-                let _ = kernel.cancel(session_id).await;
+                if daemon_mode {
+                    let _ = kernel.cancel(session_id).await;
+                }
                 break state.finish(RunStatus::Timeout, None);
             }
             _ = watchdog.tick() => {
@@ -496,7 +505,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
 
     let prompt = prompt_from_parts(&args.prompt, crate::utils::read_piped_stdin().await)?;
 
-    let (kernel, _daemon_mode) = crate::daemon::select_kernel(&args.mode, &config).await?;
+    let (kernel, daemon_mode) = crate::daemon::select_kernel(&args.mode, &config).await?;
 
     let session_arg = if let Some(fork) = &args.fork {
         SessionArg::ForkSpecific(fork.clone())
@@ -547,8 +556,15 @@ pub async fn run(args: RunArgs) -> Result<()> {
 
     let started = std::time::Instant::now();
     let mut state = RunState::new(prompt, approve_all);
-    let outcome =
-        drive_event_loop(kernel.as_ref(), &session_id, &mut events, &mut state, &args).await?;
+    let outcome = drive_event_loop(
+        kernel.as_ref(),
+        &session_id,
+        &mut events,
+        &mut state,
+        &args,
+        daemon_mode,
+    )
+    .await?;
 
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let model = kernel.get_session_model(&session_id).await.ok();

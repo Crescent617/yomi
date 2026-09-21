@@ -91,7 +91,7 @@ hook 链串行是结构保证（内核按 session 加锁，跨 agent respawn 也
 `session_id` 分文件。subagent 的 turn 同样触发（`session_id` 区分）。
 
 收尾窗口对外可见：turn 收尾期间 session 状态为 `winding_down`
-（非 Idle，算 running）——daemon 关停会等（1min 上界）、渠道回复
+（非 Idle，算 running）——daemon 关停会等（35s 上界，并行）、渠道回复
 与 subagent 转运在 hook 链后才发、`Stopped` 在 hook 链完成后才到。
 已知限制：`/stop` 后链总耗时超 ~35s 时 conductor 仍 detach respawn，
 hook 链仍由锁保序，但旧 turn 迟到的 `Stopped` 可能落进新 turn

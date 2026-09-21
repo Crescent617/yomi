@@ -109,7 +109,7 @@ impl Model {
         // even when we switch to a session that is already in the middle of work.
         match self.kernel.get_session(&session_id).await {
             Ok(status) => match status.phase.as_str() {
-                "streaming" | "executing_tool" => {
+                "streaming" | "executing_tool" | "winding_down" => {
                     self.state.is_streaming = true;
                     self.app.attr(
                         &Id::InfoBar,

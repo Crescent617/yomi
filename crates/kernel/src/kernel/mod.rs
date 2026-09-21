@@ -636,9 +636,11 @@ impl Kernel {
     /// Gracefully stop the kernel and all background tasks（outside-in
     /// 三段式）：① 关入口——cancel intake token（conductor spawn 闸、
     /// 通道三环、cron 触发、RPC 起 run 同时关闭），run 集合从此只减
-    /// 不增；② 排空——在跑的 run 按 /stop 同路径停完（此刻 shutdown
-    /// 尚未 cancel，obs forwarder / 通道投递链全部存活，终态事件正常
-    /// 投递，状态卡 morph 进终态而不是冻结在"运行中"）；③ 拆除——
+    /// 不增；② 排空——取消全部 agent 并等它们真正退出（
+    /// `conductor::shutdown_all_agents`，turn 收尾含 hook 链总上界
+    /// 35s；此刻 shutdown 尚未 cancel，obs forwarder / 通道投递链全
+    /// 部存活，终态事件正常投递，状态卡 morph 进终态而不是冻结在
+    /// "运行中"）；③ 拆除——
     /// cancel 全部后台（conductor 停分发、持久化池开始 drain），等持
     /// 久化池排空（10s 上界，超时 warn——单 key 排空的 30s 上界在
     /// `persist_pool::wait_drained`，两者互参），最后关 bus（排空期
@@ -678,12 +680,12 @@ impl Kernel {
         }
     }
 
-    /// 关停第②步：把在跑的 run 按 /stop 同路径（`AgentInput::Shutdown`）
-    /// 停掉并等它们落地。入口已在第①步关闭（不再 spawn，含 Cancel 臂
-    /// respawn），active 只减不增；每会话发一次 Shutdown（publish 失败
-    /// 的下轮补发），过闸在飞的 spawn 晚一拍落入也能在后续轮次被补杀。
-    /// 等待有上界——卡死或不可中断的工具不阻塞关停（超时仅意味着终态
-    /// PATCH 可能没赶上，结局与直接 cancel 相同，不会更糟）。
+    /// 关停第②步：取消全部 loaded agent（含 idle——rewind/compact 内
+    /// 联窗口也在收尾语义内）并等它们退出。入口已在第①步关闭（不再
+    /// spawn，含 Cancel 臂 respawn）。等待有上界（35s = 一条 hook 的
+    /// 30s 硬顶 + 余量）——卡死或不可中断的工具不阻塞关停（超时仅
+    /// 意味着终态 PATCH 可能没赶上，结局与直接 cancel 相同，不会更
+    /// 糟）。
     async fn stop_active_runs(&self) {
         /// 终态事件（Stopped）投递 grace：event bus → obs forwarder →
         /// 通道状态卡 PATCH（settle 带 usage 拉取时两次 RTT）。投递无
@@ -694,8 +696,8 @@ impl Kernel {
         // 不再经 input_bus 的 /stop 臂：那条面向交互响应，条目先移除、
         // 5s 后 detach，turn_end hook 链会被随后的进程拆除截断
         // （2026-09-21 评审 M1：headless 同型洞的 daemon 形态）。
-        // 无在跑 run 时零开销（不停 run、不留投递 grace）。
-        if self.conductor.shutdown_all_agents().await > 0 {
+        // 取消时没有非 idle agent = 零开销（不留终态投递 grace）。
+        if self.conductor.shutdown_all_agents().await {
             tokio::time::sleep(SETTLE_DELIVERY_GRACE).await;
         }
     }
@@ -934,7 +936,7 @@ impl Kernel {
     /// any), and the resolved model's configured default. The model key
     /// resolution mirrors `AgentShared::resolve_model`（含 stale key 回落
     /// 默认模型）；默认模型自身不在注册表（配置残缺）时模型默认编造为
-    /// `compactor::DEFAULT_CONTEXT_WINDOW` 供展示——该边界 resolve_model
+    /// `compactor::DEFAULT_CONTEXT_WINDOW` 供展示——该边界 `resolve_model`
     /// 会直接报错，数字不再可比。
     pub async fn get_session_context_window(
         &self,

@@ -213,6 +213,11 @@ impl Agent {
         }
     }
 
+    /// 实时状态订阅端（见 `AgentExecutionContext::subscribe`）。
+    pub fn state_watch(&self) -> tokio::sync::watch::Receiver<AgentState> {
+        self.context.subscribe()
+    }
+
     /// Emit an event through the event sink.
     fn emit(&self, event: Event) {
         self.event_sink
@@ -565,9 +570,9 @@ impl Agent {
     }
 
     /// 防御网（循环底部每次迭代调用）：正常收尾已在 `WindingDown` 臂
-    /// 完成；这里只兜"直转 Idle 且悬挂 turn/原因"的异常路径——turn
-    /// 结束是事实，晚关不如入关，但路径本身说明有代码绕过了
-    /// WindingDown，值得排查。
+    /// 完成；这里只兜"直转 Idle 且悬挂 turn/原因"的异常路径。turn
+    /// 悬挂 = 有代码绕过了 WindingDown，warn 留痕；仅原因残留（如
+    /// standalone compact 被取消）是合法 idle 路径，静悄悄兑现即可。
     async fn complete_turn_if_needed(&mut self) {
         if self.context.current_state() != AgentState::Idle {
             return;
@@ -575,7 +580,9 @@ impl Agent {
         if self.current_turn.is_none() && self.last_stop_reason.is_none() {
             return;
         }
-        tracing::warn!("turn wind-down reached Idle directly (bypassed WindingDown arm)");
+        if self.current_turn.is_some() {
+            tracing::warn!("turn wind-down reached Idle directly (bypassed WindingDown arm)");
+        }
         self.finish_turn_wind_down().await;
     }
 
