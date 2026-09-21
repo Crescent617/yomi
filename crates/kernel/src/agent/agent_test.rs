@@ -1427,12 +1427,15 @@ async fn empty_completion_is_not_persisted_and_fails_turn_cleanly() {
     );
 
     // ...but the turn must surface as Failed, not silently Completed.
-    // `Stopped` 的发射点在 turn 收尾（2026-09-21 起：先 checkpoint +
-    // turn_end hook，再发事件）——方法层驱动须显式收尾一次；这里
-    // handle_streaming 内部已转 Idle，直接走无 turn 的原因出口。
-    agent
-        .complete_turn_if_needed(crate::agent::AgentState::Streaming)
-        .await;
+    // `Stopped` 的发射点在 turn 收尾臂（2026-09-21 起：先 checkpoint +
+    // turn_end hook，再发事件，期间状态 = WindingDown）——方法层驱动
+    // 须显式走收尾臂；这里无 turn，走原因出口分支。
+    assert_eq!(
+        agent.context.current_state(),
+        crate::agent::AgentState::WindingDown,
+        "failed stream completion must wind down, not jump straight to Idle"
+    );
+    agent.finish_turn_wind_down().await;
     let mut failed_error = None;
     while let Ok(Some((_, envelope))) =
         tokio::time::timeout(Duration::from_secs(2), subscriber.recv()).await
@@ -1722,6 +1725,7 @@ struct TurnHookHarness {
     msg_id: crate::types::MessageId,
     data: std::path::PathBuf,
     work: std::path::PathBuf,
+    event_bus: std::sync::Arc<crate::comms::EventBus>,
     _data_dir: tempfile::TempDir,
     _working_dir: tempfile::TempDir,
 }
@@ -1756,7 +1760,7 @@ async fn build_turn_hook_agent(session_id: &str) -> TurnHookHarness {
             ..Default::default()
         },
     );
-    let shared = Arc::new(AgentShared::with_data_dir(
+    let mut shared = AgentShared::with_data_dir(
         Arc::new(models),
         "test".to_string(),
         None,
@@ -1770,7 +1774,10 @@ async fn build_turn_hook_agent(session_id: &str) -> TurnHookHarness {
         None,
         None,
         data_dir.path().to_path_buf(),
-    ));
+    );
+    let event_bus = crate::comms::EventBus::new();
+    shared.event_bus = Some(event_bus.clone());
+    let shared = Arc::new(shared);
     let args = AgentSpawnArgs {
         base_prompt: "test".to_string(),
         skills: Vec::new(),
@@ -1797,6 +1804,7 @@ async fn build_turn_hook_agent(session_id: &str) -> TurnHookHarness {
         msg_id,
         data: data_dir.path().to_path_buf(),
         work: working_dir.path().to_path_buf(),
+        event_bus,
         _data_dir: data_dir,
         _working_dir: working_dir,
     }
@@ -1844,10 +1852,8 @@ async fn turn_end_completed_fires_once_with_checkpoint() {
         .note_stopped_completed(Some(crate::types::FinishReason::Stop));
     h.agent
         .context
-        .transition_to(crate::agent::AgentState::Idle);
-    h.agent
-        .complete_turn_if_needed(crate::agent::AgentState::Streaming)
-        .await;
+        .transition_to(crate::agent::AgentState::WindingDown);
+    h.agent.finish_turn_wind_down().await;
 
     assert!(h.agent.current_turn.is_none());
     let payloads = hook_payloads(&h.data, "turn_end");
@@ -1882,10 +1888,8 @@ async fn turn_end_failed_carries_error() {
         .await;
     h.agent
         .context
-        .transition_to(crate::agent::AgentState::Idle);
-    h.agent
-        .complete_turn_if_needed(crate::agent::AgentState::Streaming)
-        .await;
+        .transition_to(crate::agent::AgentState::WindingDown);
+    h.agent.finish_turn_wind_down().await;
 
     let payloads = hook_payloads(&h.data, "turn_end");
     assert_eq!(payloads.len(), 1);
@@ -1902,10 +1906,8 @@ async fn turn_end_cancelled_and_max_iterations_reasons() {
     h.agent.note_operation_cancelled("streaming");
     h.agent
         .context
-        .transition_to(crate::agent::AgentState::Idle);
-    h.agent
-        .complete_turn_if_needed(crate::agent::AgentState::Streaming)
-        .await;
+        .transition_to(crate::agent::AgentState::WindingDown);
+    h.agent.finish_turn_wind_down().await;
     let payloads = hook_payloads(&h.data, "turn_end");
     assert_eq!(payloads.len(), 1);
     assert_eq!(payloads[0]["stop_reason"], "cancelled");
@@ -1918,10 +1920,8 @@ async fn turn_end_cancelled_and_max_iterations_reasons() {
         .note_stopped(crate::event::StopReason::MaxIterations { reached: 3 });
     h.agent
         .context
-        .transition_to(crate::agent::AgentState::Idle);
-    h.agent
-        .complete_turn_if_needed(crate::agent::AgentState::Streaming)
-        .await;
+        .transition_to(crate::agent::AgentState::WindingDown);
+    h.agent.finish_turn_wind_down().await;
     let payloads = hook_payloads(&h.data, "turn_end");
     assert_eq!(payloads.len(), 1);
     assert_eq!(payloads[0]["stop_reason"], "max_iterations");
@@ -1942,10 +1942,8 @@ async fn turn_end_unknown_reason_is_defensive_fallback() {
     // 不留任何原因直接结束：正常路径不会这样，兜底必须顶住且恰好一次。
     h.agent
         .context
-        .transition_to(crate::agent::AgentState::Idle);
-    h.agent
-        .complete_turn_if_needed(crate::agent::AgentState::Streaming)
-        .await;
+        .transition_to(crate::agent::AgentState::WindingDown);
+    h.agent.finish_turn_wind_down().await;
     let payloads = hook_payloads(&h.data, "turn_end");
     assert_eq!(payloads.len(), 1);
     assert_eq!(payloads[0]["stop_reason"], "unknown");
@@ -1979,10 +1977,8 @@ async fn turn_hooks_exactly_once_per_turn_including_restart() {
         h.agent.note_stopped_completed(None);
         h.agent
             .context
-            .transition_to(crate::agent::AgentState::Idle);
-        h.agent
-            .complete_turn_if_needed(crate::agent::AgentState::Streaming)
-            .await;
+            .transition_to(crate::agent::AgentState::WindingDown);
+        h.agent.finish_turn_wind_down().await;
         // /continue 语义：回到 Streaming，同一锚消息再次开 turn。
         h.agent
             .context
@@ -2019,10 +2015,8 @@ async fn mid_turn_steer_stays_in_turn_next_turn_anchors_to_it() {
     h.agent.note_stopped_completed(None);
     h.agent
         .context
-        .transition_to(crate::agent::AgentState::Idle);
-    h.agent
-        .complete_turn_if_needed(crate::agent::AgentState::Streaming)
-        .await;
+        .transition_to(crate::agent::AgentState::WindingDown);
+    h.agent.finish_turn_wind_down().await;
     // 下一 turn 锚定 buffer 里最近一条 user 消息 = 那条 steer。
     h.agent
         .context
@@ -2040,13 +2034,222 @@ async fn mid_turn_steer_stays_in_turn_next_turn_anchors_to_it() {
 #[tokio::test]
 async fn no_turn_end_without_turn_and_stale_reason_cleared() {
     let mut h = build_turn_hook_agent("sess_th").await;
-    // 无 turn 时残留原因（如 Idle 臂错误恢复）不得错配、不得触发 hook。
+    // 无 turn 时残留原因（如 Idle 臂错误恢复）不得错配、不得触发 hook
+    // （防御网路径：Idle 直转，complete_turn_if_needed 入关收尾）。
     h.agent.last_stop_reason = Some(crate::event::StopReason::Failed {
         error: "stale".to_string(),
     });
-    h.agent
-        .complete_turn_if_needed(crate::agent::AgentState::Streaming)
-        .await;
+    h.agent.complete_turn_if_needed().await;
     assert!(h.agent.last_stop_reason.is_none());
     assert!(hook_payloads(&h.data, "turn_end").is_empty());
+}
+
+/// 核心不变量的回归钉：`Stopped` 必须晚于 `turn_end` hook 链跑完
+/// （2026-09-21 评审 S2：重排发射顺序曾 1691 测试照绿）。慢 hook
+/// 在脚本收尾才写标记——若 Stopped 先于链到达，标记此刻必不存在。
+#[cfg(unix)]
+#[tokio::test]
+async fn stopped_is_emitted_only_after_turn_end_hook_chain() {
+    let mut h = build_turn_hook_agent("sess_th").await;
+    // 慢 hook：1s 后写完成标记（同时照常捕获 payload）。
+    let script = h.data.join("hooks/turn_end/00-cap");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\n{ cat; echo; } >> \"$YOMI_STATE_DIR/stdin.jsonl\"\nsleep 1\ntouch \"$YOMI_STATE_DIR/chain-done\"\nexit 0\n",
+    )
+    .unwrap();
+
+    let mut sub = h
+        .event_bus
+        .subscribe(crate::types::SessionId::from("sess_th".to_string()));
+    h.agent.start_turn_if_needed().await;
+    h.agent.note_stopped_completed(None);
+    h.agent
+        .context
+        .transition_to(crate::agent::AgentState::WindingDown);
+
+    let marker = h.data.join("state/hooks/turn_end/00-cap/chain-done");
+    let wind_down = tokio::spawn(async move {
+        // finish 在后台跑，测试侧同时观察事件到达时刻。
+        // 注意：h.agent 被 move，后续断言只用 marker/事件。
+        let mut agent = h.agent;
+        agent.finish_turn_wind_down().await;
+    });
+    let mut stopped_seen = false;
+    while let Ok(Some((_, envelope))) =
+        tokio::time::timeout(std::time::Duration::from_secs(10), sub.recv()).await
+    {
+        if let crate::event::Event::Agent(crate::event::AgentEvent::Lifecycle {
+            state: crate::event::AgentStatus::Stopped { .. },
+        }) = &envelope.event
+        {
+            stopped_seen = true;
+            assert!(
+                marker.exists(),
+                "Stopped must not be emitted before the turn_end hook chain finished"
+            );
+            break;
+        }
+    }
+    assert!(stopped_seen, "Stopped event must be emitted");
+    wind_down.await.unwrap();
+}
+
+/// 取消归因先记为准（2026-09-21 评审 S1/m4）：同一 turn 的后续 note
+/// （多半是同一收尾的回声）不得覆盖首个终局信号。
+#[cfg(unix)]
+#[tokio::test]
+async fn stop_reason_first_note_wins() {
+    let mut h = build_turn_hook_agent("sess_th").await;
+    h.agent.start_turn_if_needed().await;
+    h.agent.note_operation_cancelled("streaming");
+    // 回声：压缩取消路径的 fail_agent 再记 Failed。
+    h.agent.note_stopped(crate::event::StopReason::Failed {
+        error: "echo".to_string(),
+    });
+    h.agent
+        .context
+        .transition_to(crate::agent::AgentState::WindingDown);
+    h.agent.finish_turn_wind_down().await;
+
+    let payloads = hook_payloads(&h.data, "turn_end");
+    assert_eq!(payloads.len(), 1);
+    assert_eq!(payloads[0]["stop_reason"], "cancelled");
+}
+
+/// loop 级钉子（无 provider 可达的路径）：`max_iterations` 走 `WindingDown`
+/// 臂——`StateChanged(WindingDown)` 必须先于 `Stopped(MaxIterations)`
+/// 对外可见（收尾窗口的 running 可见性），且未开 turn 不触发 hook。
+#[cfg(unix)]
+#[tokio::test]
+async fn loop_max_iterations_winds_down_visibly_without_turn_hooks() {
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs};
+    use std::collections::BTreeMap;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::sync::Arc;
+
+    let data_dir = tempfile::tempdir().unwrap();
+    let working_dir = tempfile::tempdir().unwrap();
+    for point in ["turn_start", "turn_end"] {
+        let dir = data_dir.path().join("hooks").join(point);
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("00-cap");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\ntouch \"$YOMI_STATE_DIR/fired\"\nexit 0\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let mut models = BTreeMap::new();
+    models.insert(
+        "test".to_string(),
+        crate::provider::ModelConfig {
+            name: "test".to_string(),
+            model_id: "test-id".to_string(),
+            ..Default::default()
+        },
+    );
+    let mut shared = AgentShared::with_data_dir(
+        Arc::new(models),
+        "test".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+        None,
+        data_dir.path().to_path_buf(),
+    );
+    let event_bus = crate::comms::EventBus::new();
+    shared.event_bus = Some(event_bus.clone());
+    let shared = Arc::new(shared);
+
+    let session_id = crate::types::SessionId::new();
+    let mut sub = event_bus.subscribe(session_id.clone());
+    let mailbox = Arc::new(crate::comms::Mailbox::new());
+    let cancel = CancelToken::default();
+    let args = AgentSpawnArgs {
+        base_prompt: "test".to_string(),
+        skills: Vec::new(),
+        history: Vec::new(),
+        session_id: session_id.to_string(),
+        parent_session_id: None,
+        max_iterations: 1,
+        working_dir: working_dir.path().to_path_buf(),
+        cancel_token: Some(cancel.clone()),
+        tool_flags: crate::tools::ToolFlags::new(false),
+        file_state_store: None,
+        tool_blocklist: Vec::new(),
+        max_tool_output_length: 1024,
+        mailbox: mailbox.clone(),
+        input_bus: None,
+        ext_tools: Vec::new(),
+    };
+    let agent = Agent::new(&shared, args).await;
+    let loop_task = tokio::spawn(agent.start_loop());
+    mailbox
+        .push(crate::agent::AgentInput::User {
+            content: vec![crate::types::ContentBlock::Text {
+                text: "hi".to_string(),
+            }],
+        })
+        .await;
+
+    // 收集事件序：WindingDown 必须先于 Stopped(MaxIterations)。
+    let mut winding_down_seen = false;
+    let mut stopped_seen = false;
+    let collect = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        while let Some((_, envelope)) = sub.recv().await {
+            match &envelope.event {
+                crate::event::Event::Agent(crate::event::AgentEvent::StateChanged {
+                    state: crate::agent::AgentState::WindingDown,
+                }) => {
+                    winding_down_seen = true;
+                    assert!(
+                        !stopped_seen,
+                        "WindingDown must become visible before Stopped"
+                    );
+                }
+                crate::event::Event::Agent(crate::event::AgentEvent::Lifecycle {
+                    state:
+                        crate::event::AgentStatus::Stopped {
+                            reason: crate::event::StopReason::MaxIterations { .. },
+                        },
+                }) => {
+                    stopped_seen = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+    })
+    .await;
+    assert!(
+        collect.is_ok(),
+        "timed out waiting for Stopped(MaxIterations)"
+    );
+    assert!(winding_down_seen, "WindingDown state must be published");
+    assert!(stopped_seen);
+
+    // turn 未开启 → 两个 hook 都不得触发。
+    assert!(!data_dir
+        .path()
+        .join("state/hooks/turn_start/00-cap/fired")
+        .exists());
+    assert!(!data_dir
+        .path()
+        .join("state/hooks/turn_end/00-cap/fired")
+        .exists());
+
+    // 收尾：取消让 Idle 臂退出循环。
+    cancel.cancel();
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), loop_task)
+        .await
+        .expect("agent loop must exit after cancel");
 }

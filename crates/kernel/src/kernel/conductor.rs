@@ -273,6 +273,39 @@ impl Conductor {
             .collect()
     }
 
+    /// daemon 关停专用：取消全部 agent 并等它们真正退出——与 /stop 的
+    /// 5s detach 分叉：关停没有交互响应诉求，只有"别截断 turn 收尾"
+    /// 诉求（2026-09-21 评审 M1 根治：此前经 input_bus 走 /stop 臂，
+    /// 条目先移除、等待悬空，进程在 turn_end hook 链途中退出）。
+    /// 原地取消后移除并并行等待，总上界 35s（一条 hook 的 30s 硬顶 +
+    /// 余量）——idle agent 毫秒即退，只有收尾中的才吃宽限；预算与
+    /// `stop_active_runs` 的 1min 总额互参。
+    pub async fn shutdown_all_agents(&self) -> usize {
+        let sids: Vec<SessionId> = self.active.iter().map(|e| e.key().clone()).collect();
+        let mut handles = Vec::new();
+        for sid in sids {
+            if let Some((_, agent)) = self.active.remove(&sid) {
+                agent.cancel_token.cancel_for_shutdown();
+                handles.push(agent.handle);
+            }
+        }
+        if handles.is_empty() {
+            return 0;
+        }
+        let count = handles.len();
+        tracing::info!(count, "cancelling agents before shutdown");
+        if tokio::time::timeout(
+            std::time::Duration::from_secs(35),
+            futures::future::join_all(handles),
+        )
+        .await
+        .is_err()
+        {
+            tracing::warn!("timed out waiting for agents to wind down; continuing shutdown");
+        }
+        count
+    }
+
     /// Snapshot sessions whose agent task is still live and not idle.
     pub fn running_sessions(&self) -> Vec<ActiveSessionSnapshot> {
         self.active
@@ -332,18 +365,36 @@ impl Conductor {
                 // bailed), respawn so that input is not stranded in the
                 // mailbox until yet another message arrives.
                 if let Some((_, agent)) = self.active.remove(&sid) {
-                    if tokio::time::timeout(std::time::Duration::from_secs(5), agent.handle)
+                    let mut handle = agent.handle;
+                    if tokio::time::timeout(std::time::Duration::from_secs(5), &mut handle)
                         .await
                         .is_err()
                     {
-                        // Stuck task (e.g. a tool ignoring cancellation). It
-                        // never touches the mailbox again — a cancelled agent
-                        // always breaks at the Idle check — so a later spawn
-                        // cannot race it for input.
-                        tracing::warn!(
-                            "cancel: agent for session={} did not exit within 5s; detaching",
-                            sid.0
-                        );
+                        // turn 收尾（WindingDown：checkpoint + turn_end
+                        // hook 链，每条 30s 硬顶）比 5s 长是常态——值得
+                        // 再等一条 hook 的上界：此时 detach 会让旧 agent
+                        // 的 hook 链/Stopped 与 respawn 的新 turn 并发
+                        // 乱序（2026-09-21 评审 M2）。
+                        let winding_down = *agent.state.lock().unwrap_or_else(|e| e.into_inner())
+                            == crate::agent::AgentState::WindingDown;
+                        if winding_down
+                            && tokio::time::timeout(std::time::Duration::from_secs(30), &mut handle)
+                                .await
+                                .is_ok()
+                        {
+                            // 收尾完成，干净退出。
+                        } else {
+                            // Stuck task (e.g. a tool ignoring cancellation),
+                            // 或 hook 链超出一条的上界。mailbox 无竞态
+                            // （cancelled agent 总在 Idle 检查处退出），
+                            // hook 链并发的保序由 per-session 链锁兜底
+                            // （hook::run_session_point）；迟到的 Stopped
+                            // 落进新 turn 属已记录的病理窗口。
+                            tracing::warn!(
+                                "cancel: agent for session={} did not exit within grace; detaching",
+                                sid.0
+                            );
+                        }
                     }
                     if let Some(mb) = mailbox {
                         if !mb.is_empty() {

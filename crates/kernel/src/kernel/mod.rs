@@ -685,59 +685,19 @@ impl Kernel {
     /// 等待有上界——卡死或不可中断的工具不阻塞关停（超时仅意味着终态
     /// PATCH 可能没赶上，结局与直接 cancel 相同，不会更糟）。
     async fn stop_active_runs(&self) {
-        /// 轮询间隔（`is_running` 是纯内存查询：handle 存活 + state）。
-        const WIND_DOWN_POLL: std::time::Duration = std::time::Duration::from_millis(500);
-        /// cancel 后等待在跑 run 落地的上界（全部轮次共享）。与 CLI 侧
-        /// `GRACEFUL_SHUTDOWN_TIMEOUT`（90s，SIGKILL 兜底）互参——本窗口
-        /// 加 settle grace、persist drain（10s）、连接排空（5s）、daemon
-        /// hook 链（每条脚本 30s 上界）必须留在外层预算内。
-        const WIND_DOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(1);
         /// 终态事件（Stopped）投递 grace：event bus → obs forwarder →
         /// 通道状态卡 PATCH（settle 带 usage 拉取时两次 RTT）。投递无
         /// 完成信号可用，给固定窗口。
         const SETTLE_DELIVERY_GRACE: std::time::Duration = std::time::Duration::from_millis(1500);
 
-        let deadline = tokio::time::Instant::now() + WIND_DOWN_TIMEOUT;
-        let mut published = std::collections::HashSet::new();
-        loop {
-            let running = self.conductor.running_sessions();
-            if running.is_empty() {
-                if published.is_empty() {
-                    // 无在跑 run：零开销（不停 run、不留投递 grace）。
-                    return;
-                }
-                break;
-            }
-            if published.is_empty() {
-                tracing::info!(
-                    count = running.len(),
-                    "stopping active runs before shutdown"
-                );
-            }
-            for snap in running {
-                // `AgentInput::Shutdown`（而非 /stop 的 Cancel）：终态标
-                // `StopReason::Shutdown`——卡片与上下文标记都能区分
-                // "daemon 关停打断"与用户主动停止。每会话只发一次；
-                // publish 失败不记账，下轮还会补发（S6）。
-                if published.contains(&snap.session_id) {
-                    continue;
-                }
-                if let Err(e) = self
-                    .input_bus
-                    .publish(snap.session_id.clone(), AgentInput::Shutdown)
-                {
-                    tracing::warn!(session_id = %snap.session_id.0, "Failed to publish shutdown input: {e}");
-                } else {
-                    published.insert(snap.session_id.clone());
-                }
-            }
-            tokio::time::sleep(WIND_DOWN_POLL).await;
-            if tokio::time::Instant::now() >= deadline {
-                tracing::warn!("timed out waiting for active runs to stop; continuing shutdown");
-                break;
-            }
+        // 直接取消并等全部 agent 退出（含 turn 收尾的 35s 宽限）——
+        // 不再经 input_bus 的 /stop 臂：那条面向交互响应，条目先移除、
+        // 5s 后 detach，turn_end hook 链会被随后的进程拆除截断
+        // （2026-09-21 评审 M1：headless 同型洞的 daemon 形态）。
+        // 无在跑 run 时零开销（不停 run、不留投递 grace）。
+        if self.conductor.shutdown_all_agents().await > 0 {
+            tokio::time::sleep(SETTLE_DELIVERY_GRACE).await;
         }
-        tokio::time::sleep(SETTLE_DELIVERY_GRACE).await;
     }
 
     // ── Project API ──────────────────────────────────────────────────────
@@ -2280,6 +2240,7 @@ fn agent_state_phase(state: AgentState) -> &'static str {
         AgentState::Streaming => "streaming",
         AgentState::ExecutingTool => "executing_tool",
         AgentState::Compacting => "compacting",
+        AgentState::WindingDown => "winding_down",
         AgentState::Idle => "idle",
     }
 }

@@ -496,7 +496,13 @@ export type AgentLifecycle = AgentLifecycleRunning | AgentLifecycleStopped;
 export interface AgentEvent {
   lifecycle?: AgentLifecycle;
   state_changed?: {
-    state: "idle" | "streaming" | "executing_tool" | "compacting" | "closed";
+    state:
+      | "idle"
+      | "streaming"
+      | "executing_tool"
+      | "compacting"
+      | "winding_down"
+      | "closed";
   };
   error?: {
     phase: string;

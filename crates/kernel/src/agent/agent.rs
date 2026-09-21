@@ -296,12 +296,12 @@ impl Agent {
                     self.note_stopped(StopReason::MaxIterations {
                         reached: self.max_iterations,
                     });
-                    self.context.transition_to(AgentState::Idle);
-                    // max_iterations 算 turn 结束（2026-09-21 拍板）：关
-                    // turn（建 checkpoint + fire turn_end）。此前 continue
-                    // 跳过收尾——checkpoint 不建、旧 turn 悬挂，下一条消息
-                    // 的 turn 还会锚到上一条消息上。
-                    self.complete_turn_if_needed(state).await;
+                    // max_iterations 算 turn 结束（2026-09-21 拍板）：
+                    // 走 WindingDown 统一收尾（checkpoint + turn_end
+                    // hook + Stopped）。此前 continue 跳过收尾——
+                    // checkpoint 不建、旧 turn 悬挂，下一条消息的 turn
+                    // 还会锚到上一条消息上。
+                    self.context.transition_to(AgentState::WindingDown);
                     continue;
                 }
 
@@ -376,10 +376,19 @@ impl Agent {
                         self.handle_execute_tool().await
                     }
                     AgentState::Compacting => {
-                        tracing::warn!("Unexpected Compacting state in main loop; returning to Idle");
+                        tracing::warn!("Unexpected Compacting state in main loop; winding down to Idle");
+                        // 走 WindingDown 统一收尾（防御——若有悬挂 turn
+                        // 在此关闭，保证 turn_end 恰好一次）。
+                        self.context.transition_to(AgentState::WindingDown);
+                        Ok(())
+                    }
+                    AgentState::WindingDown => {
+                        // turn 收尾臂：checkpoint + turn_end hook 链 +
+                        // Stopped 发射都在此，期间 session 对外保持非
+                        // Idle（running 可见）——daemon 关停等得到、
+                        // 渠道判死探针不误判、headless CLI 不错杀。
+                        self.finish_turn_wind_down().await;
                         self.context.transition_to(AgentState::Idle);
-                        // 不 continue：落到循环底部统一收尾（防御——若有
-                        // 悬挂 turn 在此关闭，保证 turn_end 恰好一次）。
                         Ok(())
                     }
                 };
@@ -408,6 +417,9 @@ impl Agent {
                             AgentState::Streaming => crate::event::ErrorPhase::Streaming,
                             AgentState::ExecutingTool => crate::event::ErrorPhase::ToolExecution,
                             AgentState::Compacting => crate::event::ErrorPhase::Compaction,
+                            // 收尾臂自身不产出 Err（hook fail-open、
+                            // checkpoint 失败内部 warn）——防御映射。
+                            AgentState::WindingDown => crate::event::ErrorPhase::Unknown,
                         };
                         self.emit_error(phase, &e.to_string(), false);
 
@@ -420,14 +432,21 @@ impl Agent {
                             });
                         }
 
-                        // Recover to Idle for non-Idle states
+                        // Recover：有 turn/原因待收尾走 WindingDown 统一
+                        // 出口；干净状态直转 Idle。
                         if self.context.current_state() != AgentState::Idle {
-                            self.context.transition_to(AgentState::Idle);
+                            if self.current_turn.is_some() || self.last_stop_reason.is_some() {
+                                self.context.transition_to(AgentState::WindingDown);
+                            } else {
+                                self.context.transition_to(AgentState::Idle);
+                            }
                         }
                     }
                 }
 
-                self.complete_turn_if_needed(state).await;
+                // 防御网：正常收尾已在 WindingDown 臂完成；这里只兜
+                // "直转 Idle 且悬挂 turn/原因"的异常路径。
+                self.complete_turn_if_needed().await;
                 self.context.increment_iteration();
             }
 
@@ -450,7 +469,7 @@ impl Agent {
             // Emit cancellation event with operation name
             self.note_operation_cancelled(context);
         }
-        self.context.transition_to(AgentState::Idle);
+        self.context.transition_to(AgentState::WindingDown);
         Ok(())
     }
 
@@ -511,24 +530,21 @@ impl Agent {
         self.message_buffer.push_arc(Arc::new(msg));
     }
 
-    /// Complete current turn if transitioning from non-Idle to Idle.
-    ///
-    /// `Stopped` 事件在 turn 全关（checkpoint + `turn_end` hook 链）
-    /// 之后发射——它是"run 彻底结束"的对外信号（2026-09-21 拍板）。
-    async fn complete_turn_if_needed(&mut self, from_state: AgentState) {
-        if self.context.current_state() != AgentState::Idle {
-            return;
-        }
-        if self.current_turn.is_none() || from_state == AgentState::Idle {
+    /// turn 收尾（`WindingDown` 臂的唯一工作）：关 turn（checkpoint +
+    /// `turn_end` hook 链）后发射 `Stopped`。期间 session 保持
+    /// `WindingDown`（非 Idle）——`Stopped` 是"run 彻底结束"的对外
+    /// 信号，必须晚于 hook 链（2026-09-21 拍板；headless CLI 见
+    /// `Stopped` 即退出，顺序反了 hook 会被进程退出截断）。
+    async fn finish_turn_wind_down(&mut self) {
+        let reason = self.last_stop_reason.take();
+        if self.current_turn.is_none() {
             // 无 turn 可关时的原因出口：idle 路径也会留 Stopped 原因
-            // （如 standalone compact 被取消）——到 Idle 即发，不留给
-            // 下一 turn。
-            if let Some(reason) = self.last_stop_reason.take() {
+            // （如 standalone compact 被取消）——即发，不留给下一 turn。
+            if let Some(reason) = reason {
                 self.emit_lifecycle_stopped(reason);
             }
             return;
         }
-        let reason = self.last_stop_reason.take();
         let (stop_reason, error) = match &reason {
             Some(StopReason::Completed { .. }) => ("completed", None),
             Some(StopReason::Cancelled { .. }) => ("cancelled", None),
@@ -546,6 +562,21 @@ impl Agent {
         self.emit_lifecycle_stopped(reason.unwrap_or(StopReason::Failed {
             error: "internal: turn ended without a recorded stop reason".to_string(),
         }));
+    }
+
+    /// 防御网（循环底部每次迭代调用）：正常收尾已在 `WindingDown` 臂
+    /// 完成；这里只兜"直转 Idle 且悬挂 turn/原因"的异常路径——turn
+    /// 结束是事实，晚关不如入关，但路径本身说明有代码绕过了
+    /// WindingDown，值得排查。
+    async fn complete_turn_if_needed(&mut self) {
+        if self.context.current_state() != AgentState::Idle {
+            return;
+        }
+        if self.current_turn.is_none() && self.last_stop_reason.is_none() {
+            return;
+        }
+        tracing::warn!("turn wind-down reached Idle directly (bypassed WindingDown arm)");
+        self.finish_turn_wind_down().await;
     }
 
     /// 关闭当前 turn：建 checkpoint（尽力）+ fire `turn_end` hook。
@@ -631,15 +662,18 @@ impl Agent {
     }
 
     /// 记录 `Stopped` 原因（不发射）：lifecycle 事件统一推迟到 turn
-    /// 收尾（checkpoint + `turn_end` hook）完成后由
-    /// `complete_turn_if_needed` 发射——headless CLI 看到 `Stopped` 即
-    /// 退出关停 kernel，发射若早于收尾，hook 链会被进程退出截断
-    /// （2026-09-21 e2e 实证：checkpoint 落盘而 turn_end 未触发）。
-    /// 原因只存最近一次，消费即 take——不会把上一 turn 的错配给下一
-    /// turn。重复记录（如压缩取消后 fail_agent 再记 Failed）后者为准，
-    /// 事件只发一次。
+    /// 收尾（checkpoint + `turn_end` hook）完成后发射——headless CLI
+    /// 看到 `Stopped` 即退出关停 kernel，发射若早于收尾，hook 链会被
+    /// 进程退出截断（2026-09-21 e2e 实证：checkpoint 落盘而
+    /// `turn_end` 未触发）。**先记为准**：同一 turn 的后续 note（压缩取消后
+    /// `fail_agent` 再记 Failed、shutdown 标记被消费后 `handle_cancel`
+    /// 再记 Cancelled）多半是同一收尾的回声，首个终局信号才是真因
+    /// （2026-09-21 评审：后者为准会反转用户取消意图）。消费即
+    /// take——不会把上一 turn 的错配给下一 turn。
     fn note_stopped(&mut self, reason: StopReason) {
-        self.last_stop_reason = Some(reason);
+        if self.last_stop_reason.is_none() {
+            self.last_stop_reason = Some(reason);
+        }
     }
 
     /// `Stopped` lifecycle 事件的唯一发射口。
@@ -1527,7 +1561,7 @@ impl Agent {
             self.note_stopped(StopReason::Failed {
                 error: error.clone(),
             });
-            self.context.transition_to(AgentState::Idle);
+            self.context.transition_to(AgentState::WindingDown);
             return Ok(());
         }
 
@@ -1558,7 +1592,7 @@ impl Agent {
                         "model stopped again after auto-continue; not continuing a second time"
                     );
                     self.note_stopped_completed(finish_reason);
-                    self.context.transition_to(AgentState::Idle);
+                    self.context.transition_to(AgentState::WindingDown);
                 }
                 return Ok(());
             }
@@ -1568,12 +1602,12 @@ impl Agent {
                 self.note_stopped(StopReason::Failed {
                     error: error.to_string(),
                 });
-                self.context.transition_to(AgentState::Idle);
+                self.context.transition_to(AgentState::WindingDown);
                 return Ok(());
             }
             Some(FinishReason::Refusal) => {
                 self.note_stopped_completed(finish_reason);
-                self.context.transition_to(AgentState::Idle);
+                self.context.transition_to(AgentState::WindingDown);
                 return Ok(());
             }
             Some(FinishReason::Stop | FinishReason::Repeat) => {}
@@ -1583,7 +1617,7 @@ impl Agent {
         }
 
         self.note_stopped_completed(finish_reason);
-        self.context.transition_to(AgentState::Idle);
+        self.context.transition_to(AgentState::WindingDown);
         Ok(())
     }
 

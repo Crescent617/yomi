@@ -84,10 +84,18 @@ exit 2
 | `turn_end` | turn 关闭时（任何非 Idle→Idle，外加 rewind 取消与 loop 退出防御） |
 
 **不变量：每次 `turn_start` 恰好配一次 `turn_end`**；SIGKILL/崩溃例外
-（`turn_end` 不保证，攒状态的脚本把 `turn_start` 当持久标记）。同
-session 同点串行保序（内核 await 全链）；跨 session 并发——同名 hook
-的 state 目录共享，落盘按 `session_id` 分文件。subagent 的 turn 同样
-触发（`session_id` 区分）。
+（`turn_end` 不保证，攒状态的脚本把 `turn_start` 当持久标记）。单条
+hook **30s 硬顶**（超时按进程组强杀，fail-open）。同 session 的
+hook 链串行是结构保证（内核按 session 加锁，跨 agent respawn 也不
+并发）；跨 session 并发——同名 hook 的 state 目录共享，落盘按
+`session_id` 分文件。subagent 的 turn 同样触发（`session_id` 区分）。
+
+收尾窗口对外可见：turn 收尾期间 session 状态为 `winding_down`
+（非 Idle，算 running）——daemon 关停会等（1min 上界）、渠道回复
+与 subagent 转运在 hook 链后才发、`Stopped` 在 hook 链完成后才到。
+已知限制：`/stop` 后链总耗时超 ~35s 时 conductor 仍 detach respawn，
+hook 链仍由锁保序，但旧 turn 迟到的 `Stopped` 可能落进新 turn
+（病理窗口，hook 保持短小即可避免）。
 
 stdin（单行 JSON，契约只增不改）：
 

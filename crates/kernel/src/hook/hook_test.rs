@@ -766,3 +766,79 @@ fn turn_end_payload_omits_error_unless_failed() {
     let failed = serde_json::to_value(mk("failed", Some("boom".to_string()))).unwrap();
     assert_eq!(failed["error"], "boom");
 }
+
+/// 同 session 的链串行是结构保证（2026-09-21 评审 M2 根治）：两个
+/// 并发 `run_session_point` 持同一 `session_id` 时必须先后跑完；不同
+/// `session_id` 必须真并发（不被锁串成排队）。
+#[cfg(unix)]
+#[tokio::test]
+async fn session_point_chains_serialize_per_session_only() {
+    let tmp = tempdir();
+    let dir = point_dir(tmp.path(), POINT_TURN_END);
+    std::fs::create_dir_all(&dir).unwrap();
+    let log = tmp.path().join("chain.log");
+    write_script(
+        &dir,
+        "10-slow",
+        &format!(
+            "echo \"start $YOMI_SESSION_ID\" >> {}; sleep 1; echo \"end $YOMI_SESSION_ID\" >> {}; exit 0\n",
+            log.display(),
+            log.display()
+        ),
+        true,
+    );
+
+    // 同 session：两条链并发发起，日志必须 start,end,start,end 有序。
+    let (d, w) = (tmp.path().to_path_buf(), tmp.path().to_path_buf());
+    let (d2, w2) = (d.clone(), w.clone());
+    let (a, b) = tokio::join!(
+        tokio::spawn(async move {
+            run_session_point(&d, POINT_TURN_END, "sess_same", &w, b"{}").await;
+        }),
+        tokio::spawn(async move {
+            run_session_point(&d2, POINT_TURN_END, "sess_same", &w2, b"{}").await;
+        }),
+    );
+    a.unwrap();
+    b.unwrap();
+    let lines: Vec<String> = std::fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            "start sess_same",
+            "end sess_same",
+            "start sess_same",
+            "end sess_same"
+        ],
+        "same-session chains must not interleave"
+    );
+
+    // 不同 session：B 的 start 必须出现在 A 的 end 之前（真并发）。
+    std::fs::remove_file(&log).unwrap();
+    let (d, w) = (tmp.path().to_path_buf(), tmp.path().to_path_buf());
+    let (d2, w2) = (d.clone(), w.clone());
+    let (a, b) = tokio::join!(
+        tokio::spawn(async move {
+            run_session_point(&d, POINT_TURN_END, "sess_a", &w, b"{}").await;
+        }),
+        tokio::spawn(async move {
+            run_session_point(&d2, POINT_TURN_END, "sess_b", &w2, b"{}").await;
+        }),
+    );
+    a.unwrap();
+    b.unwrap();
+    let text = std::fs::read_to_string(&log).unwrap();
+    let (ia_start, ia_end) = (
+        text.find("start sess_a").unwrap(),
+        text.find("end sess_a").unwrap(),
+    );
+    let ib_start = text.find("start sess_b").unwrap();
+    assert!(
+        ib_start < ia_end && ia_start < ib_start,
+        "different sessions must run concurrently: {text}"
+    );
+}

@@ -70,10 +70,22 @@ session；`YOMI_SESSION_ID` 不注入。）
 `cancelled`/`shutdown`/`max_iterations`/`rewound`；`unknown` 是内核
 路径遗漏的防御兜底，正常不应出现）。进程被 SIGKILL/崩溃是例外：
 `turn_end` 不保证到达，攒状态的脚本把 `turn_start` 当持久标记用。
-同 session 同点的 hook 串行保序（内核 await 全链）；不同 session
-并发——同名 hook 的 state 目录跨 session 共享，落盘请按
-`session_id` 分文件。subagent 的 turn 同样触发（payload 里
-`session_id` 区分）。几个边界语义：
+单条 hook **30s 硬顶**，超时按进程组强杀（fail-open）——慢脚本
+（如调 LLM 固化记忆的）要把预算控制在 30s 内。同 session 的
+hook 链**串行是结构保证**（内核按 session 加锁，跨 agent respawn
+也不并发），不同 session 并发——同名 hook 的 state 目录跨 session
+共享，落盘请按 `session_id` 分文件。subagent 的 turn 同样触发
+（payload 里 `session_id` 区分）。
+
+**收尾窗口对外可见**：turn 收尾（checkpoint + hook 链）期间 session
+状态是 `winding_down`（非 Idle，算 running）——daemon 关停会等它
+（1min 上界）、渠道回复与 subagent 转运在 hook 链后才发出、
+`Stopped` 事件在 hook 链完成后才到达。已知限制：hook 条数无上限，
+`/stop` 后若链总耗时超过约 35s（5s + 一条的上界），conductor 仍
+detach respawn——此时 hook 链仍由 session 锁保序，但旧 turn 迟到
+的 `Stopped` 可能落进新 turn（病理窗口，hook 保持短小即可避免）。
+
+几个边界语义：
 
 - mid-turn 的 steer 插队**不**新开 turn；idle 态的 steer 会开 turn
   （`is_steer=true`）。

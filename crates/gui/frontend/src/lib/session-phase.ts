@@ -9,7 +9,12 @@ export interface PhaseSession {
   phase_revision: number;
 }
 
-const ACTIVE_PHASES = new Set(["streaming", "executing_tool", "compacting"]);
+const ACTIVE_PHASES = new Set([
+  "streaming",
+  "executing_tool",
+  "compacting",
+  "winding_down",
+]);
 
 export function isActiveSessionPhase(phase: string): boolean {
   return ACTIVE_PHASES.has(phase);

@@ -269,6 +269,13 @@ pub enum AgentState {
     Streaming,
     ExecutingTool,
     Compacting,
+    /// turn 收尾中（checkpoint + `turn_end` hook 链，`Stopped` 尚未发
+    /// 射）：2026-09-21 评审根治——转 Idle 到 Stopped 之间的窗口最长
+    /// 30s×N 条 hook，若对外只报 Idle，daemon 关停（`running_sessions`
+    /// 按 state 过滤）、渠道投递池判死探针（`is_running`）、headless
+    /// CLI 的 `kernel.stop()` 全都看不见这段收尾，hook 链被进程退出/
+    /// 误判截断。非 Idle 即 running 的所有消费者自动覆盖本态。
+    WindingDown,
 }
 
 impl AgentState {
@@ -278,6 +285,7 @@ impl AgentState {
             Self::Streaming => "streaming",
             Self::ExecutingTool => "executing_tool",
             Self::Compacting => "compacting",
+            Self::WindingDown => "winding_down",
         }
     }
 }

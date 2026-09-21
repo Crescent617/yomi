@@ -8,7 +8,7 @@
    */
   let { phase }: { phase: string } = $props();
 
-  const RUNNING = ["streaming", "executing_tool", "compacting"];
+  const RUNNING = ["streaming", "executing_tool", "compacting", "winding_down"];
   const active = $derived(phase !== "idle" && phase !== "closed");
   const running = $derived(RUNNING.includes(phase));
 </script>

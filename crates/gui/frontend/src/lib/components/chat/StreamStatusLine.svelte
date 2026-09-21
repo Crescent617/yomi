@@ -55,6 +55,7 @@
 
   const status = $derived.by(() => {
     if (session.phase === "compacting") return "Compacting";
+    if (session.phase === "winding_down") return "Finishing";
     if (currentTool) return "Calling";
 
     for (let i = messages.length - 1; i >= 0; i--) {

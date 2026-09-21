@@ -425,8 +425,14 @@ pub async fn run_daemon_point(data_dir: &Path, point: &str) {
 /// 通知点同一套语义——按条目名字典序串行、无否决（退出码只留痕）、
 /// fail-open、单条 30s 硬顶不接取消；差异在会话语义：进程 cwd = 会话
 /// 工作目录，注入 `YOMI_SESSION_ID`（hook 可回连 CLI，如
-/// `yomi session cat "$YOMI_SESSION_ID"`）。调用方 await 全链兑现
-/// "同 session 同点有序"。payload 由调用方序列化好（每点结构不同）。
+/// `yomi session cat "$YOMI_SESSION_ID"`）。
+///
+/// **同 session 的链串行是结构保证**（不是时序巧合）：/stop 后旧
+/// agent 的 `turn_end` 链与 respawn 新 agent 的 `turn_start` 可能并发
+/// （conductor detach 窗口），这里按 session 加锁把两条链排成先后
+/// ——先启动的链先跑完，跨 agent 也保序，共享 state 目录不会并发
+/// 写。锁表只增不删（每 session 一条目，字节级，与 `subagent_claims`
+/// 同取舍）。
 pub async fn run_session_point(
     data_dir: &Path,
     point: &str,
@@ -434,6 +440,8 @@ pub async fn run_session_point(
     working_dir: &Path,
     payload: &[u8],
 ) {
+    let chain_lock = session_chain_lock(session_id);
+    let _chain = chain_lock.lock().await;
     let hooks = match list_hooks(&point_dir(data_dir, point), point).await {
         Ok(h) => h,
         Err(e) => {
@@ -458,6 +466,19 @@ pub async fn run_session_point(
         )
         .await;
     }
+}
+
+/// 每 session 一条的 hook 链锁（跨 point 共用：`turn_end`(A) 必须排在
+/// `turn_start`(B) 前，这是跨点顺序）。
+fn session_chain_lock(session_id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: std::sync::OnceLock<
+        dashmap::DashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>,
+    > = std::sync::OnceLock::new();
+    LOCKS
+        .get_or_init(dashmap::DashMap::new)
+        .entry(session_id.to_string())
+        .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
 }
 
 /// 执行单个通知型 hook：结果只留痕（warn/debug），不反馈给任何调用方。

@@ -4,16 +4,20 @@
 # 部署：cp 到 <data_dir>/hooks/turn_end/10-audit 并 chmod +x。
 # 契约：stdin 单行 JSON（user_msg_id/stop_reason/duration_ms/iterations/
 # error）；退出码只记日志——通知型无否决，想拦操作用 pre_tool_use。
-# 注意：state 目录跨 session 共享，落盘按 session_id 分文件；stdin
-# 只能读一次——先存盘，后续一律从文件读。
-PAYLOAD="$YOMI_STATE_DIR/last-payload.json"
+# 单条硬顶 30s，超时按进程组强杀（fail-open 放行）。
+# 注意：state 目录跨 session 共享——落盘一律按 session_id 分文件，
+# 临时文件带 PID（$$）防并发撞名；stdin 只能读一次，先存盘再读。
+PAYLOAD="$YOMI_STATE_DIR/payload-$$.json"
 cat > "$PAYLOAD" || exit 0
+SID=$(jq -r '.session_id' "$PAYLOAD")
 
-jq -r '"\(.session_id)\t\(.user_msg_id)\t\(.stop_reason)\t\(.duration_ms)ms\titer=\(.iterations)"' \
-  "$PAYLOAD" >> "$YOMI_STATE_DIR/audit.log" || exit 0
+jq -r '"\(.user_msg_id)\t\(.stop_reason)\t\(.duration_ms)ms\titer=\(.iterations)"' \
+  "$PAYLOAD" >> "$YOMI_STATE_DIR/audit-$SID.log" || { rm -f "$PAYLOAD"; exit 0; }
 
 # 失败的 turn 连 payload 一起单独留一份，便于事后排查。
-jq -e '.stop_reason == "failed"' "$PAYLOAD" >/dev/null 2>&1 || exit 0
-mkdir -p "$YOMI_STATE_DIR/failed"
-cp "$PAYLOAD" "$YOMI_STATE_DIR/failed/$(date +%s).json"
+if jq -e '.stop_reason == "failed"' "$PAYLOAD" >/dev/null 2>&1; then
+  mkdir -p "$YOMI_STATE_DIR/failed"
+  cp "$PAYLOAD" "$YOMI_STATE_DIR/failed/$(date +%s)-$$.json"
+fi
+rm -f "$PAYLOAD"
 exit 0
