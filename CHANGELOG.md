@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.38] - 2026-09-22
+
+### Changed
+- watch 观察模式的提示词现在明确告知被观察的 agent：只有通过 skill 发出的消息群里才可见，普通输出群成员看不到，避免 agent 误以为自己的话已被群成员看到。
+
 ## [0.10.37] - 2026-09-21
 
 ### Added
