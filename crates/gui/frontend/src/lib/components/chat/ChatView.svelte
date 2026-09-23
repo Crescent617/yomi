@@ -21,6 +21,7 @@
   import TabBar from "../layout/TabBar.svelte";
   import MessageList from "./MessageList.svelte";
   import ChatInput from "./ChatInput.svelte";
+  import QuoteSelectionPopover from "./QuoteSelectionPopover.svelte";
   import LoadingPlaceholder from "../ui/LoadingPlaceholder.svelte";
   import PopoverPanel from "../ui/PopoverPanel.svelte";
   import FilePreview from "../editor/FilePreview.svelte";
@@ -140,6 +141,7 @@
   let permission_level = $state("");
   let chatInputRef: {
     setContent?: (text: string) => void;
+    addQuote?: (text: string) => void;
     focus?: () => void;
   } | null = $state(null);
   let projectDropdownOpen = $state(false);
@@ -1445,6 +1447,9 @@
               <ChatInput bind:this={chatInputRef} />
             </div>
           </div>
+          <QuoteSelectionPopover
+            on_quote={(text) => chatInputRef?.addQuote?.(text)}
+          />
         </div>
       </div>
     {:else if activeSession}

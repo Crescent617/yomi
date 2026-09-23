@@ -23,6 +23,7 @@ import * as shareCard from "../share-card";
 import * as commandPalette from "../command-palette.svelte";
 import * as searchHighlight from "../components/chat/search-highlight";
 import * as MessageList from "../components/chat/MessageList.svelte";
+import * as QuoteSelectionPopover from "../components/chat/QuoteSelectionPopover.svelte";
 import * as StatusBar from "../components/layout/StatusBar.svelte";
 import * as MermaidBlock from "../components/chat/MermaidBlock.svelte";
 import * as CodeBlock from "../components/chat/CodeBlock.svelte";
@@ -41,6 +42,7 @@ export const api = {
   commandPalette,
   searchHighlight,
   MessageList,
+  QuoteSelectionPopover,
   StatusBar,
   MermaidBlock,
   CodeBlock,

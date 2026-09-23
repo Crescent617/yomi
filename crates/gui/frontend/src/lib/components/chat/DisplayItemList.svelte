@@ -48,8 +48,10 @@
   alignEnd: boolean,
 )}
   {#if createdAt && !isStreaming}
+    <!-- select-none: quote selections sweeping past the message body must
+         not pick up the time text (quote popover gates on this container). -->
     <div
-      class="mt-1 flex text-[10px] leading-none text-muted-foreground/60 transition-colors group-hover:text-foreground {alignEnd
+      class="mt-1 flex select-none text-[10px] leading-none text-muted-foreground/60 transition-colors group-hover:text-foreground {alignEnd
         ? 'justify-end pr-1'
         : 'justify-start pl-1'}"
     >

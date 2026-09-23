@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- GUI 会话里用鼠标选中消息文本会浮出 Quote 按钮，点击后该段文字作为引用块进入输入框（可删、可多条）；发送时引用以 markdown 引用格式随消息一起发出，agent 能直接看到你针对哪段原文追问。
+
 ## [0.10.38] - 2026-09-22
 
 ### Changed

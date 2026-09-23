@@ -5,6 +5,7 @@
     Square,
     Clock,
     Paperclip,
+    Quote,
     X,
     Wrench,
   } from "lucide-svelte";
@@ -27,6 +28,7 @@
   import ModelSelector from "./ModelSelector.svelte";
   import PermissionSelector from "./PermissionSelector.svelte";
   import ContextWindowEditor from "./ContextWindowEditor.svelte";
+  import { composeOutgoingText, formatQuoteText } from "./quote";
 
   let content = $state("");
   let textareaRef: HTMLTextAreaElement | null = $state(null);
@@ -60,6 +62,28 @@
   }
   let inlineImages = $state<InlineImage[]>([]);
   let inlineImageCounter = $state(0);
+
+  // ── quote chips (selection → quote popover) ──
+  // Quotes ride along with the next outgoing message as a markdown
+  // blockquote prefix. Like attachments, they are not persisted across
+  // session switches.
+  let quotes = $state<string[]>([]);
+
+  export function addQuote(text: string) {
+    const cleaned = formatQuoteText(text);
+    if (cleaned && !quotes.includes(cleaned)) {
+      quotes = [...quotes, cleaned];
+    }
+    focus();
+  }
+
+  function removeQuote(index: number) {
+    quotes = quotes.filter((_, i) => i !== index);
+  }
+
+  function clearQuotes() {
+    quotes = [];
+  }
 
   const activeSession = $derived(getActiveSession());
   const isStreaming = $derived(
@@ -227,6 +251,7 @@
     content = text;
     clearInlineImages();
     fileAttachments = [];
+    clearQuotes();
     requestAnimationFrame(autoResize);
   }
 
@@ -246,7 +271,7 @@
     if (isSending) return;
     const session = activeSession;
     if (!session || !content.trim()) return;
-    const text = content.trim();
+    const text = composeOutgoingText(quotes, content.trim());
     try {
       const queued = await enqueue(
         session.id,
@@ -265,6 +290,7 @@
       content = "";
       clearInlineImages();
       fileAttachments = [];
+      clearQuotes();
       autoResize();
     } catch {
       showNotification("Failed to queue the message", "error");
@@ -373,7 +399,10 @@
           break;
         case "/steer":
           {
-            const steerText = parts.slice(1).join(" ").trim();
+            const steerText = composeOutgoingText(
+              quotes,
+              parts.slice(1).join(" ").trim(),
+            );
             if (!steerText && inlineImages.length === 0) {
               showNotification(
                 "Please provide steer content: /steer <content>",
@@ -384,6 +413,7 @@
             const blocks = buildContentBlocks(steerText, inlineImages);
             await api.sendSteer(session_id, blocks);
             clearInlineImages();
+            clearQuotes();
             showNotification("Steer message queued for next step", "info");
           }
           break;
@@ -420,7 +450,7 @@
           break;
         default:
           // Unknown command — treat as normal message
-          await api.sendMessage(session_id, text);
+          await api.sendMessage(session_id, composeOutgoingText(quotes, text));
       }
       return true;
     } catch (e: unknown) {
@@ -449,6 +479,7 @@
         autoResize();
         fileAttachments = [];
         clearInlineImages();
+        clearQuotes();
         return;
       }
 
@@ -460,9 +491,10 @@
         fileAttachments.length > 0
           ? "\n" + fileAttachments.map((p) => `[File: ${p}]`).join("\n")
           : "";
-      const text = baseText + fileSuffix;
+      const text = composeOutgoingText(quotes, baseText) + fileSuffix;
 
       fileAttachments = [];
+      clearQuotes();
 
       if (inlineImages.length > 0) {
         // Message with inline images: build content blocks
@@ -790,6 +822,7 @@
       content = currentId ? (inputDrafts[currentId] ?? "") : "";
       clearInlineImages();
       fileAttachments = [];
+      clearQuotes();
       requestAnimationFrame(autoResize);
     }
   });
@@ -917,6 +950,34 @@
               onclick={() => removeInlineImage(img.id)}
               class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
               title="Remove"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        {/each}
+      </div>
+    {/if}
+    {#if quotes.length > 0}
+      <div class="flex flex-col gap-1.5 px-2 pt-3 pb-1">
+        {#each quotes as quote, i (quote)}
+          <div
+            class="flex items-start gap-2 rounded-md border-l-2 border-primary/60 bg-primary/5 py-1.5 pl-2.5 pr-1.5"
+          >
+            <Quote
+              size={12}
+              class="mt-0.5 shrink-0 text-muted-foreground"
+              aria-hidden="true"
+            />
+            <span
+              class="min-w-0 flex-1 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground line-clamp-3"
+              >{quote}</span
+            >
+            <button
+              type="button"
+              onclick={() => removeQuote(i)}
+              class="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              title="Remove quote"
+              aria-label={`Remove quote: ${quote.slice(0, 40)}`}
             >
               <X size={12} />
             </button>
