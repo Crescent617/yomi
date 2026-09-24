@@ -43,6 +43,22 @@ jobs:
           npm ci
           npx tauri build --config '{"build":{"beforeBuildCommand":""}}'
 
+      # 回归守卫：windows_subsystem 属性一旦失效（例如少写 `!` 变成 outer attr，
+      # rustc 仅 warning），exe 会退回 CUI、用户启动即弹控制台窗口。直接读 PE 头断言。
+      - name: Verify GUI exe is windows-subsystem
+        shell: pwsh
+        run: |
+          $path = "target/release/yomi-gui.exe"
+          $fs = [System.IO.File]::OpenRead($path)
+          $br = New-Object System.IO.BinaryReader($fs)
+          $fs.Seek(0x3c, [System.IO.SeekOrigin]::Begin) | Out-Null
+          $pe = $br.ReadInt32()
+          $fs.Seek($pe + 0x5c, [System.IO.SeekOrigin]::Begin) | Out-Null
+          $sub = $br.ReadUInt16()
+          $br.Close()
+          if ($sub -ne 2) { throw "yomi-gui.exe subsystem=$sub, expect 2 (Windows GUI); CUI exe pops a console window on launch" }
+          Write-Host "yomi-gui.exe subsystem=$sub OK"
+
       - uses: actions/upload-artifact@v6
         with:
           name: gui-windows-installers
