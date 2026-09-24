@@ -222,6 +222,7 @@ pub fn run() {
             commands::chat::rename_session,
             commands::chat::continue_session,
             commands::chat::send_steer,
+            commands::chat::btw,
             commands::pet::get_pet_state,
             commands::pet::set_pet_enabled,
             commands::keep_awake::get_keep_awake,

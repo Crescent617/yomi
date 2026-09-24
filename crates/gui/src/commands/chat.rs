@@ -306,6 +306,23 @@ pub async fn send_steer(
     Ok(())
 }
 
+/// `/btw` 旁问：返回 request_id（前端据此关联 `"btw"` 事件流）。
+#[tauri::command(rename_all = "snake_case")]
+pub async fn btw(
+    state: State<'_, AppState>,
+    session_id: String,
+    question: String,
+    request_id: Option<String>,
+) -> Result<String, GuiError> {
+    let coord = state.kernel_snapshot();
+    let sid = SessionId::from(session_id);
+    let id = coord
+        .btw(&sid, question, request_id)
+        .await
+        .map_err(GuiError::kernel)?;
+    Ok(id.0.to_string())
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn mailbox_snapshot(
     state: State<'_, AppState>,

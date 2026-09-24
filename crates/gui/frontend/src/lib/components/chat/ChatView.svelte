@@ -22,6 +22,7 @@
   import MessageList from "./MessageList.svelte";
   import ChatInput from "./ChatInput.svelte";
   import QuoteSelectionPopover from "./QuoteSelectionPopover.svelte";
+  import BtwCard from "./BtwCard.svelte";
   import LoadingPlaceholder from "../ui/LoadingPlaceholder.svelte";
   import PopoverPanel from "../ui/PopoverPanel.svelte";
   import FilePreview from "../editor/FilePreview.svelte";
@@ -1435,6 +1436,7 @@
             role="presentation"
           >
             <MessageList />
+            <BtwCard sessionId={activeSession.id} />
           </div>
           <div class="shrink-0 w-full">
             <div class="mx-auto w-full max-w-4xl px-4 lg:px-6">

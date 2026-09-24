@@ -547,11 +547,25 @@ export interface UserEvent {
   };
 }
 
+export type BtwEndReason =
+  | "stop"
+  | "tool_use"
+  | "replaced"
+  | "cancelled"
+  | { error: string };
+
+export interface BtwEvent {
+  start?: { request_id: string };
+  delta?: { request_id: string; text: string };
+  done?: { request_id: string; reason: BtwEndReason };
+}
+
 export type KernelEvent =
   | { model: ModelChunk }
   | { agent: AgentEvent }
   | { tool: ToolEvent }
-  | { user: UserEvent };
+  | { user: UserEvent }
+  | { btw: BtwEvent };
 
 // ── Core state ───────────────────────────────────────────────────────────
 

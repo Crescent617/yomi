@@ -15,6 +15,7 @@ import {
   type KernelEvent,
 } from "./state.svelte";
 import { ensureSessionPhase, setSessionPhase } from "./session-phase";
+import { handleBtwEvent } from "./btw.svelte";
 import { estimateStreamTokens, utf8Length } from "./tokens";
 import {
   sendDesktopNotification,
@@ -126,6 +127,8 @@ export function handleEvent(
     handleToolEvent(session, ev.tool);
   } else if ("user" in ev) {
     handleUserEvent(session, ev.user);
+  } else if ("btw" in ev) {
+    handleBtwEvent(session_id, ev.btw);
   }
 }
 
