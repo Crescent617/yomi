@@ -40,6 +40,8 @@ enum Commands {
     Usage(UsageArgs),
     /// Stream session events from the daemon as NDJSON
     Events(EventsArgs),
+    /// Ask an ephemeral side question against a session's context (no trace left)
+    Btw(BtwArgs),
     /// Send a raw wire-protocol request to the daemon (debug/tooling)
     Rpc(RpcArgs),
     /// Manage cron jobs
@@ -208,6 +210,19 @@ struct UsageArgs {
     /// Filter by provider name (e.g. anthropic, openai)
     #[arg(long)]
     provider: Option<String>,
+}
+
+#[derive(Parser)]
+struct BtwArgs {
+    #[command(flatten)]
+    global: GlobalArgs,
+
+    /// Question text (reads from stdin when omitted)
+    question: Vec<String>,
+
+    /// Session ID (defaults to current directory's last session)
+    #[arg(short, long)]
+    session: Option<String>,
 }
 
 #[derive(Parser)]
@@ -382,6 +397,9 @@ async fn main() -> Result<()> {
         Some(Commands::Usage(args)) => run_usage(args).await,
         Some(Commands::Events(args)) => {
             commands::events::run(&args.global, args.session, args.all, args.after_event_id).await
+        }
+        Some(Commands::Btw(args)) => {
+            commands::btw::run(&args.global, args.question, args.session).await
         }
         Some(Commands::Rpc(args)) => commands::rpc::run(args).await,
         Some(Commands::Cron(args)) => run_cron(args).await,
