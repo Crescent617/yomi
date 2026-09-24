@@ -26,7 +26,7 @@
   } = $props();
 
   const BTN_HEIGHT = 32;
-  const BTN_WIDTH = 96; // "Quote" label + icon, measured ≈90px
+  const BTN_WIDTH = 32; // icon-only square button
   const VIEWPORT_MARGIN = 8;
 
   let visible = $state(false);
@@ -112,7 +112,7 @@
        focus) intact until click fires. -->
   <button
     type="button"
-    class="fixed z-50 inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground shadow-md transition-colors hover:bg-secondary hover:text-foreground"
+    class="fixed z-50 inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-md transition-colors hover:bg-secondary hover:text-foreground"
     style:left={`${left}px`}
     style:top={`${top}px`}
     onmousedown={(e) => e.preventDefault()}
@@ -121,6 +121,5 @@
     title="Quote selection"
   >
     <Quote size={13} aria-hidden="true" />
-    <span>Quote</span>
   </button>
 {/if}
