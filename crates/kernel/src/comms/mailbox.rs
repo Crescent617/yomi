@@ -6,8 +6,10 @@ use tokio::sync::Notify;
 use crate::agent::AgentInput;
 use crate::types::{ContentBlock, MailboxItemId};
 
-/// 与 Agent 1:1 绑定的双队列缓冲。
-/// steer 高优先级，在 Streaming 前批量消费；normal 普通消息，Idle 时逐条消费。
+/// 与 Agent 1:1 绑定的收件箱：steer 高优先级，在 Streaming 前批量消费；
+/// normal 普通消息，Idle 时逐条消费。旁问（btw）不经这里——它由
+/// conductor 直接应答（只读公共源的快照旁路，见 `kernel::btw`），
+/// 与 agent 的输入流结构性隔离。
 pub struct Mailbox {
     steer: Mutex<VecDeque<MailboxEntry>>,
     normal: Mutex<VecDeque<MailboxEntry>>,

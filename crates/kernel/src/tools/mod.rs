@@ -215,6 +215,28 @@ impl ToolRegistry {
         removed
     }
 
+    /// 组装会话工具表：内建标准工具 + tools/ 目录外挂（spawn 时扫描
+    /// 快照）——blocklist 与撞名让位在此收口，与内建一致。agent 与旁问
+    /// （`kernel::btw`）共用：同源组装是同一份 definitions 的结构保证
+    /// （prompt cache 复用的前提）。
+    pub fn assemble(config: ToolRegistryConfig<'_>, ext_tools: Vec<Arc<dyn Tool>>) -> Self {
+        let blocklist = config.tool_blocklist.clone();
+        let mut registry = Self::new().with_standard_tools(config);
+        for tool in ext_tools {
+            let name = tool.name().to_string();
+            if !passes_blocklist(&name, &blocklist) {
+                tracing::info!("Extension tool '{name}' blocked by blocklist pattern");
+                continue;
+            }
+            if registry.get(&name).is_some() {
+                tracing::warn!("Extension tool '{name}' shadows a registered tool; skipped");
+                continue;
+            }
+            registry.register_arc(tool);
+        }
+        registry
+    }
+
     /// Returns tool definitions wrapped in Arc for cheap cloning.
     /// Cache is computed once since tools are static after registration.
     pub fn definitions(&mut self) -> Vec<Arc<ToolDefinition>> {
@@ -228,7 +250,7 @@ impl ToolRegistry {
         }
 
         // Compute definitions, wrap each in Arc
-        let defs: Vec<Arc<ToolDefinition>> = self
+        let mut defs: Vec<Arc<ToolDefinition>> = self
             .tools
             .values()
             .map(|tool| {
@@ -244,6 +266,10 @@ impl ToolRegistry {
                 Arc::new(definition)
             })
             .collect();
+        // 确定性顺序：同一注册集 → 同一定义序列。agent 与旁问各自重建
+        // registry（HashMap 遍历序随机），排序是跨实例前缀一致（prompt
+        // cache 复用）的前提。
+        defs.sort_by(|a, b| a.name.cmp(&b.name));
 
         tracing::debug!(
             "ToolRegistry.definitions() computed and cached {} tools: {:?}",

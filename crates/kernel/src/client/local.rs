@@ -96,6 +96,15 @@ impl KernelApi for Kernel {
         Self::send_message(self, session_id, blocks).await
     }
 
+    async fn btw(
+        &self,
+        session_id: &SessionId,
+        question: String,
+        request_id: Option<String>,
+    ) -> Result<crate::types::BtwId> {
+        Self::btw(self, session_id, question, request_id).await
+    }
+
     async fn cancel(&self, session_id: &SessionId) -> Result<()> {
         Self::cancel(self, session_id);
         Ok(())

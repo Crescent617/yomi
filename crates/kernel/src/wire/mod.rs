@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 // ── Wire Protocol ────────────────────────────────────────────────────────
 
 /// Wire protocol version. Bumped on any breaking change to the IPC schema.
-pub const WIRE_PROTOCOL_VERSION: u32 = 30;
+/// 31: `Event::Btw` 是新枚举变体——旧客户端反序列化事件帧会直接失败
+/// （连接被读端当致命错误掐断），属破坏性变更，必须让旧端在 Hello 处
+/// 快速失败而不是在事件流上反复重连暴毙。
+pub const WIRE_PROTOCOL_VERSION: u32 = 31;
 
 /// All operations a client can request from the daemon.
 ///
@@ -76,6 +79,19 @@ pub enum ReqMethod {
         session_id: String,
         #[schemars(with = "serde_json::Value")]
         blocks: Vec<ContentBlock>,
+    },
+    /// Ask an ephemeral side question against the session's live context
+    /// (`/btw`): a single tool-free streaming completion off a frozen
+    /// snapshot, with the request prefix kept byte-identical to the agent
+    /// loop's (prompt-cache reuse). Nothing is persisted; the answer
+    /// streams as `btw` events carrying the returned `request_id`.
+    Btw {
+        session_id: String,
+        question: String,
+        /// Optional client-minted id for correlating events before the ack
+        /// arrives; the daemon generates `btw_<ulid>` when absent.
+        #[serde(default)]
+        request_id: Option<String>,
     },
     ListSessionSkills {
         session_id: String,

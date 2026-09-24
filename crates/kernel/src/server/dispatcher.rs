@@ -177,6 +177,25 @@ impl KernelServer {
                         .map(|()| serde_json::Value::Null),
                 )
             }
+            ReqMethod::Btw {
+                session_id,
+                question,
+                request_id,
+            } => {
+                if !self.kernel.intake_open() {
+                    return rpc_error(
+                        "shutting_down",
+                        "daemon is shutting down; please retry shortly",
+                    );
+                }
+                rpc_body(
+                    "btw_failed",
+                    self.kernel
+                        .btw(&SessionId::from(session_id), question, request_id)
+                        .await
+                        .map(|id| id.0.to_string()),
+                )
+            }
             ReqMethod::ListSessionSkills { session_id } => rpc_body(
                 "list_session_skills_failed",
                 self.kernel
