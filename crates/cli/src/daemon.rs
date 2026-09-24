@@ -105,6 +105,10 @@ pub async fn spawn_daemon_with_auto_exit(auto_exit: bool) -> Result<()> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
 
+    // Windows：无 console 的调用方（GUI/计划任务/Explorer）拉起 daemon 时，
+    // CUI 子进程默认会被系统分配一个可见控制台窗口；与其它 spawn 点一样收口。
+    kernel::utils::process::no_console_window_std(&mut cmd);
+
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
