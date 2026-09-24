@@ -33,6 +33,13 @@ pub enum AgentInput {
     Cancel,
     /// Steer message injected before the next streaming turn
     Steer(Vec<ContentBlock>),
+    /// Ephemeral side question payload (bus-side only): the conductor
+    /// answers it directly off a read-only snapshot of public sources
+    /// (see `kernel::btw`); the agent never sees this variant.
+    Btw {
+        request_id: crate::types::BtwId,
+        question: String,
+    },
     /// Permission response from user/TUI (handled directly by Checker via `input_bus`)
     PermissionResponse {
         req_id: String,
@@ -141,7 +148,7 @@ impl Agent {
 
         let shared = shared.clone();
 
-        let mut tool_registry = ToolRegistry::new().with_standard_tools(
+        let tool_registry = ToolRegistry::assemble(
             ToolRegistryConfig {
                 shared: &shared,
                 event_bus: &event_bus,
@@ -152,22 +159,8 @@ impl Agent {
                 flags: args.tool_flags,
             }
             .with_file_state_store(args.file_state_store.clone()),
+            args.ext_tools,
         );
-
-        // tools/ 目录外挂工具（spawn 时快照）：收口与内建一致——
-        // blocklist 同样生效，与内建/已注册撞名让位记 warn。
-        for tool in args.ext_tools {
-            let name = tool.name().to_string();
-            if !crate::tools::passes_blocklist(&name, &args.tool_blocklist) {
-                tracing::info!("Extension tool '{name}' blocked by blocklist pattern");
-                continue;
-            }
-            if tool_registry.get(&name).is_some() {
-                tracing::warn!("Extension tool '{name}' shadows a registered tool; skipped");
-                continue;
-            }
-            tool_registry.register_arc(tool);
-        }
 
         let permission_checker = shared
             .permission_state
@@ -965,6 +958,12 @@ impl Agent {
                 self.inject_user_message(content, false).await
             }
             AgentInput::Steer(blocks) => self.inject_user_message(blocks, true).await,
+            AgentInput::Btw { .. } => {
+                // 旁问由 conductor 直接应答（只读快照旁路，不经 agent
+                // 输入流）——本臂结构性不可达，防御性 warn 不 panic。
+                tracing::warn!("btw input reached agent handle_input; ignoring");
+                Ok(())
+            }
             AgentInput::Shutdown => {
                 tracing::info!("received shutdown signal");
                 self.cancel_token.cancel_for_shutdown();

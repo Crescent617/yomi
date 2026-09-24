@@ -30,6 +30,42 @@ pub enum Event {
     Internal(InternalEvent),
     Model(ModelEvent),
     Tool(ToolEvent),
+    Btw(BtwEvent),
+}
+
+/// Ephemeral side-question (`/btw`) stream: one `request_id` per question,
+/// Start → Delta* → Done, nothing persisted. Clients render only the
+/// `request_id` they initiated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", rename_all_fields = "snake_case")]
+pub enum BtwEvent {
+    Start {
+        request_id: crate::types::BtwId,
+    },
+    Delta {
+        request_id: crate::types::BtwId,
+        text: String,
+    },
+    Done {
+        request_id: crate::types::BtwId,
+        reason: BtwEndReason,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", rename_all_fields = "snake_case")]
+pub enum BtwEndReason {
+    /// Normal completion (text answer, possibly alongside ignored `tool_use`)
+    Stop,
+    /// Model emitted only `tool_use` and no text — nothing executable by
+    /// design; clients show the "needs a real prompt" fallback.
+    ToolUse,
+    /// Superseded by a newer btw for the same session
+    Replaced,
+    /// Session cancelled / agent exited mid-answer
+    Cancelled,
+    /// Provider or request-resolution failure
+    Error(String),
 }
 
 /// Control command from TUI to kernel

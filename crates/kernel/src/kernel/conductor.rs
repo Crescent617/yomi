@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use dashmap::DashMap;
 use tokio::task::JoinHandle;
@@ -7,10 +7,13 @@ use tracing::Instrument;
 use crate::agent::AgentShared;
 use crate::agent::{Agent, AgentConfig, AgentInput, AgentSpawnArgs, AgentState};
 use crate::comms::{EventBus, InputBus, InputBusSubscriber, Mailbox};
-use crate::event::{AgentEvent, AgentStatus, Event, InternalEvent, StopReason};
+use crate::event::{
+    AgentEvent, AgentStatus, BtwEndReason, BtwEvent, Event, InternalEvent, StopReason,
+};
+use crate::kernel::btw::BtwTracker;
 use crate::kernel::persist_pool;
 use crate::notification::{AgentActivity, Notification, NotificationBus};
-use crate::types::SessionId;
+use crate::types::{Message, SessionId};
 
 /// 唯一管理 Agent 生命周期的地方。
 /// `InputBus` 的唯一消费者，负责 Mailbox 管理、Agent lazy spawn、Cancel 分发。
@@ -30,11 +33,32 @@ pub struct Conductor {
     /// Intake 闸（kernel `stop()` 第一步 cancel）：关闭后 `wake_agent`
     /// 不再 spawn——关停窗口内 run 集合只减不增（outside-in 关停）。
     intake: tokio_util::sync::CancellationToken,
+    /// 旁问跟踪器（在飞句柄 + 事件流半截镜像；见 `kernel::btw`）。
+    /// 旁问与 agent 生命周期无关——由 conductor 直接应答。
+    btw: Arc<BtwTracker>,
 }
 
 pub struct ActiveSessionSnapshot {
     pub session_id: SessionId,
     pub state: AgentState,
+}
+
+/// spawn 与旁问共用的会话上下文（`resolve_session_context` 的产物）：
+/// 历史、prompt、skills、工具集输入——旁问快照与主 loop 同源的载体。
+struct SessionContext {
+    history: Vec<Arc<Message>>,
+    /// dangling 工具批关账合成的 cancelled 结果（未落盘——落盘是
+    /// spawn 的修复职责，在 `wake_agent` 完成；旁问是只读观察者，
+    /// 只用内存关账后的 history）。
+    closed: Vec<Message>,
+    session_info: Option<crate::storage::SessionInfo>,
+    cwd: std::path::PathBuf,
+    base_clone: Arc<AgentShared>,
+    skills: Vec<Arc<crate::skill::Skill>>,
+    base_prompt: String,
+    tool_blocklist: Vec<String>,
+    tool_flags: crate::tools::ToolFlags,
+    ext_tools: Vec<Arc<dyn crate::tools::Tool>>,
 }
 
 struct ActiveAgent {
@@ -65,6 +89,7 @@ impl Conductor {
             active: DashMap::new(),
             mailboxes: DashMap::new(),
             rx: std::sync::Mutex::new(Some(rx)),
+            btw: Arc::new(BtwTracker::new(Arc::clone(&event_bus))),
             event_bus,
             input_bus,
             base_prompt,
@@ -90,6 +115,8 @@ impl Conductor {
                 biased;
                 () = shutdown.cancelled() => {
                     tracing::info!("Conductor shutting down, cancelling all active agents");
+                    // 在飞旁问统一补终态掐断（bus 即将拆除，Done 先走）。
+                    self.btw.abort_all(&BtwEndReason::Cancelled);
                     // intake 闸已先关（kernel `stop()` 第一步），active
                     // 只减不增；过闸在飞的 spawn 晚一拍落入，轮询补杀
                     // 直到全部落地（卡死工具按既有 detach 哲学放行）。
@@ -116,6 +143,8 @@ impl Conductor {
                     });
                 }
                 Some((sid, envelope)) = subscriber.recv() => {
+                    // 旁问的事件流半截镜像（Chunk 累计/落盘清除；无独立 task）。
+                    self.btw.observe(&sid, &envelope.event);
                     let event_id = envelope.event_id.to_string();
                     if let Event::Agent(event) = &envelope.event {
                         if let Some(activity) = pet_activity(event) {
@@ -230,6 +259,10 @@ impl Conductor {
                     // 清理没有活跃 agent 且 mailbox 为空的 session，防止内存泄漏
                     self.mailboxes.retain(|sid, mb| {
                         self.active.contains_key(sid) || !mb.is_empty()
+                    });
+                    // 旁问跟踪器：清已完成句柄与无归属的锁/partial。
+                    self.btw.retain(|sid| {
+                        self.active.contains_key(sid) || self.mailboxes.contains_key(sid)
                     });
                     // 清理已完成 spawn 或不会再被唤醒的 session 的锁。
                     // 保留既没有活跃 agent 但 mailbox 仍在的 session（未来还会 spawn）。
@@ -357,6 +390,16 @@ impl Conductor {
                         agent.cancel_token.cancel();
                     }
                 }
+                // 旁问与 start 串行（同一把 per-session 锁）：bump 代际
+                // 让 prepare 窗口内的 start 放弃 spawn，再掐在飞流。
+                // 置于 agent cancel 之后——/stop 响应不被旁问锁拖延
+                // （prepare 最坏 1-2s，R4 复审）。
+                {
+                    let _g = self.btw.lock(&sid).await;
+                    self.btw.bump_cancel_gen(&sid);
+                    self.btw.abort(&sid, BtwEndReason::Cancelled);
+                }
+                // 在飞旁问已在臂首随 run 一并终止（代际 + abort）。
                 if let Some(ref mb) = mailbox {
                     mb.clear().await;
                     self.emit_mailbox_changed(&sid, mb).await;
@@ -410,6 +453,15 @@ impl Conductor {
             // PermissionResponse and AskUserResponse are consumed directly by
             // Checker / AskUserTool via input_bus subscription; do not queue them.
             AgentInput::PermissionResponse { .. } | AgentInput::AskUserResponse { .. } => {}
+            // 旁问：conductor 直接应答（只读公共源的快照旁路）——不起
+            // agent、不进 mailbox，与主 run 及 agent 生命周期结构性隔离
+            // （见 `kernel::btw`）。
+            AgentInput::Btw {
+                request_id,
+                question,
+            } => {
+                self.start_btw(sid, request_id, question).await;
+            }
             input => {
                 // 图片落盘 + 绝对路径标注（当前轮进模型即可 Read/文件
                 // 操作；历史读回经 inline_assets_in_message 有同款标注）。
@@ -610,47 +662,23 @@ impl Conductor {
         false
     }
 
-    async fn wake_agent(&self, sid: &SessionId, mailbox: Arc<Mailbox>) {
-        // 关停闸：intake 关闭后一律不 spawn（含 Cancel/Shutdown 臂的
-        // respawn——"重启打断后 run 被复活再被兜底杀"的根修）；消息留
-        // 在 mailbox 随进程退出。
-        if self.intake.is_cancelled() {
-            return;
-        }
-        let lock = self
-            .spawn_locks
-            .entry(sid.clone())
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-            .downgrade()
-            .clone();
-        let _guard = match lock.try_lock() {
-            Ok(g) => g,
-            Err(_) => {
-                // Another task is already spawning for this session.
-                // Messages have already been pushed to the mailbox; once that
-                // spawn completes and the agent starts, it will consume them.
-                return;
-            }
-        };
-
-        if self
-            .active
-            .get(sid)
-            .is_some_and(|v| !v.handle.is_finished())
-        {
-            return;
-        }
-
+    /// spawn 与旁问（`kernel::btw`）共用的会话上下文解析：历史（排空
+    /// 落盘队列后读取、dangling 工具批关账）、system prompt、skills、
+    /// 工具集输入、per-session 调整的 AgentShared。同源组装是旁问快照
+    /// 与主 loop 内容口径一致的结构保证（prompt cache 复用）。纯解析
+    /// 无副作用——关账合成结果的落盘是 spawn 的修复职责
+    /// （`wake_agent`），旁问只读。
+    async fn resolve_session_context(&self, sid: &SessionId) -> SessionContext {
         // 读历史前先排空该 session 的落盘队列：respawn 常紧跟在
         // cancel/正常收尾之后，而 marker 与工具结果走总线+池是异步
-        // 落盘——不等排空可能读到缺一截的历史。spawn 路径对延迟敏
+        // 落盘——不等排空可能读到缺一截的历史。读取路径对延迟敏
         // 感，上界取 1s（非通用 30s）：超时即退回旧竞态，绝不为排
-        // 空拖住 spawn（2026-09-11 hrli 指令）。
+        // 空拖住读取（2026-09-11 hrli 指令）。
         // 排空只是 fast path，正确性不依赖它：下方
         // `close_dangling_tool_batches` 关账对任何形状的缺口历史
         // （含总线饱和双丢、排空窗口未覆盖的在途写）统一补齐 cancelled
         // 结果，dangling 批永远不会以「痕迹被 sanitize 抹掉」的方式
-        // 进入新 agent 上下文。
+        // 进入模型上下文。
         if let Some(ref pool) = self.agent_shared.persist_pool {
             persist_pool::wait_drained_within(
                 pool,
@@ -668,37 +696,21 @@ impl Conductor {
             None => Vec::new(),
         };
 
-        // respawn 关账：给历史里 dangling 工具批补合成 cancelled 结果
+        // 关账：给历史里 dangling 工具批补合成 cancelled 结果
         //（cancel 合成结果与 interruption marker 饱和双丢、进程崩溃、
         // shutdown 竞速的统一兜底）——链完整后 sanitize 不再整组剔除
         // 中断痕迹，模型对「这批调用已取消」知情，重发与否是模型的
-        // 知情决策而非痕迹被抹后的无意识重跑。落盘失败不阻塞 spawn：
-        // 内存历史已补齐，下次 respawn 幂等重补。
+        // 知情决策而非痕迹被抹后的无意识重跑。
         let (history, closed) = crate::agent::MessageBuffer::close_dangling_tool_batches(
             &history,
             self.agent_config.max_tool_output_length,
         );
         if !closed.is_empty() {
-            tracing::info!(
+            tracing::debug!(
                 session = %sid.0,
                 closed = closed.len(),
-                "closed dangling tool batch results on respawn"
+                "closed dangling tool batch results"
             );
-            // 与正常消息同通道落盘（per-key FIFO），不做 store 直写：
-            // 直写与 pool worker 并发写同一 jsonl 有粘行先例（2026-09-11
-            // marker 粘行事故）。队列打满=池记 ERROR 丢件，不阻塞
-            // spawn（内存历史已补齐；落盘丢失的布局由迁移逻辑在下轮
-            // respawn 幂等兜住）。无 pool 的退化配置下没有并发写入
-            // 者，直写无粘行风险。
-            if let Some(ref pool) = self.agent_shared.persist_pool {
-                for message in closed {
-                    pool.dispatch(&sid, persist_pool::PersistJob::Append(message));
-                }
-            } else if let Some(store) = &self.agent_shared.message_store {
-                if let Err(e) = store.append(&sid.0, &closed).await {
-                    tracing::warn!("failed to persist closed tool results: {e}");
-                }
-            }
         }
 
         let session_info = match self.agent_shared.session_store.as_ref() {
@@ -706,51 +718,18 @@ impl Conductor {
             None => None,
         };
 
-        let cancel_token = session_info
-            .as_ref()
-            .and_then(|i| {
-                i.parent_id
-                    .clone()
-                    .and_then(|p| self.active.get(&p))
-                    .map(|a| a.cancel_token.child_token())
-            })
-            .unwrap_or_else(crate::agent::CancelToken::new);
-
         // Resolve working directory from session info or fallback to data_dir/workspace
         let working_dir = session_info
             .as_ref()
             .and_then(|i| i.working_dir.clone())
             .map(std::path::PathBuf::from);
 
-        let cwd = Some(crate::utils::path::session_workspace_dir(
-            &self.data_dir,
-            working_dir,
-        ));
-
-        // Create file state store
-        let file_state_store = match Self::create_file_state_store(&sid.0, &self.data_dir).await {
-            Ok(store) => store,
-            Err(e) => {
-                tracing::error!("Failed to create file state store: {}", e);
-                Arc::new(crate::tools::helper::FileStateStore::new())
-            }
-        };
-
-        // Create permission state from session's auto_approve_level
-        let auto_approve_level = session_info
-            .as_ref()
-            .and_then(|i| i.auto_approve_level.as_ref())
-            .and_then(|s| s.parse::<crate::permission::Level>().ok())
-            .unwrap_or_default();
-        let permission_state = Some(crate::permission::PermissionState::new(auto_approve_level));
+        let cwd = crate::utils::path::session_workspace_dir(&self.data_dir, working_dir);
 
         // Resolve workspace skill directory
-        let workspace_skill_dir = match cwd.as_ref() {
-            Some(dir) => crate::skill::workspace_skill_dir(dir).await,
-            None => None,
-        };
+        let workspace_skill_dir = crate::skill::workspace_skill_dir(&cwd).await;
 
-        // 磁盘即真相：spawn 现场分层扫描（同目录并发单飞），工作区目录优先级最高
+        // 磁盘即真相：现场分层扫描（同目录并发单飞），工作区目录优先级最高
         let skill_folders = crate::skill::session_skill_folders(
             &self.agent_shared.skill_folders,
             workspace_skill_dir.clone(),
@@ -765,14 +744,8 @@ impl Conductor {
             &self.agent_shared.skill_folders,
             workspace_skill_dir.clone(),
         );
-        let checkpoint_store = base_clone.checkpoint_store.clone();
-        let shared = Arc::new(base_clone.with_per_session(
-            permission_state,
-            Some(Arc::clone(&file_state_store)),
-            checkpoint_store,
-        ));
 
-        let working_dir = cwd.unwrap_or_default();
+        let working_dir = cwd.clone();
 
         let is_sub_agent = sid.starts_with(crate::types::SUB_PREFIX);
 
@@ -887,21 +860,249 @@ impl Conductor {
                 .with_cron(self.agent_config.enable_cron_tool && !is_sub_agent)
                 .with_todo(self.agent_config.enable_todo_tool);
 
-        // tools/ 目录外挂（spawn 时扫描快照）：代理工具的收口与内建一致
-        // （Agent::new 合并处做 blocklist 与撞名让位）。
+        // tools/ 目录外挂（现场扫描快照）：代理工具的收口与内建一致
+        // （blocklist 与撞名让位在 `ToolRegistry::assemble` 收口）。
         let ext_tools = crate::tools::ext::scan(&self.data_dir).await;
 
-        let args = AgentSpawnArgs::new(base_prompt, sid.0.clone(), mailbox, working_dir)
-            .with_skills(skills)
-            .with_arc_history(history)
+        SessionContext {
+            history,
+            closed,
+            session_info,
+            cwd,
+            base_clone: Arc::new(base_clone),
+            skills,
+            base_prompt,
+            tool_blocklist,
+            tool_flags,
+            ext_tools,
+        }
+    }
+
+    /// 应答一条旁问（`AgentInput::Btw` 的唯一归宿）：只读公共源冻结
+    /// 快照，spawn 单 step 旁路补全。每条会话同时只跑一条（新旁问
+    /// `Replaced` 旧的）；与 agent 生命周期完全无关——不起 agent，
+    /// agent 退役不影响在飞旁路流。
+    async fn start_btw(&self, sid: SessionId, request_id: crate::types::BtwId, question: String) {
+        // cancel 代际快照（锁外读取 = 本旁问开始处理时的世界状态）：
+        // prepare 完成后比对——/stop・shutdown 落在此期间（代际已
+        // bump）= 放弃 spawn 补 Done{Cancelled}：先于 /stop 发起的
+        // 旁问被取消闭环，晚于 /stop 的旁问正常开跑。已知残余窗口：
+        // 快照以 task 启动为"接受点"（bus 入队序不可得），极端调度
+        // 下本 task 启动晚于 cancel 完成时识别不到——毫秒级，接受。
+        let gen = self.btw.cancel_gen(&sid);
+        // per-session 串行闸：handle_input 按输入并发 spawn，两条连发
+        // 旁问的 abort/register 不能交错（否则旧流成孤儿）。
+        let _guard = self.btw.lock(&sid).await;
+
+        self.btw.abort(&sid, BtwEndReason::Replaced);
+        // Start 在这里发（而非 runner task 里）：下方任何解析失败路径
+        // 也能保证 Start → Done 的事件序，客户端永远看得到完整生命周期。
+        self.btw.emit(
+            &sid,
+            BtwEvent::Start {
+                request_id: request_id.clone(),
+            },
+        );
+
+        let prepared = async {
+            // 只读观察：历史内存关账不落盘（closed 由 spawn 落盘）。
+            let ctx = self.resolve_session_context(&sid).await;
+            // system prompt 与 agent 构造同路径（SystemPromptBuilder：
+            // base + 项目 memory + skills 表 + working_dir + session_id）。
+            let system_prompt = crate::prompt::SystemPromptBuilder::new()
+                .base_prompt(&ctx.base_prompt)
+                .with_skills(&ctx.skills)
+                .with_working_dir(&ctx.cwd)
+                .with_session_id(&sid.0)
+                .build()
+                .await;
+            // 快照 = system + 历史 + 事件流半截 + 包裹问题。
+            let history = crate::kernel::btw::assemble_btw_history(system_prompt, &ctx.history);
+            let partial = self.btw.partial_of(&sid);
+            let messages = crate::kernel::btw::build_btw_snapshot(&history, partial, &question);
+
+            let event_bus_handle = self.event_bus.handle(sid.clone());
+            let mut registry = crate::tools::ToolRegistry::assemble(
+                crate::tools::ToolRegistryConfig {
+                    shared: &ctx.base_clone,
+                    event_bus: &event_bus_handle,
+                    session_id: &sid.0,
+                    input_bus: Some(&self.input_bus),
+                    file_state_store: None,
+                    tool_blocklist: ctx.tool_blocklist.clone(),
+                    flags: ctx.tool_flags,
+                },
+                ctx.ext_tools,
+            );
+            let tools = registry.definitions();
+
+            let (provider, model_config) = ctx
+                .base_clone
+                .resolve_model(&sid)
+                .await
+                .map_err(|e| format!("Model resolution failed: {e}"))?;
+            let request_config =
+                crate::provider::resolve_request_config(&messages, &tools, &model_config)
+                    .map_err(|e| e.to_string())?;
+            Ok::<_, String>((provider, messages, tools, request_config))
+        }
+        .await;
+
+        let (provider, messages, tools, request_config) = match prepared {
+            Ok(v) => v,
+            Err(e) => {
+                self.btw.emit(
+                    &sid,
+                    BtwEvent::Done {
+                        request_id,
+                        reason: BtwEndReason::Error(e),
+                    },
+                );
+                return;
+            }
+        };
+
+        // cancel 代际比对：/stop・shutdown 落在 prepare 窗口 = 放弃
+        // spawn（Start 已发，补 Done{Cancelled} 保事件序完整）。
+        if self.btw.cancel_gen(&sid) != gen {
+            self.btw.emit(
+                &sid,
+                BtwEvent::Done {
+                    request_id,
+                    reason: BtwEndReason::Cancelled,
+                },
+            );
+            return;
+        }
+
+        let sink: Arc<dyn crate::comms::EventSink> = Arc::new(self.event_bus.handle(sid.clone()));
+        let tracker = Arc::clone(&self.btw);
+        let task_sid = sid.clone();
+        let task_request_id = request_id.clone();
+        let task = tokio::spawn(
+            async move {
+                let reason = crate::kernel::btw::run_btw_completion(
+                    sink,
+                    task_sid.clone(),
+                    task_request_id.clone(),
+                    provider,
+                    messages,
+                    tools,
+                    request_config,
+                )
+                .await;
+                // Done 收口：与 abort 抢删句柄，抢到者发（恰好一次）。
+                tracker.complete(&task_sid, &task_request_id, reason);
+            }
+            .instrument(tracing::Span::current()),
+        );
+        self.btw.register(sid, request_id, task.abort_handle());
+    }
+
+    async fn wake_agent(&self, sid: &SessionId, mailbox: Arc<Mailbox>) {
+        // 关停闸：intake 关闭后一律不 spawn（含 Cancel/Shutdown 臂的
+        // respawn——"重启打断后 run 被复活再被兜底杀"的根修）；消息留
+        // 在 mailbox 随进程退出。
+        if self.intake.is_cancelled() {
+            return;
+        }
+        let lock = self
+            .spawn_locks
+            .entry(sid.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .downgrade()
+            .clone();
+        let _guard = match lock.try_lock() {
+            Ok(g) => g,
+            Err(_) => {
+                // Another task is already spawning for this session.
+                // Messages have already been pushed to the mailbox; once that
+                // spawn completes and the agent starts, it will consume them.
+                return;
+            }
+        };
+
+        if self
+            .active
+            .get(sid)
+            .is_some_and(|v| !v.handle.is_finished())
+        {
+            return;
+        }
+
+        let ctx = self.resolve_session_context(sid).await;
+
+        // spawn 的修复职责：关账合成结果落盘——与正常消息同通道
+        //（per-key FIFO），不做 store 直写：直写与 pool worker 并发写
+        // 同一 jsonl 有粘行先例（2026-09-11 marker 粘行事故）。队列
+        // 打满=池记 ERROR 丢件，不阻塞 spawn（内存历史已补齐；落盘
+        // 丢失的布局由迁移逻辑在下轮 respawn 幂等兜住）。无 pool 的
+        // 退化配置下没有并发写入者，直写无粘行风险。
+        if !ctx.closed.is_empty() {
+            let closed_len = ctx.closed.len();
+            if let Some(ref pool) = self.agent_shared.persist_pool {
+                for message in ctx.closed {
+                    pool.dispatch(sid, persist_pool::PersistJob::Append(message));
+                }
+            } else if let Some(store) = &self.agent_shared.message_store {
+                if let Err(e) = store.append(&sid.0, &ctx.closed).await {
+                    tracing::warn!("failed to persist closed tool results: {e}");
+                }
+            }
+            tracing::info!(
+                session = %sid.0,
+                closed = closed_len,
+                "persisted closed tool results on respawn"
+            );
+        }
+
+        let cancel_token = ctx
+            .session_info
+            .as_ref()
+            .and_then(|i| {
+                i.parent_id
+                    .clone()
+                    .and_then(|p| self.active.get(&p))
+                    .map(|a| a.cancel_token.child_token())
+            })
+            .unwrap_or_else(crate::agent::CancelToken::new);
+
+        // Create file state store
+        let file_state_store = match Self::create_file_state_store(&sid.0, &self.data_dir).await {
+            Ok(store) => store,
+            Err(e) => {
+                tracing::error!("Failed to create file state store: {}", e);
+                Arc::new(crate::tools::helper::FileStateStore::new())
+            }
+        };
+
+        // Create permission state from session's auto_approve_level
+        let auto_approve_level = ctx
+            .session_info
+            .as_ref()
+            .and_then(|i| i.auto_approve_level.as_ref())
+            .and_then(|s| s.parse::<crate::permission::Level>().ok())
+            .unwrap_or_default();
+        let permission_state = Some(crate::permission::PermissionState::new(auto_approve_level));
+
+        let checkpoint_store = ctx.base_clone.checkpoint_store.clone();
+        let shared = Arc::new(ctx.base_clone.with_per_session(
+            permission_state,
+            Some(Arc::clone(&file_state_store)),
+            checkpoint_store,
+        ));
+
+        let args = AgentSpawnArgs::new(ctx.base_prompt, sid.0.clone(), mailbox, ctx.cwd.clone())
+            .with_skills(ctx.skills)
+            .with_arc_history(ctx.history)
             .with_max_iterations(self.agent_config.max_iterations)
-            .with_tool_flags(tool_flags)
+            .with_tool_flags(ctx.tool_flags)
             .with_file_state_store(Arc::clone(&file_state_store))
-            .with_tool_blocklist(tool_blocklist)
+            .with_tool_blocklist(ctx.tool_blocklist)
             .with_max_tool_output_length(self.agent_config.max_tool_output_length)
             .with_cancel_token(cancel_token.clone())
             .with_input_bus(self.input_bus.clone())
-            .with_ext_tools(ext_tools);
+            .with_ext_tools(ctx.ext_tools);
 
         let agent = Agent::new(&shared, args).await;
         let state_watch = agent.state_watch();

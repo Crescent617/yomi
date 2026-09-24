@@ -44,7 +44,12 @@ fn forward_envelope(
         return;
     }
 
-    event_buffer.push(envelope.clone());
+    // 旁问事件只发实时订阅、不进回放缓冲：它们是瞬态的（重放只会把
+    // 过期 delta 重新灌给刚订阅的客户端），且 btw 永远不会触发缓冲
+    // 清空（不产 MessageAdded），放进去只会白白挤占 10k 上限。
+    if !matches!(envelope.event, Event::Btw(_)) {
+        event_buffer.push(envelope.clone());
+    }
 
     if matches!(
         &envelope.event,

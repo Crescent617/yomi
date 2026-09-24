@@ -1,5 +1,6 @@
 //! Application layer - kernel and conductor management
 
+pub(crate) mod btw;
 pub mod conductor;
 pub(crate) mod persist_pool;
 mod tasks;
@@ -1541,6 +1542,41 @@ impl Kernel {
         self.send_message_inner(session_id, blocks, true).await
     }
 
+    /// Ephemeral side question (`/btw`): route a `Btw` input to the session's
+    /// agent; the answer streams back as `btw` events carrying the returned
+    /// request_id. Validation mirrors the CLI/GUI call sites (unknown
+    /// sessions are rejected there, same as `send_message`).
+    pub async fn btw(
+        &self,
+        session_id: &SessionId,
+        question: String,
+        request_id: Option<String>,
+    ) -> Result<crate::types::BtwId> {
+        let question = question.trim().to_string();
+        if question.is_empty() {
+            return Err(KernelError::config("btw question must not be empty"));
+        }
+        if let Some(ref id) = request_id {
+            if id.chars().count() > 64 {
+                return Err(KernelError::config(
+                    "btw request_id too long (max 64 chars)",
+                ));
+            }
+        }
+        let request_id =
+            request_id.map_or_else(crate::types::BtwId::new, crate::types::BtwId::from);
+        self.input_bus
+            .publish(
+                session_id.clone(),
+                AgentInput::Btw {
+                    request_id: request_id.clone(),
+                    question,
+                },
+            )
+            .map_err(|e| KernelError::io(format!("InputBus full: {e}")))?;
+        Ok(request_id)
+    }
+
     pub(crate) async fn send_message_inner(
         &self,
         session_id: &SessionId,
@@ -1690,12 +1726,14 @@ impl Kernel {
         let Some(mb) = self.conductor.mailbox(session_id) else {
             return false;
         };
-        let Some(AgentInput::User { content }) =
-            mb.take(&crate::types::MailboxItemId::from(item_id)).await
-        else {
-            // Legit false paths: already consumed (double-click/race), or
-            // a control input (Compact/Rewind) living in the normal queue.
+        let Some(entry) = mb.take(&crate::types::MailboxItemId::from(item_id)).await else {
             tracing::debug!(session_id = %session_id.0, item_id, "mailbox steer-promote: item not pending");
+            return false;
+        };
+        let AgentInput::User { content } = entry else {
+            // 控制输入（Compact/Rewind 等）不能提升——原样塞回，不能
+            // 静默吞掉（Rewind 挂着 result_tx，吞了调用方永远等不到）。
+            mb.push(entry).await;
             return false;
         };
         mb.push_steer(mark_user_steer(content)).await;

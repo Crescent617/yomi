@@ -192,6 +192,22 @@ impl KernelApi for RemoteKernel {
         .await
     }
 
+    async fn btw(
+        &self,
+        session_id: &SessionId,
+        question: String,
+        request_id: Option<String>,
+    ) -> Result<crate::types::BtwId> {
+        let id: String = self
+            .call_json(ReqMethod::Btw {
+                session_id: session_id.0.to_string(),
+                question,
+                request_id,
+            })
+            .await?;
+        Ok(crate::types::BtwId::from(id))
+    }
+
     async fn cancel(&self, session_id: &SessionId) -> Result<()> {
         self.call_unit(ReqMethod::Command {
             session_id: session_id.0.to_string(),

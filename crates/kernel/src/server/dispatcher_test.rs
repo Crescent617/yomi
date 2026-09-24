@@ -488,3 +488,44 @@ async fn run_starting_methods_rejected_after_intake_close() {
 
     shutdown.cancel();
 }
+
+#[tokio::test]
+async fn test_btw_wire_round_trip() {
+    let (client, _tmp, shutdown) = setup().await;
+    let sid = SessionId::new();
+    let mut sub = client.subscribe_session_events(&sid, None).await.unwrap();
+
+    // ack 返回 request_id；客户端自带 id 时原样生效。
+    let rid = client
+        .btw(&sid, "刚才那个变量叫什么？".to_string(), None)
+        .await
+        .unwrap();
+    assert!(rid.as_str().starts_with("btw_"));
+
+    // 测试内核没有配置 API key：agent 解析到 NoKeyProvider / 无模型，
+    // 事件契约必然是 Start → Done(Error)（且不落盘任何消息）。
+    let mut saw_start = false;
+    let reason = loop {
+        let item = tokio::time::timeout(std::time::Duration::from_secs(15), sub.recv())
+            .await
+            .expect("btw event timed out")
+            .expect("event stream ended");
+        let crate::event::Event::Btw(ev) = item.1.event else {
+            continue;
+        };
+        match ev {
+            crate::event::BtwEvent::Start { request_id } => {
+                assert_eq!(request_id, rid);
+                saw_start = true;
+            }
+            crate::event::BtwEvent::Delta { .. } => {}
+            crate::event::BtwEvent::Done { request_id, reason } => {
+                assert_eq!(request_id, rid);
+                break reason;
+            }
+        }
+    };
+    assert!(saw_start, "Start must precede Done even on the error path");
+    assert!(matches!(reason, crate::event::BtwEndReason::Error(_)));
+    shutdown.cancel();
+}

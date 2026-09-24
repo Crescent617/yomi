@@ -137,6 +137,14 @@ pub trait KernelApi: Send + Sync {
         auto_approve_level: Level,
     ) -> Result<SessionId>;
     async fn send_message(&self, session_id: &SessionId, blocks: Vec<ContentBlock>) -> Result<()>;
+    /// Ask an ephemeral side question (`/btw`); returns the `request_id`
+    /// correlating the session's `btw` event stream.
+    async fn btw(
+        &self,
+        session_id: &SessionId,
+        question: String,
+        request_id: Option<String>,
+    ) -> Result<crate::types::BtwId>;
     async fn cancel(&self, session_id: &SessionId) -> Result<()>;
     async fn send_permission_response(
         &self,
