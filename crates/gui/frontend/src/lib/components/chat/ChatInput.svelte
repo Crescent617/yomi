@@ -22,6 +22,7 @@
   import { forkSession, textFromBlocks } from "../../session";
   import { isActiveSessionPhase } from "../../session-phase";
   import { SLASH_COMMANDS } from "../../commands";
+  import { askBtw } from "../../btw.svelte";
   import { sanitizeControlPuaPaste } from "../../utils";
   import { open } from "@tauri-apps/plugin-dialog";
 
@@ -448,6 +449,16 @@
         case "/history":
           openHistoryPicker();
           break;
+        case "/btw":
+          {
+            const question = parts.slice(1).join(" ").trim();
+            if (!question) {
+              showNotification("用法：/btw <问题>", "error");
+              return false;
+            }
+            await askBtw(session_id, question);
+          }
+          break;
         default:
           // Unknown command — treat as normal message
           await api.sendMessage(session_id, composeOutgoingText(quotes, text));
@@ -750,6 +761,14 @@
       const text = content.trim();
       if (text === "/history" || text.startsWith("/history ")) {
         openHistoryPicker();
+        return;
+      }
+      // /btw 在流式中也必须走命令通道——否则会被 queueInput 当普通消息
+      // 原文排队，字面污染它承诺不碰的上下文。匹配与 handleCommand 同款
+      // 大小写不敏感。
+      const lower = text.toLowerCase();
+      if (lower === "/btw" || lower.startsWith("/btw ")) {
+        void handleSubmit();
         return;
       }
       if (isStreaming) {

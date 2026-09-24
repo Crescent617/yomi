@@ -650,6 +650,19 @@ export async function sendSteer(
   return invokeCmd("send_steer", { session_id: session_id, blocks });
 }
 
+/** `/btw` 旁问：返回答案的 request_id（对应 `"btw"` 事件流）。 */
+export async function btw(
+  session_id: string,
+  question: string,
+  request_id?: string,
+): Promise<string> {
+  return invokeCmd("btw", {
+    session_id: session_id,
+    question,
+    request_id: request_id ?? null,
+  });
+}
+
 // ── Mailbox（pending 消息管理面） ──
 
 export interface MailboxItem {

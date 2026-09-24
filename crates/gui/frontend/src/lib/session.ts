@@ -2,6 +2,7 @@ import * as api from "./api";
 import type { SessionMessage } from "./api";
 import type { TaggedContentBlock } from "./types";
 import { refreshMailbox } from "./mailbox.svelte";
+import { closeBtwCard } from "./btw.svelte";
 import {
   getSession,
   pinnedSessionMeta,
@@ -165,6 +166,9 @@ export function appendSessionMessages(
 export function setActiveSession(id: string | null) {
   const prevId = sessionState.activeSessionId;
   if (id === prevId) return;
+  // 切会话即弃旁问：daemon 的旁问事件不进回放缓冲（见 kernel
+  // forward_envelope），切走的卡永远等不到 Done——销毁而不是挂着。
+  closeBtwCard();
   if (prevId && id !== prevId) {
     api.unsubscribe(prevId).catch(() => {});
     const prevSession = getSession(prevId);

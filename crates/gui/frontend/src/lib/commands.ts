@@ -13,4 +13,6 @@ export const SLASH_COMMANDS: readonly (readonly [string, string])[] = [
   ["/continue", "Trigger agent to continue without new input"],
   ["/debug", "noti Emit 10 short-lived test notifications"],
   ["/help", "Show keyboard shortcuts help"],
+  // GUI 先行；TUI 实现 /btw 后同步 TUI 列表（见头注）。
+  ["/btw", "Ask a side question without touching session context (text only)"],
 ] as const;
