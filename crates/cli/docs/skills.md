@@ -16,6 +16,12 @@ skill = 一个目录 + 其中的 `SKILL.md`：frontmatter 声明用途，正文�
 
 生效时机：spawn 时经 loader 加载，目录扫描结果缓存 60s（全 daemon 共享）——新装的 skill 最晚约 1 分钟内生效，无 reload 命令。`yomi skill list` 查看当前生效清单（同样走缓存）。
 
+## 从生态安装别人的 skill
+
+- 社区安装 CLI：`npx skills add <owner/repo>`；或 `git clone` 进层目录；dotfiles 管理用 stow/符号链接。目录落进上述任一层即生效，无需任何对接。
+- 安装工具的 lock 文件（如 `skills-lock.json`）归其自己维护——团队可复现是项目仓库侧的事，yomi 不读不写；落在 skills 根目录也不影响扫描（只认 `<名>/SKILL.md`）。
+- 第三方 frontmatter 的 `name:`/`metadata:`/`allowed-tools:` 字段被忽略（不报错）——yomi 按目录路径取名，与 frontmatter 的 `name:` 不一致时以路径为准。
+
 ## SKILL.md 格式
 
 ```markdown
