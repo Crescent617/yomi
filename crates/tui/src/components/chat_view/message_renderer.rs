@@ -766,6 +766,9 @@ fn render_subagent_inline(sa: &SubagentState, _width: usize) -> Vec<Arc<Line<'st
                     kernel::event::StopReason::MaxIterations { reached } => {
                         format!(" Max iterations ({reached})")
                     }
+                    kernel::event::StopReason::ToolLoop { tool, count } => {
+                        format!(" Tool loop: {tool} ×{count}")
+                    }
                 },
                 _ => String::new(),
             })

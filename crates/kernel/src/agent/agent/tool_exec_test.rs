@@ -124,6 +124,7 @@ async fn cancel_persists_cancelled_results_for_unfinished_calls() {
         session_id: SessionId::new().to_string(),
         parent_session_id: None,
         max_iterations: 1,
+        tool_loop_guard: crate::agent::LoopGuard::default(),
         working_dir: working_dir.path().to_path_buf(),
         cancel_token: None,
         tool_flags: crate::tools::ToolFlags::new(false),
@@ -277,6 +278,7 @@ async fn closed_out_history_does_not_re_execute_batch() {
             session_id: SessionId::new().to_string(),
             parent_session_id: None,
             max_iterations: 1,
+            tool_loop_guard: crate::agent::LoopGuard::default(),
             working_dir: working_dir.path().to_path_buf(),
             cancel_token: None,
             tool_flags: crate::tools::ToolFlags::new(false),
@@ -310,4 +312,228 @@ async fn closed_out_history_does_not_re_execute_batch() {
     let agent = spawn_with_history(closed).await;
     let (_, pending) = agent.pending_tool_calls().expect("batch still present");
     assert!(pending.is_empty(), "closed-out batch must not re-execute");
+}
+
+/// 循环哨兵端到端：同一调用（参数与结果均相同）连续重复——第 2 次
+/// 注入 user 警告（L1，turn 继续），第 3 次熔断（L2，记
+/// `StopReason::ToolLoop` 走 `WindingDown` 收尾）。
+#[tokio::test]
+async fn identical_call_loop_warns_then_breaks_turn() {
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs, AgentState};
+    use crate::event::StopReason;
+    use crate::tools::{Tool, ToolExecCtx};
+    use crate::types::{Message, Result, Role, SessionId, ToolOutput};
+    use async_trait::async_trait;
+    use serde_json::Value;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    struct EchoTool;
+
+    #[async_trait]
+    impl Tool for EchoTool {
+        fn name(&self) -> &'static str {
+            "echo"
+        }
+        fn desc(&self) -> &'static str {
+            "constant output"
+        }
+        fn schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+        async fn exec(&self, _args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
+            Ok(ToolOutput::text("constant output"))
+        }
+    }
+
+    async fn run_round(
+        agent: &mut Agent,
+        tag: &str,
+    ) -> std::result::Result<(), crate::agent::AgentError> {
+        let mut assistant = Message::assistant("calling echo");
+        assistant.tool_calls = Some(vec![ToolCall {
+            id: format!("call-{tag}"),
+            name: "echo".to_string(),
+            arguments: json!({}),
+        }]);
+        agent.message_buffer.push_arc(Arc::new(assistant));
+        agent.handle_execute_tool().await
+    }
+
+    let shared = Arc::new(AgentShared::new(
+        Arc::new(BTreeMap::new()),
+        "test".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+        None,
+    ));
+    let working_dir = tempfile::tempdir().unwrap();
+    let args = AgentSpawnArgs {
+        base_prompt: "test".to_string(),
+        skills: Vec::new(),
+        history: Vec::new(),
+        session_id: SessionId::new().to_string(),
+        parent_session_id: None,
+        max_iterations: 100,
+        tool_loop_guard: crate::agent::LoopGuard::default(),
+        working_dir: working_dir.path().to_path_buf(),
+        cancel_token: None,
+        tool_flags: crate::tools::ToolFlags::new(false),
+        file_state_store: None,
+        tool_blocklist: Vec::new(),
+        max_tool_output_length: 1024,
+        mailbox: Arc::new(crate::comms::Mailbox::new()),
+        input_bus: None,
+        ext_tools: Vec::new(),
+    };
+    let mut agent = Agent::new(&shared, args).await;
+    agent.tool_registry.register(EchoTool);
+
+    // 第 1 次：正常执行，转 Streaming，无警告。
+    run_round(&mut agent, "1").await.expect("round 1");
+    assert_eq!(agent.context.current_state(), AgentState::Streaming);
+    assert!(
+        !agent
+            .message_buffer
+            .messages()
+            .iter()
+            .any(|m| m.role == Role::User),
+        "first call must not trigger a warning"
+    );
+
+    // 第 2 次（identical）：L1 警告注入，turn 继续。
+    run_round(&mut agent, "2").await.expect("round 2");
+    assert_eq!(agent.context.current_state(), AgentState::Streaming);
+    let warning = agent
+        .message_buffer
+        .messages()
+        .iter()
+        .filter(|m| m.role == Role::User)
+        .map(|m| match m.content.first() {
+            Some(crate::types::ContentBlock::Text { text }) => text.clone(),
+            other => panic!("expected text content, got {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(warning.len(), 1, "exactly one loop warning injected");
+    assert!(warning[0].contains("[loop guard]"));
+    assert!(warning[0].contains("`echo`"));
+
+    // 警告注入在批结果之后：has_user_after 守卫生效，respawn 不会
+    // 重放这个已收尾的批（与中断标记同语义）。
+    assert!(
+        agent.pending_tool_calls().is_none(),
+        "warning injection closes the batch against replay"
+    );
+
+    // 第 3 次（identical）：L2 熔断，记 ToolLoop，走 WindingDown。
+    run_round(&mut agent, "3").await.expect("round 3");
+    assert_eq!(agent.context.current_state(), AgentState::WindingDown);
+    assert_eq!(
+        agent.last_stop_reason,
+        Some(StopReason::ToolLoop {
+            tool: "echo".to_string(),
+            count: 3,
+        })
+    );
+}
+
+/// 结果变化的重复调用（轮询/改后重读）不触发哨兵。
+#[tokio::test]
+async fn fresh_results_do_not_trip_the_guard() {
+    use crate::agent::{Agent, AgentShared, AgentSpawnArgs, AgentState};
+    use crate::tools::{Tool, ToolExecCtx};
+    use crate::types::{Message, Result, Role, SessionId, ToolOutput};
+    use async_trait::async_trait;
+    use serde_json::Value;
+    use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    struct CounterTool(Arc<AtomicUsize>);
+
+    #[async_trait]
+    impl Tool for CounterTool {
+        fn name(&self) -> &'static str {
+            "counter"
+        }
+        fn desc(&self) -> &'static str {
+            "fresh output every call"
+        }
+        fn schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+        async fn exec(&self, _args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
+            let n = self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(ToolOutput::text(format!("count {n}")))
+        }
+    }
+
+    let shared = Arc::new(AgentShared::new(
+        Arc::new(BTreeMap::new()),
+        "test".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+        None,
+    ));
+    let working_dir = tempfile::tempdir().unwrap();
+    let args = AgentSpawnArgs {
+        base_prompt: "test".to_string(),
+        skills: Vec::new(),
+        history: Vec::new(),
+        session_id: SessionId::new().to_string(),
+        parent_session_id: None,
+        max_iterations: 100,
+        tool_loop_guard: crate::agent::LoopGuard::default(),
+        working_dir: working_dir.path().to_path_buf(),
+        cancel_token: None,
+        tool_flags: crate::tools::ToolFlags::new(false),
+        file_state_store: None,
+        tool_blocklist: Vec::new(),
+        max_tool_output_length: 1024,
+        mailbox: Arc::new(crate::comms::Mailbox::new()),
+        input_bus: None,
+        ext_tools: Vec::new(),
+    };
+    let mut agent = Agent::new(&shared, args).await;
+    agent
+        .tool_registry
+        .register(CounterTool(Arc::new(AtomicUsize::new(0))));
+
+    for tag in ["1", "2", "3", "4"] {
+        let mut assistant = Message::assistant("polling");
+        assistant.tool_calls = Some(vec![ToolCall {
+            id: format!("call-{tag}"),
+            name: "counter".to_string(),
+            arguments: json!({}),
+        }]);
+        agent.message_buffer.push_arc(Arc::new(assistant));
+        agent.handle_execute_tool().await.expect("round");
+        assert_eq!(
+            agent.context.current_state(),
+            AgentState::Streaming,
+            "round {tag}: fresh results must keep the guard silent"
+        );
+    }
+    assert!(
+        !agent
+            .message_buffer
+            .messages()
+            .iter()
+            .any(|m| m.role == Role::User),
+        "no warning for fresh results"
+    );
 }

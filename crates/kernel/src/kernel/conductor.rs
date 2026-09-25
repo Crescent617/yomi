@@ -616,6 +616,9 @@ impl Conductor {
             StopReason::MaxIterations { reached } => {
                 format!("⚠ run hit max iterations ({reached})\n{reply}")
             }
+            StopReason::ToolLoop { tool, count } => {
+                format!("⚠ run stopped: `{tool}` looped with identical results (×{count})\n{reply}")
+            }
             StopReason::Cancelled { .. } | StopReason::Shutdown => {
                 unreachable!("cancelled/shutdown filtered above")
             }
@@ -1096,6 +1099,7 @@ impl Conductor {
             .with_skills(ctx.skills)
             .with_arc_history(ctx.history)
             .with_max_iterations(self.agent_config.max_iterations)
+            .with_tool_loop_guard(self.agent_config.tool_loop_guard())
             .with_tool_flags(ctx.tool_flags)
             .with_file_state_store(Arc::clone(&file_state_store))
             .with_tool_blocklist(ctx.tool_blocklist)

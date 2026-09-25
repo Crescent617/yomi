@@ -77,6 +77,8 @@ pub struct Agent {
     cancel_token: CancelToken,
     session_id: SessionId,
     max_iterations: usize,
+    /// 工具调用循环哨兵阈值（`tool_exec::finish_tool_batch` 处判定）
+    tool_loop_guard: super::LoopGuard,
     // Tool registry - each agent has its own set of tools
     tool_registry: crate::tools::ToolRegistry,
     // Permission checker for tool execution
@@ -191,6 +193,7 @@ impl Agent {
             cancel_token,
             session_id,
             max_iterations: args.max_iterations,
+            tool_loop_guard: args.tool_loop_guard,
             tool_registry,
             permission_checker,
             working_dir: args.working_dir,
@@ -549,6 +552,7 @@ impl Agent {
             Some(StopReason::Shutdown) => ("shutdown", None),
             Some(StopReason::Failed { error }) => ("failed", Some(error.clone())),
             Some(StopReason::MaxIterations { .. }) => ("max_iterations", None),
+            Some(StopReason::ToolLoop { .. }) => ("tool_loop", None),
             None => {
                 // 防御兜底：正常出路都经 `note_stopped` / 循环底部 Err 臂
                 // 留原因；走到这说明内核漏了路径，warn 留痕以便排查。

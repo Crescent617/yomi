@@ -476,6 +476,19 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
         showNotification(msg, "warning");
         sendDesktopNotification("Yomi", msg, session.id);
         return true;
+      } else if ("tool_loop" in stopReason) {
+        const msg = `Tool loop: \`${stopReason.tool_loop.tool}\` repeated with identical results (×${stopReason.tool_loop.count})`;
+        appendSessionMessages(session, [
+          {
+            id: crypto.randomUUID(),
+            type: "error",
+            content: msg,
+            created_at: new Date().toISOString(),
+          },
+        ]);
+        showNotification(msg, "warning");
+        sendDesktopNotification("Yomi", msg, session.id);
+        return true;
       }
       sendDesktopNotification("Yomi", "Task completed", session.id);
       return true;

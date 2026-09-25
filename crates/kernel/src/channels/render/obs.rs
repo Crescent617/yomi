@@ -298,6 +298,9 @@ fn settle_from_reason(reason: &StopReason) -> Settle {
         StopReason::Shutdown => Settle::Shutdown,
         StopReason::Failed { error } => Settle::Failed(error.clone()),
         StopReason::MaxIterations { reached } => Settle::MaxIterations(*reached),
+        StopReason::ToolLoop { tool, count } => Settle::Failed(format!(
+            "Tool loop: `{tool}` repeated with identical results (×{count})"
+        )),
     }
 }
 

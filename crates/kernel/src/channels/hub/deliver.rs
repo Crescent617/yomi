@@ -32,7 +32,8 @@ impl RunEndStatus {
             crate::event::StopReason::Cancelled { .. } => Self::Cancelled,
             crate::event::StopReason::Shutdown => Self::Shutdown,
             crate::event::StopReason::Failed { .. }
-            | crate::event::StopReason::MaxIterations { .. } => Self::Failed,
+            | crate::event::StopReason::MaxIterations { .. }
+            | crate::event::StopReason::ToolLoop { .. } => Self::Failed,
         }
     }
 

@@ -237,6 +237,14 @@ impl SubagentTool {
                         );
                         break;
                     }
+                    StopReason::ToolLoop { tool, count } => {
+                        status = SubAgentStatus::Failed(format!(
+                            "Stopped: `{tool}` was called {count} times in a row with \
+                             identical arguments and identical results. Change approach \
+                             or break the task into smaller steps."
+                        ));
+                        break;
+                    }
                 }
             }
         }

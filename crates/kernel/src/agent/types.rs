@@ -21,6 +21,12 @@ pub struct AgentConfig {
     pub default_model: String,
     /// Maximum number of iterations per agent run
     pub max_iterations: usize,
+    /// 工具调用循环哨兵：同一调用（参数与结果均相同）连续重复该次数
+    /// 后注入警告，给模型一次自纠机会（默认 2；0 = 不警告）。
+    pub tool_loop_warn_threshold: usize,
+    /// 循环哨兵熔断：同一调用连续重复达到该次数即结束 turn
+    /// （默认 3；0 = 关闭哨兵）。
+    pub tool_loop_break_threshold: usize,
     /// Allow the agent to spawn sub-agents
     pub enable_subagent: bool,
     /// Custom system prompt override; supports the {{name}} placeholder.
@@ -56,6 +62,8 @@ pub struct AgentSpawnArgs {
     pub session_id: String,
     pub parent_session_id: Option<String>,
     pub max_iterations: usize,
+    /// 循环哨兵阈值（随 spawn 装配；`AgentConfig::tool_loop_guard`）
+    pub tool_loop_guard: super::LoopGuard,
     pub working_dir: std::path::PathBuf,
     /// Optional cancel token to share with parent (for cascading cancellation)
     pub cancel_token: Option<super::CancelToken>,
@@ -84,6 +92,7 @@ impl std::fmt::Debug for AgentSpawnArgs {
             .field("session_id", &self.session_id)
             .field("parent_session_id", &self.parent_session_id)
             .field("max_iterations", &self.max_iterations)
+            .field("tool_loop_guard", &self.tool_loop_guard)
             .field("working_dir", &self.working_dir)
             .field("cancel_token", &self.cancel_token.is_some())
             .field("tool_flags", &self.tool_flags)
@@ -111,6 +120,7 @@ impl AgentSpawnArgs {
             session_id: session_id.into(),
             parent_session_id: None,
             max_iterations: 100,
+            tool_loop_guard: super::LoopGuard::default(),
             working_dir: working_dir.into(),
             cancel_token: None,
             tool_flags: crate::tools::ToolFlags::new(true),
@@ -165,6 +175,13 @@ impl AgentSpawnArgs {
         self
     }
 
+    /// Set the tool-call loop guard thresholds
+    #[must_use]
+    pub const fn with_tool_loop_guard(mut self, guard: super::LoopGuard) -> Self {
+        self.tool_loop_guard = guard;
+        self
+    }
+
     /// Set tool registration flags
     #[must_use]
     pub const fn with_tool_flags(mut self, flags: crate::tools::ToolFlags) -> Self {
@@ -216,6 +233,8 @@ impl Default for AgentConfig {
             name: "Yomi".to_string(),
             default_model: "default".to_string(),
             max_iterations: 100,
+            tool_loop_warn_threshold: 2,
+            tool_loop_break_threshold: 3,
             enable_subagent: true,
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
             tool_blocklist: Vec::new(),
@@ -242,6 +261,15 @@ impl AgentConfig {
     #[must_use]
     pub fn rendered_system_prompt(&self) -> String {
         self.system_prompt.replace(NAME_PLACEHOLDER, &self.name)
+    }
+
+    /// 装配运行时的循环哨兵阈值。
+    #[must_use]
+    pub const fn tool_loop_guard(&self) -> super::LoopGuard {
+        super::LoopGuard {
+            warn_at: self.tool_loop_warn_threshold,
+            break_at: self.tool_loop_break_threshold,
+        }
     }
 }
 

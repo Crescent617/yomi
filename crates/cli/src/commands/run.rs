@@ -245,6 +245,12 @@ impl RunState {
                     StopReason::Completed { .. } => (RunStatus::Completed, None),
                     StopReason::Failed { error } => (RunStatus::Failed, Some(error.clone())),
                     StopReason::MaxIterations { .. } => (RunStatus::MaxIterations, None),
+                    StopReason::ToolLoop { tool, count } => (
+                        RunStatus::Failed,
+                        Some(format!(
+                            "tool loop: `{tool}` repeated with identical results (×{count})"
+                        )),
+                    ),
                     StopReason::Cancelled { .. } | StopReason::Shutdown => {
                         (RunStatus::Cancelled, None)
                     }

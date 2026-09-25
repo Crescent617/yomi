@@ -489,5 +489,9 @@ fn notice_reason(reason: &StopReason) -> (PetNoticeKind, Option<String>) {
             PetNoticeKind::MaxIterations,
             Some(format!("Reached {reached} iterations")),
         ),
+        StopReason::ToolLoop { tool, count } => (
+            PetNoticeKind::Failed,
+            Some(format!("Tool loop: {tool} ×{count}")),
+        ),
     }
 }

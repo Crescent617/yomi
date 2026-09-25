@@ -29,6 +29,10 @@ pub mod env_names {
     /// Application settings
     pub const DATA_DIR: &str = env_name!("DATA_DIR");
     pub const MAX_ITERATIONS: &str = env_name!("MAX_ITERATIONS");
+    /// 工具调用循环哨兵：连续 identical 调用达该次数注入警告（默认 2；0 = 不警告）
+    pub const TOOL_LOOP_WARN: &str = env_name!("TOOL_LOOP_WARN");
+    /// 工具调用循环哨兵：连续 identical 调用达该次数结束 turn（默认 3；0 = 关闭哨兵）
+    pub const TOOL_LOOP_BREAK: &str = env_name!("TOOL_LOOP_BREAK");
     pub const ENABLE_SUB_AGENTS: &str = env_name!("ENABLE_SUB_AGENTS");
 
     /// Thinking configuration
@@ -652,6 +656,14 @@ impl Config {
 
         if let Some(iters) = env_parse::<usize>(env_names::MAX_ITERATIONS) {
             self.agent.max_iterations = iters;
+        }
+
+        // Tool-call loop guard thresholds (consecutive identical calls)
+        if let Some(n) = env_parse::<usize>(env_names::TOOL_LOOP_WARN) {
+            self.agent.tool_loop_warn_threshold = n;
+        }
+        if let Some(n) = env_parse::<usize>(env_names::TOOL_LOOP_BREAK) {
+            self.agent.tool_loop_break_threshold = n;
         }
 
         // Enable sub-agents (default true unless explicitly set to "false")

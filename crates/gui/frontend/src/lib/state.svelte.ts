@@ -477,6 +477,7 @@ export type StopReason =
   | { cancelled: { operation?: string } }
   | { failed: { error: string } }
   | { max_iterations: { reached: number } }
+  | { tool_loop: { tool: string; count: number } }
   | { completed: { finish_reason?: string | null } };
 
 export interface AgentLifecycleStopped {

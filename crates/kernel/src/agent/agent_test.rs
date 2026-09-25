@@ -240,6 +240,7 @@ async fn repeated_token_usage_events_are_recorded_once() {
         session_id: SessionId::new().to_string(),
         parent_session_id: None,
         max_iterations: 1,
+        tool_loop_guard: crate::agent::LoopGuard::default(),
         working_dir: working_dir.path().to_path_buf(),
         cancel_token: None,
         tool_flags: crate::tools::ToolFlags::new(false),
@@ -308,6 +309,7 @@ async fn handle_clear_keeps_system_prompt() {
         session_id: SessionId::new().to_string(),
         parent_session_id: None,
         max_iterations: 1,
+        tool_loop_guard: crate::agent::LoopGuard::default(),
         working_dir: working_dir.path().to_path_buf(),
         cancel_token: None,
         tool_flags: crate::tools::ToolFlags::new(false),
@@ -375,6 +377,7 @@ async fn apply_compacted_messages_keeps_system_prompt() {
         session_id: SessionId::new().to_string(),
         parent_session_id: None,
         max_iterations: 1,
+        tool_loop_guard: crate::agent::LoopGuard::default(),
         working_dir: working_dir.path().to_path_buf(),
         cancel_token: None,
         tool_flags: crate::tools::ToolFlags::new(false),
@@ -449,6 +452,7 @@ async fn force_full_compact_emits_event_bracket_on_early_failure() {
         session_id: session_id.to_string(),
         parent_session_id: None,
         max_iterations: 1,
+        tool_loop_guard: crate::agent::LoopGuard::default(),
         working_dir: working_dir.path().to_path_buf(),
         cancel_token: None,
         tool_flags: crate::tools::ToolFlags::new(false),
@@ -548,6 +552,7 @@ async fn compaction_result_emits_compacted_outcome() {
         session_id: session_id.to_string(),
         parent_session_id: None,
         max_iterations: 1,
+        tool_loop_guard: crate::agent::LoopGuard::default(),
         working_dir: working_dir.path().to_path_buf(),
         cancel_token: None,
         tool_flags: crate::tools::ToolFlags::new(false),
@@ -629,6 +634,7 @@ async fn cancelled_agent_exits_loop() {
         session_id: SessionId::new().to_string(),
         parent_session_id: None,
         max_iterations: 1,
+        tool_loop_guard: crate::agent::LoopGuard::default(),
         working_dir: working_dir.path().to_path_buf(),
         cancel_token: None,
         tool_flags: crate::tools::ToolFlags::new(false),
@@ -749,6 +755,7 @@ async fn retrying_event_carries_retry_after_wait() {
         session_id: session_id.to_string(),
         parent_session_id: None,
         max_iterations: 1,
+        tool_loop_guard: crate::agent::LoopGuard::default(),
         working_dir: working_dir.path().to_path_buf(),
         cancel_token: None,
         tool_flags: crate::tools::ToolFlags::new(false),
@@ -879,6 +886,7 @@ async fn interrupted_marker_closes_pending_tool_batch() {
         session_id: SessionId::new().to_string(),
         parent_session_id: None,
         max_iterations: 1,
+        tool_loop_guard: crate::agent::LoopGuard::default(),
         working_dir: working_dir.path().to_path_buf(),
         cancel_token: None,
         tool_flags: crate::tools::ToolFlags::new(false),
@@ -1000,6 +1008,7 @@ async fn pre_tool_use_hook_denies_tool_call() {
         session_id: SessionId::new().to_string(),
         parent_session_id: None,
         max_iterations: 1,
+        tool_loop_guard: crate::agent::LoopGuard::default(),
         working_dir: working_dir.path().to_path_buf(),
         cancel_token: None,
         tool_flags: crate::tools::ToolFlags::new(false),
@@ -1091,6 +1100,7 @@ mod rewind_tests {
             session_id: session_id.clone(),
             parent_session_id: None,
             max_iterations: 1,
+            tool_loop_guard: crate::agent::LoopGuard::default(),
             working_dir: working_dir.path().to_path_buf(),
             cancel_token: None,
             tool_flags: crate::tools::ToolFlags::new(false),
@@ -1397,6 +1407,7 @@ async fn empty_completion_is_not_persisted_and_fails_turn_cleanly() {
         session_id: session_id.to_string(),
         parent_session_id: None,
         max_iterations: 1,
+        tool_loop_guard: crate::agent::LoopGuard::default(),
         working_dir: working_dir.path().to_path_buf(),
         cancel_token: None,
         tool_flags: crate::tools::ToolFlags::new(false),
@@ -1523,6 +1534,7 @@ async fn ext_tools_merge_shadow_and_blocklist() {
         session_id: SessionId::new().to_string(),
         parent_session_id: None,
         max_iterations: 1,
+        tool_loop_guard: crate::agent::LoopGuard::default(),
         working_dir: working_dir.path().to_path_buf(),
         cancel_token: None,
         tool_flags: crate::tools::ToolFlags::new(false),
@@ -1589,6 +1601,7 @@ async fn interrupted_marker_user_cancel_stays_off_direct_store_write() {
         session_id: SessionId::new().to_string(),
         parent_session_id: None,
         max_iterations: 1,
+        tool_loop_guard: crate::agent::LoopGuard::default(),
         working_dir: working_dir.path().to_path_buf(),
         cancel_token: None,
         tool_flags: crate::tools::ToolFlags::new(false),
@@ -1671,6 +1684,7 @@ async fn interrupted_marker_user_cancel_is_published_to_bus() {
         session_id: session_id.clone(),
         parent_session_id: None,
         max_iterations: 1,
+        tool_loop_guard: crate::agent::LoopGuard::default(),
         working_dir: working_dir.path().to_path_buf(),
         cancel_token: None,
         tool_flags: crate::tools::ToolFlags::new(false),
@@ -1785,6 +1799,7 @@ async fn build_turn_hook_agent(session_id: &str) -> TurnHookHarness {
         session_id: session_id.to_string(),
         parent_session_id: None,
         max_iterations: 100,
+        tool_loop_guard: crate::agent::LoopGuard::default(),
         working_dir: working_dir.path().to_path_buf(),
         cancel_token: None,
         tool_flags: crate::tools::ToolFlags::new(false),
@@ -1899,7 +1914,7 @@ async fn turn_end_failed_carries_error() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn turn_end_cancelled_and_max_iterations_reasons() {
+async fn turn_end_cancelled_and_abnormal_stop_reasons() {
     // cancelled
     let mut h = build_turn_hook_agent("sess_th").await;
     h.agent.start_turn_if_needed().await;
@@ -1932,6 +1947,21 @@ async fn turn_end_cancelled_and_max_iterations_reasons() {
         .await
         .unwrap();
     assert_eq!(cps.len(), 1, "max_iterations must close the checkpoint too");
+
+    // tool_loop：循环哨兵熔断同样算 turn 结束，payload 可辨识。
+    let mut h = build_turn_hook_agent("sess_th").await;
+    h.agent.start_turn_if_needed().await;
+    h.agent.note_stopped(crate::event::StopReason::ToolLoop {
+        tool: "probe".to_string(),
+        count: 3,
+    });
+    h.agent
+        .context
+        .transition_to(crate::agent::AgentState::WindingDown);
+    h.agent.finish_turn_wind_down().await;
+    let payloads = hook_payloads(&h.data, "turn_end");
+    assert_eq!(payloads.len(), 1);
+    assert_eq!(payloads[0]["stop_reason"], "tool_loop");
 }
 
 #[cfg(unix)]
@@ -2181,6 +2211,7 @@ async fn loop_max_iterations_winds_down_visibly_without_turn_hooks() {
         session_id: session_id.to_string(),
         parent_session_id: None,
         max_iterations: 1,
+        tool_loop_guard: crate::agent::LoopGuard::default(),
         working_dir: working_dir.path().to_path_buf(),
         cancel_token: Some(cancel.clone()),
         tool_flags: crate::tools::ToolFlags::new(false),

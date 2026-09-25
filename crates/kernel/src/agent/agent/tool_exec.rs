@@ -20,15 +20,16 @@
 //!               then persist a synthesized cancelled result for every
 //!               call that never did — the assistant→tool chain stays
 //!               complete, so `sanitize` keeps the batch in context
-//!   └─ finish_tool_batch()           — back to Streaming for the next model round
+//!   └─ finish_tool_batch()           — loop guard (warn / break), then back
+//!                                      to Streaming for the next model round
 //! ```
 
-use crate::event::{Event, ToolEvent};
+use crate::event::{Event, StopReason, ToolEvent};
 use crate::tools::executor::{
     build_tool_result, execute_single_tool, log_tool_result, ToolExecutionResult,
 };
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::{MessageId, Role, ToolCall};
+use crate::types::{Message, MessageId, Role, ToolCall};
 use futures::FutureExt;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
@@ -67,9 +68,44 @@ impl Agent {
         Ok(())
     }
 
-    /// 工具批收尾：工具结果已喂回上下文，转 Streaming 开下一轮模型调用。
+    /// 工具批收尾：先过循环哨兵——熔断（L2）记 `StopReason::ToolLoop`
+    /// 走 `WindingDown` 统一收尾（与 `max_iterations` 同路径，绝不
+    /// auto-continue）；警告（L1）注入 user 提醒后照常开下一轮模型
+    /// 调用，给模型一次自纠机会。
     fn finish_tool_batch(&mut self) {
-        self.context.transition_to(AgentState::Streaming);
+        use crate::agent::loop_detect::{detect, LoopSignal};
+        match detect(self.message_buffer.messages(), self.tool_loop_guard) {
+            LoopSignal::Break { tool, streak } => {
+                tracing::warn!(
+                    tool = %tool,
+                    streak,
+                    "tool call loop detected, ending turn"
+                );
+                self.note_stopped(StopReason::ToolLoop {
+                    tool,
+                    count: streak,
+                });
+                self.context.transition_to(AgentState::WindingDown);
+            }
+            LoopSignal::Warn { tool, streak } => {
+                tracing::warn!(
+                    tool = %tool,
+                    streak,
+                    "repeated identical tool call, injecting loop warning"
+                );
+                self.push_user_message(Message::user(format!(
+                    "[loop guard] `{tool}` has been called {streak} times in a row with \
+                     identical arguments and identical results — another identical retry \
+                     cannot produce new information. Stop retrying: diagnose why the \
+                     result does not advance the task, change your approach, or report \
+                     the blockage to the user."
+                )));
+                self.context.transition_to(AgentState::Streaming);
+            }
+            LoopSignal::None => {
+                self.context.transition_to(AgentState::Streaming);
+            }
+        }
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

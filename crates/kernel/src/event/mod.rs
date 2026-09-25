@@ -218,6 +218,9 @@ pub enum StopReason {
     Failed { error: String },
     /// Reached maximum iterations
     MaxIterations { reached: usize },
+    /// 工具调用死循环熔断：同一调用（参数与结果均相同）连续重复
+    /// `count` 次，由循环哨兵结束 turn。
+    ToolLoop { tool: String, count: usize },
 }
 
 /// Agent execution phase, used for error reporting

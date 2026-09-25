@@ -348,6 +348,16 @@ impl Model {
                                     format!("Reached maximum iterations ({reached})"),
                                 );
                             }
+                            StopReason::ToolLoop { tool, count } => {
+                                let message = format!(" Tool loop: `{tool}` ×{count}");
+                                self.send_desktop_notification("Yomi - Stopped", &message);
+                                self.handle_streaming_error(
+                                    StreamingStatus::Failed,
+                                    format!(
+                                        "Tool loop detected: `{tool}` repeated with identical results (×{count})"
+                                    ),
+                                );
+                            }
                         },
                     }
                 }
