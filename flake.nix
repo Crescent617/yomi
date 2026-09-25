@@ -21,25 +21,36 @@
         # 只保留构建必需：根 Cargo.toml/Cargo.lock + crates/ 下的源码。
         # docs/site/evals/examples/scripts 等改动不再触发重编；
         # 构建产物与缓存目录（target/node_modules/前端 build 产物等）一律排除。
+        mkSrcFilter = extraDeny: path: type:
+          let
+            rel = lib.removePrefix (toString ./. + "/") (toString path);
+            base = baseNameOf path;
+            junkDirs = [
+              "target"
+              "node_modules"
+              "build"
+              "dist"
+              ".svelte-kit"
+              ".vite"
+              "test-results"
+            ];
+          in
+          (rel == "Cargo.toml" || rel == "Cargo.lock" || rel == "crates" || lib.hasPrefix "crates/" rel)
+          && !(type == "directory" && builtins.elem base junkDirs)
+          && !(lib.hasSuffix ".log" base)
+          && !(builtins.any (p: lib.hasPrefix p rel) extraDeny);
+
         src = lib.cleanSourceWith {
           src = ./.;
-          filter = path: type:
-            let
-              rel = lib.removePrefix (toString ./. + "/") (toString path);
-              base = baseNameOf path;
-              junkDirs = [
-                "target"
-                "node_modules"
-                "build"
-                "dist"
-                ".svelte-kit"
-                ".vite"
-                "test-results"
-              ];
-            in
-            (rel == "Cargo.toml" || rel == "Cargo.lock" || rel == "crates" || lib.hasPrefix "crates/" rel)
-            && !(type == "directory" && builtins.elem base junkDirs)
-            && !(lib.hasSuffix ".log" base);
+          filter = mkSrcFilter [ ];
+        };
+
+        # yomi-cli 专用源码：去掉 gui 前端（churn 最高）。前端改动不再触发
+        # cli 重编；crates/gui 的 Cargo.toml 与 Rust 源码保留（workspace 成
+        # 员解析需要），但 cargo build -p cli 不会编译它。
+        srcCli = lib.cleanSourceWith {
+          src = ./.;
+          filter = mkSrcFilter [ "crates/gui/frontend" ];
         };
 
         commonNativeBuildInputs = with pkgs; [
@@ -107,12 +118,23 @@
           default = flake-utils.lib.mkApp { drv = self.packages.${system}.yomi-cli; };
         };
 
-        packages = {
+        packages = rec {
           yomi-cli = craneLib.buildPackage (commonArgs // {
             inherit version cargoArtifacts;
             pname = "yomi-cli";
+            src = srcCli;
 
             cargoExtraArgs = "-p cli";
+
+            # target 产物落到独立 artifacts 输出，供 yomi-gui 链式复用
+            # （deps + kernel/tui/cli 的编译缓存），同时避免压缩的 target
+            # 目录混进 $out → 不污染系统 closure。
+            doInstallCargoArtifacts = true;
+            outputs = [ "out" "artifacts" ];
+            postFixup = ''
+              mkdir -p "$artifacts"
+              mv "$out"/target.tar.zst* "$artifacts/"
+            '';
 
             meta = commonMeta // {
               description = "Yomi CLI - AI coding assistant command-line interface";
@@ -121,8 +143,14 @@
           });
 
           yomi-gui = craneLib.buildPackage (commonArgs // {
-            inherit version cargoArtifacts;
+            inherit version;
             pname = "yomi-gui";
+
+            # 链式复用 yomi-cli 的全部编译产物：第三方 deps 之外，kernel
+            # 等 workspace crate 也免二次编译（kernel feature 集与 cli 构
+            # 建一致，指纹命中）；同时把 yomi-cli 拉为构建输入，sidecar
+            # 与随包 CLI 直接从它的 $out 拷贝，零编译。
+            cargoArtifacts = yomi-cli.artifacts;
 
             # custom-protocol：tauri 用它区分生产/开发模式（见 tauri 官方模板约定，勿放进 default
             # feature，否则 tauri dev 的 devUrl/HMR 会失效）。缺失时二进制误以为 dev 去连
@@ -141,16 +169,19 @@
               pkgs.wrapGAppsHook4
             ];
 
-            # 在 cargo build 前手动构建前端：tauri-build 会把 frontendDist 嵌进二进制
+            # 在 cargo build 前手动准备：
+            # 1) CLI sidecar：tauri.conf.json 的 externalBin 要求
+            #    binaries/yomi-<triple> 存在，否则 tauri-build 直接报错退出
+            #    （sandbox 中源码过滤不带 binaries/，从 yomi-cli 产物拷贝摆位）。
+            # 2) 前端：tauri-build 会把 frontendDist 嵌进二进制。
             preBuild = ''
+              triple="$(rustc -vV | awk '/^host:/{print $2}')"
+              mkdir -p crates/gui/binaries
+              cp ${yomi-cli}/bin/yomi "crates/gui/binaries/yomi-$triple"
+
               pushd crates/gui/frontend
               npm run build
               popd
-            '';
-
-            # 复用同一 target dir 顺带编译 CLI：deps 已编译过，只需编译 cli crate 本身
-            postBuild = ''
-              cargo build --release -p cli
             '';
 
             postFixup = ''
@@ -180,8 +211,8 @@
                   --inherit-argv0
               fi
 
-              # 随 app 一并分发 CLI（postBuild 已编译），放在 GTK wrap 之后避免被 wrapGAppsHook 包装
-              install -Dm755 target/release/yomi $out/bin/yomi
+              # 随 app 一并分发 CLI（直接取 yomi-cli 产物），放在 GTK wrap 之后避免被 wrapGAppsHook 包装
+              install -Dm755 ${yomi-cli}/bin/yomi $out/bin/yomi
             '';
 
             meta = commonMeta // {
@@ -191,6 +222,16 @@
           });
 
           default = self.packages.${system}.yomi-cli;
+        };
+
+        # nix flake check：只挂零编译成本的 fmt。clippy 故意不挂——它需要
+        # 用 clippy-driver 重编全部依赖（tauri/webkit 在内），缓存收益为负；
+        # 需要时走 just ci / dev shell。
+        checks = {
+          fmt = craneLib.cargoFmt {
+            inherit src;
+            pname = "yomi-fmt";
+          };
         };
 
         devShells = {
