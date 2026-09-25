@@ -90,7 +90,7 @@ pub(crate) const YOMI_HOOK_EVENT: &str = crate::env_name!("HOOK_EVENT");
 /// 目录形态 hook 的入口文件名（与 tools 的 `run` 同约定）。
 const RUN_FILE: &str = "run";
 
-/// 单 hook 执行上限：gate 在 agent 热路径上，不能给 workflow 的 5min。
+/// 单 hook 执行上限：gate 在 agent 热路径上，必须短小。
 const HOOK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 否决原因（hook stderr）回流给 agent 的长度上限。

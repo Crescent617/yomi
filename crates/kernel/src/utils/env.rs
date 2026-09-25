@@ -1,9 +1,8 @@
 //! Environment variable utilities for the kernel crate
 
 /// 子进程注入的标准环境变量名（编译期拼出 `"YOMI_..."`）。shell 工具、
-/// `/workflow run`、cron shell job 的子进程都带这些变量，脚本据此
-/// 回连 yomi（如 `"$YOMI_DATA_DIR/workflows/..."`、`yomi session send
-/// --steer -s "$YOMI_SESSION_ID"`）。
+/// cron shell job 的子进程都带这些变量，脚本据此回连 yomi（如
+/// `yomi session send --steer -s "$YOMI_SESSION_ID"`）。
 pub const YOMI_SESSION_ID: &str = crate::env_name!("SESSION_ID");
 pub const YOMI_DATA_DIR: &str = crate::env_name!("DATA_DIR");
 /// 外挂（hook/tool）的持久状态目录：hook 为
@@ -24,8 +23,7 @@ pub const YOMI_SHELL: &str = crate::env_name!("SHELL");
 /// 清掉会让子进程拿到指向错误会话/目录的残留值。
 ///
 /// 各调用点按手头上下文传参：shell 工具总有 session、`data_dir` 视构造
-/// 而定；workflow run 必有 `data_dir`、session 视会话；cron shell 只有
-/// `data_dir`。
+/// 而定；cron shell 只有 `data_dir`。
 pub fn inject_child_env<'a>(
     cmd: &'a mut tokio::process::Command,
     data_dir: Option<&std::path::Path>,
@@ -52,7 +50,7 @@ pub fn inject_child_env<'a>(
 
 /// 注入 `YOMI_STATE_DIR`（`None` 时显式移除，同 `inject_child_env` 的
 /// 防残留语义）。与 `inject_child_env` 分开：state 目录只对有名字的外挂
-/// （hook 文件名 / tool 目录名）有意义，shell/cron/workflow 不注入。
+/// （hook 文件名 / tool 目录名）有意义，shell/cron 不注入。
 pub fn inject_state_dir<'a>(
     cmd: &'a mut tokio::process::Command,
     state_dir: Option<&std::path::Path>,
