@@ -18,8 +18,14 @@ skill = 一个目录 + 其中的 `SKILL.md`：frontmatter 声明用途，正文�
 
 ## 从生态安装别人的 skill
 
-- 社区安装 CLI：`npx skills add <owner/repo>`——目录落进上述任一层即生效，无需任何对接。
-- 安装工具的 lock 文件（如 `skills-lock.json`）归其自己维护——团队可复现是项目仓库侧的事，yomi 不读不写；落在 skills 根目录也不影响扫描（只认 `<名>/SKILL.md`）。
+- 社区安装 CLI（**裸跑是交互式的**，非交互形式）：
+
+  ```sh
+  npx skills add <owner/repo> -g -y -s <skill名> -a '*'
+  ```
+
+  `-a '*'` 装到全部 agent 目录（含全局层 `~/.agents/skills`；个别 agent 不支持全局安装，报一两条失败无害）。`-l` 只列出仓库里的 skill 不安装。
+- 安装工具在 `~/.agents/.skill-lock.json` 记录来源与版本——归其自己维护（团队可复现是项目仓库侧的事），yomi 不读不写；在扫描目录之外，天然不干扰。
 - 第三方 frontmatter 的 `name:`/`metadata:`/`allowed-tools:` 字段被忽略（不报错）——yomi 按目录路径取名，与 frontmatter 的 `name:` 不一致时以路径为准。
 
 ## SKILL.md 格式
