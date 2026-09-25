@@ -176,7 +176,10 @@ fn api_error_display_drops_option_code_noise() {
 #[test]
 fn root_cause_message_drills_to_deepest_source() {
     #[derive(Debug)]
-    struct Wrap(&'static str, Option<Box<dyn std::error::Error + Send + Sync>>);
+    struct Wrap(
+        &'static str,
+        Option<Box<dyn std::error::Error + Send + Sync>>,
+    );
     impl std::fmt::Display for Wrap {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str(self.0)
