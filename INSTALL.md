@@ -33,18 +33,26 @@ cargo build --release --bin yomi   # binary at target/release/yomi
 
 ## GUI (`yomi-app`)
 
+The GUI needs the CLI alongside it: agents reach the built-in manual
+(`yomi doc`) and the self-management commands (`yomi session wait`,
+`yomi cron`, …) through the `yomi` binary on `PATH`. Don't install the GUI
+without the CLI.
+
 ### macOS
 
 ```sh
 brew update && brew install crescent617/tap/yomi-app
 ```
 
-or download the `.dmg` from the releases page.
+The cask declares `depends_on` on the `yomi` formula, so this installs both.
+If you install the `.dmg` from the releases page instead, install the CLI
+separately (any method above).
 
 ### Windows
 
 Download the `.msi` / `.nsis` installer from the releases page
-(unsigned — expect a SmartScreen prompt).
+(unsigned — expect a SmartScreen prompt), and install the CLI zip
+(`yomi-<version>-x86_64-pc-windows-msvc.zip`) as well.
 
 ## First-run setup
 
