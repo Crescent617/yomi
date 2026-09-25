@@ -65,7 +65,14 @@ fn build_action(
             command,
             working_dir: work_dir,
         }),
-        (None, None) => None,
+        (None, None) => {
+            // update 只带 --work-dir（不带 --message/--command）曾在此被
+            // 静默忽略——显式报错，恢复 clap 约束解除前的硬拒绝语义。
+            if work_dir.is_some() {
+                anyhow::bail!("--work-dir requires --message or --command");
+            }
+            None
+        }
         (Some(_), Some(_)) => unreachable!("clap conflicts_with"),
     })
 }
@@ -143,6 +150,19 @@ mod tests {
             panic!("expected Shell");
         };
         assert_eq!(working_dir.as_deref(), Some("/x"));
+    }
+
+    #[test]
+    fn bare_work_dir_is_rejected() {
+        // update 只带 --work-dir 不得静默通过（恢复 clap 约束解除前的硬拒绝）。
+        let err = build_action(None, None, None, Some("/x".to_string())).unwrap_err();
+        assert!(err.to_string().contains("--work-dir"), "{err}");
+    }
+
+    #[test]
+    fn no_action_flags_means_keep_current() {
+        // update 不带 action 类 flag：None = 不动现有 action。
+        assert!(build_action(None, None, None, None).unwrap().is_none());
     }
 }
 

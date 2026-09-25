@@ -155,6 +155,21 @@ else
   bad "fork 复制 rules 文件" "child=$child 文件缺失或内容不同"
 fi
 
+# ── 7. session wait：不存在的会话 exit 2；等待期间被删 exit 4 ──
+"$YOMI" session wait -s sess_gone_404 --interval 1 >/dev/null 2>&1
+check "session wait 不存在会话 exit 2" "2" "$?"
+
+wsid=$("$YOMI" rpc create_session '{}' | tr -d '"')
+"$YOMI" session send -s "$wsid" "写一份 300 行的详尽观察日记，每行一个独立句子，不许省略" >/dev/null 2>&1
+# wait 先后台起跑完成首探（reachable_once=true），再删会话——
+# 删早了会落进首探失败路径（exit 2）测不到 4。
+"$YOMI" session wait -s "$wsid" --interval 1 >/dev/null 2>&1 &
+wpid=$!
+sleep 2
+"$YOMI" rpc delete_session "{\"session_id\":\"$wsid\"}" >/dev/null 2>&1
+wait $wpid
+check "session wait 等待期间会话被删 exit 4" "4" "$?"
+
 echo
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

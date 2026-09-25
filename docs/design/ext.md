@@ -47,7 +47,7 @@ extension v2 草案。兼容性：ext 没人用，直接删；`hooks/` 目录原
 这类事物在 yomi 的传统里本就叫**外挂**（memory.md 的外挂记忆进程、
 phase1 的外挂裁决）。本设计把词正式化：**外挂 = 文件系统注册、kernel
 以 spawn 驱动、stdio 契约的外部程序**。用户侧表面 = 数据目录里两个
-扁平复数目录（与 `workflows/` `pets/` `channels/` 同约定），目录名即
+扁平复数目录（与 `pets/` `channels/` 同约定），目录名即
 语义，不造伞概念；代码沿用 `extension` / `ext_route` 模块名，不造新
 英文词。与 skill 的分工：skill 教 agent 怎么做事（知识进 prompt），
 外挂是接在 kernel 上的程序（spawn 执行）。

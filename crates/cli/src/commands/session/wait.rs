@@ -2,8 +2,8 @@
 //! `phase == idle`、无 running 子 agent、无后台 shell 任务。
 //!
 //! 退出码：0 静默；2 首个探测失败（会话不存在或 daemon 不在）；
-//! 3 `--timeout` 到期。mailbox pending 不在静默判定内（队列可经
-//! `yomi session mailbox` 查看，但不视为忙碌）。
+//! 3 `--timeout` 到期；4 会话在等待期间被删除。mailbox pending 不在
+//! 静默判定内（队列可经 `yomi session mailbox` 查看，但不视为忙碌）。
 
 use crate::args::GlobalArgs;
 use anyhow::Result;
@@ -43,6 +43,16 @@ async fn probe(kernel: &kernel::client::RemoteKernel, sid: &SessionId) -> Result
     })
 }
 
+/// 判定"会话已消失"（被 delete_session/gc 删除）与瞬时故障区分：
+/// 类型化 downcast 为主，wire 错误文本前缀兜底。
+fn is_session_gone(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<kernel::types::KernelError>()
+            .is_some_and(kernel::types::KernelError::is_session_not_found)
+    }) || e.to_string().starts_with("session_not_found")
+}
+
 pub async fn run(
     global: &GlobalArgs,
     session: Option<String>,
@@ -77,7 +87,13 @@ pub async fn run(
                 p
             }
             Err(e) if reachable_once => {
-                // 曾经连通后的失败按瞬时处理（daemon 重启中？）——继续等。
+                // 曾连通后拿到 session_not_found = 会话在等待期间被删
+                // （delete_session/gc）——等下去永远不会有结果，exit 4。
+                if is_session_gone(&e) {
+                    eprintln!("session-wait: session {session_id} was deleted mid-wait");
+                    std::process::exit(4);
+                }
+                // 其他失败按瞬时处理（daemon 重启中？）——继续等。
                 tracing::warn!("session-wait probe failed (treated as busy): {e}");
                 Probe {
                     phase: "unreachable".to_string(),

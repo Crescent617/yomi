@@ -11,7 +11,7 @@ ext.md）并列：同一 spawn 引擎、同一目录与环境变量约定，注�
    adapter 反馈），不碰 agent 回路；平台名入目录——
    `card.action.trigger` 是飞书概念，`PlatformConfig` 已有
    Telegram，第二个平台的交互回调将来平级新增目录，不假装存在
-   跨平台 card 抽象。复数目录名，同 `hooks/ tools/ workflows/`
+   跨平台 card 抽象。复数目录名，同 `hooks/ tools/`
    约定。
 2. 单脚本即全部：无 manifest、无 admin 字段（契约只增不改，后加
    零成本）；条目只有带执行位的裸文件一种形态（hooks 的 `<名>/run`
