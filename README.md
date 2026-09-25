@@ -55,6 +55,8 @@ Ask it to "restart yourself" or "find the session where we discussed X" — it k
 
 ### Installation
 
+Full runbook (prebuilt binaries, source build, first-run config, verification, containers): [INSTALL.md](INSTALL.md).
+
 #### Both (CLI + GUI)
 
 ```bash
