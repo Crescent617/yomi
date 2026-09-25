@@ -346,7 +346,7 @@ impl Provider for OpenAIProvider {
                         }
                         Ok(Err(e)) => {
                             tracing::error!("OpenAI SSE error: {}", e);
-                            return Err(ProviderError::Sse(format!("SSE error: {e}")));
+                            return Err(ProviderError::Sse(e.to_string()));
                         }
                         Err(_) => {
                             tracing::error!(
@@ -354,7 +354,7 @@ impl Provider for OpenAIProvider {
                                 IDLE_TIMEOUT.as_secs()
                             );
                             return Err(ProviderError::Timeout(format!(
-                                "SSE idle timeout: no data received for {} seconds",
+                                "no data received for {} seconds",
                                 IDLE_TIMEOUT.as_secs()
                             )));
                         }

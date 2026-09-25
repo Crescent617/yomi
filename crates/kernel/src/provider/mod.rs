@@ -290,7 +290,7 @@ pub enum ProviderError {
     Http(#[from] HttpError),
 
     /// Request building or sending failed
-    #[error("Request failed: {0}")]
+    #[error("{0}")]
     Request(String),
 
     /// SSE/streaming error
@@ -371,12 +371,12 @@ impl ProviderError {
 impl From<reqwest::Error> for ProviderError {
     fn from(e: reqwest::Error) -> Self {
         if e.is_timeout() {
-            ProviderError::Timeout(format!("Request timeout: {e}"))
+            ProviderError::Timeout(e.to_string())
         } else if let Some(status) = e.status() {
             // reqwest::Error carries no response headers — no Retry-After.
             ProviderError::Http(HttpError::new(status.as_u16(), None))
         } else {
-            ProviderError::Request(format!("Request failed: {e}"))
+            ProviderError::Request(e.to_string())
         }
     }
 }
