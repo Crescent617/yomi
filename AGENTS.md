@@ -68,6 +68,7 @@ just ci
 ### Rust
 - write ut in separate test file.
     - e.g. a.rs with a_test.rs. use `#[cfg(test)]`
+- **结构性搜索/重构**: 批量查找或改写代码模式优先用 `ast-grep`（本机已装，命令名即 `ast-grep`）而非文本 grep；写 scan 规则时用 `ignores: ["**/*_test.rs", "**/tests/**"]` 排除测试。
 
 ### kernel
 - **Env Vars**: should follow prefix `kernel::ENV_PREFIX`
