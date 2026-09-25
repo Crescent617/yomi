@@ -425,6 +425,23 @@ async fn identical_call_loop_warns_then_breaks_turn() {
     assert!(warning[0].contains("[loop guard]"));
     assert!(warning[0].contains("`echo`"));
 
+    // 警告带 metadata 标记：哨兵扫描对它透明（否则警告自身成了
+    // turn 边界，L1→L2 梯子断裂），transcript/UI 可辨识。
+    let warn_msg = agent
+        .message_buffer
+        .messages()
+        .iter()
+        .find(|m| m.role == Role::User)
+        .expect("warning message");
+    assert_eq!(
+        warn_msg
+            .metadata
+            .as_ref()
+            .and_then(|md| md.get(crate::types::LOOP_GUARD_META_KEY))
+            .map(String::as_str),
+        Some("true")
+    );
+
     // 警告注入在批结果之后：has_user_after 守卫生效，respawn 不会
     // 重放这个已收尾的批（与中断标记同语义）。
     assert!(

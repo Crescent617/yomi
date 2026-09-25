@@ -123,15 +123,20 @@ fn reordered_arg_keys_still_match() {
     ));
 }
 
-/// 注入的 user 提醒（L1 产物）不打断 streak——模型无视警告再
-/// 复读一次即熔断。
+/// 哨兵注入的警告（metadata 标记）对扫描透明——模型无视警告再
+/// 复读一次即熔断，L1→L2 梯子不断。
 #[test]
 fn injected_warning_does_not_reset_streak() {
     let mut messages = concat(vec![
         round("1", "probe", json!({}), "same"),
         round("2", "probe", json!({}), "same"),
     ]);
-    messages.push(Arc::new(Message::user("[loop guard] stop retrying")));
+    let mut warning = Message::user("[loop guard] stop retrying");
+    warning.metadata = Some(std::collections::HashMap::from([(
+        crate::types::LOOP_GUARD_META_KEY.to_string(),
+        "true".to_string(),
+    )]));
+    messages.push(Arc::new(warning));
     messages.extend(round("3", "probe", json!({}), "same"));
     assert_eq!(
         detect(&messages, GUARD),
@@ -140,6 +145,53 @@ fn injected_warning_does_not_reset_streak() {
             streak: 3,
         }
     );
+}
+
+/// 跨 turn 不泄漏：真实 user 消息是扫描硬边界——上一 turn 的两次
+/// 复读（已警告）不算进这一 turn 的第一次相同调用。
+#[test]
+fn real_user_message_marks_turn_boundary() {
+    let mut messages = concat(vec![
+        round("1", "probe", json!({}), "same"),
+        round("2", "probe", json!({}), "same"),
+    ]);
+    // 上一 turn 结束（含最终文本回答），用户开启新 turn。
+    messages.push(Arc::new(Message::assistant("done")));
+    messages.push(Arc::new(Message::user("check it again")));
+    messages.extend(round("3", "probe", json!({}), "same"));
+    assert_eq!(
+        detect(&messages, GUARD),
+        LoopSignal::None,
+        "streak must not leak across turns"
+    );
+
+    // 边界后重新计：本 turn 内再复读一次 → 警告而非熔断。
+    messages.extend(round("4", "probe", json!({}), "same"));
+    assert_eq!(
+        detect(&messages, GUARD),
+        LoopSignal::Warn {
+            tool: "probe".to_string(),
+            streak: 2,
+        }
+    );
+}
+
+/// 中断标记（`[Request interrupted by user]`，无哨兵标记）同样
+/// 是边界——cancel 之后的重试重新计数。
+#[test]
+fn interruption_marker_marks_boundary() {
+    let mut messages = concat(vec![
+        round("1", "probe", json!({}), "same"),
+        round("2", "probe", json!({}), "same"),
+    ]);
+    let mut marker = Message::user("[Request interrupted by user]");
+    marker.metadata = Some(std::collections::HashMap::from([(
+        crate::types::INTERRUPTED_META_KEY.to_string(),
+        "true".to_string(),
+    )]));
+    messages.push(Arc::new(marker));
+    messages.extend(round("3", "probe", json!({}), "same"));
+    assert_eq!(detect(&messages, GUARD), LoopSignal::None);
 }
 
 #[test]

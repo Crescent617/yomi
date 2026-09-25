@@ -14,13 +14,16 @@
 //! - **连续**才计数：轮询等待（A,B,A,B 交错）形不成连续 streak，
 //!   「等构建完成再查一次」这类合法节奏不会被掐；
 //! - **结果相同**才计数：改完文件重读这类合理重复，结果已变、
-//!   指纹不同，天然豁免。
+//!   指纹不同，天然豁免；
+//! - **streak 不跨 turn**：倒扫遇真实 user 消息即停（turn 硬边
+//!   界，与 `max_iterations` 按 turn 重置同语义）；哨兵自己注入
+//!   的警告带 `LOOP_GUARD_META_KEY` 标记，对扫描透明。
 //!
 //! 检测只读 message buffer 尾部、无内部状态：不按 turn 重置、不怕
 //! respawn、不怕压缩重写——看到的永远是消息流本身（the stream is
 //! reality），无状态可漂移。
 
-use crate::types::{ContentBlock, Message, Role};
+use crate::types::{Message, Role};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -45,7 +48,10 @@ impl Default for LoopGuard {
 }
 
 /// 对刚执行完的工具批的处置信号。
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// 派生 `Ord`：变体声明顺序即严重度（None < Warn < Break），
+/// 同批多个调用命中时取最大者。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LoopSignal {
     None,
     /// 同一调用已连续重复 `streak` 次——提醒模型换方法。
@@ -58,16 +64,6 @@ pub enum LoopSignal {
         tool: String,
         streak: usize,
     },
-}
-
-impl LoopSignal {
-    fn severity(&self) -> u8 {
-        match self {
-            Self::None => 0,
-            Self::Warn { .. } => 1,
-            Self::Break { .. } => 2,
-        }
-    }
 }
 
 /// 检测 buffer 尾部是否出现工具调用死循环。
@@ -101,7 +97,7 @@ pub fn detect(messages: &[Arc<Message>], guard: LoopGuard) -> LoopSignal {
             continue;
         };
         // 同批多个调用命中时取最严重者（Break > Warn）。
-        if hit.severity() > signal.severity() {
+        if hit > signal {
             signal = hit;
         }
     }
@@ -148,6 +144,21 @@ fn recent_batches(messages: &[Arc<Message>], depth: usize) -> Vec<Vec<CallPrint>
                     break;
                 }
             }
+            Role::User => {
+                // turn 硬边界：streak 不跨 turn（与 max_iterations 按
+                // turn 重置同语义）——上一 turn 的复读不能算进这一
+                // turn 的第一次相同调用。哨兵自己注入的警告（metadata
+                // 标记）是 turn 内产物，对扫描保持透明，否则警告后
+                // 复读 streak 归 1，L1→L2 梯子断裂。
+                let is_guard_note = msg
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get(crate::types::LOOP_GUARD_META_KEY))
+                    .is_some_and(|v| v == "true");
+                if !is_guard_note {
+                    break;
+                }
+            }
             _ => {}
         }
     }
@@ -155,75 +166,25 @@ fn recent_batches(messages: &[Arc<Message>], depth: usize) -> Vec<Vec<CallPrint>
     batches
 }
 
+/// 一次调用的指纹：工具名 + 序列化参数 + 序列化结果内容。
+/// 结果不同的重复调用（如改后重读）指纹不同，不计入循环。
+///
+/// canonical 性依赖 `serde_json` 的 `Map` 即 `BTreeMap`（本工作区未开
+/// `preserve_order`），序列化输出 key 天然有序，无需自写排序；
+/// `reordered_arg_keys_still_match` 测试钉死该假设（谁开了
+/// `preserve_order` 它会当场失败）。枚举 tag 充当内容块的判别式。
+/// （数值 1 与 1.0 序列化不同，视为不同参数：宁可漏检一次重试，
+/// 不误伤合法调用。）
 fn fingerprint(name: &str, args: &serde_json::Value, result: &Message) -> u64 {
     let mut hasher = DefaultHasher::new();
     name.hash(&mut hasher);
-    canonical_args(args).hash(&mut hasher);
-    for block in &result.content {
-        match block {
-            ContentBlock::Text { text } => {
-                0u8.hash(&mut hasher);
-                text.hash(&mut hasher);
-            }
-            ContentBlock::Thinking { thinking, .. } => {
-                1u8.hash(&mut hasher);
-                thinking.hash(&mut hasher);
-            }
-            ContentBlock::RedactedThinking { data } => {
-                2u8.hash(&mut hasher);
-                data.hash(&mut hasher);
-            }
-            ContentBlock::ImageUrl { image_url } => {
-                3u8.hash(&mut hasher);
-                image_url.url.hash(&mut hasher);
-            }
-            ContentBlock::Audio { audio } => {
-                4u8.hash(&mut hasher);
-                audio.format.hash(&mut hasher);
-                audio.data.hash(&mut hasher);
-            }
-        }
-    }
+    serde_json::to_string(args)
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    serde_json::to_string(&result.content)
+        .unwrap_or_default()
+        .hash(&mut hasher);
     hasher.finish()
-}
-
-/// 参数 canonical 化：对象 key 排序序列化——不同轮次/provider 重排
-/// key 序不逃脱指纹。（数值 1 与 1.0 序列化不同，视为不同参数：
-/// 宁可漏检一次重试，不误伤合法调用。）
-fn canonical_args(args: &serde_json::Value) -> String {
-    let mut out = String::new();
-    write_canonical(args, &mut out);
-    out
-}
-
-fn write_canonical(value: &serde_json::Value, out: &mut String) {
-    match value {
-        serde_json::Value::Object(map) => {
-            out.push('{');
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort_unstable();
-            for (i, key) in keys.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                out.push_str(&serde_json::to_string(key).unwrap_or_default());
-                out.push(':');
-                write_canonical(&map[*key], out);
-            }
-            out.push('}');
-        }
-        serde_json::Value::Array(items) => {
-            out.push('[');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                write_canonical(item, out);
-            }
-            out.push(']');
-        }
-        _ => out.push_str(&serde_json::to_string(value).unwrap_or_default()),
-    }
 }
 
 #[cfg(test)]

@@ -23,6 +23,13 @@ pub const INTERRUPTED_META_KEY: &str = "interrupted";
 /// cancellation apart from a genuine tool error.
 pub const TOOL_CANCELLED_META_KEY: &str = "tool_cancelled";
 
+/// Metadata flag on the loop-guard warning injected by
+/// `Agent::finish_tool_batch` (see `agent::loop_detect`): lets the
+/// detector's backward scan tell the guard's own note (transparent —
+/// it lives inside the turn) apart from a real user message (a hard
+/// turn boundary that resets the streak).
+pub const LOOP_GUARD_META_KEY: &str = "loop_guard";
+
 // ─── Macro: generate a distinct newtype for each ID ───────────────────────
 
 macro_rules! define_id {
