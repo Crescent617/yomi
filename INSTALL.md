@@ -53,11 +53,9 @@ session wait`、`yomi cron`，…）用的是与 GUI 严格同版的 `yomi`，
 brew update && brew install crescent617/tap/yomi-app
 ```
 
-The cask links the CLI bundled inside the app into your PATH
-（`binary` stanza 指向 `Yomi.app/Contents/MacOS/yomi`）——terminal
-里的 `yomi` 与 GUI 严格同版，随 cask 升级。已装 `yomi` formula
-会报冲突：只想留 GUI 版就 `brew uninstall yomi`（formula 留给
-headless / Linux / 只要 CLI 的场景）。
+The cask declares `depends_on` on the `yomi` formula, so this installs
+both（formula 负责你 terminal 里的 `yomi`；cask 里的 sidecar 负责
+agent 子进程里的 `yomi`）。
 
 ### Windows
 
