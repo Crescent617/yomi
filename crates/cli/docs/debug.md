@@ -1,6 +1,7 @@
 # 调试
 
 - `yomi run "<prompt>"`：headless 一次性运行。退出码：0 成功 / 2 失败 / 3 超迭代 / 124 超时 / 130 取消。脚本里要执行工具须 `--yolo` 或 `--auto-approve`。
+- shell 工具与 cron shell 任务的子进程都注入 `YOMI_DATA_DIR`（有会话时加 `YOMI_SESSION_ID`）——脚本可据此回连 CLI（如 `yomi session cat "$YOMI_SESSION_ID"`）。
 - `yomi events [-s <sid>]`：事件 NDJSON 流；`--all` 跨会话仅实时（无回放）；`--after-event-id` 断点续传。
 - `yomi rpc <method> [params-json]`：wire 协议逃生舱口；`--help` 列全部方法、`<method> --help` 显示参数 schema（无需 daemon）。流式方法（subscribe）只回 ack，事件流用 `events`。
 - `yomi usage`：token 用量统计（`-n` 天数，`--model`/`--provider` 过滤）。

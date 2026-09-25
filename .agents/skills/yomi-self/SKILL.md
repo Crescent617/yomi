@@ -1,6 +1,6 @@
 ---
 name: yomi-self
-description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话、cron 和数据。Use when 要 doctor 自检、重启 daemon、看日志、检索/查看/驱动会话、管理 cron 与 workflow/hook/tool/卡片触发器脚本、gc 清理、查 token 用量、跑 headless、配 web search 引擎，或 events/rpc 调试。"
+description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话、cron 和数据。Use when 要 doctor 自检、重启 daemon、看日志、检索/查看/驱动会话、管理 cron 与 hook/tool/卡片触发器脚本、gc 清理、查 token 用量、跑 headless、配 web search 引擎，或 events/rpc 调试。"
 ---
 
 # yomi 自我管理
@@ -44,10 +44,6 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 - `cron list|get|create|update|pause|resume|delete`；`cron trigger <id>` 立即触发一次（调试用）。
 - 一次性任务：`--max-runs 1` + 近未来 schedule。
 - shell 类 job 退出码 **42** = 自我完成：标记 `Completed` 不再调度（仅调度执行兑现，手动 `trigger` 不生效）。
-
-## workflow
-
-用户自有脚本：`$YOMI_DATA_DIR/workflows/`（py / shell / node，需 shebang + `chmod +x`，写入即生效）。shell 工具、cron shell 任务与 `/workflow run` 注入 `YOMI_DATA_DIR`（有会话时加 `YOMI_SESSION_ID`）。
 
 ## hook
 
