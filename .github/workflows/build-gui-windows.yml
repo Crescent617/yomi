@@ -34,24 +34,16 @@ jobs:
           version: "25.x"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # frontend 必须先就绪：cargo build -p yomi-gui 的 codegen 嵌
-      # frontendDist（并发跑会撞"目录不存在"），故本 job 不重叠这两
-      # 段——重叠的收益本来就归 cli∥gui 单调用并行（下一…步）。
-      - name: Build frontend
-        shell: bash
-        run: cd crates/gui/frontend && npm ci && npm run build
-
-      # 单调用编译：共享依赖之后 cli crate 与 yomi-gui crate 两个叶
-      # 子在 cargo 调度下并行，替代「先 cli 后 tauri 内 gui」的串行。
-      # 悬念（实测裁决）：tauri build 内嵌 cargo 的 TAURI_CONFIG 指
-      # 纹若与裸 cargo 不一致，下一步 tauri build 会重编 gui crate
-      # ——那这条就是亏的，看 step 计时说话。
-      - name: Build CLI + GUI crates (single cargo invocation)
+      # frontend（node/vite）与 CLI 编译（cargo）后台并行，产物目
+      # 录不相交；tauri codegen 嵌入 frontendDist 前必须 wait 就绪。
+      - name: Build CLI sidecar + frontend (concurrent)
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --release -p cli -p yomi-gui
-          bash scripts/bundle-cli-sidecar.sh x86_64-pc-windows-msvc release --copy-only
+          (cd crates/gui/frontend && npm ci && npm run build) &
+          FE_PID=$!
+          bash scripts/bundle-cli-sidecar.sh x86_64-pc-windows-msvc
+          wait $FE_PID || { echo "frontend build failed"; exit 1; }
 
       # CLI zip 与 sidecar 同源（同一 target dir 一次编译）——版本号
       # 读 tauri.conf.json：reusable 在 tag（release.yml）与分支
