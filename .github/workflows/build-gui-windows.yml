@@ -34,9 +34,16 @@ jobs:
           version: "25.x"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Bundle CLI sidecar (externalBin)
+      # frontend（node/vite）与 CLI 编译（cargo）后台并行，产物目
+      # 录不相交；tauri codegen 嵌入 frontendDist 前必须 wait 就绪。
+      - name: Build CLI sidecar + frontend (concurrent)
         shell: bash
-        run: bash scripts/bundle-cli-sidecar.sh x86_64-pc-windows-msvc
+        run: |
+          set -euo pipefail
+          (cd crates/gui/frontend && npm ci && npm run build) &
+          FE_PID=$!
+          bash scripts/bundle-cli-sidecar.sh x86_64-pc-windows-msvc
+          wait $FE_PID || { echo "frontend build failed"; exit 1; }
 
       # CLI zip 与 sidecar 同源（同一 target dir 一次编译）——版本号
       # 读 tauri.conf.json：reusable 在 tag（release.yml）与分支
@@ -56,7 +63,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cd frontend && npm ci && npm run build && cd ..
           npm ci
           npx tauri build --config '{"build":{"beforeBuildCommand":""}}'
 

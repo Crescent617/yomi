@@ -161,8 +161,19 @@ jobs:
           version: "25.x"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Bundle CLI sidecar (externalBin)
-        run: bash scripts/bundle-cli-sidecar.sh aarch64-apple-darwin
+      # frontend 构建（node/vite）与 CLI 编译（cargo）互不依赖、产
+      # 物目录不相交——同 runner 后台并行，两份 wall 叠成一份。
+      # tauri build 的 generate_context! 在 codegen 时嵌入
+      # frontendDist，故进入 DMG 步前必须 wait 前端就绪（失败也在
+      # 烧 rust 编译时间前快速退出）。
+      - name: Build CLI sidecar + frontend (concurrent)
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd crates/gui/frontend && npm ci && npm run build) &
+          FE_PID=$!
+          bash scripts/bundle-cli-sidecar.sh aarch64-apple-darwin
+          wait $FE_PID || { echo "frontend build failed"; exit 1; }
 
       # CLI tar.gz 与 sidecar 同源：同一 target dir 一次编译，此处
       # 只打包不上编译（原 build-tui macOS leg 的重复全量编译已删）。
@@ -188,15 +199,7 @@ jobs:
       - name: Build & Sign DMG
         working-directory: crates/gui
         run: |
-          cd frontend && npm ci && cd ..
-          # 根 npm ci 与前端构建并行；但 tauri build 必须等前端产物
-          # 就绪——generate_context! 在 cargo codegen 时嵌入
-          # frontendDist，暖缓存下先跑会把缺失/半成品的 build/ 打进
-          # 签名 DMG；前端失败也在烧 rust 编译时间前快速退出。
-          (cd frontend && npm run build) &
-          FE_PID=$!
           npm ci
-          wait $FE_PID || { echo "frontend build failed"; exit 1; }
           npx tauri build --config '{"build":{"beforeBuildCommand":""}}'
           bash ../../scripts/fix-dmg-signature.sh
 
@@ -363,11 +366,13 @@ jobs:
           fi
           gh release edit "${GITHUB_REF_NAME}" --repo "${{ github.repository }}" --notes-file release-notes.md
 
-  # ==================== 更新 Homebrew Formula (TUI) ====================
-  brew-tui:
-    # build-tui(linux) 与 build-gui(macOS CLI 资产与 sidecar 同源)
-    # 完成后自行 gate：formula 需要 mac+linux 两个 tar.gz 都在
-    # release 上；缺则跳过（不红）。
+  # ==================== 更新 Homebrew（formula + cask） ====================
+  # formula（mac+linux tar.gz gate）与 cask（DMG gate）同一 job 内顺
+  # 序执行：原跨 job 串行的唯一理由是防同一 tap repo 的 push 冲突
+  #（non-fast-forward），合 job 后该约束天然成立，还少一层 job 启
+  # 动与相互等待。always() + 各自 gate：任一上游产物缺失只跳过对
+  # 应半段，不红。
+  brew:
     needs: [create-release, build-tui, build-gui, check-precondition]
     if: always()
     runs-on: ubuntu-latest
@@ -403,18 +408,6 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           bash ./scripts/brew-release.sh "${GITHUB_REF_NAME#v}"
-
-  # ==================== 更新 Homebrew Cask (GUI) ====================
-  brew-gui:
-    # needs brew-tui 仅为串行 push 同一 tap repo（防 non-fast-forward
-    # 冲突）；always() 使其在 brew-tui 失败/跳过时仍按 DMG gate 自行决定。
-    needs: [create-release, build-gui, check-precondition, brew-tui]
-    if: always()
-    runs-on: ubuntu-latest
-    env:
-      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-    steps:
-      - uses: actions/checkout@v6
 
       - name: Download DMG from Release
         id: dmg
