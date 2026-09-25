@@ -1071,11 +1071,13 @@ fn render_card_renders_inline_images_below_body_before_trace() {
             key: "img_k1".to_string(),
             alt: "a.png".to_string(),
             path: std::path::PathBuf::from("/tmp/a.png"),
+            declared: "a.png".to_string(),
         },
         InlineImage {
             key: "img_k2".to_string(),
             alt: "b.png".to_string(),
             path: std::path::PathBuf::from("/tmp/b.png"),
+            declared: "b.png".to_string(),
         },
     ]);
 
@@ -1111,4 +1113,334 @@ fn render_card_renders_inline_images_below_body_before_trace() {
     );
     assert_eq!(elements[4]["img_key"], "img_k2");
     assert_eq!(elements[4]["alt"]["content"], "b.png");
+}
+
+// ── anchored inline images (block position = image position) ────────
+
+#[test]
+fn record_model_end_leaves_anchor_token_for_images_only() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end(
+        "看这里\n<yomi_attachments>\noutput/a.png\noutput/b.pdf\n</yomi_attachments>\n下一段",
+    );
+    let reply = buf.into_reply();
+    let body = reply.text().unwrap();
+    // Image path anchored in place; the file path leaves no token.
+    assert!(body.contains(&crate::utils::attachments::attachment_token("output/a.png")));
+    assert!(!body.contains("b.pdf"));
+    // Both paths collected for delivery.
+    assert_eq!(reply.attachments(), &["output/a.png", "output/b.pdf"]);
+}
+
+#[test]
+fn render_card_places_image_at_its_anchor_token() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end(
+        "先看我\n\n<yomi_attachments>\noutput/a.png\n</yomi_attachments>\n\n再看我",
+    );
+    let mut reply = buf.into_reply();
+    reply.set_inline_images(vec![InlineImage {
+        key: "img_k1".to_string(),
+        alt: "a.png".to_string(),
+        path: std::path::PathBuf::from("/tmp/a.png"),
+        declared: "output/a.png".to_string(),
+    }]);
+
+    let card: serde_json::Value =
+        serde_json::from_str(&render_card(&reply, None).unwrap()).unwrap();
+    let elements = card["body"]["elements"].as_array().unwrap();
+
+    let tags: Vec<&str> = elements
+        .iter()
+        .map(|e| e["tag"].as_str().unwrap())
+        .collect();
+    assert_eq!(tags, vec!["markdown", "img", "markdown"]);
+    assert_eq!(elements[0]["content"], "先看我");
+    assert_eq!(elements[1]["img_key"], "img_k1");
+    assert_eq!(elements[2]["content"], "再看我");
+}
+
+#[test]
+fn render_card_drops_token_naming_no_uploaded_image() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end(
+        "先看我\n\n<yomi_attachments>\noutput/a.png\n</yomi_attachments>\n\n再看我",
+    );
+    let mut reply = buf.into_reply();
+    // Upload covered a different declaration; the token names nothing.
+    reply.set_inline_images(vec![InlineImage {
+        key: "img_k9".to_string(),
+        alt: "other.png".to_string(),
+        path: std::path::PathBuf::from("/tmp/other.png"),
+        declared: "other.png".to_string(),
+    }]);
+
+    let card: serde_json::Value =
+        serde_json::from_str(&render_card(&reply, None).unwrap()).unwrap();
+    let elements = card["body"]["elements"].as_array().unwrap();
+
+    let tags: Vec<&str> = elements
+        .iter()
+        .map(|e| e["tag"].as_str().unwrap())
+        .collect();
+    // The unmatched token vanishes; the unanchored image appends after.
+    assert_eq!(tags, vec!["markdown", "markdown", "img"]);
+    assert!(!card.to_string().contains("⟦"));
+    assert_eq!(elements[2]["img_key"], "img_k9");
+}
+
+#[test]
+fn render_card_truncated_token_head_is_stripped_and_image_appended() {
+    // Body sized so the 28KB budget cut lands inside the token: the
+    // block sits after 27_970 bytes, so its minted token spans the cut.
+    let mut buf = RunReplyBuffer::new();
+    let text = format!(
+        "{}\n\n<yomi_attachments>\noutput/aaa.png\n</yomi_attachments>\n\nTAIL",
+        "a".repeat(27_968)
+    );
+    buf.record_model_end(&text);
+    let mut reply = buf.into_reply();
+    reply.set_inline_images(vec![InlineImage {
+        key: "img_k1".to_string(),
+        alt: "aaa.png".to_string(),
+        path: std::path::PathBuf::from("/tmp/aaa.png"),
+        declared: "output/aaa.png".to_string(),
+    }]);
+
+    let card: serde_json::Value =
+        serde_json::from_str(&render_card(&reply, None).unwrap()).unwrap();
+    let elements = card["body"]["elements"].as_array().unwrap();
+
+    // No partial token leaks; the image falls back to the after-body slot.
+    assert!(!card.to_string().contains("⟦"));
+    let tags: Vec<&str> = elements
+        .iter()
+        .map(|e| e["tag"].as_str().unwrap())
+        .collect();
+    assert_eq!(tags, vec!["markdown", "img"]);
+    assert_eq!(elements[1]["img_key"], "img_k1");
+}
+
+#[test]
+fn render_plain_strips_anchor_tokens() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("前文\n<yomi_attachments>\noutput/a.png\n</yomi_attachments>\n后文");
+    let reply = buf.into_reply();
+
+    let plain = render_plain(&reply);
+    assert!(!plain.contains("⟦"));
+    assert!(plain.contains("前文"));
+    assert!(plain.contains("后文"));
+}
+
+#[test]
+fn process_panel_strips_anchor_tokens_from_narrations() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("中间\n<yomi_attachments>\noutput/mid.png\n</yomi_attachments>");
+    buf.record_model_end("这是更长一些的最终答案内容，覆盖前一条成为正文。");
+    let reply = buf.into_reply();
+
+    let card = render_card(&reply, None).unwrap();
+    // The mid-run narration's token never renders (its image, when
+    // uploaded, appends after the body instead).
+    assert!(!card.contains("⟦"));
+    assert_eq!(reply.attachments(), &["output/mid.png"]);
+}
+
+#[test]
+fn render_card_token_only_body_renders_lone_img() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("<yomi_attachments>\nonly.png\n</yomi_attachments>");
+    let mut reply = buf.into_reply();
+    reply.set_inline_images(vec![InlineImage {
+        key: "img_k1".to_string(),
+        alt: "only.png".to_string(),
+        path: std::path::PathBuf::from("/tmp/only.png"),
+        declared: "only.png".to_string(),
+    }]);
+
+    let card: serde_json::Value =
+        serde_json::from_str(&render_card(&reply, None).unwrap()).unwrap();
+    let tags: Vec<&str> = card["body"]["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["tag"].as_str().unwrap())
+        .collect();
+    assert_eq!(tags, vec!["img"]);
+}
+
+#[test]
+fn render_card_anchors_in_both_promoted_body_texts() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end(
+        "第一段比较长，占位占位占位。\n<yomi_attachments>\nout/one.png\n</yomi_attachments>\n第一段尾巴。",
+    );
+    buf.record_model_end("第二段短。\n<yomi_attachments>\nout/two.png\n</yomi_attachments>\n尾。");
+    let mut reply = buf.into_reply();
+    assert_eq!(reply.body_texts().len(), 2, "longer earlier text promoted");
+    reply.set_inline_images(vec![
+        InlineImage {
+            key: "img_k1".to_string(),
+            alt: "one.png".to_string(),
+            path: std::path::PathBuf::from("/tmp/one.png"),
+            declared: "out/one.png".to_string(),
+        },
+        InlineImage {
+            key: "img_k2".to_string(),
+            alt: "two.png".to_string(),
+            path: std::path::PathBuf::from("/tmp/two.png"),
+            declared: "out/two.png".to_string(),
+        },
+    ]);
+
+    let card: serde_json::Value =
+        serde_json::from_str(&render_card(&reply, None).unwrap()).unwrap();
+    let elements = card["body"]["elements"].as_array().unwrap();
+    let tags: Vec<&str> = elements
+        .iter()
+        .map(|e| e["tag"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        tags,
+        vec!["markdown", "img", "markdown", "hr", "markdown", "img", "markdown"]
+    );
+    assert_eq!(elements[1]["img_key"], "img_k1");
+    assert_eq!(elements[5]["img_key"], "img_k2");
+}
+
+#[test]
+fn render_card_complete_token_at_truncation_boundary_survives() {
+    // Cut lands right after the token's final byte: target = 28_000 -
+    // suffix(16) = 27_984; the block sits so its minted token ends
+    // exactly there, and the tail beyond pushes the text past the cap.
+    let token = crate::utils::attachments::attachment_token("output/aaa.png");
+    assert_eq!(token.len(), 36);
+    let text = format!(
+        "{}\n\n<yomi_attachments>\noutput/aaa.png\n</yomi_attachments>\n\n{}",
+        "a".repeat(27_984 - 36 - 2),
+        "T".repeat(100)
+    );
+    assert!(text.len() > 28_000, "must actually truncate");
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end(&text);
+    let mut reply = buf.into_reply();
+    reply.set_inline_images(vec![InlineImage {
+        key: "img_k1".to_string(),
+        alt: "aaa.png".to_string(),
+        path: std::path::PathBuf::from("/tmp/aaa.png"),
+        declared: "output/aaa.png".to_string(),
+    }]);
+
+    let card: serde_json::Value =
+        serde_json::from_str(&render_card(&reply, None).unwrap()).unwrap();
+    let elements = card["body"]["elements"].as_array().unwrap();
+    let tags: Vec<&str> = elements
+        .iter()
+        .map(|e| e["tag"].as_str().unwrap())
+        .collect();
+    // Token intact → image in place; the suffix becomes the trailing segment.
+    assert_eq!(tags, vec!["markdown", "img", "markdown"]);
+    assert_eq!(elements[1]["img_key"], "img_k1");
+    assert!(!card.to_string().contains("⟦"));
+}
+
+#[test]
+fn process_panel_skips_token_only_narrations() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("<yomi_attachments>\nmid.png\n</yomi_attachments>");
+    buf.record_model_end("最终答案内容，写得长一些、确保超过 token 的长度而留在正文位置不被提升。");
+    let reply = buf.into_reply();
+
+    let card = render_card(&reply, None).unwrap();
+    assert!(
+        !card.contains("\"content\":\"\""),
+        "no empty markdown: {card}"
+    );
+    assert!(!card.contains("⟦"));
+}
+
+#[test]
+fn body_text_drops_token_emptied_texts_before_join() {
+    // Over-drop guard: an earlier text with real content keeps the divider.
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end(
+        "<yomi_attachments>\nout/a.png\n</yomi_attachments>\n凑长度占位占位占位。",
+    );
+    buf.record_model_end("正文短。");
+    let reply = buf.into_reply();
+    assert_eq!(reply.body_texts().len(), 2);
+    assert!(reply.body_text().unwrap().contains("---"));
+
+    // The orphan-`---` case: token-only earlier text (32 bytes) beats the
+    // short final at promotion, then flattens to nothing on plain.
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("<yomi_attachments>\nout/a.png\n</yomi_attachments>");
+    buf.record_model_end("正文。");
+    let reply = buf.into_reply();
+    assert_eq!(
+        reply.body_texts().len(),
+        2,
+        "token-only text promoted first"
+    );
+    let text = reply.body_text().unwrap();
+    assert_eq!(text, "正文。", "no orphan divider: {text:?}");
+}
+
+#[test]
+fn render_card_no_stray_hr_when_a_text_emits_nothing() {
+    // Leading case: token-only earlier text promoted first, its image
+    // never uploaded → it emits nothing; the short final emits markdown.
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("<yomi_attachments>\nout/a.png\n</yomi_attachments>");
+    buf.record_model_end("正文。");
+    let reply = buf.into_reply();
+    assert_eq!(reply.body_texts().len(), 2);
+
+    let card: serde_json::Value =
+        serde_json::from_str(&render_card(&reply, None).unwrap()).unwrap();
+    let tags: Vec<&str> = card["body"]["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["tag"].as_str().unwrap())
+        .collect();
+    assert_eq!(tags, vec!["markdown"], "no leading hr: {card}");
+
+    // Trailing case: real earlier text, token-only final (unmatched) —
+    // no trailing hr above whatever follows.
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("正文长一些的正文，占位占位占位占位占位占位。");
+    buf.record_model_end("<yomi_attachments>\nout/a.png\n</yomi_attachments>");
+    let reply = buf.into_reply();
+    assert_eq!(reply.body_texts().len(), 2);
+
+    let card: serde_json::Value =
+        serde_json::from_str(&render_card(&reply, None).unwrap()).unwrap();
+    let tags: Vec<&str> = card["body"]["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["tag"].as_str().unwrap())
+        .collect();
+    assert_eq!(tags, vec!["markdown"], "no trailing hr: {card}");
+    assert!(!card.to_string().contains("\"tag\":\"hr\""));
+}
+
+#[test]
+fn render_plain_skips_token_only_narrations() {
+    let mut buf = RunReplyBuffer::new();
+    buf.record_model_end("<yomi_attachments>\nmid.png\n</yomi_attachments>");
+    buf.record_model_end("最终答案，比 token-only 前一条长不少的正文内容。");
+    let reply = buf.into_reply();
+
+    let plain = render_plain(&reply);
+    assert!(!plain.contains("⟦"));
+    // The token-only mid-run narration leaves no blank line in the
+    // trace section (the blank above the title is the body separator).
+    let trace = &plain[plain.find('🐾').unwrap()..];
+    assert!(
+        trace.lines().all(|l| !l.trim().is_empty()),
+        "no blank lines in trace: {plain:?}"
+    );
 }

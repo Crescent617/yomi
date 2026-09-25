@@ -94,6 +94,7 @@ fn reply_with_inline_image() -> reply::FinalReply {
         key: "img_k1".to_string(),
         alt: "a.png".to_string(),
         path: PathBuf::from("/tmp/a.png"),
+        declared: "a.png".to_string(),
     }]);
     reply
 }
@@ -146,4 +147,28 @@ async fn flush_plain_path_inline_image_file_failure_surfaces_a_note() {
     assert_eq!(texts.len(), 2);
     assert_eq!(texts[0], "body");
     assert!(texts[1].contains("disk full"), "note: {}", texts[1]);
+}
+
+#[tokio::test]
+async fn flush_plain_path_token_only_body_sends_files_not_empty_bubble() {
+    let mock = Arc::new(MockAdapter::default()); // no card support
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let mut buf = reply::RunReplyBuffer::new();
+    buf.record_model_end("<yomi_attachments>\na.png\n</yomi_attachments>");
+    let mut reply = buf.into_reply();
+    reply.set_inline_images(vec![InlineImage {
+        key: "img_k1".to_string(),
+        alt: "a.png".to_string(),
+        path: PathBuf::from("/tmp/a.png"),
+        declared: "a.png".to_string(),
+    }]);
+
+    let msg_id = flush_reply(&adapter, &routing(), reply, false).await;
+
+    // The token-only body flattens to nothing: no empty bubble goes out;
+    // the image rides the regular file path.
+    assert_eq!(msg_id, None);
+    assert!(mock.texts.lock().unwrap().is_empty());
+    let files = mock.files.lock().unwrap();
+    assert_eq!(files.as_slice(), [vec![PathBuf::from("/tmp/a.png")]]);
 }

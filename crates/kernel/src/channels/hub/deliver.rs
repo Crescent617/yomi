@@ -284,8 +284,8 @@ pub(crate) async fn flush_reply(
     tool_trace: bool,
 ) -> Option<String> {
     reply.text()?;
-    // The card is worth it for inline images alone: they render below
-    // the body instead of going out as separate file messages.
+    // The card is worth it for inline images alone: they render at
+    // their anchor tokens instead of going out as separate file messages.
     let want_card = adapter.supports_status_card()
         && ((tool_trace && reply.has_trace()) || !reply.inline_images().is_empty());
     if want_card {
@@ -325,6 +325,16 @@ pub(crate) async fn flush_reply(
     } else {
         reply.into_text().unwrap_or_default()
     };
+    // A body that held only attachment tokens flattens to nothing — an
+    // empty bubble must not go out (platforms reject it); the images
+    // still ride the regular file path.
+    if text.is_empty() {
+        if !inline.is_empty() {
+            let paths: Vec<std::path::PathBuf> = inline.into_iter().map(|img| img.path).collect();
+            crate::channels::attachments::send_attachments(adapter, routing, paths).await;
+        }
+        return None;
+    }
     match adapter
         .send_message(
             &routing.external_chat_id,
@@ -527,8 +537,10 @@ pub(crate) async fn freeze_with(
 /// attachments (`<yomi_attachments>` blocks, stripped at record time) are
 /// resolved up front — resolution notes ride with the reply text. Image
 /// attachments pre-upload before the reply lands and ride the reply card
-/// as inline `img` elements below the body; all other files go out AFTER
-/// the reply, landing at the bottom of the chat. The reply itself:
+/// as inline `img` elements — each at its anchor token (the block's
+/// position in the text), appended after the body when no token
+/// survives; all other files go out AFTER the reply, landing at the
+/// bottom of the chat. The reply itself:
 /// card-capable platforms with observability
 /// morph the status card into it (one message per run) — or, when the user
 /// posted mid-run and `mid_run_split` is enabled, flush the reply as a new
@@ -565,7 +577,7 @@ pub(crate) async fn deliver_reply(
     // on the reply text; the remaining files are sent after the reply
     // below — except images, which pre-upload here and ride the reply
     // card inline instead.
-    let mut files = match reply.as_mut() {
+    let files = match reply.as_mut() {
         Some(reply) if !reply.attachments().is_empty() => {
             // Best-effort workspace lookup for relative paths; a gone
             // kernel still allows absolute-path attachments.
@@ -580,10 +592,12 @@ pub(crate) async fn deliver_reply(
     // Inline images need a text-carrying reply card to ride on; without
     // one (no reply, or a textless run) everything stays on the
     // post-reply file path.
-    if let Some(reply) = reply.as_mut() {
-        files =
-            crate::channels::attachments::inline_partition_for_reply(adapter, reply, files).await;
-    }
+    let files: Vec<std::path::PathBuf> = match reply.as_mut() {
+        Some(reply) => {
+            crate::channels::attachments::inline_partition_for_reply(adapter, reply, files).await
+        }
+        None => files.into_iter().map(|(_, p)| p).collect(),
+    };
     let reply_msg_id = if observability && adapter.supports_status_card() {
         // A mention forces the split even in a quiet chat: card patches
         // never notify (feishu), so the only way an @ pings is a new

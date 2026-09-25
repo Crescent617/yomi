@@ -271,3 +271,106 @@ async fn default_workspace_fallback_empty_base_dir_also_falls_back() {
 
     assert_eq!(resolved, Some(ws.join("a.pdf").canonicalize().unwrap()));
 }
+
+// ── parse_attachments_anchored / tokens ─────────────────────────────
+
+#[test]
+fn anchored_mid_text_block_leaves_image_token_at_its_spot() {
+    let (cleaned, paths) = parse_attachments_anchored(
+        "先看我\n\n<yomi_attachments>\noutput/a.png\n</yomi_attachments>\n\n再看我",
+    );
+    assert_eq!(
+        cleaned,
+        format!("先看我\n\n{}\n\n再看我", attachment_token("output/a.png"))
+    );
+    assert_eq!(paths, vec!["output/a.png"]);
+}
+
+#[test]
+fn anchored_multiple_images_keep_declaration_order() {
+    let (cleaned, paths) =
+        parse_attachments_anchored("<yomi_attachments>\na.png\nb.jpg\nc.pdf\n</yomi_attachments>");
+    // Images leave tokens in order; the non-image leaves none.
+    assert_eq!(
+        cleaned,
+        format!("{}{}", attachment_token("a.png"), attachment_token("b.jpg"))
+    );
+    assert_eq!(paths, vec!["a.png", "b.jpg", "c.pdf"]);
+}
+
+#[test]
+fn anchored_non_image_leaves_no_token() {
+    let (cleaned, paths) =
+        parse_attachments_anchored("done\n<yomi_attachments>\nout.pdf\n</yomi_attachments>");
+    assert_eq!(cleaned, "done");
+    assert_eq!(paths, vec!["out.pdf"]);
+}
+
+#[test]
+fn anchored_fenced_block_is_left_alone() {
+    let text = "```\n<yomi_attachments>\na.png\n</yomi_attachments>\n```";
+    let (cleaned, paths) = parse_attachments_anchored(text);
+    assert_eq!(cleaned, text);
+    assert!(paths.is_empty());
+}
+
+#[test]
+fn anchored_unterminated_block_is_left_alone() {
+    let text = "done\n<yomi_attachments>\na.png\n";
+    let (cleaned, paths) = parse_attachments_anchored(text);
+    assert_eq!(cleaned, text);
+    assert!(paths.is_empty());
+}
+
+#[test]
+fn strip_attachment_tokens_removes_complete_tokens() {
+    let text = format!(
+        "前文\n\n{}\n\n后文{}尾",
+        attachment_token("a.png"),
+        attachment_token("b/c 图.png")
+    );
+    assert_eq!(strip_attachment_tokens(&text), "前文\n\n\n\n后文尾");
+}
+
+#[test]
+fn strip_attachment_tokens_keeps_unterminated_head() {
+    let text = format!("前文{}", ATTACHMENT_TOKEN_PREFIX);
+    assert_eq!(strip_attachment_tokens(&text), text);
+}
+
+#[test]
+fn strip_dangling_token_cuts_partial_head() {
+    let mut text = format!("正文{}", &attachment_token("output/long-name.png")[..20]);
+    assert!(strip_dangling_token(&mut text, "…"));
+    assert_eq!(text, "正文…");
+}
+
+#[test]
+fn strip_dangling_token_keeps_complete_token() {
+    let mut text = format!("正文{}", attachment_token("a.png"));
+    assert!(!strip_dangling_token(&mut text, "…"));
+    assert!(text.ends_with(ATTACHMENT_TOKEN_SUFFIX));
+}
+
+#[test]
+fn anchored_parse_neutralizes_literal_token_prose() {
+    // The model quoting the token pattern in prose: content preserved
+    // (space added after the bracket), never read as a live anchor.
+    let (cleaned, paths) =
+        parse_attachments_anchored(&format!("写法是 {} 这样", attachment_token("fake.png")));
+    assert!(paths.is_empty());
+    assert!(cleaned.contains("⟦ yomi-attachment:fake.png⟧"));
+    assert!(!cleaned.contains(ATTACHMENT_TOKEN_PREFIX));
+    // …即使在围栏内（渲染端按 token 切分时不认围栏）。
+    let (cleaned, _) =
+        parse_attachments_anchored(&format!("```\n{}\n```", attachment_token("fake.png")));
+    assert!(!cleaned.contains(ATTACHMENT_TOKEN_PREFIX));
+}
+
+#[test]
+fn anchored_parse_never_mints_a_token_for_a_bracket_path() {
+    let (cleaned, paths) =
+        parse_attachments_anchored("<yomi_attachments>\nout/⟦x⟧.png\n</yomi_attachments>");
+    assert_eq!(paths, vec!["out/⟦x⟧.png"]);
+    assert_eq!(cleaned, "");
+}

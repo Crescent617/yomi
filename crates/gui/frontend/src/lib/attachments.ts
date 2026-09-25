@@ -4,22 +4,46 @@
  * Port of `kernel::utils::attachments::parse_attachments` — keep the two
  * implementations (and their test cases) in sync. A block counts as a
  * declaration only when it stands outside a fenced code block (fence
- * parity: an odd fence count after the block means it is fenced in).
- * Recognized blocks are stripped for display; stored messages keep the
- * raw text.
+ * parity tracked from the start of the text, exactly like Rust's
+ * `map_outside_fences`: a marker line is one whose first non-whitespace
+ * characters are ```; an unterminated fence keeps everything after the
+ * opener fenced). Recognized blocks are stripped for display; stored
+ * messages keep the raw text.
  */
 
 const OPEN_TAG = "<yomi_attachments>";
 const CLOSE_TAG = "</yomi_attachments>";
-const FENCE = "```";
+
+/**
+ * Apply `f` to each contiguous run of `text` standing outside a fenced
+ * code block; fenced runs (fence markers included) pass through verbatim.
+ * Mirrors `kernel::utils::markdown::map_outside_fences`.
+ */
+function mapOutsideFences(text: string, f: (run: string) => string): string {
+  let out = "";
+  let fenced = false;
+  let runStart = 0;
+  let pos = 0;
+  for (const line of text.split(/(?<=\n)/)) {
+    const lineEnd = pos + line.length;
+    if (line.trimStart().startsWith("```")) {
+      if (!fenced) out += f(text.slice(runStart, pos));
+      fenced = !fenced;
+      out += line;
+      pos = lineEnd;
+      if (!fenced) runStart = pos;
+    } else {
+      pos = lineEnd;
+      if (fenced) out += line;
+    }
+  }
+  if (!fenced) out += f(text.slice(runStart, pos));
+  return out;
+}
 
 export interface ParsedAttachments {
   cleaned: string;
   paths: string[];
-}
-
-function countOccurrences(haystack: string, needle: string): number {
-  return haystack.split(needle).length - 1;
 }
 
 /**
@@ -30,35 +54,28 @@ function countOccurrences(haystack: string, needle: string): number {
  */
 export function parseAttachments(text: string): ParsedAttachments {
   const paths: string[] = [];
-  let cleaned = "";
   let removed = false;
-  let rest = text;
+  const cleaned = mapOutsideFences(text, (run) => {
+    let out = "";
+    let rest = run;
+    for (;;) {
+      const open = rest.indexOf(OPEN_TAG);
+      if (open === -1) break;
+      const afterOpen = open + OPEN_TAG.length;
+      const close = rest.indexOf(CLOSE_TAG, afterOpen);
+      if (close === -1) break;
 
-  for (;;) {
-    const open = rest.indexOf(OPEN_TAG);
-    if (open === -1) break;
-    const afterOpen = open + OPEN_TAG.length;
-    const close = rest.indexOf(CLOSE_TAG, afterOpen);
-    if (close === -1) break;
-    const blockEnd = close + CLOSE_TAG.length;
-
-    if (countOccurrences(rest.slice(blockEnd), FENCE) % 2 !== 0) {
-      // Fenced example: keep it verbatim, keep scanning after it.
-      cleaned += rest.slice(0, blockEnd);
-      rest = rest.slice(blockEnd);
-      continue;
+      out += rest.slice(0, open);
+      for (const line of rest.slice(afterOpen, close).split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed) paths.push(trimmed);
+      }
+      removed = true;
+      rest = rest.slice(close + CLOSE_TAG.length);
     }
-
-    cleaned += rest.slice(0, open);
-    for (const line of rest.slice(afterOpen, close).split("\n")) {
-      const trimmed = line.trim();
-      if (trimmed) paths.push(trimmed);
-    }
-    removed = true;
-    rest = rest.slice(blockEnd);
-  }
-
+    out += rest;
+    return out;
+  });
   if (!removed) return { cleaned: text, paths };
-  cleaned += rest;
   return { cleaned: cleaned.trim(), paths };
 }

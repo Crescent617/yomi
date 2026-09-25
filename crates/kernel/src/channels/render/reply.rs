@@ -199,10 +199,14 @@ impl RunReplyBuffer {
     /// becomes the reply body at flush time, all earlier ones stay as
     /// narrations. Each `<yomi_attachments>` block outside a fenced code
     /// block is stripped from the text and its paths collected for file
-    /// delivery; a text that held only blocks leaves no narration.
+    /// delivery; each **image** path additionally leaves an inline
+    /// placeholder token at the block's spot (the card renderer splits
+    /// the body there). A text that held only blocks leaves a token-only
+    /// narration (image-only — renders as a lone-img card) or, when it
+    /// declared no image paths, no narration at all.
     pub(crate) fn record_model_end(&mut self, text: &str) {
         self.steps += 1;
-        let (text, paths) = crate::utils::attachments::parse_attachments(text);
+        let (text, paths) = crate::utils::attachments::parse_attachments_anchored(text);
         // 旧转录里可能还留着已下线的回合终止标记：状态机早已不读，
         // 这里仅在展示路径剥掉，避免控制文本泄漏到卡片/CLI。
         let text = crate::prompt::strip_end_turn_marker(&text);
@@ -379,6 +383,11 @@ pub(crate) struct InlineImage {
     /// Local source path — fallback delivery when the card path is
     /// unavailable (plain-text flush).
     pub path: std::path::PathBuf,
+    /// The path as declared in the attachments block — the anchor
+    /// token in the body text carries this string; the card renderer
+    /// places the image at the token's spot (or appends it after the
+    /// body when no token names it).
+    pub declared: String,
 }
 
 /// The deliverable reply: the last text (joined from above by the longest
@@ -447,22 +456,24 @@ impl FinalReply {
     }
 
     /// Body texts joined for plain/comment surfaces (divider line between
-    /// steps). `None` when the run produced no text.
+    /// steps), attachment anchor tokens stripped. `None` when the run
+    /// produced no text — including a token-only body (an image-only
+    /// declaration flattens to nothing on plain surfaces). Token-emptied
+    /// texts are dropped before the join, so no orphan `---` dividers.
     pub(crate) fn body_text(&self) -> Option<String> {
-        if self.texts.is_empty() {
-            None
-        } else {
-            Some(self.texts.join("\n\n---\n\n"))
-        }
+        let joined = self
+            .texts
+            .iter()
+            .map(|t| crate::utils::attachments::strip_attachment_tokens(t))
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n---\n\n");
+        (!joined.is_empty()).then_some(joined)
     }
 
     /// The bare body text (used when the trace is disabled by config).
     pub(crate) fn into_text(self) -> Option<String> {
-        if self.texts.is_empty() {
-            None
-        } else {
-            Some(self.texts.join("\n\n---\n\n"))
-        }
+        self.body_text()
     }
 
     /// Attachment paths declared in the final text.
@@ -513,6 +524,43 @@ impl FinalReply {
     }
 }
 
+/// One inline image as a card `img` element.
+fn img_element(img: &InlineImage) -> serde_json::Value {
+    json!({
+        "tag": "img",
+        "img_key": img.key,
+        "alt": { "tag": "plain_text", "content": img.alt },
+    })
+}
+
+/// Push one body text as elements split at attachment tokens: a token
+/// naming a pre-uploaded image becomes an `img` element in place
+/// (consumed from `anchored`); unmatched tokens drop silently (that
+/// image went the post-reply file route). Whitespace-only segments
+/// between tokens are skipped.
+fn push_anchored_segments(
+    elements: &mut Vec<serde_json::Value>,
+    text: &str,
+    anchored: &mut Vec<&InlineImage>,
+) {
+    for seg in crate::utils::attachments::token_segments(text) {
+        match seg {
+            crate::utils::attachments::TokenSegment::Text(t) => {
+                let t = t.trim();
+                if !t.is_empty() {
+                    elements.push(json!({ "tag": "markdown", "content": t }));
+                }
+            }
+            crate::utils::attachments::TokenSegment::Anchor(declared) => {
+                if let Some(pos) = anchored.iter().position(|img| img.declared == declared) {
+                    let img = anchored.remove(pos);
+                    elements.push(img_element(img));
+                }
+            }
+        }
+    }
+}
+
 /// Render the Feishu reply card (schema 2.0, no header): an optional notice
 /// line (e.g. error summary for abnormal endings), the body texts (two are
 /// split by an `hr` divider), any inline images (pre-uploaded attachments),
@@ -551,10 +599,16 @@ pub(crate) fn render_card(reply: &FinalReply, notice: Option<&str>) -> Option<St
         budgets[idx] += give;
         leftover -= give;
     }
+    // Anchored inline images: a token naming a pre-uploaded image
+    // splits the body markdown at its spot; anything else (upload
+    // failed, token truncated off, declared mid-run) leaves the image
+    // appended after the body — the classic position.
+    let mut anchored: Vec<&InlineImage> = reply.inline_images().iter().collect();
+    // One element run per body text, `hr` dividers between non-empty
+    // runs only: a text that emits nothing (token-only, image not
+    // uploaded) earns no divider — leading or trailing.
+    let mut parts: Vec<Vec<serde_json::Value>> = Vec::new();
     for (idx, text) in body_texts.iter().enumerate() {
-        if idx > 0 {
-            elements.push(json!({ "tag": "hr" }));
-        }
         // Truncate before mention rewrite: `<@id>` → `<at id=..></at>`
         // expands, and rewriting first would let the cut land mid-tag
         // (an unclosed tag degrades the whole element to plain text on
@@ -562,21 +616,30 @@ pub(crate) fn render_card(reply: &FinalReply, notice: Option<&str>) -> Option<St
         let text =
             crate::utils::strs::truncate_with_suffix(text, budgets[idx], "\n\n...(truncated)");
         // Truncation can cut a fence pair — balance after capping.
-        let text = balance_fences(&text);
+        let mut text = balance_fences(&text).into_owned();
+        // …and it can cut mid-token: drop the partial head (its image
+        // falls back to the after-body append), re-appending the suffix.
+        crate::utils::attachments::strip_dangling_token(&mut text, "\n\n...(truncated)");
         // Platform-neutral `<@USER_ID>` contract → feishu <at> syntax.
         let text =
             crate::channels::utils::rewrite_mentions(&text, &|id| format!("<at id={id}></at>"));
-        elements.push(json!({ "tag": "markdown", "content": text }));
+        let mut part = Vec::new();
+        push_anchored_segments(&mut part, &text, &mut anchored);
+        if !part.is_empty() {
+            parts.push(part);
+        }
+    }
+    for (i, part) in parts.into_iter().enumerate() {
+        if i > 0 {
+            elements.push(json!({ "tag": "hr" }));
+        }
+        elements.extend(part);
     }
 
-    // Inline images ride the card right below the body (pre-uploaded by
-    // the hub — see `InlineImage`), one `img` element per attachment.
-    for img in reply.inline_images() {
-        elements.push(json!({
-            "tag": "img",
-            "img_key": img.key,
-            "alt": { "tag": "plain_text", "content": img.alt },
-        }));
+    // Images no surviving token named (declared in a mid-run narration,
+    // or their token truncated off) append after the body.
+    for img in anchored {
+        elements.push(img_element(img));
     }
 
     if !reply.entries.is_empty() {
@@ -621,7 +684,13 @@ pub(crate) fn render_plain(reply: &FinalReply) -> String {
         while i < reply.entries.len() {
             match &reply.entries[i] {
                 TraceEntry::Narration(text) => {
-                    out.push_str(text);
+                    let text = crate::utils::attachments::strip_attachment_tokens(text);
+                    // Token-only narrations leave no blank line.
+                    if text.is_empty() {
+                        i += 1;
+                        continue;
+                    }
+                    out.push_str(&text);
                     out.push('\n');
                     i += 1;
                 }
@@ -696,7 +765,14 @@ fn process_panel(entries: &[TraceEntry], dropped_entries: usize, title: &str) ->
     while i < entries.len() {
         match &entries[i] {
             TraceEntry::Narration(text) => {
-                let text = crate::channels::utils::rewrite_mentions(text, &|id| {
+                let text = crate::utils::attachments::strip_attachment_tokens(text);
+                // Token-only narrations (image-only mid-run texts) leave
+                // no element.
+                if text.is_empty() {
+                    i += 1;
+                    continue;
+                }
+                let text = crate::channels::utils::rewrite_mentions(&text, &|id| {
                     format!("<at id={id}></at>")
                 });
                 body.push(json!({ "tag": "markdown", "content": balance_fences(&text) }));
@@ -902,7 +978,16 @@ fn trace_lines(entries: &[TraceEntry], markdown: bool) -> Vec<String> {
     for entry in entries {
         match entry {
             TraceEntry::Narration(text) => {
-                let snippet = truncate_by_chars(&flatten_ws(text), NARRATION_MAX_CHARS, "…");
+                let snippet = truncate_by_chars(
+                    &flatten_ws(&crate::utils::attachments::strip_attachment_tokens(text)),
+                    NARRATION_MAX_CHARS,
+                    "…",
+                );
+                // Token-only narrations (image-only mid-run texts) leave
+                // no line.
+                if snippet.is_empty() {
+                    continue;
+                }
                 if markdown {
                     lines.push(format!(
                         "<font color='grey'>💬 {}</font>",

@@ -22,11 +22,13 @@ const SKILL_EMPTY_HINT: &str =
 
 /// Attachment contract for every non-sub-agent session (when the
 /// `attachments` feature is on): files declared in a `<yomi_attachments>`
-/// block reach the user as attachments alongside the message — channels
-/// deliver the files, the app shows clickable items. Appended to the base
-/// prompt by the conductor at spawn time. Sub-agents never get it: a
-/// sub-agent's parent decides what becomes an attachment.
-pub(crate) const ATTACHMENTS_SECTION: &str = "# Attachments\nTo attach files to your reply, include an attachments block, one path per line (absolute, or relative to the workspace) — each is delivered to the user as an attachment alongside your message:\n\n<yomi_attachments>\noutput/report.pdf\n</yomi_attachments>\n\nTo show this syntax to the user instead of attaching files, wrap it in a fenced code block.";
+/// block reach the user as attachments alongside the message — on
+/// card-capable channels images render inline at the block's position
+/// in the text, other files go as follow-up file messages; the app
+/// shows clickable items. Appended to the base prompt by the conductor
+/// at spawn time. Sub-agents never get it: a sub-agent's parent decides
+/// what becomes an attachment.
+pub(crate) const ATTACHMENTS_SECTION: &str = "# Attachments\nTo attach files to your reply, include an attachments block, one path per line (absolute, or relative to the workspace). On card-capable surfaces, only images render inline, at the block's position; other files go as follow-up file messages:\n\n<yomi_attachments>\noutput/plot.png\n</yomi_attachments>\n\nTo show this syntax to the user instead of attaching files, wrap it in a fenced code block.";
 
 /// Mention contract for channel-routed sessions: `<@USER_ID>` in a reply
 /// is rewritten by each platform adapter into its native mention (feishu

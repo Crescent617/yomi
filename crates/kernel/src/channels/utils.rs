@@ -90,7 +90,7 @@ pub(crate) async fn read_upload(
     let bytes = tokio::fs::read(path)
         .await
         .map_err(|e| super::ChannelError::Platform(format!("read file: {e}")))?;
-    let is_image = mime_guess::from_path(path).first_or_octet_stream().type_() == "image";
+    let is_image = crate::utils::attachments::is_image_name(path);
     let (limit, kind) = if is_image {
         (image_max_bytes, image_kind)
     } else {

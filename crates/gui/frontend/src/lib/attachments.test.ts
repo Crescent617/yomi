@@ -91,4 +91,23 @@ describe("parseAttachments", () => {
     expect(cleaned).toBe("done");
     expect(paths).toEqual([]);
   });
+
+  it("strips a block before an unterminated fence", () => {
+    // Truncated reply (fence never closed): the block stands OUTSIDE the
+    // fence — a real declaration. Mirrors Rust `block_before_unterminated_fence_is_stripped`.
+    const text =
+      "<yomi_attachments>\nout.pdf\n</yomi_attachments>\n```\n truncated";
+    const { cleaned, paths } = parseAttachments(text);
+    expect(cleaned).toBe("```\n truncated");
+    expect(paths).toEqual(["out.pdf"]);
+  });
+
+  it("keeps a block inside an unterminated fence", () => {
+    // Fence opened and never closed: the block stays inside — an example,
+    // not a declaration. Mirrors Rust `block_inside_unterminated_fence_is_kept`.
+    const text = "```\n<yomi_attachments>\nout.pdf\n</yomi_attachments>";
+    const { cleaned, paths } = parseAttachments(text);
+    expect(cleaned).toBe(text);
+    expect(paths).toEqual([]);
+  });
 });
