@@ -333,8 +333,8 @@ enum CronCommands {
         /// Target session for --message (default: a fresh session per run)
         #[arg(long, requires = "message")]
         session: Option<String>,
-        /// Working directory for --command
-        #[arg(long, requires = "command")]
+        /// Working directory: --command runs there; with --message and no --session, per-run sessions start there
+        #[arg(long)]
         work_dir: Option<String>,
         /// Stop after N runs (default: unlimited)
         #[arg(long)]
@@ -367,8 +367,8 @@ enum CronCommands {
         /// Target session for --message (omit for a fresh session per run)
         #[arg(long, requires = "message")]
         session: Option<String>,
-        /// Working directory for --command
-        #[arg(long, requires = "command")]
+        /// Working directory: --command runs there; with --message and no --session, per-run sessions start there
+        #[arg(long)]
         work_dir: Option<String>,
         /// Stop after N runs (0 = back to unlimited)
         #[arg(long)]

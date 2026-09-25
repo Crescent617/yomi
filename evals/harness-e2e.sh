@@ -50,6 +50,21 @@ pre=$(sqlite3 "$DB" "SELECT precheck IS NULL FROM cron_jobs WHERE id='$gid'")
 check "cron precheck update 空串清除" "1" "$pre"
 "$YOMI" cron delete "$gid" >/dev/null 2>&1
 
+# ── 1.6 message job 的 --work-dir 经 session_template 落库；绑
+# --session 时 --work-dir 显式报错 ──
+wid=$("$YOMI" cron create --name e2e-wd --schedule "0 9 * * *" --message "hi" --work-dir /tmp | grep -o 'cron_[A-Za-z0-9]*')
+tpl=$(sqlite3 "$DB" "SELECT action FROM cron_jobs WHERE id='$wid'")
+echo "$tpl" | grep -q '"working_dir":"/tmp"' \
+  && ok "message job --work-dir 落库" || bad "message job --work-dir 落库" "$tpl"
+"$YOMI" cron delete "$wid" >/dev/null 2>&1
+if "$YOMI" cron create --name e2e-wd2 --schedule "0 9 * * *" --message "hi" --session sess_x --work-dir /tmp >/dev/null 2>&1; then
+  bad "--session+--work-dir 显式报错" "未报错（job 已建）"
+  wid2=$("$YOMI" cron list | awk '$2=="e2e-wd2" {print $1}')
+  [ -n "$wid2" ] && "$YOMI" cron delete "$wid2" >/dev/null 2>&1
+else
+  ok "--session+--work-dir 显式报错"
+fi
+
 # ── 2. 模板 spawn：verifier 落库 + VERDICT 锚点 ──
 "$YOMI" run --yolo --timeout 180 \
   "用 agent 工具 spawn 子 agent（template=verifier，wait_for_completion=true）：验收 README.md 是否存在。" \

@@ -9,7 +9,8 @@ use chrono::{DateTime, Utc};
 use comfy_table::{ContentArrangement, Table};
 use kernel::client::{KernelApi, RemoteKernel};
 use kernel::cron::{
-    CreateCronJobInput, CronAction, CronJob, CronJobId, CronJobStatus, UpdateCronJobInput,
+    CreateCronJobInput, CronAction, CronJob, CronJobId, CronJobStatus, CronSessionTemplate,
+    UpdateCronJobInput,
 };
 
 async fn connect() -> Result<RemoteKernel> {
@@ -31,25 +32,42 @@ fn parse_expires_at(raw: &str) -> Result<DateTime<Utc>> {
 
 /// Build the action from `--message` / `--command` flags (exactly one
 /// required on create; both absent on update keeps the current action).
+///
+/// `--work-dir` 对 message 类（未绑 `--session`）经 `session_template`
+/// 透传为 per-run 新会话的工作目录——kernel 尊重调用方的目录、只重算
+/// 权限等级（见 `create_cron_job`/`update_cron_job` 的归一化）。绑定
+/// `--session` 时 `--work-dir` 无意义：显式报错而非静默忽略。
 fn build_action(
     message: Option<String>,
     command: Option<String>,
     session: Option<String>,
     work_dir: Option<String>,
-) -> Option<CronAction> {
-    match (message, command) {
-        (Some(content), None) => Some(CronAction::SendMessage {
-            session_id: session,
-            content,
-            session_template: None,
-        }),
+) -> Result<Option<CronAction>> {
+    Ok(match (message, command) {
+        (Some(content), None) => {
+            if session.is_some() && work_dir.is_some() {
+                anyhow::bail!(
+                    "--work-dir has no effect with --message + --session \
+                     (the bound session keeps its own working directory)"
+                );
+            }
+            Some(CronAction::SendMessage {
+                session_id: session,
+                content,
+                session_template: work_dir.map(|dir| CronSessionTemplate {
+                    working_dir: Some(dir),
+                    project_id: None,
+                    auto_approve_level: None,
+                }),
+            })
+        }
         (None, Some(command)) => Some(CronAction::Shell {
             command,
             working_dir: work_dir,
         }),
         (None, None) => None,
         (Some(_), Some(_)) => unreachable!("clap conflicts_with"),
-    }
+    })
 }
 
 /// One-line truncation for table cells.
@@ -58,6 +76,73 @@ fn truncate(s: &str, max: usize) -> String {
         format!("{}…", s.chars().take(max - 1).collect::<String>())
     } else {
         s.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_action;
+    use kernel::cron::CronAction;
+
+    #[test]
+    fn message_with_work_dir_fills_session_template() {
+        let action = build_action(
+            Some("hi".to_string()),
+            None,
+            None,
+            Some("/proj".to_string()),
+        )
+        .unwrap()
+        .unwrap();
+        let CronAction::SendMessage {
+            session_template, ..
+        } = action
+        else {
+            panic!("expected SendMessage");
+        };
+        let tpl = session_template.expect("template filled from --work-dir");
+        assert_eq!(tpl.working_dir.as_deref(), Some("/proj"));
+        // 权限等级留给 kernel 按 config 重算（下限 caution），CLI 不预设。
+        assert!(tpl.auto_approve_level.is_none());
+        assert!(tpl.project_id.is_none());
+    }
+
+    #[test]
+    fn message_without_work_dir_keeps_template_absent() {
+        let action = build_action(Some("hi".to_string()), None, None, None)
+            .unwrap()
+            .unwrap();
+        let CronAction::SendMessage {
+            session_template, ..
+        } = action
+        else {
+            panic!("expected SendMessage");
+        };
+        assert!(session_template.is_none());
+    }
+
+    #[test]
+    fn message_with_session_and_work_dir_is_rejected() {
+        // 绑定会话有自己的工作目录，--work-dir 无意义——显式报错而非静默忽略。
+        let err = build_action(
+            Some("hi".to_string()),
+            None,
+            Some("sess_1".to_string()),
+            Some("/proj".to_string()),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("--work-dir"), "{err}");
+    }
+
+    #[test]
+    fn shell_work_dir_unchanged() {
+        let action = build_action(None, Some("ls".to_string()), None, Some("/x".to_string()))
+            .unwrap()
+            .unwrap();
+        let CronAction::Shell { working_dir, .. } = action else {
+            panic!("expected Shell");
+        };
+        assert_eq!(working_dir.as_deref(), Some("/x"));
     }
 }
 
@@ -105,7 +190,7 @@ pub async fn create(
     expires_at: Option<String>,
     precheck: Option<String>,
 ) -> Result<()> {
-    let action = build_action(message, command, session, work_dir)
+    let action = build_action(message, command, session, work_dir)?
         .expect("create requires --message or --command");
     let expires_at = expires_at.as_deref().map(parse_expires_at).transpose()?;
 
@@ -212,7 +297,7 @@ pub async fn update(
     expires_at: Option<String>,
     precheck: Option<String>,
 ) -> Result<()> {
-    let action = build_action(message, command, session, work_dir);
+    let action = build_action(message, command, session, work_dir)?;
     let expires_at = expires_at.as_deref().map(parse_expires_at).transpose()?;
 
     let kernel = connect().await?;
