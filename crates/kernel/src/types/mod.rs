@@ -446,6 +446,19 @@ impl Message {
         }
     }
 
+    /// Create a user message injected by the agent itself mid-turn
+    /// (loop-guard warning, auto-continue "continue"): model-visible,
+    /// flagged `TURN_INTERNAL_META_KEY` so consumers (the loop-guard
+    /// scan) treat it as turn-internal, not a hard turn boundary.
+    pub fn user_turn_internal(content: impl Into<String>) -> Self {
+        let mut msg = Self::user(content);
+        msg.metadata = Some(std::collections::HashMap::from([(
+            TURN_INTERNAL_META_KEY.to_string(),
+            "true".to_string(),
+        )]));
+        msg
+    }
+
     /// Create a user message with image
     pub fn user_with_image(text: impl Into<String>, image_url: impl Into<String>) -> Self {
         Self {

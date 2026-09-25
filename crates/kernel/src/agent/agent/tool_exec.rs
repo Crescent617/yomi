@@ -29,7 +29,7 @@ use crate::tools::executor::{
     build_tool_result, execute_single_tool, log_tool_result, ToolExecutionResult,
 };
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::{MessageId, Role, ToolCall};
+use crate::types::{Message, MessageId, Role, ToolCall};
 use futures::FutureExt;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
@@ -96,7 +96,7 @@ impl Agent {
                 // turn-internal 标记：哨兵扫描对这条警告保持透明
                 //（否则警告本身成了 turn 边界，L1→L2 梯子断裂），
                 // transcript 与 UI 也可辨识。
-                let note = crate::agent::loop_detect::turn_internal_message(format!(
+                let note = Message::user_turn_internal(format!(
                     "[loop guard] `{tool}` has been called {streak} times in a row with \
                      identical arguments and identical results — another identical retry \
                      cannot produce new information. Stop retrying: diagnose why the \

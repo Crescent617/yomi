@@ -1,4 +1,4 @@
-use super::{detect, turn_internal_message, LoopGuard, LoopSignal};
+use super::{detect, LoopGuard, LoopSignal};
 use crate::types::{ContentBlock, Message, ToolCall};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -131,8 +131,8 @@ fn injected_warning_does_not_reset_streak() {
         round("1", "probe", json!({}), "same"),
         round("2", "probe", json!({}), "same"),
     ]);
-    messages.push(Arc::new(turn_internal_message(
-        "[loop guard] stop retrying".to_string(),
+    messages.push(Arc::new(Message::user_turn_internal(
+        "[loop guard] stop retrying",
     )));
     messages.extend(round("3", "probe", json!({}), "same"));
     assert_eq!(
@@ -145,14 +145,14 @@ fn injected_warning_does_not_reset_streak() {
 }
 
 /// auto-continue 注入的 "continue" 同走 turn-internal 标记——循环
-/// 跨越它不重置（与 max_iterations 不因它重置的语义对齐）。
+/// 跨越它不重置（与 `max_iterations` 不因它重置的语义对齐）。
 #[test]
 fn auto_continue_message_is_transparent() {
     let mut messages = concat(vec![
         round("1", "probe", json!({}), "same"),
         round("2", "probe", json!({}), "same"),
     ]);
-    messages.push(Arc::new(turn_internal_message("continue".to_string())));
+    messages.push(Arc::new(Message::user_turn_internal("continue")));
     messages.extend(round("3", "probe", json!({}), "same"));
     assert!(matches!(
         detect(&messages, GUARD),

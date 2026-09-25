@@ -71,19 +71,6 @@ pub enum LoopSignal {
     },
 }
 
-/// 构造一条 turn 内 user 消息（带 `TURN_INTERNAL_META_KEY` 标记）：
-/// 模型可见、对哨兵扫描透明。生产方：L1 警告
-///（`tool_exec::finish_tool_batch`）、`MaxTokens` auto-continue
-///（`agent::transition_after_streaming`）。
-pub fn turn_internal_message(text: String) -> Message {
-    let mut msg = Message::user(text);
-    msg.metadata = Some(std::collections::HashMap::from([(
-        crate::types::TURN_INTERNAL_META_KEY.to_string(),
-        "true".to_string(),
-    )]));
-    msg
-}
-
 /// 检测 buffer 尾部是否出现工具调用死循环。
 pub fn detect(messages: &[Arc<Message>], guard: LoopGuard) -> LoopSignal {
     // 阈值归一：0 = 关闭（break 关哨兵 / warn 不警告）；1 是退化

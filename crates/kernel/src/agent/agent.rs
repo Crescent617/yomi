@@ -1607,8 +1607,7 @@ impl Agent {
                     tracing::info!(?finish_reason, "auto-injecting 'continue' user message");
                     // turn-internal 标记：turn 未结束（与 max_iterations
                     // 不因它重置一致），哨兵扫描对它透明。
-                    let msg =
-                        crate::agent::loop_detect::turn_internal_message("continue".to_string());
+                    let msg = Message::user_turn_internal("continue");
                     self.push_user_message(msg);
                     self.context.transition_to(AgentState::Streaming);
                 } else {
