@@ -298,7 +298,7 @@ pub enum ProviderError {
     Sse(String),
 
     /// Timeout error
-    #[error("Timeout: {0}")]
+    #[error("{0}")]
     Timeout(String),
 
     /// JSON parse error

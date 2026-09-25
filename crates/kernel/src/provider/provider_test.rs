@@ -146,3 +146,17 @@ async fn reqwest_error_surfaces_cause_not_url_boilerplate() {
     assert!(!msg.contains("error sending request"), "got: {msg}");
     assert!(!msg.contains("Request failed"), "got: {msg}");
 }
+
+#[test]
+fn provider_error_display_has_no_doubled_prefix() {
+    // Category prefix lives either in the template or in the message, never both.
+    assert_eq!(
+        ProviderError::Timeout("timed out".into()).to_string(),
+        "timed out"
+    );
+    assert_eq!(ProviderError::Request("boom".into()).to_string(), "boom");
+    assert_eq!(
+        ProviderError::Sse("boom".into()).to_string(),
+        "SSE error: boom"
+    );
+}
