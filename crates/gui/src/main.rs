@@ -367,4 +367,3 @@ fn main() {
     kernel::utils::path::prepend_exe_dir_to_path();
     run();
 }
-
