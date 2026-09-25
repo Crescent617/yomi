@@ -367,7 +367,7 @@ impl<'a> SystemPromptBuilder<'a> {
         // `yomi doc`（编进二进制、版本锁死）是权威文档源。
         let _ = write!(
             prompt,
-            "agent kernel: Yomi (manual: `yomi doc` — about skills, config, sessions, cron, daemon, extensions, debug)\nDate: {}",
+            "agent kernel: Yomi (manual: `yomi doc [topic]` — about skills, config, sessions, cron, daemon, extensions, debug)\nDate: {}",
             Local::now().format("%Y-%m-%d")
         );
         if let Some(cwd) = self.working_dir {

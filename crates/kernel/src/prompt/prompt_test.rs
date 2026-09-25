@@ -63,7 +63,7 @@ async fn environment_section_names_detected_shell() {
 async fn environment_section_points_to_builtin_manual() {
     // 一行指针覆盖"手册在哪"的盲区；说明书正文不进 SP，权威源是 `yomi doc`。
     let prompt = SystemPromptBuilder::new().base_prompt("base").build().await;
-    assert!(prompt.contains("manual: `yomi doc`"));
+    assert!(prompt.contains("manual: `yomi doc [topic]`"));
     assert!(prompt.contains("skills, config, sessions, cron, daemon, extensions, debug"));
 }
 
