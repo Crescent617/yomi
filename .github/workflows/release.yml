@@ -60,12 +60,9 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
 
-          - target: aarch64-apple-darwin
-            os: macos-latest
-
-          # ✅ Windows（关键：msvc）
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
+          # macOS / Windows 的 CLI 资产已移入对应 GUI job——sidecar
+          # 本来就要在那编一遍 CLI，同一 target dir 里 kernel 只编
+          # 一次，资产与 sidecar 同源打包（此处不再重复全量编译）。
 
     steps:
       - uses: actions/checkout@v6
@@ -167,6 +164,27 @@ jobs:
       - name: Bundle CLI sidecar (externalBin)
         run: bash scripts/bundle-cli-sidecar.sh aarch64-apple-darwin
 
+      # CLI tar.gz 与 sidecar 同源：同一 target dir 一次编译，此处
+      # 只打包不上编译（原 build-tui macOS leg 的重复全量编译已删）。
+      - name: Package & upload CLI asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=${GITHUB_REF_NAME#v}
+          OUT="yomi-${VERSION}-aarch64-apple-darwin"
+          mkdir -p "$OUT"
+          cp target/release/yomi "$OUT/"
+          tar czf "$OUT.tar.gz" "$OUT"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: aarch64-apple-darwin
+          path: yomi-*-aarch64-apple-darwin.tar.gz
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: yomi-*-aarch64-apple-darwin.tar.gz
+
       - name: Build & Sign DMG
         working-directory: crates/gui
         run: |
@@ -227,6 +245,7 @@ jobs:
           files: |
             **/Yomi_*.msi
             **/Yomi_*-setup.exe
+            **/yomi-*-pc-windows-msvc.zip
 
   # ==================== Docker 镜像 (GHCR) ====================
   build-docker:
@@ -346,9 +365,10 @@ jobs:
 
   # ==================== 更新 Homebrew Formula (TUI) ====================
   brew-tui:
-    # build-tui 完成（其尾部已即建即发）后自行 gate：formula 需要
-    # mac+linux 两个 tar.gz 都在 release 上；缺则跳过（不红）。
-    needs: [create-release, build-tui, check-precondition]
+    # build-tui(linux) 与 build-gui(macOS CLI 资产与 sidecar 同源)
+    # 完成后自行 gate：formula 需要 mac+linux 两个 tar.gz 都在
+    # release 上；缺则跳过（不红）。
+    needs: [create-release, build-tui, build-gui, check-precondition]
     if: always()
     runs-on: ubuntu-latest
     env:

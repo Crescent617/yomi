@@ -38,6 +38,19 @@ jobs:
         shell: bash
         run: bash scripts/bundle-cli-sidecar.sh x86_64-pc-windows-msvc
 
+      # CLI zip 与 sidecar 同源（同一 target dir 一次编译）——版本号
+      # 读 tauri.conf.json：reusable 在 tag（release.yml）与分支
+      #（windows-e2e dispatch）两种 ref 下都取得到。
+      - name: Package CLI zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(grep -oE '"version":\s*"[^"]+"' crates/gui/tauri.conf.json | head -1 | cut -d'"' -f4)
+          OUT="yomi-${VERSION}-x86_64-pc-windows-msvc"
+          mkdir -p "$OUT"
+          cp target/release/yomi.exe "$OUT/"
+          7z a -tzip "$OUT.zip" "./$OUT" >/dev/null
+
       - name: Build frontend + tauri (msi + nsis)
         working-directory: crates/gui
         shell: bash
@@ -71,3 +84,4 @@ jobs:
           path: |
             target/release/bundle/msi/*.msi
             target/release/bundle/nsis/*.exe
+            yomi-*-x86_64-pc-windows-msvc.zip
