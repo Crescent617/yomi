@@ -322,43 +322,11 @@ pub fn run() {
     });
 }
 
-/// sidecar CLI（bundle `externalBin` 打进包的 yomi）与主二进制同
-/// 目录——把该目录 prepend 进 PATH，GUI/daemon 子树（agent 的 shell
-/// 工具、hook、cron shell job）即可直接调用与 GUI 严格同版的 CLI，
-/// 无需 brew。只改本进程环境（子进程继承），不影响系统其他进程；
-/// bundle CLI 在 GUI 子树内遮蔽 brew 版本是有意的同版保证。dev 模
-/// 式 `current_exe` 在 target/{debug,release}，同目录的 cargo 构
-/// 建产物里通常也有 yomi，行为一致。
-fn prepend_exe_dir_to_path() {
-    let Ok(exe) = std::env::current_exe() else {
-        return;
-    };
-    let Some(dir) = exe.parent() else {
-        return;
-    };
-    let Ok(path) = std::env::var("PATH") else {
-        return;
-    };
-    let new_path = prepend_path_dir(&path, dir);
-    if new_path == path {
-        tracing::debug!(dir = %dir.display(), "sidecar dir already on PATH");
-    } else {
-        // 日志行是 e2e 与排障的取证点：GUI 子树的 agent shell 能用
-        // 哪个 yomi，看这行就知道。
-        tracing::info!(dir = %dir.display(), "prepended sidecar dir to PATH");
-    }
-    std::env::set_var("PATH", new_path);
-}
-
-/// 把 `dir` 放到 PATH 最前；已存在则原样返回（幂等）。
-fn prepend_path_dir(path: &str, dir: &std::path::Path) -> String {
-    let sep = if cfg!(windows) { ';' } else { ':' };
-    if path.split(sep).any(|p| p == dir.as_os_str()) {
-        return path.to_string();
-    }
-    format!("{}{sep}{}", dir.display(), path)
-}
-
+/// daemon 子树（agent 的 shell 工具、hook、cron shell job）的 PATH
+/// 由 kernel 统一准备（`kernel::utils::path::prepend_exe_dir_to_path`，
+/// CLI daemon 入口同样调用）——GUI 在 logging 之后、run()（拉起
+/// in-process daemon、spawn 子进程）之前调用，同进程 env 共享，
+/// 时序安全。
 fn main() {
     // Load ~/.env before anything else so env vars are available to the app.
     if let Some(home) = std::env::var("HOME")
@@ -394,26 +362,9 @@ fn main() {
         None
     });
     // 注入须在 run()（拉起 daemon task、spawn 子进程）之前；放在日
-    // 志初始化之后是为了让 "prepended sidecar dir" 这行落进日志文
-    // 件——config 加载与日志初始化都不 spawn 子进程，时序安全。
-    prepend_exe_dir_to_path();
+    // 志初始化之后是为了让 "prepended exe dir" 这行落进日志文件——
+    // config 加载与日志初始化都不 spawn 子进程，时序安全。
+    kernel::utils::path::prepend_exe_dir_to_path();
     run();
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn prepend_path_dir_prepends_once_and_is_idempotent() {
-        let dir = std::path::Path::new("/Applications/Yomi.app/Contents/MacOS");
-        let sep = if cfg!(windows) { ';' } else { ':' };
-        let path = format!("/usr/bin{sep}/opt/homebrew/bin");
-
-        let once = super::prepend_path_dir(&path, dir);
-        assert_eq!(
-            once,
-            format!("/Applications/Yomi.app/Contents/MacOS{sep}/usr/bin{sep}/opt/homebrew/bin")
-        );
-        // 幂等：目录已在 PATH 中（如重入/重启）时原样返回。
-        assert_eq!(super::prepend_path_dir(&once, dir), once);
-    }
-}

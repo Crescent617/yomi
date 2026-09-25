@@ -53,16 +53,19 @@ session wait`、`yomi cron`，…）用的是与 GUI 严格同版的 `yomi`，
 brew update && brew install crescent617/tap/yomi-app
 ```
 
-The cask declares `depends_on` on the `yomi` formula, so this installs
-both（formula 负责你 terminal 里的 `yomi`；cask 里的 sidecar 负责
-agent 子进程里的 `yomi`）。
+The cask links the CLI bundled inside the app into your PATH
+（`binary` stanza 指向 `Yomi.app/Contents/MacOS/yomi`）——terminal
+里的 `yomi` 与 GUI 严格同版，随 cask 升级。已装 `yomi` formula
+会报冲突：只想留 GUI 版就 `brew uninstall yomi`（formula 留给
+headless / Linux / 只要 CLI 的场景）。
 
 ### Windows
 
-Download the `.msi` / `.nsis` installer from the releases page
-(unsigned — expect a SmartScreen prompt)。安装包已内嵌 CLI
-sidecar；只有想在 terminal 里用 `yomi` 时才需另装 CLI zip
-（`yomi-<version>-x86_64-pc-windows-msvc.zip`）。
+Download the `.msi` installer from the releases page (unsigned —
+expect a SmartScreen prompt)。安装包内嵌 CLI sidecar，且 msi 会把
+安装目录加进系统 PATH——新开 terminal 即可直接使用 `yomi`（与
+GUI 同版）。`.nsis` 安装器不改 PATH；想在 terminal 用可另装 CLI
+zip（`yomi-<version>-x86_64-pc-windows-msvc.zip`）。
 
 ## First-run setup
 

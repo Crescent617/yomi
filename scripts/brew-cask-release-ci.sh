@@ -45,14 +45,14 @@ cask "${CASK_NAME}" do
   desc "AI coding assistant with GUI"
   homepage "https://github.com/${REPO}"
 
-  # GUI 的 agent 功能依赖 PATH 上的 yomi CLI（doc/session wait/cron
-  # 等子命令）——装 cask 时把 formula 一并装上，PATH 由 brew 链接
-  # 自动就绪。注意：依赖只在 install 时保证存在；升级 cask 不会连
-  # 带升级 formula（brew 语义），formula 随 brew upgrade 全量或单
-  # 独升级。
-  depends_on formula: "yomi"
+  # CLI 与 GUI 同源：把 app 内 sidecar 链接进 brew PATH，版本随
+  # GUI 走、升级 cask 自动指新版，无需 formula（formula 留给
+  # headless / Linux / 只要 CLI 的场景）。已装 formula 的用户按
+  # 冲突提示 brew uninstall yomi 后，CLI 由本 cask 接管。
+  conflicts_with formula: "yomi"
 
   app "Yomi.app"
+  binary "#{appdir}/Yomi.app/Contents/MacOS/yomi"
 
   zap trash: [
     "~/.yomi",

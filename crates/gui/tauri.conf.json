@@ -84,6 +84,12 @@
     "active": true,
     "targets": "all",
     "externalBin": ["binaries/yomi"],
+    "windows": {
+      "wix": {
+        "fragmentPaths": ["wix/path-env.wxs"],
+        "componentGroupRefs": ["InstallDirOnPath"]
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -55,3 +55,18 @@ fn session_workspace_dir_falls_back_to_data_workspace() {
         PathBuf::from("/data/workspace")
     );
 }
+
+#[test]
+fn prepend_path_dir_prepends_once_and_is_idempotent() {
+    let dir = std::path::Path::new("/Applications/Yomi.app/Contents/MacOS");
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    let path = format!("/usr/bin{sep}/opt/homebrew/bin");
+
+    let once = super::prepend_path_dir(&path, dir);
+    assert_eq!(
+        once,
+        format!("/Applications/Yomi.app/Contents/MacOS{sep}/usr/bin{sep}/opt/homebrew/bin")
+    );
+    // 幂等：目录已在 PATH 中（如重入/重启）时原样返回。
+    assert_eq!(super::prepend_path_dir(&once, dir), once);
+}

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  把 INSTALLDIR 追加到系统 PATH，让 msi 安装后用户 terminal 直接可用
+  bundle sidecar 的 yomi.exe。Permanent="no" 保证卸载时自动从 PATH 移除。
+  经 bundle.windows.wix.fragmentPaths + componentGroupRefs 接入 main.wxs
+  的 External feature。
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <ComponentGroup Id="InstallDirOnPath">
+      <ComponentRef Id="InstallDirOnPath" />
+    </ComponentGroup>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="InstallDirOnPath" Guid="{7E3A5C21-9B4F-4D8E-A6C3-2F1D8B0E5A97}" Win64="$(var.Win64)">
+        <Environment Id="InstallDirOnPath" Name="PATH" Action="set"
+                     Permanent="no" Part="last" Delimiter=";" System="yes"
+                     Value="[INSTALLDIR]" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

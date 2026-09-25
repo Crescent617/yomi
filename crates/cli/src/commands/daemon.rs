@@ -67,6 +67,11 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
                 kernel::init_kernel(global.config.as_ref(), true).await?;
             let config_file = config_file.or_else(|| Some(kernel::config::Config::write_path()));
             let _log_guard = kernel::utils::logging::init_logging(&config, "daemon", true)?;
+            // daemon 子树（agent shell/hook/cron job）的 PATH 准备：
+            // 与 GUI 同一逻辑，须在 logging 之后（取证行落盘）、
+            // server 拉起之前。external daemon 场景下这是 agent
+            // shell 能找到同目录同版 CLI 的唯一注入点。
+            kernel::utils::path::prepend_exe_dir_to_path();
             if let Some(path) = &config_file {
                 tracing::info!("Loaded config from {}", path.display());
             }
