@@ -16,4 +16,4 @@
   yomi doctor
   ```
 
-  三个坑：config 不随 YOMI_DATA_DIR 走——不覆盖 `YOMI_CONFIG` 时 channels 会双开，和生产 daemon 抢同一份消息；`daemon start` 是前台内部命令，必须后台化；要测 agent 会话内的新 CLI，给 daemon 的 PATH 前置构建目录。要零 skill 环境再加 `HOME=<隔离目录>`（全局层 `~/.agents/skills` 跟 HOME 走）。或 `yomi run/tui --fg` 用进程内核，完全不动 daemon。
+  三个坑：config 不随 YOMI_DATA_DIR 走——不覆盖 `YOMI_CONFIG` 时 channels 会双开，和生产 daemon 抢同一份消息；`daemon start` 是前台内部命令，必须后台化；要测 agent 会话内的新 CLI，给 daemon 的 PATH 前置构建目录。要零 skill 环境再加 `HOME=<隔离目录>`（全局层 `~/.agents/skills` 跟 HOME 走）。或 `yomi run --fg` / `yomi tui --fg` 用进程内核，完全不动 daemon。

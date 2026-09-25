@@ -117,7 +117,7 @@ stdin（单行 JSON，契约只增不改）：
 边界语义：mid-turn 的 steer 插队**不**新开 turn（idle 态 steer 会，
 `is_steer=true`）；`user_msg_id` 可重复（`/continue`、rewind 后重做
 以同一锚消息再开 turn——去重不能只看 msg id）；`input_preview` 必须
-取自 payload（锚定消息经 bus 异步落盘，`session cat` 此刻可能还读
+取自 payload（锚定消息经 bus 异步落盘，`yomi session cat` 此刻可能还读
 不到）。进程 cwd = 会话工作目录，注入 `YOMI_SESSION_ID`（可回连
 CLI）与 `YOMI_EVENT`（= 触发点名），`YOMI_HOOK_EVENT` 不注入。
 
