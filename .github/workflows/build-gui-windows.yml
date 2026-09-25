@@ -34,6 +34,10 @@ jobs:
           version: "25.x"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Bundle CLI sidecar (externalBin)
+        shell: bash
+        run: bash scripts/bundle-cli-sidecar.sh x86_64-pc-windows-msvc
+
       - name: Build frontend + tauri (msi + nsis)
         working-directory: crates/gui
         shell: bash

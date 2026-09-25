@@ -33,10 +33,11 @@ cargo build --release --bin yomi   # binary at target/release/yomi
 
 ## GUI (`yomi-app`)
 
-The GUI needs the CLI alongside it: agents reach the built-in manual
-(`yomi doc`) and the self-management commands (`yomi session wait`,
-`yomi cron`, …) through the `yomi` binary on `PATH`. Don't install the GUI
-without the CLI.
+v0.10.42 起，GUI 内嵌 CLI sidecar 并在启动时把所在目录 prepend 进
+`PATH`——agent 调用内置手册（`yomi doc`）与自管理命令（`yomi
+session wait`、`yomi cron`，…）用的是与 GUI 严格同版的 `yomi`，
+无需单独安装 CLI。只有当你还想在自己的 terminal 里用 `yomi` 时，
+才需要按下文单独装 CLI。
 
 ### macOS
 
@@ -44,15 +45,16 @@ without the CLI.
 brew update && brew install crescent617/tap/yomi-app
 ```
 
-The cask declares `depends_on` on the `yomi` formula, so this installs both.
-If you install the `.dmg` from the releases page instead, install the CLI
-separately (any method above).
+The cask declares `depends_on` on the `yomi` formula, so this installs
+both（formula 负责你 terminal 里的 `yomi`；cask 里的 sidecar 负责
+agent 子进程里的 `yomi`）。
 
 ### Windows
 
 Download the `.msi` / `.nsis` installer from the releases page
-(unsigned — expect a SmartScreen prompt), and install the CLI zip
-(`yomi-<version>-x86_64-pc-windows-msvc.zip`) as well.
+(unsigned — expect a SmartScreen prompt)。安装包已内嵌 CLI
+sidecar；只有想在 terminal 里用 `yomi` 时才需另装 CLI zip
+（`yomi-<version>-x86_64-pc-windows-msvc.zip`）。
 
 ## First-run setup
 

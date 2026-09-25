@@ -70,3 +70,6 @@ node_modules
 .direnv
 /result
 .agents/tasks
+
+# tauri externalBin sidecar 产物（scripts/bundle-cli-sidecar.sh 生成）
+crates/gui/binaries/

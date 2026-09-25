@@ -322,6 +322,35 @@ pub fn run() {
     });
 }
 
+/// sidecar CLI（bundle `externalBin` 打进包的 yomi）与主二进制同
+/// 目录——把该目录 prepend 进 PATH，GUI/daemon 子树（agent 的 shell
+/// 工具、hook、cron shell job）即可直接调用与 GUI 严格同版的 CLI，
+/// 无需 brew。只改本进程环境（子进程继承），不影响系统其他进程；
+/// bundle CLI 在 GUI 子树内遮蔽 brew 版本是有意的同版保证。dev 模
+/// 式 `current_exe` 在 target/{debug,release}，同目录的 cargo 构
+/// 建产物里通常也有 yomi，行为一致。
+fn prepend_exe_dir_to_path() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(dir) = exe.parent() else {
+        return;
+    };
+    let Ok(path) = std::env::var("PATH") else {
+        return;
+    };
+    std::env::set_var("PATH", prepend_path_dir(&path, dir));
+}
+
+/// 把 `dir` 放到 PATH 最前；已存在则原样返回（幂等）。
+fn prepend_path_dir(path: &str, dir: &std::path::Path) -> String {
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    if path.split(sep).any(|p| p == dir.as_os_str()) {
+        return path.to_string();
+    }
+    format!("{}{sep}{}", dir.display(), path)
+}
+
 fn main() {
     // Load ~/.env before anything else so env vars are available to the app.
     if let Some(home) = std::env::var("HOME")
@@ -339,6 +368,7 @@ fn main() {
     if let Err(e) = fix_path_env::fix() {
         tracing::warn!("Failed to fix PATH environment: {e}");
     }
+    prepend_exe_dir_to_path();
 
     let mut config = kernel::config::Config::discover_file()
         .and_then(|p| kernel::config::Config::from_file(&p).ok())
@@ -357,4 +387,22 @@ fn main() {
         None
     });
     run();
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn prepend_path_dir_prepends_once_and_is_idempotent() {
+        let dir = std::path::Path::new("/Applications/Yomi.app/Contents/MacOS");
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        let path = format!("/usr/bin{sep}/opt/homebrew/bin");
+
+        let once = super::prepend_path_dir(&path, dir);
+        assert_eq!(
+            once,
+            format!("/Applications/Yomi.app/Contents/MacOS{sep}/usr/bin{sep}/opt/homebrew/bin")
+        );
+        // 幂等：目录已在 PATH 中（如重入/重启）时原样返回。
+        assert_eq!(super::prepend_path_dir(&once, dir), once);
+    }
 }

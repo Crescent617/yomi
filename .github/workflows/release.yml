@@ -164,6 +164,9 @@ jobs:
           version: "25.x"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Bundle CLI sidecar (externalBin)
+        run: bash scripts/bundle-cli-sidecar.sh aarch64-apple-darwin
+
       - name: Build & Sign DMG
         working-directory: crates/gui
         run: |
