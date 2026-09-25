@@ -13,7 +13,11 @@ use commands::tui;
 
 #[derive(Parser)]
 #[command(name = "yomi")]
-#[command(about = "AI coding assistant CLI", version)]
+#[command(
+    about = "Yomi agent kernel CLI — manage sessions, cron, skills, config, channels and the daemon",
+    long_about = "Yomi is an agent kernel: a daemon hosts sessions (TUI, headless runs, channel sessions, cron-triggered runs). This CLI is its control surface, used by humans and by the agent itself for self-management.\n\nTask map:\n  do work now       run (headless) | tui | session send (running session)\n  inspect sessions  session list | cat | search | mailbox | wait\n  schedule work     cron create | list | trigger\n  configure         config show | get | set | schema\n  built-in manual   doc (e.g. `yomi doc skills`)",
+    version
+)]
 struct Args {
     #[command(flatten)]
     tui: tui::TuiArgs,
@@ -32,7 +36,7 @@ enum Commands {
     Session(SessionArgs),
     /// Garbage collect expired session data (dry-run by default)
     Gc(commands::gc::GcArgs),
-    /// Manage skills
+    /// List available skills (install = create <name>/SKILL.md under ~/.agents/skills — see `yomi doc skills`)
     Skill(SkillArgs),
     /// Manage configuration
     Config(ConfigArgs),
@@ -50,6 +54,8 @@ enum Commands {
     Channel(commands::channel::ChannelArgs),
     /// Health-check the daemon, channels, cron, storage and config
     Doctor(GlobalArgs),
+    /// Print the built-in manual (no topic: list all)
+    Doc(DocArgs),
     /// Show version
     Version,
     /// Manage daemon (internal use)
@@ -79,6 +85,18 @@ enum SessionsCommands {
         /// Session ID to cancel (defaults to current directory's last session)
         #[arg(short, long)]
         session: Option<String>,
+    },
+    /// Wait until a session is quiescent (idle, no running subagents, no background shells)
+    Wait {
+        /// Session ID (defaults to current directory's last session)
+        #[arg(short, long)]
+        session: Option<String>,
+        /// Polling interval in seconds
+        #[arg(long, default_value = "10", value_parser = clap::value_parser!(u64).range(1..))]
+        interval: u64,
+        /// Give up after this many seconds (default: wait forever; exit 3 on timeout)
+        #[arg(long)]
+        timeout: Option<u64>,
     },
     /// Send a message to a session (requires the daemon; queues if the agent is busy)
     Send {
@@ -192,6 +210,12 @@ enum ConfigCommands {
     },
     /// Print the JSON Schema of the config file (generated from code)
     Schema,
+}
+
+#[derive(Parser)]
+struct DocArgs {
+    /// Topic name (omit to list all topics)
+    topic: Option<String>,
 }
 
 #[derive(Parser)]
@@ -405,6 +429,7 @@ async fn main() -> Result<()> {
         Some(Commands::Cron(args)) => run_cron(args).await,
         Some(Commands::Channel(args)) => commands::channel::run(args).await,
         Some(Commands::Doctor(global)) => commands::doctor::run(&global).await,
+        Some(Commands::Doc(args)) => commands::doc::run(args.topic.as_deref()),
         Some(Commands::Version) => {
             println!("v{}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -420,6 +445,11 @@ async fn run_session(args: SessionArgs) -> Result<()> {
         SessionsCommands::Cancel { session } => {
             commands::session::cancel::run(&args.global, session).await
         }
+        SessionsCommands::Wait {
+            session,
+            interval,
+            timeout,
+        } => commands::session::wait::run(&args.global, session, interval, timeout).await,
         SessionsCommands::Send {
             message,
             session,

@@ -8,6 +8,7 @@ pub mod ctx;
 pub mod mailbox;
 pub mod search;
 pub mod send;
+pub mod wait;
 
 #[cfg(test)]
 #[path = "list_test.rs"]

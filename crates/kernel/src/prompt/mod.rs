@@ -15,6 +15,11 @@ pub struct SystemPromptBuilder<'a> {
 
 const SKILL_SECTION_HEADER: &str = "# Skills\nIMPORTANT: before replying, you must scan available skills and load skill content with `read` tool when task hits its description.\n\n";
 
+/// 空态提示：无条目时 path 线索随之缺席，agent 无从推断新 skill 的安装
+/// 落点。只给全局层一个推荐路径，不罗列三层目录（2026-09-25 hrli：精简优先）。
+const SKILL_EMPTY_HINT: &str =
+    "# Skills\nNone installed. To add one, create `<name>/SKILL.md` under `~/.agents/skills/` (see `yomi doc skills`).\n\n";
+
 /// Attachment contract for every non-sub-agent session (when the
 /// `attachments` feature is on): files declared in a `<yomi_attachments>`
 /// block reach the user as attachments alongside the message — channels
@@ -341,7 +346,9 @@ impl<'a> SystemPromptBuilder<'a> {
 
         prompt.push_str("\n\n");
 
-        if !self.skills.is_empty() {
+        if self.skills.is_empty() {
+            prompt.push_str(SKILL_EMPTY_HINT);
+        } else {
             prompt.push_str(SKILL_SECTION_HEADER);
             prompt.push_str("## Available Skills\n");
             for skill in self.skills {
@@ -356,9 +363,11 @@ impl<'a> SystemPromptBuilder<'a> {
         }
 
         prompt.push_str("# Environment\n");
+        // 手册入口一行带过：说明书正文不进 prompt（成本按 turn 计），
+        // `yomi doc`（编进二进制、版本锁死）是权威文档源。
         let _ = write!(
             prompt,
-            "agent kernel: Yomi\nDate: {}",
+            "agent kernel: Yomi (manual: `yomi doc` — about skills, config, sessions, cron, daemon, extensions, debug)\nDate: {}",
             Local::now().format("%Y-%m-%d")
         );
         if let Some(cwd) = self.working_dir {

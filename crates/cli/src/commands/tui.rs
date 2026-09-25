@@ -26,11 +26,6 @@ pub struct TuiArgs {
     pub yolo: bool,
 
     /// Resume a session: --resume (last session) or --resume <id> (specific)
-    ///
-    /// Uses `Option<Option<String>>` to distinguish three cases:
-    /// - `None`: --resume not provided (create new session)
-    /// - `Some(None)`: --resume provided without value (resume last session)
-    /// - `Some(Some(id))`: --resume <id> provided (resume specific session)
     #[arg(short, long, value_name = "SESSION_ID")]
     #[allow(clippy::option_option)]
     pub resume: Option<Option<String>>,
@@ -38,10 +33,6 @@ pub struct TuiArgs {
     /// Fork a session: --fork (last session) or --fork <id> (specific)
     ///
     /// Creates a new session with copied history from the source session.
-    /// Uses `Option<Option<String>>` to distinguish three cases:
-    /// - `None`: --fork not provided
-    /// - `Some(None)`: --fork provided without value (fork last session)
-    /// - `Some(Some(id))`: --fork <id> provided (fork specific session)
     #[arg(short, long, value_name = "SESSION_ID")]
     #[allow(clippy::option_option)]
     pub fork: Option<Option<String>>,

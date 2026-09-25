@@ -59,6 +59,14 @@ async fn environment_section_names_detected_shell() {
     assert!(prompt.contains(&needle), "missing `{needle}` in:\n{prompt}");
 }
 
+#[tokio::test]
+async fn environment_section_points_to_builtin_manual() {
+    // 一行指针覆盖"手册在哪"的盲区；说明书正文不进 SP，权威源是 `yomi doc`。
+    let prompt = SystemPromptBuilder::new().base_prompt("base").build().await;
+    assert!(prompt.contains("manual: `yomi doc`"));
+    assert!(prompt.contains("skills, config, sessions, cron, daemon, extensions, debug"));
+}
+
 #[test]
 fn contract_sections_matrix() {
     // attachments on + channel-routed → 两段都在
@@ -121,6 +129,18 @@ async fn skill_section_indexes_only_top_level_skills() {
     assert!(!prompt.contains("nested child"));
 
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn empty_skill_section_hints_install_location() {
+    // 无 skill 时条目级 path 线索缺席，必须显式给出安装落点。
+    let prompt = SystemPromptBuilder::new().base_prompt("base").build().await;
+
+    assert!(prompt.contains("# Skills"));
+    assert!(prompt.contains("~/.agents/skills"));
+    assert!(prompt.contains("yomi doc skills"));
+    assert!(!prompt.contains("## Available Skills"));
+    assert!(!prompt.contains("scan available skills"));
 }
 
 #[test]
