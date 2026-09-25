@@ -1257,6 +1257,10 @@ pub struct HistoryMessage {
     pub create_time: i64,
     /// Full open id of the sender (attribution).
     pub sender_id: String,
+    /// Sender display name resolved by the platform (cached; `None` =
+    /// no contact permission, bot sender, or unresolved). Rendering
+    /// falls back to the bare `sender_id`.
+    pub sender_name: Option<String>,
     /// Extracted text (non-text messages become a `[type]` placeholder).
     pub text: String,
     /// Opaque platform keys of images attached to this message (Feishu
@@ -1267,6 +1271,28 @@ pub struct HistoryMessage {
     /// injection walk the quote chain (a quoted message's own quoted
     /// context would otherwise be lost).
     pub parent_id: Option<String>,
+}
+
+impl HistoryMessage {
+    /// Sender for context lines: `名字 (open_id)` when a display name
+    /// resolved (sanitized like the event envelope's `[from: …]`), else
+    /// the bare id. The id stays visible so the agent can still
+    /// @-mention the sender.
+    pub fn sender_display(&self) -> String {
+        match self.sender_name.as_deref().and_then(sanitize_header_name) {
+            Some(name) => format!("{name} ({})", self.sender_id),
+            None => self.sender_id.clone(),
+        }
+    }
+
+    /// Short sender form for inline quote snippets (capped secondary
+    /// context): the bare name when resolved, else the id.
+    pub fn sender_short(&self) -> String {
+        self.sender_name
+            .as_deref()
+            .and_then(sanitize_header_name)
+            .unwrap_or_else(|| self.sender_id.clone())
+    }
 }
 
 // ── Internal helper: access control ──────────────────────────────────

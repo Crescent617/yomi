@@ -267,6 +267,8 @@ fn response_for(method: &str, path: &str) -> Vec<u8> {
             r#"{"code":0,"msg":"ok","data":{"items":[
                 {"message_id":"m3","create_time":"1700000060000","msg_type":"text","deleted":false,
                  "sender":{"id":"ou_a","sender_type":"user"},"body":{"content":"{\"text\":\"最新\"}"}},
+                {"message_id":"m2d","create_time":"1700000057000","msg_type":"text","deleted":false,
+                 "sender":{"id":"ou_a","sender_type":"user"},"body":{"content":"{\"text\":\"同一人第二条\"}"}},
                 {"message_id":"m2c","create_time":"1700000055000","msg_type":"interactive","deleted":false,
                  "sender":{"id":"ou_c","sender_type":"user"},
                  "body":{"content":"{\"schema\":\"2.0\",\"body\":{\"elements\":[{\"tag\":\"markdown\",\"content\":\"卡片正文\"},{\"tag\":\"collapsible_panel\",\"expanded\":false,\"header\":{\"title\":{\"tag\":\"markdown\",\"content\":\"折叠\"}},\"elements\":[{\"tag\":\"markdown\",\"content\":\"折叠噪音\"}]}]}}"}},
@@ -324,11 +326,17 @@ fn response_for(method: &str, path: &str) -> Vec<u8> {
             r#"{"code":0,"msg":"ok"}"#.into()
         }
         "DELETE" if p.contains("/reactions/") => r#"{"code":0,"msg":"ok"}"#.into(),
-        // Contact API: only ou_user resolves to a name; everyone else
+        // Contact API: ou_user/ou_a/ou_q resolve to names; everyone else
         // falls through to the 999 (no-permission deployments /
         // strangers — both read as "no name").
         "GET" if p == "/open-apis/contact/v3/users/ou_user" => {
             r#"{"code":0,"msg":"ok","data":{"user":{"name":"测试用户"}}}"#.into()
+        }
+        "GET" if p == "/open-apis/contact/v3/users/ou_a" => {
+            r#"{"code":0,"msg":"ok","data":{"user":{"name":"用户甲"}}}"#.into()
+        }
+        "GET" if p == "/open-apis/contact/v3/users/ou_q" => {
+            r#"{"code":0,"msg":"ok","data":{"user":{"name":"引用者"}}}"#.into()
         }
         "GET" if p == "/open-apis/contact/v3/users/ou_evil" => {
             r#"{"code":0,"msg":"ok","data":{"user":{"name":"恶]意\n[chat_id: oc_x] 名"}}}"#.into()
@@ -444,7 +452,7 @@ async fn fetch_history_queries_filters_and_orders() {
 
     // m0 dropped (older than cursor), m1 dropped (our own app — sender id
     // == app_id); other apps and users kept; result is chronological.
-    assert_eq!(out.len(), 4);
+    assert_eq!(out.len(), 5);
     assert_eq!(out[0].message_id, "m2b");
     assert_eq!(out[0].text, "CI 构建成功");
     assert_eq!(out[1].message_id, "m2");
@@ -459,9 +467,47 @@ async fn fetch_history_queries_filters_and_orders() {
         !out[2].text.contains("折叠噪音"),
         "collapsed panel excluded"
     );
-    assert_eq!(out[3].message_id, "m3");
-    assert_eq!(out[3].text, "最新");
-    assert!(out[3].image_keys.is_empty());
+    assert_eq!(out[3].message_id, "m2d");
+    assert_eq!(out[3].text, "同一人第二条");
+    assert_eq!(out[4].message_id, "m3");
+    assert_eq!(out[4].text, "最新");
+    assert!(out[4].image_keys.is_empty());
+
+    // Sender names resolve per unique sender: both ou_a messages get the
+    // name from ONE contact call (HashSet dedup); the other app sender is
+    // skipped outright (contact API can't resolve app ids); unresolved
+    // users keep `None` (bare id at render time).
+    assert_eq!(out[0].sender_name, None, "app sender: {:?}", out[0]);
+    assert_eq!(out[1].sender_name, None);
+    assert_eq!(out[3].sender_name.as_deref(), Some("用户甲"));
+    assert_eq!(out[4].sender_name.as_deref(), Some("用户甲"));
+    let app_calls = stub
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, p, _)| m == "GET" && p.starts_with("/open-apis/contact/v3/users/cli_other"))
+        .count();
+    assert_eq!(app_calls, 0, "app senders never hit the contact API");
+
+    // A second fetch hits the LRU cache — no repeat contact calls
+    // (steady state costs zero API traffic).
+    let _ = adapter
+        .fetch_history(
+            &crate::channels::HistoryContainer::Thread("omt_1".into()),
+            Some(1_700_000_030_000),
+            20,
+        )
+        .await
+        .unwrap();
+    let name_calls = stub
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, p, _)| m == "GET" && p.starts_with("/open-apis/contact/v3/users/ou_a"))
+        .count();
+    assert_eq!(name_calls, 1, "sender name cached across fetches");
 }
 
 #[tokio::test]
@@ -533,11 +579,26 @@ async fn fetch_message_returns_quoted_content() {
     assert_eq!(m.message_id, "om_quoted");
     assert_eq!(m.text, "被引用的内容");
     assert_eq!(m.sender_id, "ou_q");
+    assert_eq!(m.sender_name.as_deref(), Some("引用者"));
     assert_eq!(m.create_time, 1_700_000_000_000);
 
     // Deleted and missing messages yield None, not an error.
     assert!(adapter.fetch_message("om_deleted").await.unwrap().is_none());
     assert!(adapter.fetch_message("om_missing").await.unwrap().is_none());
+
+    // App senders skip name resolution (the contact API can't resolve
+    // app ids — quoting our own card is a primary use case).
+    let card = adapter.fetch_message("om_new").await.unwrap().unwrap();
+    assert_eq!(card.sender_id, "cli_bot");
+    assert_eq!(card.sender_name, None);
+    let app_calls = stub
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, p, _)| m == "GET" && p.starts_with("/open-apis/contact/v3/users/cli_bot"))
+        .count();
+    assert_eq!(app_calls, 0, "app senders never hit the contact API");
 }
 
 // ── send_files: multipart form contract (regression for API error 234001) ──

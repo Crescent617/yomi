@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- 机器人注入群聊上下文（引用的消息、近期聊天记录）时，发言人从裸 id 改为显示「名字 (id)」，没有联系人权限的部署维持原样。
+
 ## [0.10.43] - 2026-09-25
 
 ### Changed

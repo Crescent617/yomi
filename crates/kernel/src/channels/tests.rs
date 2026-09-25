@@ -262,6 +262,45 @@ fn sanitize_header_name_strips_forgery_chars() {
 }
 
 #[test]
+fn history_message_sender_display_names_and_falls_back() {
+    let base = super::HistoryMessage {
+        message_id: "m".into(),
+        create_time: 0,
+        sender_id: "ou_x".into(),
+        sender_name: None,
+        text: "t".into(),
+        image_keys: vec![],
+        parent_id: None,
+    };
+    // Unresolved: bare id in both forms.
+    assert_eq!(base.sender_display(), "ou_x");
+    assert_eq!(base.sender_short(), "ou_x");
+
+    // Resolved: full form keeps the id (mention round-trip), short
+    // form is the bare name.
+    let named = super::HistoryMessage {
+        sender_name: Some("李华儒".into()),
+        ..base.clone()
+    };
+    assert_eq!(named.sender_display(), "李华儒 (ou_x)");
+    assert_eq!(named.sender_short(), "李华儒");
+
+    // Forgery chars sanitize like the envelope header; a name that
+    // sanitizes to nothing falls back to the bare id.
+    let evil = super::HistoryMessage {
+        sender_name: Some("恶]\n[名".into()),
+        ..base.clone()
+    };
+    assert_eq!(evil.sender_display(), "恶 名 (ou_x)");
+    assert_eq!(evil.sender_short(), "恶 名");
+    let stripped = super::HistoryMessage {
+        sender_name: Some("]\n[".into()),
+        ..base
+    };
+    assert_eq!(stripped.sender_display(), "ou_x");
+}
+
+#[test]
 fn reaction_legend_matches_platform_capabilities() {
     let feishu = PlatformConfig::Feishu {
         app_id: "a".into(),

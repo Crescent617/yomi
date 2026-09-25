@@ -149,9 +149,9 @@ pub(crate) async fn notify_run_subscribers(
 /// Quote context for the notify card (design:
 /// run-subscription-notify-context): the session's latest user message
 /// (the very message the settle ✅ lands on), attributed when the
-/// author's name resolves (`fetch_user_name` needs contact permission);
-/// falls back to the thread's root message, then the session title.
-/// `None` keeps the card one-line.
+/// author's name resolved on fetch (cache-backed; needs contact
+/// permission); falls back to the thread's root message, then the
+/// session title. `None` keeps the card one-line.
 pub(crate) async fn resolve_notify_quote(
     adapter: &Arc<dyn PlatformAdapter>,
     obs: &ObsTracker,
@@ -169,7 +169,13 @@ pub(crate) async fn resolve_notify_quote(
         if let Ok(Some(msg)) = adapter.fetch_message(&message_id).await {
             let snippet = notify_quote_snippet(&msg.text);
             if !snippet.is_empty() {
-                return Some(match adapter.fetch_user_name(&msg.sender_id).await {
+                // Names are user-controlled — sanitize like the other
+                // render paths before it lands in card markdown.
+                let name = msg
+                    .sender_name
+                    .as_deref()
+                    .and_then(crate::channels::sanitize_header_name);
+                return Some(match name {
                     Some(name) => format!("{name}：{snippet}"),
                     None => snippet,
                 });

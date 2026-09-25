@@ -389,13 +389,15 @@ pub(crate) async fn maybe_quoted_prefix(
 pub(crate) const QUOTE_CHAIN_MAX: usize = 3;
 
 /// `[HH:MM] sender: text` (local time, per-message capped) — the shared
-/// line format for quoted and history context blocks.
+/// line format for quoted and history context blocks. The sender shows
+/// its resolved display name (`名字 (open_id)`) when the platform
+/// provided one, else the bare id (see [`HistoryMessage::sender_display`]).
 pub(crate) fn sender_line(m: &HistoryMessage) -> String {
     let ts = chrono::DateTime::from_timestamp_millis(m.create_time)
         .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M").to_string())
         .unwrap_or_default();
     let text = crate::utils::strs::truncate_by_chars(m.text.trim(), HISTORY_MESSAGE_MAX_CHARS, "…");
-    format!("[{ts}] {}: {text}", m.sender_id)
+    format!("[{ts}] {}: {text}", m.sender_display())
 }
 
 /// Download a message's attached images (deferred until post-gate) and
@@ -437,8 +439,9 @@ pub(crate) async fn append_message_images(
 pub(crate) const HISTORY_MESSAGE_MAX_CHARS: usize = 2000;
 
 /// Format fetched messages as a context block: chronological, one line
-/// each (`[HH:MM] open_id: text`, per-message capped), quote-replies
-/// carrying an inline snippet of the quoted message (` ↩ sender: text`).
+/// each (`[HH:MM] sender: text`, per-message capped; sender = display
+/// name when resolved, else `open_id`), quote-replies carrying an
+/// inline snippet of the quoted message (` ↩ sender: text`).
 pub(crate) fn assemble_history(
     messages: &[&HistoryMessage],
     quotes: &std::collections::HashMap<String, String>,
@@ -464,11 +467,13 @@ pub(crate) const HISTORY_QUOTE_FETCH_MAX: usize = 3;
 pub(crate) const QUOTE_SNIPPET_MAX_CHARS: usize = 80;
 
 /// `sender: text` for an inline quote snippet (whitespace-collapsed to
-/// keep the one-line-per-message block shape).
+/// keep the one-line-per-message block shape). The sender uses the
+/// short form (bare name when resolved — snippets are capped secondary
+/// context, the id would eat the budget).
 pub(crate) fn quote_snippet(m: &HistoryMessage) -> String {
     let collapsed = m.text.split_whitespace().collect::<Vec<_>>().join(" ");
     let text = crate::utils::strs::truncate_by_chars(&collapsed, QUOTE_SNIPPET_MAX_CHARS, "…");
-    format!("{}: {text}", m.sender_id)
+    format!("{}: {text}", m.sender_short())
 }
 
 /// Resolve quoted-message snippets for quote-replies in `history` (one

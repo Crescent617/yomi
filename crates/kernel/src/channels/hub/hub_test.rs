@@ -4759,6 +4759,7 @@ async fn deliver_reply_falls_back_to_flush_when_obs_state_missing() {
 fn assemble_history_formats_chronological_capped_lines() {
     let messages = [
         HistoryMessage {
+            sender_name: Some("Alice".into()),
             message_id: "m1".into(),
             create_time: 1_700_000_000,
             sender_id: "ou_alice".into(),
@@ -4767,6 +4768,7 @@ fn assemble_history_formats_chronological_capped_lines() {
             parent_id: None,
         },
         HistoryMessage {
+            sender_name: None,
             message_id: "m2".into(),
             create_time: 1_700_000_060,
             sender_id: "ou_bob".into(),
@@ -4781,7 +4783,10 @@ fn assemble_history_formats_chronological_capped_lines() {
     let out = assemble_history(&refs, &quotes);
     assert!(out.starts_with("<recent_chat_history>\n"));
     assert!(out.ends_with("</recent_chat_history>"));
-    assert!(out.contains("ou_alice: hello world"), "trimmed: {out}");
+    assert!(
+        out.contains("Alice (ou_alice): hello world"),
+        "trimmed: {out}"
+    );
     assert!(out.contains("hello world ↩ ou_x: 前文摘要"), "quote: {out}");
     let bob_line = out.lines().find(|l| l.contains("ou_bob")).unwrap();
     assert!(bob_line.ends_with('…'), "capped: {bob_line}");
@@ -4861,6 +4866,7 @@ impl PlatformAdapter for HistoryMockAdapter {
         let mut messages = Vec::new();
         if self.with_root.load(std::sync::atomic::Ordering::Relaxed) {
             messages.push(HistoryMessage {
+                sender_name: None,
                 message_id: "root-msg".into(),
                 create_time: 50,
                 sender_id: "ou_a".into(),
@@ -4871,6 +4877,7 @@ impl PlatformAdapter for HistoryMockAdapter {
         }
         messages.extend([
             HistoryMessage {
+                sender_name: None,
                 message_id: "m0".into(),
                 create_time: 100,
                 sender_id: "ou_a".into(),
@@ -4882,6 +4889,7 @@ impl PlatformAdapter for HistoryMockAdapter {
                     .then(|| "root-msg".to_string()),
             },
             HistoryMessage {
+                sender_name: None,
                 message_id: "m1".into(),
                 create_time: 200,
                 sender_id: "ou_a".into(),
@@ -4900,6 +4908,7 @@ impl PlatformAdapter for HistoryMockAdapter {
         {
             messages.extend([
                 HistoryMessage {
+                    sender_name: None,
                     message_id: "cmd1".into(),
                     create_time: 250,
                     sender_id: "ou_a".into(),
@@ -4908,6 +4917,7 @@ impl PlatformAdapter for HistoryMockAdapter {
                     parent_id: None,
                 },
                 HistoryMessage {
+                    sender_name: None,
                     message_id: "cmd2".into(),
                     create_time: 260,
                     sender_id: "ou_a".into(),
@@ -4918,6 +4928,7 @@ impl PlatformAdapter for HistoryMockAdapter {
             ]);
         }
         messages.push(HistoryMessage {
+            sender_name: None,
             message_id: "trigger".into(),
             create_time: 300,
             sender_id: "ou_b".into(),
@@ -4964,6 +4975,7 @@ fn blocks_text(blocks: &[ContentBlock]) -> String {
 
 fn quoted_history_msg() -> HistoryMessage {
     HistoryMessage {
+        sender_name: None,
         message_id: "om_q".into(),
         create_time: 1_700_000_000_000,
         sender_id: "ou_x".into(),
@@ -5006,6 +5018,7 @@ async fn test_quoted_prefix_rules() {
     mock.quoted_map.lock().await.insert(
         "om_root".into(),
         HistoryMessage {
+            sender_name: None,
             message_id: "om_root".into(),
             create_time: 1_700_000_000_000,
             sender_id: "ou_x".into(),
@@ -5054,6 +5067,7 @@ async fn test_quoted_prefix_includes_images() {
     let adapter: Arc<dyn PlatformAdapter> = mock.clone();
     *mock.image_download_ok.lock().await = true;
     *mock.quoted.lock().await = Some(HistoryMessage {
+        sender_name: None,
         message_id: "om_img".into(),
         create_time: 1_700_000_000_000,
         sender_id: "ou_x".into(),
@@ -5083,6 +5097,7 @@ async fn test_quoted_prefix_walks_quote_chain() {
     map.insert(
         "om_r".into(),
         HistoryMessage {
+            sender_name: None,
             message_id: "om_r".into(),
             create_time: 1_700_000_060_000,
             sender_id: "ou_b".into(),
@@ -5094,6 +5109,7 @@ async fn test_quoted_prefix_walks_quote_chain() {
     map.insert(
         "om_m0".into(),
         HistoryMessage {
+            sender_name: None,
             message_id: "om_m0".into(),
             create_time: 1_700_000_000_000,
             sender_id: "ou_a".into(),
@@ -5131,6 +5147,7 @@ async fn test_quoted_prefix_chain_capped_and_partial() {
             map.insert(
                 id.into(),
                 HistoryMessage {
+                    sender_name: None,
                     message_id: id.into(),
                     create_time: 1,
                     sender_id: "ou_a".into(),
@@ -5157,6 +5174,7 @@ async fn test_quoted_prefix_chain_capped_and_partial() {
     mock2.quoted_map.lock().await.insert(
         "only".into(),
         HistoryMessage {
+            sender_name: None,
             message_id: "only".into(),
             create_time: 1,
             sender_id: "ou_a".into(),
@@ -5183,6 +5201,7 @@ async fn context_prefix_orders_history_before_quoted() {
     let store: Arc<dyn ChannelStore> = store;
     let mock = Arc::new(HistoryMockAdapter::default());
     *mock.quoted.lock().await = Some(HistoryMessage {
+        sender_name: None,
         message_id: "om_q".into(),
         create_time: 50,
         sender_id: "ou_x".into(),
@@ -5213,6 +5232,7 @@ async fn context_prefix_fresh_thread_root_exactly_once() {
     mock.with_root
         .store(true, std::sync::atomic::Ordering::Relaxed);
     *mock.quoted.lock().await = Some(HistoryMessage {
+        sender_name: None,
         message_id: "root-msg".into(),
         create_time: 50,
         sender_id: "ou_a".into(),
@@ -5774,6 +5794,7 @@ async fn history_prefix_backstops_root_outside_page() {
     let mock = Arc::new(HistoryMockAdapter::default());
     // No with_root: the fetched page does NOT include the root.
     *mock.quoted.lock().await = Some(HistoryMessage {
+        sender_name: None,
         message_id: "root-msg".into(),
         create_time: 50,
         sender_id: "ou_a".into(),
@@ -5833,6 +5854,7 @@ async fn resolve_history_quotes_in_page_fetch_dedup_and_cap() {
     let mock = Arc::new(HistoryMockAdapter::default());
     let adapter: Arc<dyn PlatformAdapter> = mock.clone();
     *mock.quoted.lock().await = Some(HistoryMessage {
+        sender_name: None,
         message_id: "x".into(),
         create_time: 1,
         sender_id: "ou_x".into(),
@@ -5841,6 +5863,7 @@ async fn resolve_history_quotes_in_page_fetch_dedup_and_cap() {
         parent_id: None,
     });
     let hmsg = |id: &str, text: &str, parent: Option<&str>| HistoryMessage {
+        sender_name: None,
         message_id: id.into(),
         create_time: 1,
         sender_id: "ou_a".into(),
@@ -5848,7 +5871,7 @@ async fn resolve_history_quotes_in_page_fetch_dedup_and_cap() {
         image_keys: vec![],
         parent_id: parent.map(str::to_string),
     };
-    let page = vec![
+    let mut page = vec![
         hmsg("p1", "页内引用", None),
         hmsg("m1", "回复 p1", Some("p1")),
         hmsg("m2", "回复 x1", Some("x1")),
@@ -5857,11 +5880,13 @@ async fn resolve_history_quotes_in_page_fetch_dedup_and_cap() {
         hmsg("m5", "也回复 x1", Some("x1")),
         hmsg("m6", "回复 x4", Some("x4")),
     ];
+    // A resolved sender name shows in the snippet's short form.
+    page[0].sender_name = Some("甲".into());
     let history: Vec<&HistoryMessage> = page.iter().collect();
     let quotes = resolve_history_quotes(&adapter, &page, &history).await;
 
     // In-page parent: free.
-    assert_eq!(quotes["m1"], "ou_a: 页内引用");
+    assert_eq!(quotes["m1"], "甲: 页内引用");
     // Out-of-page parents: fetched once each, deduped by parent, and
     // capped at HISTORY_QUOTE_FETCH_MAX distinct parents (x4 skipped).
     assert_eq!(quotes["m2"], "ou_x: 页外引用");
@@ -5913,6 +5938,7 @@ async fn resolve_history_quotes_failure_cached_and_counts_toward_cap() {
         .store(true, std::sync::atomic::Ordering::Relaxed);
     let adapter: Arc<dyn PlatformAdapter> = mock.clone();
     let hmsg = |id: &str, parent: &str| HistoryMessage {
+        sender_name: None,
         message_id: id.into(),
         create_time: 1,
         sender_id: "ou_a".into(),
@@ -5943,6 +5969,7 @@ async fn history_quote_of_backstopped_root_resolves_free() {
     let mock = Arc::new(HistoryMockAdapter::default());
     // The root is NOT in the fetched page — the backstop fetches it once.
     *mock.quoted.lock().await = Some(HistoryMessage {
+        sender_name: None,
         message_id: "root-msg".into(),
         create_time: 50,
         sender_id: "ou_a".into(),
@@ -6092,6 +6119,7 @@ async fn history_prefix_keeps_command_shaped_root() {
     // shaped text. It is EXEMPT from the command filter: history[0] must
     // stay the root or the image priority slicing below misfires.
     *mock.quoted.lock().await = Some(HistoryMessage {
+        sender_name: None,
         message_id: "root-msg".into(),
         create_time: 50,
         sender_id: "ou_a".into(),
@@ -9273,8 +9301,6 @@ struct NotifyMockAdapter {
     /// Message ids `fetch_message` was called with, in order.
     fetch_calls: tokio::sync::Mutex<Vec<String>>,
     fetch_fail: std::sync::atomic::AtomicBool,
-    /// Returned by `fetch_user_name` (None = no contact permission).
-    user_name: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -9341,10 +9367,6 @@ impl PlatformAdapter for NotifyMockAdapter {
             ));
         }
         Ok(self.message.lock().await.clone())
-    }
-
-    async fn fetch_user_name(&self, _open_id: &str) -> Option<String> {
-        self.user_name.clone()
     }
 }
 
@@ -9466,6 +9488,7 @@ async fn test_notify_run_subscribers() {
 
 fn notify_trigger_message() -> HistoryMessage {
     HistoryMessage {
+        sender_name: None,
         message_id: "omt_1".into(),
         create_time: 1,
         sender_id: "ou_author".into(),
@@ -9499,16 +9522,16 @@ async fn notify_quote_setup() -> (
 }
 
 /// The notify card quotes the thread root/trigger message, attributed
-/// when the author's name resolves; mentions stripped, whitespace flat.
+/// when the author's name resolved on fetch; mentions stripped,
+/// whitespace flat. The name is user-controlled — forgery chars are
+/// sanitized before it lands in card markdown.
 #[tokio::test]
 async fn notify_card_quotes_trigger_message_with_author() {
     let (store, _unused, routing) = notify_quote_setup().await;
-    let mut mock = NotifyMockAdapter {
-        user_name: Some("李华儒".to_string()),
-        ..Default::default()
-    };
-    *mock.message.get_mut() = Some(notify_trigger_message());
-    let mock = Arc::new(mock);
+    let mock = Arc::new(NotifyMockAdapter::default());
+    let mut msg = notify_trigger_message();
+    msg.sender_name = Some("李]\n[华儒".to_string());
+    *mock.message.lock().await = Some(msg);
     let adapter: Arc<dyn PlatformAdapter> = mock.clone();
 
     notify_run_subscribers(
@@ -9525,9 +9548,10 @@ async fn notify_card_quotes_trigger_message_with_author() {
     let dms = mock.dms.lock().await;
     let card = &dms[0].1;
     assert!(
-        card.contains("> 李华儒：帮我看下 这个 run 怎么样"),
-        "{card}"
+        card.contains("> 李 华儒：帮我看下 这个 run 怎么样"),
+        "sanitized author: {card}"
     );
+    assert!(!card.contains("李]"), "unsanitized name: {card}");
     assert!(!card.contains("@_user_1"), "{card}");
 }
 

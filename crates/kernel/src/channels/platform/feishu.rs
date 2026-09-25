@@ -1212,6 +1212,10 @@ impl PlatformAdapter for FeishuAdapter {
             return Ok(Vec::new());
         };
         let mut out = Vec::with_capacity(items.len());
+        // App senders (other bots) can't be resolved via the contact
+        // API — tracked here so name resolution skips them outright
+        // instead of paying one doomed call per bot per negative-TTL.
+        let mut app_senders: std::collections::HashSet<String> = std::collections::HashSet::new();
         for item in items {
             if item["deleted"].as_bool().unwrap_or(false) {
                 continue;
@@ -1239,10 +1243,14 @@ impl PlatformAdapter for FeishuAdapter {
             if text.trim().is_empty() {
                 continue;
             }
+            if sender["sender_type"].as_str() == Some("app") {
+                app_senders.insert(sender["id"].as_str().unwrap_or("").to_string());
+            }
             out.push(crate::channels::HistoryMessage {
                 message_id: item["message_id"].as_str().unwrap_or("").to_string(),
                 create_time,
                 sender_id: sender["id"].as_str().unwrap_or("").to_string(),
+                sender_name: None,
                 text,
                 image_keys,
                 parent_id: item["parent_id"].as_str().map(str::to_string),
@@ -1250,6 +1258,26 @@ impl PlatformAdapter for FeishuAdapter {
         }
         // The API returns newest-first; assemble chronologically.
         out.reverse();
+        // Resolve sender display names: unique ids only, concurrent,
+        // LRU-cached (`display_name`) — steady state costs zero API
+        // calls; a cold cache costs one contact call per distinct
+        // sender (bounded by the page size), all in flight at once.
+        let unique: std::collections::HashSet<&str> = out
+            .iter()
+            .map(|m| m.sender_id.as_str())
+            .filter(|id| !app_senders.contains(*id))
+            .collect();
+        let names: std::collections::HashMap<String, Option<String>> = futures::future::join_all(
+            unique
+                .into_iter()
+                .map(|id| async move { (id.to_string(), self.display_name(id).await) }),
+        )
+        .await
+        .into_iter()
+        .collect();
+        for m in &mut out {
+            m.sender_name = names.get(&m.sender_id).cloned().flatten();
+        }
         Ok(out)
     }
 
@@ -1331,6 +1359,16 @@ impl PlatformAdapter for FeishuAdapter {
         } else {
             Self::extract_history_content(item)
         };
+        // Single sender — one cached `display_name` lookup (a hit is
+        // free; quote chains resolve every link this way). App senders
+        // (quoting our own card is a primary use case) can't be
+        // resolved via the contact API — skip the doomed call.
+        let sender_id = item["sender"]["id"].as_str().unwrap_or("").to_string();
+        let sender_name = if item["sender"]["sender_type"].as_str() == Some("app") {
+            None
+        } else {
+            self.display_name(&sender_id).await
+        };
         Ok(Some(crate::channels::HistoryMessage {
             message_id: item["message_id"]
                 .as_str()
@@ -1340,7 +1378,8 @@ impl PlatformAdapter for FeishuAdapter {
                 .as_str()
                 .and_then(|s| s.parse::<i64>().ok())
                 .unwrap_or_default(),
-            sender_id: item["sender"]["id"].as_str().unwrap_or("").to_string(),
+            sender_id,
+            sender_name,
             text,
             image_keys,
             parent_id: item["parent_id"].as_str().map(str::to_string),
