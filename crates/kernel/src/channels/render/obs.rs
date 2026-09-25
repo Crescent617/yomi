@@ -69,6 +69,10 @@ const PATCH_FAILURE_LIMIT: u32 = 3;
 const STATUS_TRACE_MAX_ENTRIES: usize = 10;
 /// Error summary truncation on terminal cards.
 const ERROR_MAX_CHARS: usize = 200;
+/// Char cap for the retry/error reason in the card header title — the
+/// title is one line (same budget as tool-run titles, 48); the full
+/// error is always in logs and the terminal notice.
+const TITLE_REASON_MAX_CHARS: usize = 48;
 /// Whisper buffer cap (tail kept); bounds memory for long streamed answers.
 const WHISPER_BUFFER_CHARS: usize = 200;
 /// Max length (chars, ellipsis included) for dynamic text lines on the
@@ -533,7 +537,7 @@ impl ObsTracker {
                 wait_ms,
             }) => {
                 let retry_of = format!("🔁 Retrying {attempt}/{max_attempts}");
-                let reason = truncate_by_chars(reason, 30, "…");
+                let reason = truncate_by_chars(reason, TITLE_REASON_MAX_CHARS, "…");
                 let phase = Phase::Text(match crate::event::format_retry_delay(*wait_ms) {
                     Some(delay) => format!("{retry_of} {delay}: {reason}"),
                     None => format!("{retry_of}: {reason}"),
@@ -541,7 +545,10 @@ impl ObsTracker {
                 self.update_running(session_id, |s| s.phase = phase).await;
             }
             Event::Agent(AgentEvent::Error { error, .. }) => {
-                let phase = Phase::Text(format!("⚠️ Error: {}", truncate_by_chars(error, 30, "…")));
+                let phase = Phase::Text(format!(
+                    "⚠️ Error: {}",
+                    truncate_by_chars(error, TITLE_REASON_MAX_CHARS, "…")
+                ));
                 // Never settles — a mid-retry error may still recover (see design §3).
                 self.update_running(session_id, |s| s.phase = phase).await;
             }
