@@ -10,7 +10,8 @@
 //! provides the full conversation history on every request.
 use crate::event::ContentChunk;
 use crate::provider::{
-    HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, ProviderError, ToolCallRequest,
+    root_cause_message, HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider,
+    ProviderError, ToolCallRequest,
 };
 use crate::types::{ContentBlock, FinishReason, Message, Result, Role, ToolDefinition};
 use async_trait::async_trait;
@@ -307,7 +308,7 @@ impl Provider for OpenAIResponseProvider {
                         }
                         Ok(Err(e)) => {
                             tracing::error!("OpenAI Responses SSE error: {}", e);
-                            return Err(ProviderError::Sse(e.to_string()));
+                            return Err(ProviderError::Sse(root_cause_message(&e)));
                         }
                         Err(_) => {
                             tracing::error!(

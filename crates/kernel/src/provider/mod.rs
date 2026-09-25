@@ -306,7 +306,7 @@ pub enum ProviderError {
     Parse(String),
 
     /// API response error with provider code and explicit retry classification
-    #[error("API error ({code:?}): {message}")]
+    #[error("API error: {message}")]
     Api {
         code: Option<String>,
         message: String,
@@ -376,17 +376,22 @@ impl From<reqwest::Error> for ProviderError {
             // reqwest::Error carries no response headers — no Retry-After.
             ProviderError::Http(HttpError::new(status.as_u16(), None))
         } else {
-            // reqwest's own message is boilerplate ("error sending request
-            // for url …"); the deepest source names the actual cause.
-            let mut cause = e.to_string();
-            let mut src = std::error::Error::source(&e);
-            while let Some(s) = src {
-                cause = s.to_string();
-                src = s.source();
-            }
-            ProviderError::Request(cause)
+            ProviderError::Request(root_cause_message(&e))
         }
     }
+}
+
+/// Message for retry/log surfaces: wrapper layers around a transport
+/// failure tend to be boilerplate ("error sending request for url …"),
+/// while the deepest source names the actual cause.
+pub(crate) fn root_cause_message<E: std::error::Error + ?Sized>(e: &E) -> String {
+    let mut cause = e.to_string();
+    let mut src = e.source();
+    while let Some(s) = src {
+        cause = s.to_string();
+        src = s.source();
+    }
+    cause
 }
 
 use std::sync::Arc;

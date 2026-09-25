@@ -160,3 +160,44 @@ fn provider_error_display_has_no_doubled_prefix() {
         "SSE error: boom"
     );
 }
+
+#[test]
+fn api_error_display_drops_option_code_noise() {
+    // `{code:?}` would print `Some("rate_limited")`, hiding the message
+    // behind debug noise on tight surfaces like status card titles.
+    let err = ProviderError::Api {
+        code: Some("rate_limited".into()),
+        message: "Rate limit reached".into(),
+        retryable: true,
+    };
+    assert_eq!(err.to_string(), "API error: Rate limit reached");
+}
+
+#[test]
+fn root_cause_message_drills_to_deepest_source() {
+    #[derive(Debug)]
+    struct Wrap(&'static str, Option<Box<dyn std::error::Error + Send + Sync>>);
+    impl std::fmt::Display for Wrap {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+    impl std::error::Error for Wrap {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match &self.1 {
+                Some(e) => Some(e.as_ref()),
+                None => None,
+            }
+        }
+    }
+    let leaf = Wrap("connection refused", None);
+    let mid = Wrap("tcp connect error", Some(Box::new(leaf)));
+    let top = Wrap(
+        "error sending request for url (http://x)",
+        Some(Box::new(mid)),
+    );
+    assert_eq!(root_cause_message(&top), "connection refused");
+    // No source: falls back to the error's own message.
+    let bare = Wrap("weird failure", None);
+    assert_eq!(root_cause_message(&bare), "weird failure");
+}
