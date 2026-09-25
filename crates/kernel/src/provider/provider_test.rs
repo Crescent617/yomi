@@ -135,3 +135,14 @@ fn http_error_carries_retry_after_into_provider_error() {
     let other = ProviderError::Timeout("stall".into());
     assert_eq!(other.retry_after(), None);
 }
+
+#[tokio::test]
+async fn reqwest_error_surfaces_cause_not_url_boilerplate() {
+    // Port 9 (discard) is virtually never bound; connect fails fast and
+    // offline. The display must name the cause, not reqwest's
+    // "error sending request for url (…)" boilerplate.
+    let err = reqwest::get("http://127.0.0.1:9/").await.unwrap_err();
+    let msg = ProviderError::from(err).to_string();
+    assert!(!msg.contains("error sending request"), "got: {msg}");
+    assert!(!msg.contains("Request failed"), "got: {msg}");
+}

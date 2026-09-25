@@ -371,12 +371,20 @@ impl ProviderError {
 impl From<reqwest::Error> for ProviderError {
     fn from(e: reqwest::Error) -> Self {
         if e.is_timeout() {
-            ProviderError::Timeout(e.to_string())
+            ProviderError::Timeout("timed out".into())
         } else if let Some(status) = e.status() {
             // reqwest::Error carries no response headers — no Retry-After.
             ProviderError::Http(HttpError::new(status.as_u16(), None))
         } else {
-            ProviderError::Request(e.to_string())
+            // reqwest's own message is boilerplate ("error sending request
+            // for url …"); the deepest source names the actual cause.
+            let mut cause = e.to_string();
+            let mut src = std::error::Error::source(&e);
+            while let Some(s) = src {
+                cause = s.to_string();
+                src = s.source();
+            }
+            ProviderError::Request(cause)
         }
     }
 }
