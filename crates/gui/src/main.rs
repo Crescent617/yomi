@@ -339,7 +339,15 @@ fn prepend_exe_dir_to_path() {
     let Ok(path) = std::env::var("PATH") else {
         return;
     };
-    std::env::set_var("PATH", prepend_path_dir(&path, dir));
+    let new_path = prepend_path_dir(&path, dir);
+    if new_path == path {
+        tracing::debug!(dir = %dir.display(), "sidecar dir already on PATH");
+    } else {
+        // 日志行是 e2e 与排障的取证点：GUI 子树的 agent shell 能用
+        // 哪个 yomi，看这行就知道。
+        tracing::info!(dir = %dir.display(), "prepended sidecar dir to PATH");
+    }
+    std::env::set_var("PATH", new_path);
 }
 
 /// 把 `dir` 放到 PATH 最前；已存在则原样返回（幂等）。
@@ -368,7 +376,6 @@ fn main() {
     if let Err(e) = fix_path_env::fix() {
         tracing::warn!("Failed to fix PATH environment: {e}");
     }
-    prepend_exe_dir_to_path();
 
     let mut config = kernel::config::Config::discover_file()
         .and_then(|p| kernel::config::Config::from_file(&p).ok())
@@ -386,6 +393,10 @@ fn main() {
             .try_init();
         None
     });
+    // 注入须在 run()（拉起 daemon task、spawn 子进程）之前；放在日
+    // 志初始化之后是为了让 "prepended sidecar dir" 这行落进日志文
+    // 件——config 加载与日志初始化都不 spawn 子进程，时序安全。
+    prepend_exe_dir_to_path();
     run();
 }
 
