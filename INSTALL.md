@@ -31,6 +31,14 @@ cd yomi
 cargo build --release --bin yomi   # binary at target/release/yomi
 ```
 
+构建 GUI（`cargo build -p yomi-gui` / `tauri build`）需先生成
+externalBin sidecar（编译期校验存在性，缺了就报
+`resource path binaries/yomi-<triple> doesn't exist`）：
+
+```sh
+bash scripts/bundle-cli-sidecar.sh "$(rustc -vV | awk '/^host:/{print $2}')" debug
+```
+
 ## GUI (`yomi-app`)
 
 v0.10.42 起，GUI 内嵌 CLI sidecar 并在启动时把所在目录 prepend 进
