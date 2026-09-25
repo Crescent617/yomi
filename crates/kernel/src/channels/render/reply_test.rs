@@ -1062,3 +1062,53 @@ fn into_reply_keeps_mid_text_marker() {
     let reply = buf.into_reply();
     assert_eq!(reply.text(), Some("__YOMI_END_TURN__ 出现在中间是惰性文本"));
 }
+
+#[test]
+fn render_card_renders_inline_images_below_body_before_trace() {
+    let mut reply = buffer_with_run().into_reply();
+    reply.set_inline_images(vec![
+        InlineImage {
+            key: "img_k1".to_string(),
+            alt: "a.png".to_string(),
+            path: std::path::PathBuf::from("/tmp/a.png"),
+        },
+        InlineImage {
+            key: "img_k2".to_string(),
+            alt: "b.png".to_string(),
+            path: std::path::PathBuf::from("/tmp/b.png"),
+        },
+    ]);
+
+    let card: serde_json::Value =
+        serde_json::from_str(&render_card(&reply, None).unwrap()).unwrap();
+    let elements = card["body"]["elements"].as_array().unwrap();
+
+    // buffer_with_run promotes the longest earlier text above the last:
+    // two body markdown elements split by an hr, then the images in
+    // declaration order, then the collapsed trace panel last.
+    let tags: Vec<&str> = elements
+        .iter()
+        .map(|e| e["tag"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        tags,
+        vec![
+            "markdown",
+            "hr",
+            "markdown",
+            "img",
+            "img",
+            "collapsible_panel"
+        ]
+    );
+    assert_eq!(
+        elements[3],
+        serde_json::json!({
+            "tag": "img",
+            "img_key": "img_k1",
+            "alt": { "tag": "plain_text", "content": "a.png" }
+        })
+    );
+    assert_eq!(elements[4]["img_key"], "img_k2");
+    assert_eq!(elements[4]["alt"]["content"], "b.png");
+}

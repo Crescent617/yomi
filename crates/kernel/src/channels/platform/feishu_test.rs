@@ -2482,3 +2482,100 @@ fn extract_post_text_rendered_at_run_is_kept() {
         "叫 <@ou_alice>爱丽丝 看"
     );
 }
+
+// ── upload_image: upload-only inline-image handle ────────────────────
+
+#[tokio::test]
+async fn upload_image_returns_key_without_sending_a_message() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("pic.png");
+    std::fs::write(&file, ok_png()).unwrap();
+
+    let key = adapter.upload_image(&file).await.unwrap();
+
+    assert_eq!(key.as_deref(), Some("ik_1"));
+    let (_, _, body) = stub.find("POST", "/open-apis/im/v1/images");
+    for needle in ["name=\"image_type\"", "message", "name=\"image\""] {
+        assert!(body.contains(needle), "missing {needle} in multipart body");
+    }
+    // Upload-only: nothing went to the message endpoints.
+    assert!(
+        stub.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(_, p, _)| !p.starts_with("/open-apis/im/v1/messages")),
+        "upload_image must not send messages"
+    );
+}
+
+#[tokio::test]
+async fn upload_image_non_image_returns_none_without_uploading() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("notes.txt");
+    std::fs::write(&file, b"hello").unwrap();
+
+    let key = adapter.upload_image(&file).await.unwrap();
+
+    assert_eq!(key, None);
+    // Non-images bail before any upload (or even token) request.
+    assert!(
+        stub.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(_, p, _)| !p.starts_with("/open-apis/im/v1/images")),
+        "non-image must not hit the upload endpoint"
+    );
+}
+
+/// End-to-end against the real Feishu API: an image uploaded via
+/// `upload_image` rides a card as an inline `img` element the platform
+/// accepts (card schema is validated server-side — the stub can't prove
+/// acceptance). Env: `YOMI_E2E_FEISHU_APP_ID` / `YOMI_E2E_FEISHU_APP_SECRET`
+/// / `YOMI_E2E_CHAT` (a chat the bot sits in).
+#[tokio::test]
+#[ignore = "hits the real Feishu API; env-var driven, run manually"]
+async fn e2e_feishu_inline_image_card_accepted() {
+    let keys = [
+        "YOMI_E2E_FEISHU_APP_ID",
+        "YOMI_E2E_FEISHU_APP_SECRET",
+        "YOMI_E2E_CHAT",
+    ];
+    if keys.iter().any(|k| std::env::var(k).is_err()) {
+        eprintln!("YOMI_E2E_* env vars not set; skipping live e2e");
+        return;
+    }
+    let adapter = super::FeishuAdapter::new(
+        std::env::var(keys[0]).unwrap(),
+        std::env::var(keys[1]).unwrap(),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("e2e-inline.png");
+    std::fs::write(&file, ok_png()).unwrap();
+
+    let key = adapter
+        .upload_image(&file)
+        .await
+        .expect("upload")
+        .expect("image upload returns a key");
+    assert!(!key.is_empty());
+
+    let card = json!({
+        "schema": "2.0",
+        "body": { "elements": [
+            { "tag": "markdown", "content": "e2e inline image card" },
+            { "tag": "img", "img_key": key, "alt": { "tag": "plain_text", "content": "e2e-inline.png" } },
+        ]},
+    })
+    .to_string();
+    let msg_id = adapter
+        .send_card(&std::env::var(keys[2]).unwrap(), &card, None)
+        .await
+        .expect("card send");
+    assert!(msg_id.is_some());
+}

@@ -307,6 +307,7 @@ impl RunReplyBuffer {
             usage_in: self.usage_in,
             usage_out: self.usage_out,
             attachments: self.attachments,
+            inline_images: Vec::new(),
             entries,
             dropped_entries: self.dropped,
             elapsed: self.started_at.elapsed(),
@@ -364,6 +365,22 @@ impl Default for RunReplyBuffer {
     }
 }
 
+/// An image pre-uploaded to the platform, riding the reply card as an
+/// inline `img` element instead of a separate follow-up message. The
+/// hub fills these in after resolving the declared attachments; the
+/// source path is kept so the plain-text fallback can still deliver the
+/// image as a regular file message.
+#[derive(Debug, Clone)]
+pub(crate) struct InlineImage {
+    /// Platform-opaque image handle (Feishu `image_key`).
+    pub key: String,
+    /// Alt text (the attachment's file name).
+    pub alt: String,
+    /// Local source path — fallback delivery when the card path is
+    /// unavailable (plain-text flush).
+    pub path: std::path::PathBuf,
+}
+
 /// The deliverable reply: the last text (joined from above by the longest
 /// earlier text when that beats it in length) + the run trace (may be
 /// empty). The trace stays chronological: intermediate texts interleaved
@@ -388,6 +405,11 @@ pub(crate) struct FinalReply {
     /// run's assistant texts (blocks already stripped from the recorded
     /// texts).
     attachments: Vec<String>,
+    /// Image attachments pre-uploaded by the hub for inline rendering on
+    /// the reply card; empty when the run declared none or the platform
+    /// has no upload-only image API (those stay on the post-reply file
+    /// delivery path).
+    inline_images: Vec<InlineImage>,
     entries: Vec<TraceEntry>,
     /// Trace entries dropped at the buffer cap (shown as a marker line).
     dropped_entries: usize,
@@ -454,6 +476,24 @@ impl FinalReply {
         std::mem::take(&mut self.attachments)
     }
 
+    /// Inline images pre-uploaded for the reply card (empty when none —
+    /// e.g. non-image attachments or a platform without an upload API).
+    pub(crate) fn inline_images(&self) -> &[InlineImage] {
+        &self.inline_images
+    }
+
+    /// Attach pre-uploaded inline images (the hub's attachment step,
+    /// after the platform upload returned their handles).
+    pub(crate) fn set_inline_images(&mut self, images: Vec<InlineImage>) {
+        self.inline_images = images;
+    }
+
+    /// Take the inline images out — the plain-text fallback delivers
+    /// them as regular file messages instead.
+    pub(crate) fn take_inline_images(&mut self) -> Vec<InlineImage> {
+        std::mem::take(&mut self.inline_images)
+    }
+
     /// Append a delivery note (e.g. an attachment failure) to the latest
     /// reply text, so it surfaces on the platform instead of vanishing.
     pub(crate) fn push_note(&mut self, note: &str) {
@@ -475,7 +515,8 @@ impl FinalReply {
 
 /// Render the Feishu reply card (schema 2.0, no header): an optional notice
 /// line (e.g. error summary for abnormal endings), the body texts (two are
-/// split by an `hr` divider), and the run trace — every panel
+/// split by an `hr` divider), any inline images (pre-uploaded attachments),
+/// and the run trace — every panel
 /// collapsed by default on the final card. When the run produced earlier
 /// intermediate texts the trace renders as a **process panel**: the
 /// remaining chronological narrative one click away — each intermediate
@@ -526,6 +567,16 @@ pub(crate) fn render_card(reply: &FinalReply, notice: Option<&str>) -> Option<St
         let text =
             crate::channels::utils::rewrite_mentions(&text, &|id| format!("<at id={id}></at>"));
         elements.push(json!({ "tag": "markdown", "content": text }));
+    }
+
+    // Inline images ride the card right below the body (pre-uploaded by
+    // the hub — see `InlineImage`), one `img` element per attachment.
+    for img in reply.inline_images() {
+        elements.push(json!({
+            "tag": "img",
+            "img_key": img.key,
+            "alt": { "tag": "plain_text", "content": img.alt },
+        }));
     }
 
     if !reply.entries.is_empty() {

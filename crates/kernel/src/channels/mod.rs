@@ -1124,6 +1124,16 @@ pub trait PlatformAdapter: Send + Sync {
         ))
     }
 
+    /// Upload one image file and return an opaque platform handle for
+    /// inline rendering in a subsequent message/card (Feishu
+    /// `image_key`) — without sending anything yet. `Ok(None)` = the
+    /// platform has no upload-only image API or the file is not an
+    /// image; the caller then keeps the file on the regular
+    /// [`send_files`](Self::send_files) path. Default: `Ok(None)`.
+    async fn upload_image(&self, _path: &std::path::Path) -> Result<Option<String>, ChannelError> {
+        Ok(None)
+    }
+
     /// Fetch recent messages of a container (thread or chat), newest-first
     /// up to `limit` (platform-capped at 50), strictly newer than
     /// `since_ts` (unix **milliseconds**; `None` = fetch the latest page).

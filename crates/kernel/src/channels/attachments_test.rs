@@ -9,6 +9,11 @@ struct MockAdapter {
     sent_files: Mutex<Vec<Vec<PathBuf>>>,
     outgoing: Mutex<Vec<String>>,
     fail_send: bool,
+    /// Mirrors the real adapters' `upload_image` contract: `Ok(None)`
+    /// when the platform has no inline support (`inline_upload` off) or
+    /// the file is not an image; `Err` on upload failure.
+    inline_upload: bool,
+    fail_upload: bool,
 }
 
 #[async_trait::async_trait]
@@ -52,6 +57,21 @@ impl PlatformAdapter for MockAdapter {
             .unwrap()
             .push(files.iter().map(|(p, _)| p.to_path_buf()).collect());
         Ok(())
+    }
+
+    async fn upload_image(&self, path: &std::path::Path) -> Result<Option<String>, ChannelError> {
+        if self.fail_upload {
+            return Err(ChannelError::Platform("boom".into()));
+        }
+        if !self.inline_upload || path.extension().and_then(|e| e.to_str()) != Some("png") {
+            return Ok(None);
+        }
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("img")
+            .to_string();
+        Ok(Some(format!("key-{name}")))
     }
 }
 
@@ -133,4 +153,90 @@ async fn empty_files_is_noop() {
     send_attachments(&adapter, &routing(), Vec::new()).await;
     assert!(mock.sent_files.lock().unwrap().is_empty());
     assert!(mock.outgoing.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn inline_partition_uploads_images_and_keeps_the_rest() {
+    let mock = Arc::new(MockAdapter {
+        inline_upload: true,
+        ..Default::default()
+    });
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let files = vec![
+        PathBuf::from("/tmp/a.png"),
+        PathBuf::from("/tmp/b.pdf"),
+        PathBuf::from("/tmp/c.png"),
+    ];
+
+    let (inline, rest) = inline_partition(&adapter, files).await;
+
+    assert_eq!(inline.len(), 2);
+    assert_eq!(inline[0].key, "key-a.png");
+    assert_eq!(inline[0].alt, "a.png");
+    assert_eq!(inline[0].path, PathBuf::from("/tmp/a.png"));
+    assert_eq!(inline[1].key, "key-c.png");
+    // Non-images stay on the post-reply file path, order preserved.
+    assert_eq!(rest, vec![PathBuf::from("/tmp/b.pdf")]);
+}
+
+#[tokio::test]
+async fn inline_partition_upload_failure_keeps_the_file() {
+    let mock = Arc::new(MockAdapter {
+        inline_upload: true,
+        fail_upload: true,
+        ..Default::default()
+    });
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+
+    let (inline, rest) = inline_partition(&adapter, vec![PathBuf::from("/tmp/a.png")]).await;
+
+    assert!(inline.is_empty());
+    assert_eq!(rest, vec![PathBuf::from("/tmp/a.png")]);
+}
+
+#[tokio::test]
+async fn inline_partition_without_platform_support_is_a_noop() {
+    let mock = Arc::new(MockAdapter::default());
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+
+    let (inline, rest) = inline_partition(&adapter, vec![PathBuf::from("/tmp/a.png")]).await;
+
+    assert!(inline.is_empty());
+    assert_eq!(rest, vec![PathBuf::from("/tmp/a.png")]);
+}
+
+#[tokio::test]
+async fn inline_partition_for_reply_moves_images_onto_the_reply() {
+    let mock = Arc::new(MockAdapter {
+        inline_upload: true,
+        ..Default::default()
+    });
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let mut reply = reply_with_attachments(Some("see attached"), &[]);
+    let files = vec![PathBuf::from("/tmp/a.png"), PathBuf::from("/tmp/b.pdf")];
+
+    let rest = inline_partition_for_reply(&adapter, &mut reply, files).await;
+
+    assert_eq!(rest, vec![PathBuf::from("/tmp/b.pdf")]);
+    let inline = reply.inline_images();
+    assert_eq!(inline.len(), 1);
+    assert_eq!(inline[0].key, "key-a.png");
+    assert_eq!(inline[0].path, PathBuf::from("/tmp/a.png"));
+}
+
+#[tokio::test]
+async fn inline_partition_for_reply_textless_reply_keeps_everything() {
+    let mock = Arc::new(MockAdapter {
+        inline_upload: true,
+        ..Default::default()
+    });
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let mut reply = reply_with_attachments(None, &[]);
+    let files = vec![PathBuf::from("/tmp/a.png")];
+
+    let rest = inline_partition_for_reply(&adapter, &mut reply, files).await;
+
+    // No body text — no card to ride: the file list passes through.
+    assert_eq!(rest, vec![PathBuf::from("/tmp/a.png")]);
+    assert!(reply.inline_images().is_empty());
 }

@@ -1092,6 +1092,36 @@ impl PlatformAdapter for FeishuAdapter {
         }
     }
 
+    /// Upload-only half of the image branch of `send_one_file`: the
+    /// returned `image_key` rides the reply card as an inline `img`
+    /// element instead of a separate message. Non-images return
+    /// `Ok(None)`; cap/format violations surface as errors (the caller
+    /// keeps the file on the regular send path, which re-reports them).
+    async fn upload_image(&self, path: &std::path::Path) -> Result<Option<String>, ChannelError> {
+        let upload = crate::channels::utils::read_upload(
+            path,
+            IMAGE_MAX_BYTES,
+            FILE_MAX_BYTES,
+            "image",
+            "file",
+        )
+        .await?;
+        if !upload.is_image {
+            return Ok(None);
+        }
+        let token = self.get_token().await?;
+        let part = reqwest::multipart::Part::bytes(upload.bytes).file_name(upload.file_name);
+        let form = reqwest::multipart::Form::new()
+            .text("image_type", "message")
+            .part("image", part);
+        let url = format!("{}/open-apis/im/v1/images", self.base_url);
+        let resp = self.upload(&token, &url, form).await?;
+        let key = resp["data"]["image_key"]
+            .as_str()
+            .ok_or_else(|| api_err("no upload key", ""))?;
+        Ok(Some(key.to_string()))
+    }
+
     /// refer: <https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce?lang=zh-CN>
     async fn send_reaction(
         &self,
