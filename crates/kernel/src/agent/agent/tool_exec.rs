@@ -29,7 +29,7 @@ use crate::tools::executor::{
     build_tool_result, execute_single_tool, log_tool_result, ToolExecutionResult,
 };
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::{Message, MessageId, Role, ToolCall};
+use crate::types::{MessageId, Role, ToolCall};
 use futures::FutureExt;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
@@ -93,20 +93,16 @@ impl Agent {
                     streak,
                     "repeated identical tool call, injecting loop warning"
                 );
-                // metadata 标记：哨兵扫描对这条警告保持透明（否则警
-                // 告本身成了 turn 边界，L1→L2 梯子断裂），transcript
-                // 与 UI 也可辨识。
-                let mut note = Message::user(format!(
+                // turn-internal 标记：哨兵扫描对这条警告保持透明
+                //（否则警告本身成了 turn 边界，L1→L2 梯子断裂），
+                // transcript 与 UI 也可辨识。
+                let note = crate::agent::loop_detect::turn_internal_message(format!(
                     "[loop guard] `{tool}` has been called {streak} times in a row with \
                      identical arguments and identical results — another identical retry \
                      cannot produce new information. Stop retrying: diagnose why the \
                      result does not advance the task, change your approach, or report \
                      the blockage to the user."
                 ));
-                note.metadata = Some(std::collections::HashMap::from([(
-                    crate::types::LOOP_GUARD_META_KEY.to_string(),
-                    "true".to_string(),
-                )]));
                 self.push_user_message(note);
                 self.context.transition_to(AgentState::Streaming);
             }

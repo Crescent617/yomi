@@ -2060,6 +2060,54 @@ async fn mid_turn_steer_stays_in_turn_next_turn_anchors_to_it() {
     assert_ne!(starts[0]["user_msg_id"], starts[1]["user_msg_id"]);
 }
 
+/// mid-turn steer 由注入点打 turn-internal 标记（循环哨兵扫描对它
+/// 透明，与 max_iterations 的 turn 口径对齐）；turn 未开始时注入
+/// 的 steer 无标记，保持哨兵的 turn 硬边界。
+#[cfg(unix)]
+#[tokio::test]
+async fn mid_turn_steer_is_marked_turn_internal() {
+    use crate::types::{IS_STEER_META_KEY, TURN_INTERNAL_META_KEY};
+
+    let get = |msg: &crate::types::Message, key: &str| {
+        msg.metadata
+            .as_ref()
+            .and_then(|md| md.get(key))
+            .map_or(false, |v| v == "true")
+    };
+
+    // mid-turn（current_turn 存在）：双标记。
+    let mut h = build_turn_hook_agent("sess_th").await;
+    h.agent.start_turn_if_needed().await;
+    h.agent
+        .inject_user_message(
+            vec![crate::types::ContentBlock::Text {
+                text: "mid-turn steer".to_string(),
+            }],
+            true,
+        )
+        .await
+        .unwrap();
+    let steer = h.agent.message_buffer.messages().last().unwrap().clone();
+    assert!(get(&steer, IS_STEER_META_KEY));
+    assert!(get(&steer, TURN_INTERNAL_META_KEY));
+
+    // turn 未开始（current_turn 为空，如 Idle 臂拉起新 turn）：
+    // 只有 steer 标记，保持边界。
+    let mut h = build_turn_hook_agent("sess_th").await;
+    h.agent
+        .inject_user_message(
+            vec![crate::types::ContentBlock::Text {
+                text: "turn-start steer".to_string(),
+            }],
+            true,
+        )
+        .await
+        .unwrap();
+    let steer = h.agent.message_buffer.messages().last().unwrap().clone();
+    assert!(get(&steer, IS_STEER_META_KEY));
+    assert!(!get(&steer, TURN_INTERNAL_META_KEY));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn no_turn_end_without_turn_and_stale_reason_cleared() {

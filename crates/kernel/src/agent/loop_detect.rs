@@ -16,8 +16,13 @@
 //! - **结果相同**才计数：改完文件重读这类合理重复，结果已变、
 //!   指纹不同，天然豁免；
 //! - **streak 不跨 turn**：倒扫遇真实 user 消息即停（turn 硬边
-//!   界，与 `max_iterations` 按 turn 重置同语义）；哨兵自己注入
-//!   的警告带 `LOOP_GUARD_META_KEY` 标记，对扫描透明。
+//!   界，与 `max_iterations` 按 turn 重置同语义）；agent 注入的
+//!   turn 内消息（L1 警告、`MaxTokens` auto-continue）带
+//!   `TURN_INTERNAL_META_KEY` 标记，对扫描透明。steer 的归属由注
+//!   入点精确判定（`inject_user_message`）：Streaming 臂注入时
+//!   turn 已开始 → mid-turn steer 打标记、透明；Idle 臂注入的
+//!   steer 拉起新 turn → 无标记、保持边界——与 `max_iterations`
+//!   的 turn 口径逐点对齐。
 //!
 //! 检测只读 message buffer 尾部、无内部状态：不按 turn 重置、不怕
 //! respawn、不怕压缩重写——看到的永远是消息流本身（the stream is
@@ -66,12 +71,34 @@ pub enum LoopSignal {
     },
 }
 
+/// 构造一条 turn 内 user 消息（带 `TURN_INTERNAL_META_KEY` 标记）：
+/// 模型可见、对哨兵扫描透明。生产方：L1 警告
+///（`tool_exec::finish_tool_batch`）、`MaxTokens` auto-continue
+///（`agent::transition_after_streaming`）。
+pub fn turn_internal_message(text: String) -> Message {
+    let mut msg = Message::user(text);
+    msg.metadata = Some(std::collections::HashMap::from([(
+        crate::types::TURN_INTERNAL_META_KEY.to_string(),
+        "true".to_string(),
+    )]));
+    msg
+}
+
 /// 检测 buffer 尾部是否出现工具调用死循环。
 pub fn detect(messages: &[Arc<Message>], guard: LoopGuard) -> LoopSignal {
+    // 阈值归一：0 = 关闭（break 关哨兵 / warn 不警告）；1 是退化
+    // 配置——streak 恒 ≥1，warn=1 会对首个调用发无意义警告、
+    // break=1 会熔断一切批——按 2 处理。
     if guard.break_at == 0 {
         return LoopSignal::None;
     }
-    let batches = recent_batches(messages, guard.break_at);
+    let break_at = guard.break_at.max(2);
+    let warn_at = if guard.warn_at == 0 {
+        0
+    } else {
+        guard.warn_at.max(2)
+    };
+    let batches = recent_batches(messages, break_at);
     let Some(current) = batches.last() else {
         return LoopSignal::None;
     };
@@ -83,12 +110,12 @@ pub fn detect(messages: &[Arc<Message>], guard: LoopGuard) -> LoopSignal {
             .rev()
             .take_while(|batch| batch.iter().any(|prev| prev.print == call.print))
             .count();
-        let hit = if streak >= guard.break_at {
+        let hit = if streak >= break_at {
             LoopSignal::Break {
                 tool: call.tool.clone(),
                 streak,
             }
-        } else if guard.warn_at > 0 && streak >= guard.warn_at {
+        } else if warn_at > 0 && streak >= warn_at {
             LoopSignal::Warn {
                 tool: call.tool.clone(),
                 streak,
@@ -147,15 +174,15 @@ fn recent_batches(messages: &[Arc<Message>], depth: usize) -> Vec<Vec<CallPrint>
             Role::User => {
                 // turn 硬边界：streak 不跨 turn（与 max_iterations 按
                 // turn 重置同语义）——上一 turn 的复读不能算进这一
-                // turn 的第一次相同调用。哨兵自己注入的警告（metadata
-                // 标记）是 turn 内产物，对扫描保持透明，否则警告后
-                // 复读 streak 归 1，L1→L2 梯子断裂。
-                let is_guard_note = msg
+                // turn 的第一次相同调用。agent 注入的 turn 内消息
+                //（metadata 标记，如 L1 警告、auto-continue）对扫描
+                // 透明，否则警告后续读 streak 归 1，L1→L2 梯子断裂。
+                let is_turn_internal = msg
                     .metadata
                     .as_ref()
-                    .and_then(|m| m.get(crate::types::LOOP_GUARD_META_KEY))
+                    .and_then(|m| m.get(crate::types::TURN_INTERNAL_META_KEY))
                     .is_some_and(|v| v == "true");
-                if !is_guard_note {
+                if !is_turn_internal {
                     break;
                 }
             }

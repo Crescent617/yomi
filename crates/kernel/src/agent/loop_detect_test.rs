@@ -1,4 +1,4 @@
-use super::{detect, LoopGuard, LoopSignal};
+use super::{detect, turn_internal_message, LoopGuard, LoopSignal};
 use crate::types::{ContentBlock, Message, ToolCall};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -123,20 +123,17 @@ fn reordered_arg_keys_still_match() {
     ));
 }
 
-/// 哨兵注入的警告（metadata 标记）对扫描透明——模型无视警告再
-/// 复读一次即熔断，L1→L2 梯子不断。
+/// 哨兵注入的警告（turn-internal 标记）对扫描透明——模型无视警告
+/// 再复读一次即熔断，L1→L2 梯子不断。
 #[test]
 fn injected_warning_does_not_reset_streak() {
     let mut messages = concat(vec![
         round("1", "probe", json!({}), "same"),
         round("2", "probe", json!({}), "same"),
     ]);
-    let mut warning = Message::user("[loop guard] stop retrying");
-    warning.metadata = Some(std::collections::HashMap::from([(
-        crate::types::LOOP_GUARD_META_KEY.to_string(),
-        "true".to_string(),
-    )]));
-    messages.push(Arc::new(warning));
+    messages.push(Arc::new(turn_internal_message(
+        "[loop guard] stop retrying".to_string(),
+    )));
     messages.extend(round("3", "probe", json!({}), "same"));
     assert_eq!(
         detect(&messages, GUARD),
@@ -145,6 +142,41 @@ fn injected_warning_does_not_reset_streak() {
             streak: 3,
         }
     );
+}
+
+/// auto-continue 注入的 "continue" 同走 turn-internal 标记——循环
+/// 跨越它不重置（与 max_iterations 不因它重置的语义对齐）。
+#[test]
+fn auto_continue_message_is_transparent() {
+    let mut messages = concat(vec![
+        round("1", "probe", json!({}), "same"),
+        round("2", "probe", json!({}), "same"),
+    ]);
+    messages.push(Arc::new(turn_internal_message("continue".to_string())));
+    messages.extend(round("3", "probe", json!({}), "same"));
+    assert!(matches!(
+        detect(&messages, GUARD),
+        LoopSignal::Break { streak: 3, .. }
+    ));
+}
+
+/// turn 起跑的 steer（Idle 臂注入，无 turn-internal 标记）是边界。
+/// mid-turn steer 由注入点打标记（`inject_user_message` 按
+/// `current_turn.is_some()` 判定），不在本函数判定面内。
+#[test]
+fn steer_marks_boundary() {
+    let mut messages = concat(vec![
+        round("1", "probe", json!({}), "same"),
+        round("2", "probe", json!({}), "same"),
+    ]);
+    let mut steer = Message::user("also do X");
+    steer.metadata = Some(std::collections::HashMap::from([(
+        crate::types::IS_STEER_META_KEY.to_string(),
+        "true".to_string(),
+    )]));
+    messages.push(Arc::new(steer));
+    messages.extend(round("3", "probe", json!({}), "same"));
+    assert_eq!(detect(&messages, GUARD), LoopSignal::None);
 }
 
 /// 跨 turn 不泄漏：真实 user 消息是扫描硬边界——上一 turn 的两次
@@ -224,6 +256,26 @@ fn warn_can_be_disabled_independently() {
         detect(&three, no_warn),
         LoopSignal::Break { streak: 3, .. }
     ));
+}
+
+/// 阈值 1 是退化配置，按 2 处理：break=1 不熔断单次调用，warn=1
+/// 不发 "called 1 times" 的无意义警告。
+#[test]
+fn threshold_one_is_clamped_to_two() {
+    let degenerate = LoopGuard {
+        warn_at: 1,
+        break_at: 1,
+    };
+    let one = concat(vec![round("1", "probe", json!({}), "same")]);
+    assert_eq!(detect(&one, degenerate), LoopSignal::None);
+    let two = concat(vec![one, round("2", "probe", json!({}), "same")]);
+    assert_eq!(
+        detect(&two, degenerate),
+        LoopSignal::Break {
+            tool: "probe".to_string(),
+            streak: 2,
+        }
+    );
 }
 
 /// 一批多个调用时，信号指名真正在复读的那个工具。

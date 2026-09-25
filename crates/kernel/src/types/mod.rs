@@ -23,12 +23,12 @@ pub const INTERRUPTED_META_KEY: &str = "interrupted";
 /// cancellation apart from a genuine tool error.
 pub const TOOL_CANCELLED_META_KEY: &str = "tool_cancelled";
 
-/// Metadata flag on the loop-guard warning injected by
-/// `Agent::finish_tool_batch` (see `agent::loop_detect`): lets the
-/// detector's backward scan tell the guard's own note (transparent —
-/// it lives inside the turn) apart from a real user message (a hard
-/// turn boundary that resets the streak).
-pub const LOOP_GUARD_META_KEY: &str = "loop_guard";
+/// Metadata flag on agent-injected turn-internal user messages: the
+/// loop-guard warning (`Agent::finish_tool_batch`) and the auto-continue
+/// "continue" after `MaxTokens`. Mid-turn artifacts that stay transparent
+/// to the loop-guard scan (`agent::loop_detect`)——真实 user 消息才是
+/// turn 硬边界，这类注入不算。steer 的归属由注入点判定（见 `loop_detect` 模块 doc）。
+pub const TURN_INTERNAL_META_KEY: &str = "turn_internal";
 
 // ─── Macro: generate a distinct newtype for each ID ───────────────────────
 

@@ -1036,10 +1036,22 @@ impl Agent {
         }
         let mut msg = Message::with_blocks(Role::User, content);
         if is_steer {
-            msg.metadata = Some(std::collections::HashMap::from([(
+            let mut metadata = std::collections::HashMap::from([(
                 crate::types::IS_STEER_META_KEY.to_string(),
                 "true".to_string(),
-            )]));
+            )]);
+            // mid-turn steer 是 turn 内产物（能走到 Streaming 臂注入
+            // 时 turn 已开始）：打 turn-internal 标记，循环哨兵扫描对
+            // 它透明——与 max_iterations 不因 steer 重置对齐。Idle 臂
+            // 注入的 steer 拉起新 turn（此处 current_turn 为空），
+            // 不打标记，保持哨兵的 turn 硬边界。
+            if self.current_turn.is_some() {
+                metadata.insert(
+                    crate::types::TURN_INTERNAL_META_KEY.to_string(),
+                    "true".to_string(),
+                );
+            }
+            msg.metadata = Some(metadata);
         }
 
         // Note: checkpoint record will be created when turn starts (in start_turn_if_needed)
@@ -1593,7 +1605,10 @@ impl Agent {
             Some(FinishReason::MaxTokens) => {
                 if should_auto_continue(&mut self.auto_continue_used, finish_reason) {
                     tracing::info!(?finish_reason, "auto-injecting 'continue' user message");
-                    let msg = Message::user("continue");
+                    // turn-internal 标记：turn 未结束（与 max_iterations
+                    // 不因它重置一致），哨兵扫描对它透明。
+                    let msg =
+                        crate::agent::loop_detect::turn_internal_message("continue".to_string());
                     self.push_user_message(msg);
                     self.context.transition_to(AgentState::Streaming);
                 } else {

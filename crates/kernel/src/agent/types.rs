@@ -22,10 +22,10 @@ pub struct AgentConfig {
     /// Maximum number of iterations per agent run
     pub max_iterations: usize,
     /// 工具调用循环哨兵：同一调用（参数与结果均相同）连续重复该次数
-    /// 后注入警告，给模型一次自纠机会（默认 2；0 = 不警告）。
+    /// 后注入警告，给模型一次自纠机会（默认 2；0 = 不警告；1 按 2 处理）。
     pub tool_loop_warn_threshold: usize,
     /// 循环哨兵熔断：同一调用连续重复达到该次数即结束 turn
-    /// （默认 3；0 = 关闭哨兵）。
+    /// （默认 3；0 = 关闭哨兵；1 按 2 处理）。
     pub tool_loop_break_threshold: usize,
     /// Allow the agent to spawn sub-agents
     pub enable_subagent: bool,
