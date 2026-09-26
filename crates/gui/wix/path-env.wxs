@@ -13,7 +13,7 @@
   </Fragment>
   <Fragment>
     <DirectoryRef Id="INSTALLDIR">
-      <Component Id="InstallDirOnPath" Guid="{7E3A5C21-9B4F-4D8E-A6C3-2F1D8B0E5A97}" Win64="$(var.Win64)">
+      <Component Id="InstallDirOnPath" Guid="{7E3A5C21-9B4F-4D8E-A6C3-2F1D8B0E5A97}">
         <Environment Id="InstallDirOnPath" Name="PATH" Action="set"
                      Permanent="no" Part="last" Delimiter=";" System="yes"
                      Value="[INSTALLDIR]" KeyPath="yes" />
