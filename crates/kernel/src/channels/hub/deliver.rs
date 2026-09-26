@@ -42,7 +42,7 @@ impl RunEndStatus {
             Self::Completed => "✅",
             Self::Cancelled => "⏹",
             Self::Shutdown => "🔌",
-            Self::Failed => "❌",
+            Self::Failed => "🙀",
         }
     }
 
@@ -211,7 +211,7 @@ pub(crate) fn notify_quote_snippet(text: &str) -> String {
 /// clickable via `card_link` — no button, minimal by design. The line
 /// names the source chat when known (threads have no name of their own —
 /// the group name stands in). The emoji mirrors the run's end status
-/// (✅/⏹/❌). Card markdown strips applink URLs, so the jump rides
+/// (✅/⏹/🙀). Card markdown strips applink URLs, so the jump rides
 /// `card_link` instead; without a link it degrades to a text-only ping.
 /// An optional `quote` (trigger-message snippet, or the
 /// session title) rides as a second markdown-quote line so overlapping

@@ -242,14 +242,14 @@ fn trace_title_carries_model_ctx_usage_and_failed_when_set() {
     };
     let title = panel["header"]["title"]["content"].as_str().unwrap();
     assert_eq!(
-        title, "🐾 0s · 💬 2 · 12.4k↑ · 2.4k↓ · ❌ 1 · k3-hs · 10%",
+        title, "🐾 0s · 💬 2 · 12.4k↑ · 2.4k↓ · 🙀 1 · k3-hs · 10%",
         "title: {title}"
     );
 
     // into_reply（回复卡路径）带出同样的段。
     let card = render_card(&buf.into_reply(), None).unwrap();
     assert!(
-        card.contains("🐾 0s · 💬 2 · 12.4k↑ · 2.4k↓ · ❌ 1 · k3-hs · 10%"),
+        card.contains("🐾 0s · 💬 2 · 12.4k↑ · 2.4k↓ · 🙀 1 · k3-hs · 10%"),
         "card: {card}"
     );
 }
@@ -279,7 +279,7 @@ fn title_counters_survive_buffer_cap() {
         "all steps counted despite cap: {title}"
     );
     assert!(
-        title.contains("❌ 10"),
+        title.contains("🙀 10"),
         "all failures counted despite cap: {title}"
     );
 }
@@ -333,9 +333,9 @@ fn tool_end_matches_by_tool_id() {
         buf.into_reply()
     };
     let card = render_card(&reply, None).unwrap();
-    assert!(card.contains("❌"));
+    assert!(card.contains("🙀"));
     assert!(card.contains("⏳"), "t2 is still pending");
-    assert!(card.contains("❌ 1"));
+    assert!(card.contains("🙀 1"));
 }
 
 #[test]
@@ -568,10 +568,10 @@ fn into_text_returns_bare_body() {
 fn render_card_with_notice_prepends_notice_line() {
     let reply = buffer_with_run().into_reply();
     let card: serde_json::Value =
-        serde_json::from_str(&render_card(&reply, Some("❌ **Error**  boom")).unwrap()).unwrap();
+        serde_json::from_str(&render_card(&reply, Some("🙀 **Error**  boom")).unwrap()).unwrap();
     let elements = card["body"]["elements"].as_array().unwrap();
     assert_eq!(elements.len(), 5);
-    assert_eq!(elements[0]["content"], "❌ **Error**  boom");
+    assert_eq!(elements[0]["content"], "🙀 **Error**  boom");
     assert_eq!(elements[1]["content"], "Let me look at the code.");
     assert_eq!(elements[2]["tag"], "hr");
     assert_eq!(elements[3]["content"], "All tests pass.");
@@ -586,7 +586,7 @@ fn render_card_returns_none_when_nothing_to_show() {
     assert_eq!(reply.text(), None);
     assert!(render_card(&reply, None).is_none());
     // A notice alone is enough to render (failure explanation).
-    let card = render_card(&reply, Some("❌ **Error**  boom")).unwrap();
+    let card = render_card(&reply, Some("🙀 **Error**  boom")).unwrap();
     assert!(card.contains("boom"));
 }
 

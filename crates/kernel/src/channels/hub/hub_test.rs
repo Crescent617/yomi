@@ -1561,6 +1561,10 @@ fn test_parse_model_commands() {
         ChannelCommand::ListModels
     ));
     assert!(matches!(
+        parse_channel_command(Some("/ml")),
+        ChannelCommand::ListModels
+    ));
+    assert!(matches!(
         parse_channel_command(Some("  /model\n")),
         ChannelCommand::CurrentModel
     ));
@@ -1706,6 +1710,10 @@ fn test_parse_command_aliases() {
     assert!(matches!(
         parse_channel_command(Some("/unsub")),
         ChannelCommand::Unsubscribe
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/set")),
+        ChannelCommand::Settings
     ));
     // Aliases share the canonical command's argument validation.
     assert!(matches!(
@@ -9483,7 +9491,7 @@ async fn test_notify_run_subscribers() {
     let dms = mock.dms.lock().await;
     let failed_card = &dms.last().unwrap().1;
     assert!(failed_card.contains("failed"), "{failed_card}");
-    assert!(failed_card.contains("❌"), "{failed_card}");
+    assert!(failed_card.contains("🙀"), "{failed_card}");
 }
 
 fn notify_trigger_message() -> HistoryMessage {

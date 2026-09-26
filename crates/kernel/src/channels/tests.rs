@@ -308,11 +308,11 @@ fn reaction_legend_matches_platform_capabilities() {
     };
     let telegram = PlatformConfig::Telegram { token: "t".into() };
     assert!(feishu.reaction_legend().contains("✅"));
-    assert!(feishu.reaction_legend().contains('❌'));
+    assert!(feishu.reaction_legend().contains('😭'));
     // Telegram runs never get settle reactions (no status-card path) —
     // the legend must not promise them.
     let legend = telegram.reaction_legend();
-    assert!(!legend.contains('✅') && !legend.contains('❌'), "{legend}");
+    assert!(!legend.contains('✅') && !legend.contains('😭'), "{legend}");
     assert!(legend.contains("👀") && legend.contains("👌"), "{legend}");
 }
 

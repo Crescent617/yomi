@@ -30,7 +30,7 @@
 //!
 //! Settle reaction: card patches never notify, so a run that settles
 //! silently (the morph above) additionally reacts on the session's
-//! **latest user message** — ✅ done / ❌ failed; the chat-list
+//! **latest user message** — ✅ done / 😭 failed; the chat-list
 //! "回应了你的消息" surfacing stands in for a completion ping. Runs
 //! without a fresh trigger (cron-fired runs, API
 //! steers) react on the last recorded user message instead of a run
@@ -316,9 +316,9 @@ impl Settle {
         match self {
             Settle::Completed | Settle::Cancelled => None,
             Settle::Shutdown => Some("🔌 Interrupted by daemon shutdown.".to_string()),
-            Settle::Failed(error) => Some(format!("❌ {}", error_line(error))),
+            Settle::Failed(error) => Some(format!("🙀 {}", error_line(error))),
             Settle::MaxIterations(reached) => {
-                Some(format!("❌ Max iterations reached ({reached})"))
+                Some(format!("🙀 Max iterations reached ({reached})"))
             }
             Settle::Timeout => Some("⏰ Session lost (timed out)".to_string()),
         }
@@ -332,7 +332,7 @@ impl Settle {
     fn reaction_emoji(&self) -> Option<&'static str> {
         match self {
             Settle::Completed => Some("DONE"),
-            Settle::Failed(_) | Settle::MaxIterations(_) | Settle::Timeout => Some("CrossMark"),
+            Settle::Failed(_) | Settle::MaxIterations(_) | Settle::Timeout => Some("SOB"),
             Settle::Shutdown => Some("SLEEP"),
             Settle::Cancelled => None,
         }
@@ -1283,10 +1283,10 @@ fn whisper_snippet(whisper: &str) -> String {
 fn render_terminal(s: &ObsCardState, settle: &Settle, keep_trace: bool) -> String {
     let (emoji, verb) = match settle {
         Settle::Completed => ("✅", "Done".to_string()),
-        Settle::Failed(_) => ("❌", "Failed".to_string()),
+        Settle::Failed(_) => ("🙀", "Failed".to_string()),
         Settle::Cancelled => ("⏹", "Stopped".to_string()),
         Settle::Shutdown => ("🔌", "Stopped · daemon shutdown".to_string()),
-        Settle::MaxIterations(reached) => ("❌", format!("Max iterations ({reached})")),
+        Settle::MaxIterations(reached) => ("🙀", format!("Max iterations ({reached})")),
         Settle::Timeout => ("⏰", "Timed out".to_string()),
     };
     // One quiet line, no header/template: the reply message below carries
@@ -1318,7 +1318,7 @@ fn render_terminal(s: &ObsCardState, settle: &Settle, keep_trace: bool) -> Strin
 /// headerless receipt style as [`render_terminal`].
 fn render_compact_terminal(s: &ObsCardState, summary: &str, is_error: bool) -> String {
     let (emoji, verb) = if is_error {
-        ("❌", "Compaction failed")
+        ("🙀", "Compaction failed")
     } else {
         ("✅", "Compacted")
     };

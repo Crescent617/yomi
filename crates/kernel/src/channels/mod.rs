@@ -317,13 +317,13 @@ impl PlatformConfig {
     }
 
     /// One-line legend of the bot's message reactions, for `/help` and
-    /// the welcome card: gate ack / queue / (Feishu only) settle ✅❌ —
+    /// the welcome card: gate ack / queue / (Feishu only) settle ✅😭 —
     /// Telegram runs never get settle reactions (no status-card path) —
     /// / access denied.
     pub(crate) fn reaction_legend(&self) -> &'static str {
         match self {
             Self::Feishu { .. } => {
-                "`[马上]` accepted · `[收到]` queued · ✅ run done · ❌ run failed · 🙏 no access"
+                "`[马上]` accepted · `[收到]` queued · ✅ run done · 😭 run failed · 🙏 no access"
             }
             Self::Telegram { .. } => "👀 accepted · 👌 queued · 🙏 no access",
         }

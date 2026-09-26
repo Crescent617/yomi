@@ -187,7 +187,7 @@ impl RunReplyBuffer {
         (self.usage_in, self.usage_out)
     }
 
-    /// Failed tool calls so far (title's ❌ segment).
+    /// Failed tool calls so far (title's 🙀 segment).
     pub(crate) fn failed_count(&self) -> usize {
         self.failed
     }
@@ -400,7 +400,7 @@ pub(crate) struct FinalReply {
     /// Completed model responses this run (`ModelEvent::End` count) — the
     /// step count shown in the trace title.
     steps: usize,
-    /// Failed tool calls this run (title ❌ counter, survives the buffer
+    /// Failed tool calls this run (title 🙀 counter, survives the buffer
     /// cap). Tool totals were dropped in the traffic redesign.
     failed: usize,
     /// Title tail segments mirrored from the run state (absent when the
@@ -908,7 +908,7 @@ pub(crate) struct TraceTitle<'a> {
 }
 
 /// Build the ordered summary segments, split into the always-dark head
-/// (💬 steps, traffic totals, ❌ failed) and the technical tail
+/// (💬 steps, traffic totals, 🙀 failed) and the technical tail
 /// (model, ctx) that callers may grey out. Zero/absent parts omitted;
 /// the elapsed prefix is left to the caller (its icon differs per
 /// surface). Tool totals are deliberately not shown — the traffic
@@ -936,7 +936,7 @@ pub(crate) fn summary_segments(t: &TraceTitle<'_>) -> (Vec<String>, Vec<String>)
         }
     }
     if t.failed > 0 {
-        head.push(format!("❌ {}", t.failed));
+        head.push(format!("🙀 {}", t.failed));
     }
     let mut tail = Vec::new();
     if let Some(m) = t.model {
@@ -1001,7 +1001,7 @@ fn trace_lines(entries: &[TraceEntry], markdown: bool) -> Vec<String> {
                 let icon = if tool.elapsed_ms.is_none() {
                     "⏳"
                 } else if tool.is_error {
-                    "❌"
+                    "🙀"
                 } else {
                     "✅"
                 };

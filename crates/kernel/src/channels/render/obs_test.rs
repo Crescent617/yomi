@@ -354,7 +354,7 @@ async fn tool_events_patch_card_with_stats() {
     let last = &patches[3].1;
     // Tool totals are no longer titled (traffic segments carry the cost
     // shape); the failed counter still is.
-    assert!(last.contains("❌ 1"), "failed summary: {last}");
+    assert!(last.contains("🙀 1"), "failed summary: {last}");
     // The title drops back to a thinking title after the tool ends.
     assert!(
         super::THINKING_TITLES.iter().any(|t| last.contains(t)),
@@ -363,7 +363,7 @@ async fn tool_events_patch_card_with_stats() {
     // The live trace shows the finished tool with elapsed and the failed
     // one with the error icon.
     assert!(last.contains("✅ **bash** · 2s"), "trace: {last}");
-    assert!(last.contains("❌ **read**"), "trace: {last}");
+    assert!(last.contains("🙀 **read**"), "trace: {last}");
     // …and the moment it finished, bash WAS the current step.
     assert!(
         patches[1].1.contains("✅ **bash** · 2s"),
@@ -658,7 +658,7 @@ async fn settle_failed_shows_error_summary() {
         card.get("header").is_none(),
         "terminal receipt has no header"
     );
-    assert!(patches[0].1.contains("❌ **Failed**"));
+    assert!(patches[0].1.contains("🙀 **Failed**"));
     assert!(patches[0].1.contains("provider exploded"));
 }
 
@@ -671,7 +671,7 @@ async fn failed_settle_without_tools_patches_terminal_card() {
 
     // Run fails before any tool call: the card (materialized at Running)
     // is PATCHed into the red terminal card so the user gets an
-    // explanation, not just a CrossMark.
+    // explanation, not just a SOB.
     tracker
         .handle_event(&adapter, &sid, "chat-1", Some("msg-1"), &running())
         .await;
@@ -699,7 +699,7 @@ async fn failed_settle_without_tools_patches_terminal_card() {
         card.get("header").is_none(),
         "terminal receipt has no header"
     );
-    assert!(patches[0].1.contains("❌ **Failed**"));
+    assert!(patches[0].1.contains("🙀 **Failed**"));
     assert!(patches[0].1.contains("provider exploded"));
 }
 
@@ -951,7 +951,7 @@ async fn standalone_compact_failure_settles_with_error() {
 
     let patches = mock.patches.lock().await;
     assert_eq!(patches.len(), 1);
-    assert!(patches[0].1.contains("❌ **Compaction failed**"));
+    assert!(patches[0].1.contains("🙀 **Compaction failed**"));
     assert!(patches[0].1.contains("**Error**"));
     assert!(patches[0].1.contains("rate limited"));
     drop(patches);
@@ -984,7 +984,7 @@ async fn standalone_compact_failure_without_card_sends_explanation() {
         .await;
     let cards = mock.cards.lock().await;
     assert_eq!(cards.len(), 1);
-    assert!(cards[0].1.contains("❌ **Compaction failed**"));
+    assert!(cards[0].1.contains("🙀 **Compaction failed**"));
     drop(cards);
     assert!(!tracker.has_state(&sid));
 }
@@ -1110,7 +1110,7 @@ async fn terminal_receipt_title_matches_live_segments() {
     let patches = mock.patches.lock().await;
     let live = patches.last().unwrap().1.clone();
     assert!(
-        live.contains("🐾 0s · 💬 1 · 10.0k↑ · 2.3k↓ · ❌ 1 · k3-hs · 6%"),
+        live.contains("🐾 0s · 💬 1 · 10.0k↑ · 2.3k↓ · 🙀 1 · k3-hs · 6%"),
         "live title: {live}"
     );
     drop(patches);
@@ -1127,7 +1127,7 @@ async fn terminal_receipt_title_matches_live_segments() {
     let patches = mock.patches.lock().await;
     let terminal = &patches.last().unwrap().1;
     assert!(
-        terminal.contains("🐾 0s · 💬 1 · 10.0k↑ · 2.3k↓ · ❌ 1 · k3-hs · 6%"),
+        terminal.contains("🐾 0s · 💬 1 · 10.0k↑ · 2.3k↓ · 🙀 1 · k3-hs · 6%"),
         "terminal title matches live: {terminal}"
     );
 }
@@ -2183,7 +2183,7 @@ async fn stopped_failed_shows_error_notice_in_content() {
     let morphed: serde_json::Value = serde_json::from_str(&patches.last().unwrap().1).unwrap();
     assert!(morphed["header"].is_null(), "no red header after morph");
     let elements = morphed["body"]["elements"].as_array().unwrap();
-    assert_eq!(elements[0]["content"], "❌ **Error**  provider exploded");
+    assert_eq!(elements[0]["content"], "🙀 **Error**  provider exploded");
     assert_eq!(elements[1]["content"], "intermediate thought");
     assert_eq!(elements[2]["tag"], "hr");
     assert_eq!(elements[3]["content"], "partial answer");
@@ -2587,7 +2587,7 @@ async fn settle_morph_reacts_done_on_latest_user_message() {
 }
 
 #[tokio::test]
-async fn settle_failed_reacts_cross_mark() {
+async fn settle_failed_reacts_sob() {
     let tracker = ObsTracker::new();
     let mock = MockAdapter::new();
     let sid = sid();
@@ -2607,12 +2607,12 @@ async fn settle_failed_reacts_cross_mark() {
     let reactions = mock.reactions_added.lock().await;
     assert_eq!(
         reactions.as_slice(),
-        [("user-msg-1".to_string(), "CrossMark".to_string())]
+        [("user-msg-1".to_string(), "SOB".to_string())]
     );
 }
 
 #[tokio::test]
-async fn settle_timeout_reacts_cross_mark() {
+async fn settle_timeout_reacts_sob() {
     let tracker = ObsTracker::new();
     let mock = MockAdapter::new();
     let sid = sid();
@@ -2626,7 +2626,7 @@ async fn settle_timeout_reacts_cross_mark() {
     let reactions = mock.reactions_added.lock().await;
     assert_eq!(
         reactions.as_slice(),
-        [("user-msg-1".to_string(), "CrossMark".to_string())]
+        [("user-msg-1".to_string(), "SOB".to_string())]
     );
 }
 
@@ -2809,7 +2809,7 @@ async fn freeze_stopped_failed_without_card_sends_terminal_card() {
         card.get("header").is_none(),
         "terminal receipt has no header"
     );
-    assert!(cards[0].1.contains("❌ **Failed**"));
+    assert!(cards[0].1.contains("🙀 **Failed**"));
     assert!(cards[0].1.contains("collapsible_panel"));
     assert!(mock.patches.lock().await.is_empty());
 }

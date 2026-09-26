@@ -68,7 +68,7 @@ pub(crate) const COMMANDS: &[(&str, &[&str])] = &[
     (CMD_HELP, &["/h"]),
     (CMD_INFO, &["/i"]),
     (CMD_RULES, &[]),
-    (CMD_MODELS, &[]),
+    (CMD_MODELS, &["/ml"]),
     (CMD_MODEL, &["/m"]),
     (CMD_CLEAR, &["/c"]),
     (CMD_COMPACT, &[]),
@@ -83,7 +83,7 @@ pub(crate) const COMMANDS: &[(&str, &[&str])] = &[
     (CMD_WATCH, &[]),
     (CMD_MAILBOX, &["/mb"]),
     (CMD_SHELL, &["/shell"]),
-    (CMD_SETTINGS, &[]),
+    (CMD_SETTINGS, &["/set"]),
     (CMD_CRON, &[]),
     (CMD_BIND, &[]),
     (CMD_SESSIONS, &[]),
@@ -115,14 +115,14 @@ pub(crate) const HELP_TEXT: &str = "\
 `/thread <text>` (`/t`) — ask in a new thread off this message (Feishu; redundant in reply-in-thread chats — every top-level message opens one)
 
 **Models**
-`/models` — list configured models (current one marked)
+`/models` (`/ml`) — list configured models (current one marked)
 `/model` (`/m`) — show current model; `/model <key>` to switch (in a thread: this thread only)
 
 **Chat admin**
 `/mention` — show the @-requirement here; `/mention on|off|reset` (chat or thread scope, by location; mutations admin)
 `/threads` — show reply-in-thread mode; `/threads on|off|reset` (chat only — use at top level; mutations admin)
 `/watch` — show watch mode; `/watch on|off` observer mode: every message mirrored to one session that decides when to reply (admin; chat only)
-`/settings` — settings panel card: mention / reply-in-thread / model / context window / watch as dropdowns (admin)
+`/settings` (`/set`) — settings panel card: mention / reply-in-thread / model / context window / watch as dropdowns (admin)
 `/subscribe [chat_id] [-r]` (`/sub`) — DM you when runs here complete; `-r` covers this chat's threads (Feishu)
 `/unsubscribe` (`/unsub`) — cancel the subscription here
 `/bind` — show this conversation's session id; `/bind <session_id>` to retarget it (admin)
@@ -154,7 +154,7 @@ pub(crate) const HELP_SHORT: &str = "\
 `/clear` (`/c`) · `/compact` — reset / compact context
 `/stop` (`/s`) — stop the current run
 `/steer <text>` · `/queue <text>` (`/q`) — inject now / queue for later
-`/settings` — panel card: mention / reply-in-thread / model / context window / watch
+`/settings` (`/set`) — panel card: mention / reply-in-thread / model / context window / watch
 `/watch` — observer mode for the whole chat (admin)
 `/subscribe` (`/sub`) — DM you when runs here complete
 

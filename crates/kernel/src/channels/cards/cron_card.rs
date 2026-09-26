@@ -48,7 +48,7 @@ fn status_icon(status: CronJobStatus) -> &'static str {
         CronJobStatus::Active => "🟢",
         CronJobStatus::Paused => "⏸",
         CronJobStatus::Completed => "✅",
-        CronJobStatus::Failed => "❌",
+        CronJobStatus::Failed => "🙀",
     }
 }
 

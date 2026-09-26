@@ -512,7 +512,7 @@ async fn settle_deliver(
         match &settle_kind {
             SettleKind::Stopped(r) => RunEndStatus::from_stop_reason(r),
             // 兜底路径的已知取舍（评审 nit #5）：Timeout 时订阅者状态记为
-            // ❌/“session lost”——投递可靠性优先于状态保真度。
+            // 🙀/“session lost”——投递可靠性优先于状态保真度。
             SettleKind::Timeout => RunEndStatus::Failed,
         }
     });
