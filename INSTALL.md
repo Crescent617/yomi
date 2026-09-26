@@ -62,8 +62,7 @@ agent 子进程里的 `yomi`）。
 Download the `.msi` installer from the releases page (unsigned —
 expect a SmartScreen prompt)。安装包内嵌 CLI sidecar，且 msi 会把
 安装目录加进系统 PATH——新开 terminal 即可直接使用 `yomi`（与
-GUI 同版）。`.nsis` 安装器不改 PATH；想在 terminal 用可另装 CLI
-zip（`yomi-<version>-x86_64-pc-windows-msvc.zip`）。
+GUI 同版）。
 
 ## First-run setup
 

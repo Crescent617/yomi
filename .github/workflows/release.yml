@@ -220,7 +220,7 @@ jobs:
         with:
           files: ${{ steps.sha.outputs.dmg }}
 
-  # ==================== GUI 构建 (Windows MSI/NSIS) ====================
+  # ==================== GUI 构建 (Windows MSI) ====================
   # 与 windows-e2e.yml 的手动打包共用 .github/workflows/build-gui-windows.yml
   # 单一定义；产物经 release job 的 merge-multiple 下载随 Release 发布。
   build-gui-windows:
@@ -241,13 +241,12 @@ jobs:
         with:
           name: gui-windows-installers
       # artifact 内是嵌套两层（upload-artifact 多 path 按 LCA 保留
-      # 目录结构：msi/*.msi + nsis/*.exe）——必须递归通配，根目录
+      # 目录结构：msi/*.msi + 根 zip）——必须递归通配，根目录
       # 通配会零匹配而 softprops 只 warn 不 fail（静默断供）。
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             **/Yomi_*.msi
-            **/Yomi_*-setup.exe
             **/yomi-*-pc-windows-msvc.zip
 
   # ==================== Docker 镜像 (GHCR) ====================
@@ -343,7 +342,6 @@ jobs:
             "yomi-${VERSION}-x86_64-pc-windows-msvc.zip"
             "Yomi_${VERSION}_aarch64.dmg"
             "Yomi_${VERSION}_x64_en-US.msi"
-            "Yomi_${VERSION}_x64-setup.exe"
           )
           ASSETS=$(gh release view "${GITHUB_REF_NAME}" --repo "${{ github.repository }}" --json assets --jq '.assets[].name')
           MISSING=()

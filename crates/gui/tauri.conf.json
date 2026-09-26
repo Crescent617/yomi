@@ -82,7 +82,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["msi", "dmg"],
     "externalBin": ["binaries/yomi"],
     "windows": {
       "wix": {
