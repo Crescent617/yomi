@@ -14,6 +14,9 @@
   <Fragment>
     <DirectoryRef Id="INSTALLDIR">
       <Component Id="InstallDirOnPath" Guid="{7E3A5C21-9B4F-4D8E-A6C3-2F1D8B0E5A97}">
+        <!-- 无 File/Registry 资源的组件 keypath 落在 INSTALLDIR 目录上，
+             ICE18 要求该 Directory/Component 对登记进 CreateFolders 表 -->
+        <CreateFolder />
         <Environment Id="InstallDirOnPath" Name="PATH" Action="set"
                      Permanent="no" Part="last" Separator=";" System="yes"
                      Value="[INSTALLDIR]" />
