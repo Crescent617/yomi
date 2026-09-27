@@ -1098,7 +1098,7 @@ pub(crate) fn md_safe(text: &str) -> String {
 /// `**`) are too ambiguous to auto-close. Unlike `utils/markdown.rs`
 /// (```-only region mapping), this deliberately recognizes `~~~` too —
 /// the cost of a missed close is a degraded card element.
-fn balance_fences(text: &str) -> std::borrow::Cow<'_, str> {
+pub(crate) fn balance_fences(text: &str) -> std::borrow::Cow<'_, str> {
     // The open fence's marker char and run length, if any.
     let mut open: Option<(char, usize)> = None;
     for line in text.lines() {

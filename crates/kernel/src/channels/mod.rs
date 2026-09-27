@@ -1381,8 +1381,9 @@ pub fn blocks_to_text(blocks: &[ContentBlock]) -> String {
 pub mod store;
 
 pub(crate) use hub::{
-    command as hub_command, context as hub_context, deliver as hub_deliver, delivery_pool,
-    gate as hub_gate, handlers as hub_handlers, routing as hub_routing, watch as hub_watch,
+    btw as hub_btw, command as hub_command, context as hub_context, deliver as hub_deliver,
+    delivery_pool, gate as hub_gate, handlers as hub_handlers, routing as hub_routing,
+    watch as hub_watch,
 };
 
 #[cfg(test)]

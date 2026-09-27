@@ -8,6 +8,7 @@ use crate::types::{ContentBlock, Result, SessionId};
 use std::sync::Arc;
 use tracing::warn;
 
+use crate::channels::hub_btw as btw;
 use crate::channels::hub_command::{
     format_channel_line, format_current_model, format_model_list, format_rules,
     format_runtime_status, format_session_info, format_unknown_model, format_usage,
@@ -202,6 +203,23 @@ pub(crate) async fn handle_incoming_message(
         ChannelCommand::InvalidQueueCommand => Ok(Some(
             "Usage: `/queue <text>` — queue a message for a later turn.".to_string(),
         )),
+        ChannelCommand::InvalidBtwCommand => Ok(Some(
+            "Usage: `/btw <question>` — side question: full context, no tools, one answer, never enters history.".to_string(),
+        )),
+        ChannelCommand::Btw(question) => {
+            btw::handle_btw(
+                channel_name,
+                store,
+                &kernel,
+                adapter,
+                &msg,
+                reply_msg_id,
+                rit,
+                &mapping_key,
+                question,
+            )
+            .await
+        }
         ChannelCommand::Queue(text) => {
             let (sid, mut blocks) = prepare_trigger(
                 channel_name,

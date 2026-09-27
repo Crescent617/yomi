@@ -21,6 +21,8 @@ pub(crate) const CMD_STEER: &str = "/steer";
 
 pub(crate) const CMD_QUEUE: &str = "/queue";
 
+pub(crate) const CMD_BTW: &str = "/btw";
+
 pub(crate) const CMD_INFO: &str = "/info";
 
 pub(crate) const CMD_RULES: &str = "/rules";
@@ -75,6 +77,7 @@ pub(crate) const COMMANDS: &[(&str, &[&str])] = &[
     (CMD_STOP, &["/s"]),
     (CMD_STEER, &[]),
     (CMD_QUEUE, &["/q"]),
+    (CMD_BTW, &[]),
     (CMD_THREAD, &["/t"]),
     (CMD_SUBSCRIBE, &["/sub"]),
     (CMD_UNSUBSCRIBE, &["/unsub"]),
@@ -110,6 +113,7 @@ pub(crate) const HELP_TEXT: &str = "\
 `/stop` (`/s`) — stop the current run
 `/steer <text>` — inject a message into the current run
 `/queue <text>` (`/q`) — queue a message for a later turn
+`/btw <question>` — side question: full context, no tools, one answer, never enters history
 `/mailbox` (`/mb`) — pending steer/queued messages; `/mailbox retract <n>` · `/mailbox clear [steer|queue|all]` (admin)
 `/bg` — background tasks with stop buttons; `/bg --all` spans sessions (admin)
 `/thread <text>` (`/t`) — ask in a new thread off this message (Feishu; redundant in reply-in-thread chats — every top-level message opens one)
@@ -154,6 +158,7 @@ pub(crate) const HELP_SHORT: &str = "\
 `/clear` (`/c`) · `/compact` — reset / compact context
 `/stop` (`/s`) — stop the current run
 `/steer <text>` · `/queue <text>` (`/q`) — inject now / queue for later
+`/btw <q>` — side question (no tools, never enters history)
 `/settings` (`/set`) — panel card: mention / reply-in-thread / model / context window / watch
 `/watch` — observer mode for the whole chat (admin)
 `/subscribe` (`/sub`) — DM you when runs here complete
@@ -170,6 +175,12 @@ pub(crate) enum ChannelCommand {
     Stop,
     /// Inject a steer message before the next turn.
     Steer(String),
+    /// Ephemeral side question (`/btw <question>`): full context, no
+    /// tools, single answer; never enters session history or the
+    /// mailbox. The channel reply is the whole trace.
+    Btw(String),
+    /// A `/btw` without text.
+    InvalidBtwCommand,
     /// Queue a normal user message for a later turn.
     Queue(String),
     /// A `/steer` without text.
@@ -357,6 +368,14 @@ pub(crate) fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
                 ChannelCommand::Queue(rest)
             } else {
                 ChannelCommand::Steer(rest)
+            }
+        }
+        CMD_BTW => {
+            let rest = parts.collect::<Vec<_>>().join(" ");
+            if rest.is_empty() {
+                ChannelCommand::InvalidBtwCommand
+            } else {
+                ChannelCommand::Btw(rest)
             }
         }
         CMD_MODELS | CMD_MODEL => match (parts.next(), parts.next()) {
