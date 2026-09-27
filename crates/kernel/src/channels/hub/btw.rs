@@ -256,11 +256,14 @@ async fn finish(
             }
         }
         None => {
+            let note = terminal_note(&end)
+                .map(|n| format!("\n\n{n}"))
+                .unwrap_or_default();
             let text = format!(
-                "💭 btw · {}\n\n{}\n\n{}",
+                "💭 btw · {}\n\n{}{}",
                 truncate_by_chars(question, QUESTION_MAX_CHARS, "…"),
                 final_body(answer, &end),
-                terminal_note(&end),
+                note,
             );
             if let Err(e) = adapter
                 .send_message(
@@ -290,23 +293,24 @@ fn final_body(answer: &str, end: &BtwEnd) -> String {
     fallback.to_string()
 }
 
-/// The terminal line carrying the outcome + the side-question semantics
-/// ("never enters history") so the frozen card is self-explanatory in
-/// the thread. Plain text — the card wraps it in a color font, the
-/// text-platform fallback sends it verbatim (HTML would leak there).
-fn terminal_note(end: &BtwEnd) -> String {
+/// The terminal line for abnormal endings only (replaced / cancelled /
+/// error / timeout / lost) — a normal answer needs no footer. `None`
+/// for Stop/ToolUse: the answer alone is the receipt. Plain text — the
+/// card wraps it in a color font, the text-platform fallback sends it
+/// verbatim (HTML would leak there).
+fn terminal_note(end: &BtwEnd) -> Option<String> {
     match end {
-        BtwEnd::Reason(BtwEndReason::Stop | BtwEndReason::ToolUse) => {
-            "💭 side question · never enters history".to_string()
+        BtwEnd::Reason(BtwEndReason::Stop | BtwEndReason::ToolUse) => None,
+        BtwEnd::Reason(BtwEndReason::Replaced) => {
+            Some("Replaced by a newer side question".to_string())
         }
-        BtwEnd::Reason(BtwEndReason::Replaced) => "Replaced by a newer side question".to_string(),
-        BtwEnd::Reason(BtwEndReason::Cancelled) => "Cancelled".to_string(),
-        BtwEnd::Reason(BtwEndReason::Error(e)) => format!(
+        BtwEnd::Reason(BtwEndReason::Cancelled) => Some("Cancelled".to_string()),
+        BtwEnd::Reason(BtwEndReason::Error(e)) => Some(format!(
             "🙀 {}",
             crate::channels::render::reply::md_safe(&truncate_by_chars(e, ERROR_MAX_CHARS, "…"))
-        ),
-        BtwEnd::Timeout => "⏰ Side question timed out — answer above is partial".to_string(),
-        BtwEnd::Lost => "Event stream interrupted".to_string(),
+        )),
+        BtwEnd::Timeout => Some("⏰ Side question timed out — answer above is partial".to_string()),
+        BtwEnd::Lost => Some("Event stream interrupted".to_string()),
     }
 }
 
@@ -351,14 +355,18 @@ pub(crate) fn btw_card(question: &str, answer: &str, phase: BtwPhase) -> String 
     btw_card_envelope(question, &elements)
 }
 
-/// Terminal card: answer on top, terminal note underneath.
+/// Terminal card: the answer alone for a normal ending, the answer +
+/// status note for an abnormal one.
 pub(crate) fn btw_card_final(question: &str, answer: &str, end: &BtwEnd) -> String {
-    let note = format!(
-        "<font color='{}'>{}</font>",
-        terminal_note_color(end),
-        terminal_note(end)
-    );
-    let body = format!("{}\n\n{}", final_body(answer, end), note);
+    let body = match terminal_note(end) {
+        Some(note) => format!(
+            "{}\n\n<font color='{}'>{}</font>",
+            final_body(answer, end),
+            terminal_note_color(end),
+            note
+        ),
+        None => final_body(answer, end),
+    };
     btw_card_envelope(question, &[json!({ "tag": "markdown", "content": body })])
 }
 

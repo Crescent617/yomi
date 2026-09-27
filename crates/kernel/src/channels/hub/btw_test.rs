@@ -211,15 +211,28 @@ fn publish_btw_stream(
     });
 }
 
-/// Poll `what` until it returns `Some` or the deadline passes.
+/// Poll `what` until it returns `Some` or the deadline passes. The
+/// deadline is generous: under full-crate test parallelism the delivery
+/// task's real timers (patch ticks, retry sleeps) can stretch well past
+/// their nominal intervals.
 async fn wait_for<T>(mut what: impl FnMut() -> Option<T>) -> Option<T> {
-    for _ in 0..100 {
+    for _ in 0..250 {
         if let Some(v) = what() {
             return Some(v);
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     None
+}
+
+/// A patch is settled when it carries the answer without the live
+/// "Answering…" status line (normal endings have no footer to wait on).
+fn settled(patches: &[String], answer: &str) -> Option<String> {
+    patches
+        .iter()
+        .rev()
+        .find(|p| p.contains(answer) && !p.contains("Answering"))
+        .cloned()
 }
 
 #[test]
@@ -261,8 +274,14 @@ fn btw_card_final_renders() {
     let done = btw_card_final("q", "答案", &BtwEnd::Reason(BtwEndReason::Stop));
     assert!(done.contains("答案"), "{done}");
     assert!(
-        done.contains("side question · never enters history"),
-        "{done}"
+        !done.contains("never enters history"),
+        "normal ending carries no footer: {done}"
+    );
+    // Abnormal endings keep their status note.
+    let replaced = btw_card_final("q", "答案", &BtwEnd::Reason(BtwEndReason::Replaced));
+    assert!(
+        replaced.contains("Replaced by a newer side question"),
+        "{replaced}"
     );
 
     // Pure tool_use: fallback body replaces the empty answer.
@@ -320,16 +339,13 @@ async fn btw_streams_to_card_and_freezes() {
         BtwEndReason::Stop,
     );
 
-    let final_patch = wait_for(|| {
-        let patches = mock.patches.try_lock().ok()?;
-        patches
-            .last()
-            .filter(|p| p.contains("side question · never enters history"))
-            .cloned()
-    })
-    .await
-    .expect("final btw card patch");
-    assert!(final_patch.contains("那个变量叫"), "{final_patch}");
+    let final_patch = wait_for(|| settled(&mock.patches.try_lock().ok()?, "那个变量叫"))
+        .await
+        .expect("final btw card patch");
+    assert!(
+        !final_patch.contains("never enters history"),
+        "{final_patch}"
+    );
 }
 
 #[tokio::test]
@@ -399,8 +415,8 @@ async fn btw_text_mode_sends_single_message() {
     .expect("text reply");
     assert!(text.contains("文本答案"), "{text}");
     assert!(text.contains("💭 btw · 问题"), "{text}");
-    assert!(text.contains("never enters history"), "{text}");
-    // Text platforms must not receive card markup.
+    // Normal ending: no footer line, no card markup.
+    assert!(!text.contains("never enters history"), "{text}");
     assert!(!text.contains("<font"), "{text}");
 }
 
@@ -533,16 +549,9 @@ async fn btw_ignores_other_request_ids() {
         reason: BtwEndReason::Stop,
     });
 
-    let final_patch = wait_for(|| {
-        let patches = mock.patches.try_lock().ok()?;
-        patches
-            .last()
-            .filter(|p| p.contains("side question · never enters history"))
-            .cloned()
-    })
-    .await
-    .expect("final btw card patch");
-    assert!(final_patch.contains("飞书的答案"), "{final_patch}");
+    let final_patch = wait_for(|| settled(&mock.patches.try_lock().ok()?, "飞书的答案"))
+        .await
+        .expect("final btw card patch");
     assert!(
         !final_patch.contains("GUI的答案，不该出现"),
         "{final_patch}"
@@ -585,16 +594,9 @@ async fn btw_final_patch_retries_until_land() {
         BtwEndReason::Stop,
     );
 
-    let final_patch = wait_for(|| {
-        let patches = mock.patches.try_lock().ok()?;
-        patches
-            .last()
-            .filter(|p| p.contains("side question · never enters history"))
-            .cloned()
-    })
-    .await
-    .expect("final btw card patch after retries");
-    assert!(final_patch.contains("重试后的答案"), "{final_patch}");
+    wait_for(|| settled(&mock.patches.try_lock().ok()?, "重试后的答案"))
+        .await
+        .expect("final btw card patch after retries");
 }
 
 #[test]
@@ -673,8 +675,8 @@ async fn btw_tick_throttles_streaming_patches() {
     .await
     .expect("throttled streaming patch");
     assert!(
-        !streaming_patch.contains("side question · never enters history"),
-        "not settled yet: {streaming_patch}"
+        streaming_patch.contains("Answering"),
+        "still streaming, not settled: {streaming_patch}"
     );
 }
 
