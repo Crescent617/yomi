@@ -130,6 +130,12 @@ impl Kernel {
             .expect("session_store not configured")
     }
 
+    /// Configured agent identity name (`[agent] name`; the welcome card
+    /// greets with it).
+    pub(crate) fn agent_name(&self) -> String {
+        self.agent_config.name.clone()
+    }
+
     /// List all channels and their status.
     pub fn list_channels(&self) -> Vec<crate::channels::ChannelInfo> {
         match &self.channel_manager {

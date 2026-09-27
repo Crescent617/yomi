@@ -38,6 +38,7 @@ description: "yomi 自我管理：用 yomi CLI 运维自己的 daemon、会话�
 - **等待跑完**：`scripts/session-wait <sid>`——轮询至 `phase=idle` 且无 running subagent、无后台 shell。`send` + `session-wait` = 驱动兄弟会话的最小回路。
 - checkpoint：`rpc get_checkpoints` 列表；回滚在 TUI `/rewind`。
 - 规则文件两层（spawn 时原文注入 system prompt，只在用户要求时更改）：channel rules `<data_dir>/channels/rules/<chat_id>.md`（全群会话）、session rules `<data_dir>/sessions/rules/<session_id>.md`（当前 session）。IM `/rules` 查看生效内容。
+- 入群欢迎卡：`<data_dir>/channels/welcome.json` 写了合法飞书卡片 JSON 就原样发（`{{name}}` 替换为配置的 agent 名）；缺失或非法 JSON 退回内置默认。
 
 ## cron
 

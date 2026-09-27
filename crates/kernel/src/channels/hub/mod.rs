@@ -340,16 +340,15 @@ impl ChannelHub {
                                     debug!(channel = %name_gate, chat_id, "welcome card skipped (disabled or chat not allowed)");
                                     continue;
                                 }
-                                let (config, adapter) =
-                                    (config_gate.clone(), Arc::clone(&adapter_gate));
+                                let (adapter, kernel_w) =
+                                    (Arc::clone(&adapter_gate), kernel.clone());
                                 tokio::spawn(async move {
-                                    let card = crate::channels::cards::welcome::welcome_card(
-                                        config.platform.reaction_legend(),
-                                    );
-                                    if let Err(e) = adapter.send_card(&chat_id, &card, None).await
-                                    {
-                                        warn!(error = %e, "welcome card send failed");
-                                    }
+                                    crate::channels::cards::welcome::send_welcome_card(
+                                        &adapter,
+                                        &kernel_w,
+                                        &chat_id,
+                                    )
+                                    .await;
                                 });
                                 continue;
                             }
