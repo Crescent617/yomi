@@ -110,19 +110,25 @@ pub(crate) async fn resolve_require_mention(
     (config.require_mention, MentionSource::Default)
 }
 
-/// The effective `reply_in_thread` for a chat: the per-chat override
-/// (`/threads on|off`) wins over the channel config. DMs have no
-/// override (the command refuses them), so this stays a single lookup.
+/// The effective `reply_in_thread` for one incoming message: the
+/// per-chat override (`/threads on|off`) wins over the default. The
+/// default is the channel config in group chats; **private chats
+/// default to off even when the config is on** — threading a DM adds
+/// nothing by default, and a per-chat override is how a DM opts in.
 pub(crate) async fn resolve_reply_in_thread(
     store: &Arc<dyn ChannelStore>,
     config: &ChannelConfig,
-    chat_id: &str,
+    msg: &ChannelMessage,
 ) -> bool {
-    match store.get_rit_override(&config.name, chat_id).await {
-        Ok(value) => value.unwrap_or(config.reply_in_thread),
+    let default = config.reply_in_thread && msg.is_group;
+    match store
+        .get_rit_override(&config.name, &msg.external_chat_id)
+        .await
+    {
+        Ok(value) => value.unwrap_or(default),
         Err(e) => {
             warn!(error = %e, "rit override read failed, falling back to channel config");
-            config.reply_in_thread
+            default
         }
     }
 }
@@ -162,12 +168,13 @@ pub(crate) async fn session_jump_link(
 /// Replies to in-thread messages always stay in that thread. When the
 /// channel's `reply_in_thread` is enabled, group messages additionally anchor
 /// to the triggering message so the reply opens/continues its thread
-/// (Feishu thread reply, Telegram quote-reply). Private chats are never
-/// anchored — threading there is just noise.
+/// (Feishu thread reply, Telegram quote-reply). Private chats anchor only
+/// when their effective `reply_in_thread` is on (off by default there, see
+/// [`resolve_reply_in_thread`]) — DM threading is an explicit per-chat opt-in.
 pub(crate) fn reply_anchor(msg: &ChannelMessage, reply_in_thread: bool) -> Option<String> {
     msg.external_message_id
         .clone()
-        .filter(|_| msg.thread_id.is_some() || (reply_in_thread && msg.is_group))
+        .filter(|_| msg.thread_id.is_some() || reply_in_thread)
 }
 
 /// The reply anchor for a command's feedback. At chat level (a
@@ -193,8 +200,10 @@ pub(crate) fn command_reply_anchor(
 
 /// Compute the session mapping key for an incoming message.
 ///
-/// In `reply_in_thread` group chats each conversation thread gets its own
-/// session. The bot's reply is what opens the thread, so the thread's
+/// In `reply_in_thread` chats each conversation thread gets its own
+/// session. (DMs only thread when their per-chat override turns it on —
+/// see [`resolve_reply_in_thread`].) The bot's reply is what opens the
+/// thread, so the thread's
 /// *starting* message itself carries no `thread_id` — but every message
 /// inside the thread carries one and replies to the thread's root message
 /// (Feishu sets `root_id` to it). Keying in-thread messages by root id and
@@ -221,7 +230,7 @@ pub(crate) fn session_mapping_key(
             &dc.comment_id,
         );
     }
-    if reply_in_thread && msg.is_group {
+    if reply_in_thread {
         if msg.thread_id.is_some() {
             // Inside a thread: key by the thread's root message so the whole
             // thread shares one session (fall back to thread_id for older
@@ -302,7 +311,7 @@ pub(crate) async fn effective_mapping_key(
 /// whole — e.g. a top-level `/model` switches every thread session, and a
 /// top-level `/info` shows the chat-level session.
 pub(crate) fn is_chat_level_message(msg: &ChannelMessage, reply_in_thread: bool) -> bool {
-    reply_in_thread && msg.is_group && msg.thread_id.is_none() && msg.root_id.is_none()
+    reply_in_thread && msg.thread_id.is_none() && msg.root_id.is_none()
 }
 
 /// The session key a session-addressing command resolves at its

@@ -92,9 +92,7 @@ pub(crate) async fn maybe_history_prefix(
     // With reply_in_thread, a channel-level trigger opens a fresh thread —
     // the chat's cross-topic chatter is noise there, not context. Triggers
     // inside an existing thread still get that thread's history.
-    if msg.thread_id.is_none()
-        && resolve_reply_in_thread(store, config, &msg.external_chat_id).await
-    {
+    if msg.thread_id.is_none() && resolve_reply_in_thread(store, config, msg).await {
         return None;
     }
     let container = history_container(msg);
@@ -273,7 +271,7 @@ pub(crate) async fn prepare_trigger(
             (id.clone().unwrap_or_else(|| chat_id.clone()), id)
         }
         TriggerKind::Normal => {
-            let rit = resolve_reply_in_thread(store, config, &msg.external_chat_id).await;
+            let rit = resolve_reply_in_thread(store, config, msg).await;
             (
                 effective_mapping_key(store, adapter, channel_name, msg, &chat_id, rit).await?,
                 reply_anchor(msg, rit),
@@ -585,7 +583,7 @@ pub(crate) async fn record_passive_receipt(
     ) {
         return;
     }
-    let rit = resolve_reply_in_thread(store, config, &msg.external_chat_id).await;
+    let rit = resolve_reply_in_thread(store, config, msg).await;
     // Passive path: never resolve roots via the platform (that would
     // cost an API lookup for chatter the bot wasn't even addressed in).
     // The plain key resolves rit=on threads (key == root); for other

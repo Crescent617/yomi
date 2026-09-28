@@ -3511,10 +3511,13 @@ fn reply_anchor_respects_reply_in_thread_config() {
 }
 
 #[test]
-fn reply_anchor_never_anchors_private_chats() {
+fn reply_anchor_private_chats_follow_effective_rit() {
+    // DMs anchor only when their effective reply_in_thread is on (a
+    // per-chat opt-in); the channel config reaching this fn already
+    // includes that resolution.
     let private_msg = channel_message(None, false, true);
     assert_eq!(reply_anchor(&private_msg, false), None);
-    assert_eq!(reply_anchor(&private_msg, true), None);
+    assert_eq!(reply_anchor(&private_msg, true).as_deref(), Some("msg-1"));
 }
 
 #[test]
@@ -3779,11 +3782,15 @@ fn mapping_key_reply_in_thread_legacy_thread_falls_back_to_thread_id() {
 }
 
 #[test]
-fn mapping_key_reply_in_thread_private_chat_stays_chat_scoped() {
-    // Private chats never key by message, even for quote-replies (root_id).
+fn mapping_key_reply_in_thread_private_chat_keys_like_a_group() {
+    // With the DM's effective reply_in_thread on (per-chat opt-in), a
+    // top-level DM keys by its own message id like a group does; the
+    // session split is identical, only the DM default differs.
     let mut msg = channel_message(None, false, true);
     msg.root_id = Some("msg-root".to_string());
-    assert_eq!(session_mapping_key(&msg, "chat-1", true), "chat-1");
+    assert_eq!(session_mapping_key(&msg, "chat-1", true), "msg-1");
+    // Effective rit off → the DM stays one chat-scoped session.
+    assert_eq!(session_mapping_key(&msg, "chat-1", false), "chat-1");
 }
 
 #[test]
@@ -3964,7 +3971,7 @@ async fn deliver_reply_doc_comment_chunks_long_text() {
 }
 
 #[test]
-fn chat_level_message_only_for_top_level_group_in_thread_mode() {
+fn chat_level_message_only_for_top_level_in_thread_mode() {
     // Top-level group message in reply_in_thread mode → chat-level.
     let msg = channel_message(None, true, true);
     assert!(is_chat_level_message(&msg, true));
@@ -3977,9 +3984,11 @@ fn chat_level_message_only_for_top_level_group_in_thread_mode() {
     msg.root_id = Some("msg-root".to_string());
     assert!(!is_chat_level_message(&msg, true));
 
-    // Private chat → never chat-level.
+    // Top-level private message with effective rit on → chat-level too
+    // (DMs follow the same rule once opted in via /threads).
     let msg = channel_message(None, false, true);
-    assert!(!is_chat_level_message(&msg, true));
+    assert!(is_chat_level_message(&msg, true));
+    assert!(!is_chat_level_message(&msg, false));
 
     // reply_in_thread off → never chat-level.
     let msg = channel_message(None, true, true);
@@ -8361,26 +8370,50 @@ async fn bind_refuses_watch_session() {
     assert!(reply.contains("cannot be rebound"), "{reply}");
 }
 
-/// The chat override wins over the channel config; other chats and a
-/// cleared override fall back to it.
+/// The chat override wins over the default; other chats and a cleared
+/// override fall back to it. DMs default to off even when the channel
+/// config is on — the override is the only way a DM threads.
 #[tokio::test]
 async fn rit_override_resolution() {
     let (_pool, store) = create_test_pool().await;
     let store: Arc<dyn ChannelStore> = store;
-    let config = ChannelConfig {
+    let msg = |chat: &str, group: bool| ChannelMessage {
+        external_chat_id: chat.to_string(),
+        external_user_id: "ou_1".to_string(),
+        external_message_id: Some("m1".to_string()),
+        is_mention: true,
+        raw_text: None,
+        content: vec![],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: group,
+        create_time: None,
+        doc_comment: None,
+    };
+    let mut config = ChannelConfig {
         name: "mock".to_string(),
         ..Default::default()
     };
     assert!(!config.reply_in_thread);
-    assert!(!resolve_reply_in_thread(&store, &config, "oc_1").await);
+    assert!(!resolve_reply_in_thread(&store, &config, &msg("oc_1", true)).await);
 
     store.set_rit_override("mock", "oc_1", true).await.unwrap();
-    assert!(resolve_reply_in_thread(&store, &config, "oc_1").await);
+    assert!(resolve_reply_in_thread(&store, &config, &msg("oc_1", true)).await);
     // Other chats are unaffected.
-    assert!(!resolve_reply_in_thread(&store, &config, "oc_2").await);
+    assert!(!resolve_reply_in_thread(&store, &config, &msg("oc_2", true)).await);
 
     store.clear_rit_override("mock", "oc_1").await.unwrap();
-    assert!(!resolve_reply_in_thread(&store, &config, "oc_1").await);
+    assert!(!resolve_reply_in_thread(&store, &config, &msg("oc_1", true)).await);
+
+    // Channel config on: groups follow it, DMs still default to off…
+    config.reply_in_thread = true;
+    assert!(resolve_reply_in_thread(&store, &config, &msg("oc_1", true)).await);
+    assert!(!resolve_reply_in_thread(&store, &config, &msg("oc_dm", false)).await);
+    // …until a per-chat override opts the DM in.
+    store.set_rit_override("mock", "oc_dm", true).await.unwrap();
+    assert!(resolve_reply_in_thread(&store, &config, &msg("oc_dm", false)).await);
 }
 
 /// `/threads` end to end: admin gate, chat scoping, query/reset texts,
@@ -8458,7 +8491,7 @@ async fn threads_command_query_set_reset() {
     );
     // …and the mapping mode follows: a top-level group message now keys
     // by its own message id instead of the chat id.
-    assert!(resolve_reply_in_thread(&store, &config, "oc_1").await);
+    assert!(resolve_reply_in_thread(&store, &config, &msg("ou_admin", "/threads", true)).await);
 
     // Query reports the override and its source (sent via the adapter —
     // info replies return `None`).
@@ -8495,14 +8528,30 @@ async fn threads_command_query_set_reset() {
         .await
         .unwrap();
     let text = reply.unwrap();
-    assert!(text.contains("channel default"), "reset ack: {text}");
+    assert!(text.contains("following the default"), "reset ack: {text}");
     assert_eq!(store.get_rit_override("mock", "oc_1").await.unwrap(), None);
-    assert!(!resolve_reply_in_thread(&store, &config, "oc_1").await);
+    assert!(!resolve_reply_in_thread(&store, &config, &msg("ou_admin", "/threads", true)).await);
 
-    // DMs need no override and persist nothing.
+    // DMs follow the same rules: the override persists and flips the
+    // DM's routing too (default off, opt-in per chat).
+    let reply = handle(msg("ou_random", "/threads on", false))
+        .await
+        .unwrap();
+    assert_eq!(
+        reply.as_deref(),
+        Some("Permission denied: not in admin_users.")
+    );
     let reply = handle(msg("ou_admin", "/threads on", false)).await.unwrap();
-    assert!(reply.unwrap().contains("DM"));
-    assert_eq!(store.get_rit_override("mock", "oc_1").await.unwrap(), None);
+    let text = reply.unwrap();
+    assert!(text.contains("`on`"), "dm ack: {text}");
+    assert_eq!(
+        store.get_rit_override("mock", "oc_1").await.unwrap(),
+        Some(true)
+    );
+    assert!(
+        resolve_reply_in_thread(&store, &config, &msg("ou_admin", "hi", false)).await,
+        "DM override on"
+    );
 }
 
 /// `/mention` end to end: admin gate, container scoping, query/reset

@@ -141,7 +141,8 @@ pub struct ChannelConfig {
     pub require_mention: bool,
     /// When enabled, group-chat replies are anchored to the triggering
     /// message so they land in its thread (Feishu thread reply, Telegram
-    /// quote-reply). Private chats are unaffected.
+    /// quote-reply). Private chats default to off even when this is on —
+    /// `/threads on` in a DM opts it in per chat.
     #[serde(default)]
     pub reply_in_thread: bool,
     #[serde(default)]

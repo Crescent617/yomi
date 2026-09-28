@@ -592,7 +592,7 @@ impl ChannelHub {
                                 let rit = resolve_reply_in_thread(
                                     &store_dispatch,
                                     &config_dispatch,
-                                    &msg.external_chat_id,
+                                    &msg,
                                 )
                                 .await;
                                 let reply_msg_id = command_reply_anchor(

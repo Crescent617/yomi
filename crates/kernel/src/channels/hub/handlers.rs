@@ -37,7 +37,7 @@ pub(crate) async fn handle_incoming_message(
     adapter: &Arc<dyn PlatformAdapter>,
 ) -> Result<Option<String>> {
     let chat_id = msg.external_chat_id.clone();
-    let rit = resolve_reply_in_thread(store, config, &chat_id).await;
+    let rit = resolve_reply_in_thread(store, config, &msg).await;
     let cmd = parse_channel_command(msg.raw_text.as_deref());
     let reply_msg_id = command_reply_anchor(&msg, rit, &cmd);
     let mapping_key =
@@ -698,10 +698,10 @@ pub(crate) async fn handle_incoming_message(
                 Some(t) => format!("; notifications will be posted to `{t}`"),
                 None => String::new(),
             };
-            // In reply_in_thread group chats every top-level trigger opens
+            // In reply_in_thread chats every top-level trigger opens
             // its own thread, so a non-recursive chat subscription can
             // never match a run — say so instead of silently no-oping.
-            let rit_hint = if !in_thread && !recursive && rit && msg.is_group {
+            let rit_hint = if !in_thread && !recursive && rit {
                 " Note: this chat replies in threads — every new question starts its own thread, which this subscription does NOT cover; use `/subscribe -r` to get notified here."
             } else {
                 ""
@@ -999,11 +999,6 @@ pub(crate) async fn handle_threads_command(
     reply_msg_id: Option<String>,
     mode: Option<OverrideMode>,
 ) -> Result<Option<String>> {
-    if !msg.is_group {
-        return Ok(Some(
-            "No need for this in DMs — replies are never threaded.".to_string(),
-        ));
-    }
     // Chat-only 设置的闸与 `/watch` 同款：thread 里查询/修改都会误
     // 导读写作用域——请到顶层操作。
     if msg.thread_id.is_some() {
@@ -1013,6 +1008,10 @@ pub(crate) async fn handle_threads_command(
     }
     let on_off = |v: bool| if v { "on" } else { "off" };
     let chat_id = &msg.external_chat_id;
+    // DMs default to off even when the channel config is on; the
+    // per-chat override is the only way a DM threads (see
+    // `resolve_reply_in_thread`).
+    let default = msg.is_group && config.reply_in_thread;
     let Some(mode) = mode else {
         let override_value = store
             .get_rit_override(&config.name, chat_id)
@@ -1021,12 +1020,12 @@ pub(crate) async fn handle_threads_command(
             .flatten();
         let (effective, source) = match override_value {
             Some(v) => (v, "chat override"),
-            None => (config.reply_in_thread, "channel default"),
+            None => (default, "default"),
         };
         // Same redundancy rule as /mention: the default is shown only
         // as an override's reference point.
         let suffix = if override_value.is_some() {
-            format!(" · channel default: `{}`", on_off(config.reply_in_thread))
+            format!(" · default: `{}`", on_off(default))
         } else {
             String::new()
         };
@@ -1049,16 +1048,16 @@ pub(crate) async fn handle_threads_command(
                 " New messages will share the chat-level session; existing threads keep working."
             };
             Ok(Some(format!(
-                "✅ Reply-in-thread set to `{}` for this chat (channel default: `{}`).{note}",
+                "✅ Reply-in-thread set to `{}` for this chat (default: `{}`).{note}",
                 on_off(value),
-                on_off(config.reply_in_thread),
+                on_off(default),
             )))
         }
         OverrideMode::Reset => {
             store.clear_rit_override(&config.name, chat_id).await?;
             Ok(Some(format!(
-                "✅ Override cleared for this chat; now following the channel default: `{}`.",
-                on_off(config.reply_in_thread),
+                "✅ Override cleared for this chat; now following the default: `{}`.",
+                on_off(default),
             )))
         }
     }

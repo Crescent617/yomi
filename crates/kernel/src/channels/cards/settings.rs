@@ -225,7 +225,9 @@ async fn read_state(
         rit_override,
         model_override,
         default_mention,
-        default_rit: config.reply_in_thread,
+        // DM 的缺省 rit 是 off（即使频道配置为 on），default 伪选项
+        // 标签必须展示这个生效缺省，与 resolve_reply_in_thread 一致。
+        default_rit: config.reply_in_thread && !scope.dm,
         default_model,
         models,
         ctx_override,
@@ -472,7 +474,7 @@ pub(crate) async fn handle_settings_command(
     let chat_id = &msg.external_chat_id;
     let dm = !msg.is_group;
     let scope = if msg.thread_id.is_some() {
-        let rit = resolve_reply_in_thread(store, config, chat_id).await;
+        let rit = resolve_reply_in_thread(store, config, msg).await;
         // mention 容器与 history_container 同取法（thread_id）；session
         // 键与 /subscribe 同取法（effective_mapping_key，thread root）。
         Scope::thread_scope(

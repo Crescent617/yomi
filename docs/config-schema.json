@@ -139,7 +139,7 @@
           "$ref": "#/$defs/PlatformConfig"
         },
         "reply_in_thread": {
-          "description": "When enabled, group-chat replies are anchored to the triggering\nmessage so they land in its thread (Feishu thread reply, Telegram\nquote-reply). Private chats are unaffected.",
+          "description": "When enabled, group-chat replies are anchored to the triggering\nmessage so they land in its thread (Feishu thread reply, Telegram\nquote-reply). Private chats default to off even when this is on —\n`/threads on` in a DM opts it in per chat.",
           "type": "boolean"
         },
         "require_mention": {
