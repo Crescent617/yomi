@@ -9,6 +9,7 @@ name: build-gui-windows
 
 on:
   workflow_call:
+  workflow_dispatch:  # 手动验证 Windows GUI 编译（main 直推无 CI 门禁）
 
 jobs:
   build:
