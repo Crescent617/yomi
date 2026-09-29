@@ -61,6 +61,10 @@ tauri-build = { workspace = true, features = [] }
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["process", "signal"] }
 
+# Login item (系统设置 → 通用 → 登录项，标准 SMAppService 机制)
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-service-management = "0.3"
+
 # Keep-awake power assertions (desktop OSes only; mobile has no such API)
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 keepawake = "0.6"
