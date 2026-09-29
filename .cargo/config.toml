@@ -48,6 +48,9 @@ rustflags = [
 protocol = "sparse"
 
 [profile.release]
-lto = true
-codegen-units = 1
+# thin LTO + 默认并行 codegen 单元：fat LTO + cg=1 的链接期单线程
+# 全程序代码生成是 Windows 构建 33min 的主因（MSVC link.exe 尤其
+# 慢），yomi 是 IO/模型延迟主导的 agent 应用，fat LTO 的 CPU 收益
+# 无感——编译时间换性能不划算（2026-09-29 拍板）。
+lto = "thin"
 strip = true
