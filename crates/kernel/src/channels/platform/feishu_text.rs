@@ -72,15 +72,17 @@ impl FeishuAdapter {
         (text, image_keys)
     }
 
-    /// Placeholder for attachment messages (file/audio/media): the key
-    /// rides inline so the agent can fetch the body post-gate (`lark im
-    /// dl`, keyed by the header's `msg_id` + this key).
+    /// Placeholder for attachment messages (file/audio/media). The
+    /// platform-named key rides inline so the agent can fetch the body
+    /// post-gate (`lark im dl <msg_id> <lark_file_key>` — the `msg_id` is
+    /// in the trigger message's header; history failures get it
+    /// annotated in place, see `hub::process_files_in_text`).
     pub(crate) fn attachment_placeholder(msg_type: &str, content: &serde_json::Value) -> String {
         let name = content["file_name"].as_str();
         let key = content["file_key"].as_str();
         match (name, key) {
-            (Some(n), Some(k)) => format!("[{msg_type}: {n} (key: {k})]"),
-            (None, Some(k)) => format!("[{msg_type} (key: {k})]"),
+            (Some(n), Some(k)) => format!("[{msg_type}: {n} (lark_file_key: {k})]"),
+            (None, Some(k)) => format!("[{msg_type} (lark_file_key: {k})]"),
             (Some(n), None) => format!("[{msg_type}: {n}]"),
             (None, None) => format!("[{msg_type}]"),
         }

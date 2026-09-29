@@ -85,6 +85,7 @@ pub(crate) async fn maybe_history_prefix(
     channel_name: &str,
     msg: &ChannelMessage,
     root: RootDelivery,
+    files_root: &std::path::Path,
 ) -> Option<Vec<ContentBlock>> {
     if config.history_context == 0 || !msg.is_group {
         return None;
@@ -148,7 +149,7 @@ pub(crate) async fn maybe_history_prefix(
     }
     let quotes = resolve_history_quotes(adapter, &messages, &history).await;
     let mut blocks = vec![ContentBlock::Text {
-        text: assemble_history(&history, &quotes),
+        text: assemble_history_with_files(adapter, &history, &quotes, files_root).await,
     }];
 
     // Attach images behind `[image]`/`[post]` placeholders, capped at
@@ -236,6 +237,17 @@ pub(crate) async fn fetch_root_backstop(
 /// keeps the first ones and gets a note for the rest.
 pub(crate) const IMAGE_DOWNLOAD_MAX: usize = 5;
 
+/// Size cap for one file-attachment auto-download; over it the
+/// placeholder keeps the key for a manual `lark im dl` (design doc
+/// docs/design/file-attachment-download.md).
+pub(crate) const FILE_DOWNLOAD_MAX_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Max history files fetched per trigger (newest win). Files are
+/// bulkier than images, so the cap is tighter than `IMAGE_DOWNLOAD_MAX`;
+/// budget-exceeded placeholders get `; msg_id:` annotated like
+/// failures, so nothing becomes unfetchable.
+pub(crate) const FILE_HISTORY_DOWNLOAD_MAX: usize = 3;
+
 /// How a run trigger picks its session key and reply anchor.
 pub(crate) enum TriggerKind {
     /// The channel's `reply_in_thread` rules (see [`session_mapping_key`]
@@ -289,7 +301,22 @@ pub(crate) async fn prepare_trigger(
     )
     .await?;
     record_receipt(config, obs, kernel, &sid, msg);
-    let blocks = context_prefix(adapter, config, store, channel_name, msg, root_in_session).await;
+    let files_root = kernel
+        .data_dir()
+        .await
+        .join("channels")
+        .join(channel_name)
+        .join("files");
+    let blocks = context_prefix(
+        adapter,
+        config,
+        store,
+        channel_name,
+        msg,
+        root_in_session,
+        &files_root,
+    )
+    .await;
     Ok((sid, blocks))
 }
 
@@ -305,6 +332,7 @@ pub(crate) async fn context_prefix(
     channel_name: &str,
     msg: &ChannelMessage,
     root_in_session: bool,
+    files_root: &std::path::Path,
 ) -> Vec<ContentBlock> {
     let mut root = if root_in_session {
         RootDelivery::Consumed
@@ -317,9 +345,10 @@ pub(crate) async fn context_prefix(
         root = RootDelivery::ByQuote;
     }
     // History first, quoted last — the quote belongs to the trigger.
-    let mut blocks = maybe_history_prefix(adapter, config, store, channel_name, msg, root)
-        .await
-        .unwrap_or_default();
+    let mut blocks =
+        maybe_history_prefix(adapter, config, store, channel_name, msg, root, files_root)
+            .await
+            .unwrap_or_default();
     blocks.extend(quoted.map(|(b, _)| b).unwrap_or_default());
     blocks
 }
@@ -436,22 +465,212 @@ pub(crate) async fn append_message_images(
 /// Per-message cap in the injected history block (UTF-8 safe truncation).
 pub(crate) const HISTORY_MESSAGE_MAX_CHARS: usize = 2000;
 
+/// A parsed `[file|audio|media: name (lark_file_key: K)]` placeholder
+/// (design doc docs/design/file-attachment-download.md).
+#[derive(Debug)]
+pub(crate) struct FileRef {
+    pub(crate) key: String,
+    pub(crate) name: String,
+    /// Byte range of the `(lark_file_key: …)` suffix — swapped for
+    /// `(saved: path)` on success, extended with `; msg_id:` on
+    /// annotated failures. Includes the parentheses.
+    pub(crate) suffix: (usize, usize),
+}
+
+/// Parse the attachment placeholders `feishu_text::attachment_placeholder`
+/// mints. Tolerant by design: the legacy `(key: …)` suffix (pre-2026-09-29
+/// transcripts), missing names, and `; msg_id:` annotations all parse;
+/// anything malformed yields no ref (the text is left untouched).
+pub(crate) fn file_refs(text: &str) -> Vec<FileRef> {
+    let mut out = Vec::new();
+    let mut offset = 0usize;
+    while let Some(open_rel) = text[offset..].find('[') {
+        let open = offset + open_rel;
+        let inner_start = open + 1;
+        let Some(close_rel) = text[inner_start..].find(']') else {
+            break;
+        };
+        let close = inner_start + close_rel; // position of ']'
+        if let Some(r) = parse_file_inner(&text[inner_start..close], inner_start) {
+            out.push(r);
+        }
+        offset = close + 1;
+    }
+    out
+}
+
+/// Parse one placeholder body (`file: name (lark_file_key: K; msg_id: …)`).
+/// `base` is the body's byte offset in the original text (spans are
+/// returned absolute).
+fn parse_file_inner(inner: &str, base: usize) -> Option<FileRef> {
+    const SUFFIXES: [&str; 2] = [" (lark_file_key: ", " (key: "];
+    let (rest, key, suffix) = SUFFIXES.iter().find_map(|s| {
+        let p = inner.rfind(s)?;
+        let after = &inner[p + s.len()..];
+        let kv = after.strip_suffix(')')?;
+        let key = kv.split(';').next().unwrap_or(kv).trim();
+        if key.is_empty() {
+            return None;
+        }
+        let rest = inner[..p].trim_end();
+        // Suffix span covers `(lark_file_key: …)` — not the space.
+        Some((rest, key.to_string(), (base + p + 1, base + inner.len())))
+    })?;
+    let (kind, name) = match rest.find(": ") {
+        Some(c) => (rest[..c].trim(), rest[c + 2..].trim()),
+        None => (rest.trim(), ""),
+    };
+    if !matches!(kind, "file" | "audio" | "media") {
+        return None;
+    }
+    Some(FileRef {
+        key,
+        name: name.to_string(),
+        suffix,
+    })
+}
+
+/// Download the attachment placeholders in one text (the text of the
+/// message `message_id`), rewriting in place:
+///
+/// - success → `(saved: <local path>)`
+/// - failure or exhausted `budget` → `; msg_id: <id>` appended to the
+///   suffix, but only when `annotate` (history lines: the line format
+///   carries no `msg_id`). Trigger-message texts pass `annotate: false` —
+///   their header already has the id, so failures keep the bare
+///   placeholder (design doc: no reminder, no note lines).
+///
+/// `budget` counts download attempts across calls (history keeps the
+/// newest); `usize::MAX` means unlimited (trigger path).
+pub(crate) async fn process_files_in_text(
+    adapter: &Arc<dyn PlatformAdapter>,
+    message_id: &str,
+    text: &mut String,
+    dest_dir: &std::path::Path,
+    annotate: bool,
+    budget: &mut usize,
+) {
+    if message_id.is_empty() || text.is_empty() {
+        return;
+    }
+    let refs = file_refs(text);
+    if refs.is_empty() {
+        return;
+    }
+    let results = futures::future::join_all(refs.iter().map(|r| {
+        if *budget == 0 {
+            return futures::future::Either::Right(futures::future::ready(Ok(
+                crate::channels::FileFetch::Oversize,
+            )));
+        }
+        *budget -= 1;
+        futures::future::Either::Left(adapter.download_message_file(
+            message_id,
+            &r.key,
+            &r.name,
+            dest_dir,
+            FILE_DOWNLOAD_MAX_BYTES,
+        ))
+    }))
+    .await;
+    // Front-to-back rebuild; spans shift as the text grows/shrinks.
+    let mut shift: isize = 0;
+    for (r, result) in refs.iter().zip(results) {
+        let span = (
+            (r.suffix.0 as isize + shift) as usize,
+            (r.suffix.1 as isize + shift) as usize,
+        );
+        let replacement = match result {
+            Ok(crate::channels::FileFetch::Saved(path)) => {
+                format!("(saved: {})", path.display())
+            }
+            Ok(crate::channels::FileFetch::Oversize) => {
+                if !annotate {
+                    continue; // trigger: bare placeholder, header has the id
+                }
+                format!("(lark_file_key: {}; msg_id: {})", r.key, message_id)
+            }
+            Err(e) => {
+                warn!(error = %e, file_key = %r.key, "file attachment download failed");
+                if !annotate {
+                    continue;
+                }
+                format!("(lark_file_key: {}; msg_id: {})", r.key, message_id)
+            }
+        };
+        let len_delta = replacement.len() as isize - (span.1 - span.0) as isize;
+        *text = format!("{}{}{}", &text[..span.0], replacement, &text[span.1..]);
+        shift += len_delta;
+    }
+}
+
+/// Post-gate download of the triggering message's own file attachments
+/// (deferred like images, same call sites). Processes only the text
+/// blocks it's given — history blocks go through
+/// `assemble_history_with_files` instead, keyed per line.
+pub(crate) async fn fetch_message_files(
+    adapter: &Arc<dyn PlatformAdapter>,
+    message_id: &str,
+    content: &mut [ContentBlock],
+    dest_dir: &std::path::Path,
+) {
+    let mut budget = usize::MAX;
+    for block in content.iter_mut() {
+        let ContentBlock::Text { text } = block else {
+            continue;
+        };
+        process_files_in_text(adapter, message_id, text, dest_dir, false, &mut budget).await;
+    }
+}
+
+/// One history block line: `[HH:MM] sender: text` plus the inline
+/// quote snippet when the message quote-replies (` ↩ sender: text`).
+fn history_line(m: &HistoryMessage, quotes: &std::collections::HashMap<String, String>) -> String {
+    let mut line = sender_line(m);
+    if let Some(q) = quotes.get(&m.message_id) {
+        line.push_str(" ↩ ");
+        line.push_str(q);
+    }
+    line
+}
+
 /// Format fetched messages as a context block: chronological, one line
 /// each (`[HH:MM] sender: text`, per-message capped; sender = display
 /// name when resolved, else `open_id`), quote-replies carrying an
-/// inline snippet of the quoted message (` ↩ sender: text`).
-pub(crate) fn assemble_history(
+/// inline snippet of the quoted message (` ↩ sender: text`) — plus
+/// per-line file-attachment downloads (design doc
+/// docs/design/file-attachment-download.md): each line's placeholders
+/// download against that line's own message id, at most
+/// [`FILE_HISTORY_DOWNLOAD_MAX`] newest per trigger. Failures and
+/// budget-exceeded placeholders get `; msg_id:` annotated in place —
+/// the line format carries no `msg_id`, and `/im/v1/files/{key}` rejects
+/// message keys, so the id is the only manual-fetch path.
+pub(crate) async fn assemble_history_with_files(
+    adapter: &Arc<dyn PlatformAdapter>,
     messages: &[&HistoryMessage],
     quotes: &std::collections::HashMap<String, String>,
+    files_root: &std::path::Path,
 ) -> String {
     use std::fmt::Write as _;
     let mut out = String::from("<recent_chat_history>\n");
-    for m in messages {
-        let _ = write!(out, "{}", sender_line(m));
-        if let Some(q) = quotes.get(&m.message_id) {
-            let _ = write!(out, " ↩ {q}");
-        }
-        let _ = writeln!(out);
+    let mut budget = FILE_HISTORY_DOWNLOAD_MAX;
+    // Newest first for the download budget; lines render chronological.
+    let mut lines: Vec<String> = Vec::with_capacity(messages.len());
+    for m in messages.iter().rev() {
+        let mut line = history_line(m, quotes);
+        process_files_in_text(
+            adapter,
+            &m.message_id,
+            &mut line,
+            &files_root.join(&m.message_id),
+            true,
+            &mut budget,
+        )
+        .await;
+        lines.push(line);
+    }
+    for line in lines.into_iter().rev() {
+        let _ = writeln!(out, "{line}");
     }
     out.push_str("</recent_chat_history>");
     out

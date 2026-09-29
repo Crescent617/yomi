@@ -15,7 +15,9 @@ use crate::channels::hub_command::{
     format_watch_line, parse_channel_command, suggest_command, ChannelCommand, OverrideMode,
     HELP_SHORT, HELP_TEXT,
 };
-use crate::channels::hub_context::{append_message_images, prepare_trigger, TriggerKind};
+use crate::channels::hub_context::{
+    append_message_images, fetch_message_files, prepare_trigger, TriggerKind,
+};
 use crate::channels::hub_deliver::send_info_reply;
 use crate::channels::hub_routing::{
     command_reply_anchor, command_session_key, effective_mapping_key, get_or_create_session,
@@ -156,7 +158,16 @@ pub(crate) async fn handle_incoming_message(
             )
             .await?;
             kernel.note_title_input(&sid, &text);
-            blocks.push(ContentBlock::Text { text });
+            let mut user_blocks = vec![ContentBlock::Text { text }];
+            fetch_trigger_files(
+                &kernel,
+                channel_name,
+                adapter,
+                msg.external_message_id.as_deref().unwrap_or(""),
+                &mut user_blocks,
+            )
+            .await;
+            blocks.extend(user_blocks);
             kernel.send_steer(&sid, blocks).await;
             Ok(None)
         }
@@ -180,7 +191,16 @@ pub(crate) async fn handle_incoming_message(
             )
             .await?;
             kernel.note_title_input(&sid, &text);
-            blocks.push(ContentBlock::Text { text });
+            let mut user_blocks = vec![ContentBlock::Text { text }];
+            fetch_trigger_files(
+                &kernel,
+                channel_name,
+                adapter,
+                msg.external_message_id.as_deref().unwrap_or(""),
+                &mut user_blocks,
+            )
+            .await;
+            blocks.extend(user_blocks);
             // Deferred image download — as for a plain trigger, only
             // now, after the gate, does an attached image cost
             // bandwidth.
@@ -233,7 +253,16 @@ pub(crate) async fn handle_incoming_message(
             )
             .await?;
             kernel.note_title_input(&sid, &text);
-            blocks.push(ContentBlock::Text { text });
+            let mut user_blocks = vec![ContentBlock::Text { text }];
+            fetch_trigger_files(
+                &kernel,
+                channel_name,
+                adapter,
+                msg.external_message_id.as_deref().unwrap_or(""),
+                &mut user_blocks,
+            )
+            .await;
+            blocks.extend(user_blocks);
             // The title was just fed from the user's own text — don't
             // let send_message re-extract it from the merged blocks.
             // Deferred image download — as for a plain trigger, only
@@ -775,7 +804,10 @@ pub(crate) async fn handle_incoming_message(
             if let Some(raw) = msg.raw_text.as_deref() {
                 kernel.note_title_input(&sid, raw);
             }
-            content.extend(msg.content);
+            let msg_id = msg.external_message_id.clone().unwrap_or_default();
+            let mut user_blocks = msg.content;
+            fetch_trigger_files(&kernel, channel_name, adapter, &msg_id, &mut user_blocks).await;
+            content.extend(user_blocks);
             // Deferred image download — only now, after the gate, does
             // an attached image cost bandwidth.
             append_message_images(
@@ -789,6 +821,28 @@ pub(crate) async fn handle_incoming_message(
             Ok(None)
         }
     }
+}
+
+/// Deferred file-attachment download for the triggering message's own
+/// blocks (post-gate, like images): `[file: … (lark_file_key: …)]`
+/// placeholders rewrite to local `(saved: …)` paths — failures keep
+/// the bare placeholder, the message header carries the msg_id
+/// (design doc docs/design/file-attachment-download.md).
+async fn fetch_trigger_files(
+    kernel: &Kernel,
+    channel_name: &str,
+    adapter: &Arc<dyn PlatformAdapter>,
+    msg_id: &str,
+    content: &mut Vec<ContentBlock>,
+) {
+    let dest = kernel
+        .data_dir()
+        .await
+        .join("channels")
+        .join(channel_name)
+        .join("files")
+        .join(msg_id);
+    fetch_message_files(adapter, msg_id, content, &dest).await;
 }
 
 /// `/bind`: show or retarget the current scope's session binding.

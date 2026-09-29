@@ -1526,6 +1526,122 @@ impl PlatformAdapter for FeishuAdapter {
             image_url: data_url.into(),
         })
     }
+
+    async fn download_message_file(
+        &self,
+        message_id: &str,
+        file_key: &str,
+        name: &str,
+        dest_dir: &std::path::Path,
+        max_bytes: u64,
+    ) -> Result<crate::channels::FileFetch, ChannelError> {
+        let token = self.get_token().await?;
+        // Message attachments must go through the message resources
+        // endpoint — `/im/v1/files/{key}` only serves files the app
+        // uploaded itself (message keys get 234008 "not the resource
+        // sender"), verified against the live API 2026-09-29.
+        let resp = self
+            .client
+            .get(format!(
+                "{}/open-apis/im/v1/messages/{message_id}/resources/{file_key}",
+                self.base_url
+            ))
+            .query(&[("type", "file")])
+            .header("Authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .map_err(|e| api_err("file download", e))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            let body = crate::utils::strs::truncate_with_suffix(&body, 200, "...");
+            return Err(ChannelError::Platform(format!(
+                "file download HTTP {status}: {body}"
+            )));
+        }
+        // Known-length oversize: reject before touching the disk.
+        if let Some(len) = resp.content_length() {
+            if len > max_bytes {
+                return Ok(crate::channels::FileFetch::Oversize);
+            }
+        }
+        std::fs::create_dir_all(dest_dir)
+            .map_err(|e| ChannelError::Platform(format!("file dir create: {e}")))?;
+        let path = unique_attachment_path(dest_dir, name, file_key);
+        let mut file = std::fs::File::create(&path)
+            .map_err(|e| ChannelError::Platform(format!("file create: {e}")))?;
+        if !write_capped(resp.bytes_stream(), &mut file, max_bytes).await? {
+            drop(file);
+            let _ = std::fs::remove_file(&path);
+            return Ok(crate::channels::FileFetch::Oversize);
+        }
+        let written = file
+            .metadata()
+            .map_err(|e| ChannelError::Platform(format!("file metadata: {e}")))?
+            .len();
+        info!(
+            file_key,
+            path = %path.display(),
+            bytes = written,
+            "file attachment downloaded"
+        );
+        Ok(crate::channels::FileFetch::Saved(path))
+    }
+}
+
+/// Write a byte stream into `file`, returning `Ok(false)` the moment
+/// `max_bytes` would be exceeded (the caller deletes the partial file)
+/// and `Ok(true)` when the stream completed under the cap.
+async fn write_capped<S, B>(
+    mut stream: S,
+    file: &mut std::fs::File,
+    max_bytes: u64,
+) -> Result<bool, ChannelError>
+where
+    S: futures::Stream<Item = Result<B, reqwest::Error>> + Unpin,
+    B: AsRef<[u8]>,
+{
+    use futures::StreamExt as _;
+    use std::io::Write as _;
+    let mut written: u64 = 0;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| ChannelError::Platform(format!("file download: {e}")))?;
+        written += chunk.as_ref().len() as u64;
+        if written > max_bytes {
+            return Ok(false);
+        }
+        file.write_all(chunk.as_ref())
+            .map_err(|e| ChannelError::Platform(format!("file write: {e}")))?;
+    }
+    Ok(true)
+}
+
+/// Attachment landing path: the bare file-name part of `name` (path
+/// components and `..` dropped), falling back to the file key; suffixed
+/// `-1`, `-2`, … on collision so two attachments can't clobber.
+fn unique_attachment_path(dir: &std::path::Path, name: &str, key: &str) -> std::path::PathBuf {
+    let base = std::path::Path::new(name)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| key.to_string());
+    let candidate = dir.join(&base);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let stem = std::path::Path::new(&base)
+        .file_stem()
+        .map_or_else(|| base.clone(), |s| s.to_string_lossy().into_owned());
+    let ext = std::path::Path::new(&base)
+        .extension()
+        .map_or_else(String::new, |s| format!(".{}", s.to_string_lossy()));
+    for i in 1..1000 {
+        let candidate = dir.join(format!("{stem}-{i}{ext}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    dir.join(format!("{stem}-{}{ext}", base.len()))
 }
 
 // ── Message handlers ────────────────────────────────────────────────

@@ -57,8 +57,17 @@ impl StubFeishu {
                         .unwrap()
                         .push((method.clone(), path.clone(), body));
                     let resp = response_for(&method, &path);
+                    // Resource downloads (images/files) report errors as
+                    // HTTP 400 + JSON body — mirroring the real API (the
+                    // image path additionally fails magic-byte detection).
+                    let status = if path.contains("/resources/") && resp.starts_with(br#"{"code""#)
+                    {
+                        "400 Bad Request"
+                    } else {
+                        "200 OK"
+                    };
                     let head = format!(
-                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\n\
                          content-length: {}\r\nconnection: close\r\n\r\n",
                         resp.len(),
                     );
@@ -146,7 +155,12 @@ fn response_for(method: &str, path: &str) -> Vec<u8> {
         if path.starts_with("/open-apis/im/v1/messages/om_1/resources/img_ok?type=image") {
             return ok_png().to_vec();
         }
-        return br#"{"code":234001,"msg":"no such image"}"#.into();
+        // Message file attachments: `file_ok` serves bytes (the `type=file`
+        // query distinguishes it from images), anything else a JSON error.
+        if path.starts_with("/open-apis/im/v1/messages/om_1/resources/file_ok?type=file") {
+            return b"hello yomi file".to_vec();
+        }
+        return br#"{"code":234001,"msg":"no such resource"}"#.into();
     }
     // Single message get (quoted-reply injection): `om_quoted` serves a
     // text message, `om_deleted` a deleted one, anything else an empty list.
@@ -916,7 +930,7 @@ fn extract_history_content_keeps_file_name_and_key() {
         "body": { "content": r#"{"file_key":"fk_x","file_name":"全文献.zip"}"# }
     });
     let (text, image_keys) = super::FeishuAdapter::extract_history_content(&item);
-    assert_eq!(text, "[file: 全文献.zip (key: fk_x)]");
+    assert_eq!(text, "[file: 全文献.zip (lark_file_key: fk_x)]");
     assert!(image_keys.is_empty());
 
     let item = json!({
@@ -924,7 +938,7 @@ fn extract_history_content_keeps_file_name_and_key() {
         "body": { "content": r#"{"file_key":"aud_x"}"# }
     });
     let (text, _) = super::FeishuAdapter::extract_history_content(&item);
-    assert_eq!(text, "[audio (key: aud_x)]");
+    assert_eq!(text, "[audio (lark_file_key: aud_x)]");
 }
 
 /// A `merge_forward` in a history LIST stays a bare placeholder — the list
@@ -1346,7 +1360,7 @@ async fn file_event_is_forwarded_with_name_and_key() {
     let msg = expect_message(rx.try_recv().expect("file message forwarded"));
     assert_eq!(
         msg.raw_text.as_deref(),
-        Some("[file: 全文献.zip (key: fk_x)]")
+        Some("[file: 全文献.zip (lark_file_key: fk_x)]")
     );
     assert!(msg.image_keys.is_empty());
 }
@@ -1361,7 +1375,10 @@ async fn file_event_without_name_keeps_key() {
     adapter.parse_event_json(&event, &tx).await.unwrap();
 
     let msg = expect_message(rx.try_recv().expect("file message forwarded"));
-    assert_eq!(msg.raw_text.as_deref(), Some("[file (key: fk_x)]"));
+    assert_eq!(
+        msg.raw_text.as_deref(),
+        Some("[file (lark_file_key: fk_x)]")
+    );
 }
 
 #[tokio::test]
@@ -1375,7 +1392,10 @@ async fn audio_event_is_forwarded_with_key() {
 
     assert_eq!(msg_id.as_deref(), Some("om_1"));
     let msg = expect_message(rx.try_recv().expect("audio message forwarded"));
-    assert_eq!(msg.raw_text.as_deref(), Some("[audio (key: aud_x)]"));
+    assert_eq!(
+        msg.raw_text.as_deref(),
+        Some("[audio (lark_file_key: aud_x)]")
+    );
 }
 
 #[tokio::test]
@@ -1394,7 +1414,7 @@ async fn media_event_is_forwarded_with_name_and_key() {
     let msg = expect_message(rx.try_recv().expect("media message forwarded"));
     assert_eq!(
         msg.raw_text.as_deref(),
-        Some("[media: clip.mp4 (key: mv_x)]")
+        Some("[media: clip.mp4 (lark_file_key: mv_x)]")
     );
 }
 
@@ -1661,6 +1681,78 @@ async fn download_message_image_returns_image_block() {
         .download_message_image("om_1", "img_bad")
         .await
         .is_err());
+}
+
+#[tokio::test]
+async fn download_message_file_saves_and_sanitizes_name() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let dir = tempfile::tempdir().unwrap();
+
+    let fetch = adapter
+        .download_message_file("om_1", "file_ok", "../报告.v2.txt", dir.path(), 1024)
+        .await
+        .unwrap();
+    let crate::channels::FileFetch::Saved(path) = fetch else {
+        panic!("expected saved");
+    };
+    assert_eq!(path.file_name().unwrap(), "报告.v2.txt", "path: {path:?}");
+    assert_eq!(std::fs::read(&path).unwrap(), b"hello yomi file");
+
+    // Same name again → suffix, no clobber.
+    let fetch = adapter
+        .download_message_file("om_1", "file_ok", "报告.v2.txt", dir.path(), 1024)
+        .await
+        .unwrap();
+    let crate::channels::FileFetch::Saved(path2) = fetch else {
+        panic!("expected saved");
+    };
+    assert_eq!(
+        path2.file_name().unwrap(),
+        "报告.v2-1.txt",
+        "path: {path2:?}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"hello yomi file");
+
+    // Tiny cap → Content-Length rejection, nothing on disk.
+    let fetch = adapter
+        .download_message_file("om_1", "file_ok", "b.txt", dir.path(), 2)
+        .await
+        .unwrap();
+    assert!(
+        matches!(fetch, crate::channels::FileFetch::Oversize),
+        "{fetch:?}"
+    );
+    assert!(!dir.path().join("b.txt").exists());
+
+    // Bad key → error (the hub keeps the placeholder for a manual fetch).
+    assert!(adapter
+        .download_message_file("om_1", "file_bad", "b.txt", dir.path(), 1024)
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn write_capped_stops_past_the_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("x.bin");
+    let mut file = std::fs::File::create(&path).unwrap();
+    let stream = futures::stream::iter(vec![
+        Ok::<_, reqwest::Error>(b"abc".to_vec()),
+        Ok::<_, reqwest::Error>(b"def".to_vec()),
+    ]);
+    let complete = super::write_capped(stream, &mut file, 5).await.unwrap();
+    assert!(!complete, "second chunk crosses the cap");
+    drop(file);
+    // The caller owns cleanup of the partial file (download_message_file).
+    let _ = std::fs::remove_file(&path);
+    assert!(!path.exists());
+
+    let stream = futures::stream::iter(vec![Ok::<_, reqwest::Error>(b"abc".to_vec())]);
+    let mut file = std::fs::File::create(&path).unwrap();
+    let complete = super::write_capped(stream, &mut file, 5).await.unwrap();
+    assert!(complete, "under the cap completes");
+    assert_eq!(std::fs::read(&path).unwrap(), b"abc");
 }
 
 // ── Receive path: doc permission events ────────────────────────────

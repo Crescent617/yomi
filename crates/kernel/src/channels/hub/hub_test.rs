@@ -26,6 +26,10 @@ pub struct MockAdapter {
     /// When false (default), image downloads fail — mirroring the trait's
     /// default unsupported behavior so degradation paths stay testable.
     pub image_download_ok: tokio::sync::Mutex<bool>,
+    /// File-download behavior: "ok" writes an empty file and returns
+    /// `Saved`, "oversize" returns `Oversize`, anything else (default)
+    /// errors — mirroring the trait default (unsupported platform).
+    pub file_behavior: tokio::sync::Mutex<&'static str>,
     /// Doc-comment replies sent: (`comment_id`, chunk text).
     pub comment_replies: tokio::sync::Mutex<Vec<(String, String)>>,
     /// Thread id → root message id, returned by `thread_root_id`.
@@ -55,6 +59,7 @@ impl MockAdapter {
             quoted_map: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             quoted_calls: tokio::sync::Mutex::new(Vec::new()),
             image_download_ok: tokio::sync::Mutex::new(false),
+            file_behavior: tokio::sync::Mutex::new("err"),
             comment_replies: tokio::sync::Mutex::new(Vec::new()),
             thread_roots: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             thread_root_calls: tokio::sync::Mutex::new(Vec::new()),
@@ -206,6 +211,32 @@ impl PlatformAdapter for MockAdapter {
         Ok(ContentBlock::ImageUrl {
             image_url: format!("data:image/png;base64,fake-{image_key}").into(),
         })
+    }
+
+    async fn download_message_file(
+        &self,
+        _message_id: &str,
+        file_key: &str,
+        name: &str,
+        dest_dir: &std::path::Path,
+        _max_bytes: u64,
+    ) -> std::result::Result<crate::channels::FileFetch, crate::channels::ChannelError> {
+        match *self.file_behavior.lock().await {
+            "ok" => {
+                std::fs::create_dir_all(dest_dir).map_err(|e| {
+                    crate::channels::ChannelError::Platform(format!("mock mkdir: {e}"))
+                })?;
+                let path = dest_dir.join(if name.is_empty() { file_key } else { name });
+                std::fs::write(&path, []).map_err(|e| {
+                    crate::channels::ChannelError::Platform(format!("mock write: {e}"))
+                })?;
+                Ok(crate::channels::FileFetch::Saved(path))
+            }
+            "oversize" => Ok(crate::channels::FileFetch::Oversize),
+            other => Err(crate::channels::ChannelError::Platform(format!(
+                "mock: file download {other}"
+            ))),
+        }
     }
 
     async fn reply_doc_comment(
@@ -4772,8 +4803,8 @@ async fn deliver_reply_falls_back_to_flush_when_obs_state_missing() {
 
 // ── History context injection ───────────────────────────────────────
 
-#[test]
-fn assemble_history_formats_chronological_capped_lines() {
+#[tokio::test]
+async fn assemble_history_formats_chronological_capped_lines() {
     let messages = [
         HistoryMessage {
             sender_name: Some("Alice".into()),
@@ -4797,7 +4828,14 @@ fn assemble_history_formats_chronological_capped_lines() {
     let refs: Vec<&HistoryMessage> = messages.iter().collect();
     let quotes =
         std::collections::HashMap::from([("m1".to_string(), "ou_x: 前文摘要".to_string())]);
-    let out = assemble_history(&refs, &quotes);
+    let adapter: Arc<dyn PlatformAdapter> = Arc::new(MockAdapter::new("fs"));
+    let out = assemble_history_with_files(
+        &adapter,
+        &refs,
+        &quotes,
+        std::path::Path::new("test-files-root"),
+    )
+    .await;
     assert!(out.starts_with("<recent_chat_history>\n"));
     assert!(out.ends_with("</recent_chat_history>"));
     assert!(
@@ -5234,7 +5272,16 @@ async fn context_prefix_orders_history_before_quoted() {
     let mut msg = group_msg(Some("omt_1".into()));
     msg.root_id = Some("om_root".into());
     msg.parent_id = Some("om_q".into());
-    let blocks = context_prefix(&adapter, &config, &store, "feishu", &msg, false).await;
+    let blocks = context_prefix(
+        &adapter,
+        &config,
+        &store,
+        "feishu",
+        &msg,
+        false,
+        std::path::Path::new("test-files-root"),
+    )
+    .await;
     let text = blocks_text(&blocks);
     let history = text.find("<recent_chat_history>").expect("history: {text}");
     let quoted = text.find("<quoted_message>").expect("quoted: {text}");
@@ -5264,7 +5311,16 @@ async fn context_prefix_fresh_thread_root_exactly_once() {
     let mut msg = group_msg(Some("omt_1".into()));
     msg.root_id = Some("root-msg".into());
     msg.parent_id = Some("root-msg".into());
-    let blocks = context_prefix(&adapter, &config, &store, "feishu", &msg, false).await;
+    let blocks = context_prefix(
+        &adapter,
+        &config,
+        &store,
+        "feishu",
+        &msg,
+        false,
+        std::path::Path::new("test-files-root"),
+    )
+    .await;
     let text = blocks_text(&blocks);
     assert_eq!(
         text.matches("thread root").count(),
@@ -5834,6 +5890,7 @@ async fn history_prefix_backstops_root_outside_page() {
         "feishu",
         &msg,
         RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
     )
     .await
     .expect("history");
@@ -5855,6 +5912,7 @@ async fn history_prefix_backstops_root_outside_page() {
         "feishu",
         &msg,
         RootDelivery::Consumed,
+        std::path::Path::new("test-files-root"),
     )
     .await
     .expect("history");
@@ -5937,6 +5995,7 @@ async fn history_prefix_inlines_quote_snippet_from_page() {
         "feishu",
         &msg,
         RootDelivery::Consumed,
+        std::path::Path::new("test-files-root"),
     )
     .await
     .expect("history");
@@ -6009,6 +6068,7 @@ async fn history_quote_of_backstopped_root_resolves_free() {
         "feishu",
         &msg,
         RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
     )
     .await
     .expect("history");
@@ -6040,6 +6100,7 @@ async fn history_prefix_assembles_drops_trigger_and_advances_cursor() {
         "feishu",
         &msg,
         RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
     )
     .await;
     let blocks = blocks.expect("history prefix");
@@ -6060,6 +6121,7 @@ async fn history_prefix_assembles_drops_trigger_and_advances_cursor() {
         "feishu",
         &msg,
         RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
     )
     .await;
     let calls = mock.calls.lock().await;
@@ -6108,6 +6170,7 @@ async fn history_prefix_drops_command_messages() {
         "feishu",
         &msg,
         RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
     )
     .await
     .expect("history prefix");
@@ -6157,6 +6220,7 @@ async fn history_prefix_keeps_command_shaped_root() {
         "feishu",
         &msg,
         RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
     )
     .await
     .expect("history");
@@ -6192,6 +6256,7 @@ async fn history_prefix_skips_private_chats() {
         "feishu",
         &msg,
         RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
     )
     .await;
     assert!(prefix.is_none());
@@ -6212,6 +6277,7 @@ async fn history_prefix_uses_thread_container_when_present() {
         "feishu",
         &msg,
         RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
     )
     .await;
     // Cursor is keyed by the thread id, not the chat id.
@@ -6239,6 +6305,7 @@ async fn history_prefix_degrades_to_none_on_fetch_error() {
         "feishu",
         &group_msg(None),
         RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
     )
     .await;
     assert!(prefix.is_none(), "fetch failure degrades to no context");
@@ -6262,6 +6329,7 @@ async fn history_prefix_disabled_by_zero_config() {
         "feishu",
         &group_msg(None),
         RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
     )
     .await;
     assert!(prefix.is_none());
@@ -6284,6 +6352,7 @@ async fn history_prefix_empty_fetch_keeps_cursor_unset() {
         "feishu",
         &group_msg(None),
         RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
     )
     .await;
     assert!(prefix.is_none());
@@ -6314,6 +6383,7 @@ async fn history_prefix_skips_channel_level_when_reply_in_thread() {
         "feishu",
         &group_msg(None),
         RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
     )
     .await;
     assert!(prefix.is_none());
@@ -6327,6 +6397,7 @@ async fn history_prefix_skips_channel_level_when_reply_in_thread() {
         "feishu",
         &group_msg(Some("omt_1".into())),
         RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
     )
     .await;
     assert!(prefix.is_some(), "thread history still injected");
@@ -6410,6 +6481,7 @@ async fn history_prefix_thread_root_drop_rules() {
         "feishu",
         &msg,
         RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
     )
     .await
     .expect("history");
@@ -6430,6 +6502,7 @@ async fn history_prefix_thread_root_drop_rules() {
         "feishu",
         &msg,
         RootDelivery::Consumed,
+        std::path::Path::new("test-files-root"),
     )
     .await
     .expect("history");
@@ -6451,6 +6524,7 @@ async fn history_prefix_thread_root_drop_rules() {
         "feishu",
         &msg,
         RootDelivery::ByQuote,
+        std::path::Path::new("test-files-root"),
     )
     .await
     .expect("history");
@@ -6478,6 +6552,7 @@ async fn history_prefix_attaches_history_images() {
         "feishu",
         &group_msg(None),
         RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
     )
     .await
     .expect("history blocks");
@@ -6560,6 +6635,174 @@ async fn append_message_images_caps_an_image_dump() {
         panic!("expected omission note: {content:?}");
     };
     assert!(text.contains("3 more image(s) omitted"), "{text}");
+}
+
+// ── File attachment downloads (design doc file-attachment-download) ──
+
+async fn file_mock(behavior: &'static str) -> Arc<MockAdapter> {
+    let adapter = MockAdapter::new("fs");
+    *adapter.file_behavior.lock().await = behavior;
+    Arc::new(adapter)
+}
+
+#[test]
+fn file_refs_parses_current_legacy_and_extended_forms() {
+    use super::context::file_refs;
+
+    let text = "a [file: 报告.pptx (lark_file_key: fk_1)] b [audio (key: fk_2)] c \
+                [media: clip (lark_file_key: fk_3; msg_id: om_9)] d";
+    let refs = file_refs(text);
+    assert_eq!(refs.len(), 3, "{refs:?}");
+    assert_eq!(refs[0].name, "报告.pptx");
+    assert_eq!(refs[0].key, "fk_1");
+    assert_eq!(refs[1].name, "");
+    assert_eq!(refs[1].key, "fk_2", "legacy (key: …) suffix must parse");
+    assert_eq!(refs[2].key, "fk_3", "; msg_id annotation tolerated");
+
+    // Not placeholders: other bracket kinds, missing key, malformed suffix.
+    let none = file_refs("[image: x] [file] [file: y (lark_file_key:)] [text (key: z)]");
+    assert!(none.is_empty(), "{none:?}");
+
+    // A ']' inside the file name truncates the placeholder — documented
+    // degradation: no ref, no panic, text untouched.
+    let tricky = file_refs("[file: a]b (lark_file_key: fk_4)]");
+    assert!(tricky.is_empty(), "{tricky:?}");
+}
+
+#[tokio::test]
+async fn fetch_message_files_rewrites_placeholder_to_saved_path() {
+    use super::context::fetch_message_files;
+
+    let adapter: Arc<dyn PlatformAdapter> = file_mock("ok").await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut blocks = vec![ContentBlock::Text {
+        text: "填这个表 [file: 报告.pptx (lark_file_key: fk_1)] 谢谢".into(),
+    }];
+
+    fetch_message_files(&adapter, "om_1", &mut blocks, dir.path()).await;
+
+    assert_eq!(blocks.len(), 1, "no reminder, no note lines: {blocks:?}");
+    let ContentBlock::Text { text } = &blocks[0] else {
+        panic!("expected text block");
+    };
+    assert!(text.contains("(saved: "), "text: {text}");
+    assert!(text.contains("报告.pptx"), "text: {text}");
+    assert!(!text.contains("lark_file_key"), "text: {text}");
+    // The file really landed under dest_dir.
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[tokio::test]
+async fn fetch_message_files_trigger_failure_keeps_bare_placeholder() {
+    use super::context::fetch_message_files;
+
+    let adapter: Arc<dyn PlatformAdapter> = file_mock("err").await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut blocks = vec![ContentBlock::Text {
+        text: "[file: 大.zip (lark_file_key: fk_9)]".into(),
+    }];
+
+    fetch_message_files(&adapter, "om_1", &mut blocks, dir.path()).await;
+
+    assert_eq!(blocks.len(), 1, "trigger failures add nothing: {blocks:?}");
+    let ContentBlock::Text { text } = &blocks[0] else {
+        panic!("expected text block");
+    };
+    assert_eq!(text, "[file: 大.zip (lark_file_key: fk_9)]");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn fetch_message_files_empty_message_id_skips() {
+    use super::context::fetch_message_files;
+
+    let adapter: Arc<dyn PlatformAdapter> = file_mock("ok").await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut blocks = vec![ContentBlock::Text {
+        text: "[file: a.pdf (lark_file_key: fk_1)]".into(),
+    }];
+
+    fetch_message_files(&adapter, "", &mut blocks, dir.path()).await;
+
+    let ContentBlock::Text { text } = &blocks[0] else {
+        panic!("expected text block");
+    };
+    assert!(text.contains("lark_file_key"), "untouched: {text}");
+}
+
+#[tokio::test]
+async fn history_files_download_per_line_and_annotate_failures() {
+    use super::context::{assemble_history_with_files, FILE_HISTORY_DOWNLOAD_MAX};
+
+    // fail mock: every line's placeholder gets `; msg_id:` annotated —
+    // history lines carry no msg_id of their own.
+    let adapter: Arc<dyn PlatformAdapter> = file_mock("err").await;
+    let dir = tempfile::tempdir().unwrap();
+    let messages: Vec<HistoryMessage> = ["om_a", "om_b"]
+        .iter()
+        .map(|id| HistoryMessage {
+            message_id: id.to_string(),
+            create_time: 1_700_000_000_000,
+            sender_id: "ou_1".into(),
+            sender_name: None,
+            text: "[file: x.pdf (lark_file_key: fk_x)]".into(),
+            image_keys: vec![],
+            parent_id: None,
+        })
+        .collect();
+    let refs: Vec<&HistoryMessage> = messages.iter().collect();
+    let text = assemble_history_with_files(&adapter, &refs, &Default::default(), dir.path()).await;
+    assert!(
+        text.contains("(lark_file_key: fk_x; msg_id: om_a)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("(lark_file_key: fk_x; msg_id: om_b)"),
+        "{text}"
+    );
+
+    // ok mock: saved paths replace the suffix per line.
+    let adapter: Arc<dyn PlatformAdapter> = file_mock("ok").await;
+    let text = assemble_history_with_files(&adapter, &refs, &Default::default(), dir.path()).await;
+    assert!(text.contains("(saved: "), "{text}");
+    assert!(!text.contains("lark_file_key"), "{text}");
+    assert_eq!(
+        std::fs::read_dir(dir.path().join("om_a")).unwrap().count(),
+        1
+    );
+
+    // cap: FILE_HISTORY_DOWNLOAD_MAX newest download; older lines are
+    // annotated only (still manually fetchable via the inline msg_id).
+    let adapter: Arc<dyn PlatformAdapter> = file_mock("ok").await;
+    let many: Vec<HistoryMessage> = (0..=FILE_HISTORY_DOWNLOAD_MAX as u32)
+        .map(|i| HistoryMessage {
+            message_id: format!("om_{i}"),
+            create_time: 1_700_000_000_000 + i64::from(i),
+            sender_id: "ou_1".into(),
+            sender_name: None,
+            text: "[file: x.pdf (lark_file_key: fk_x)]".into(),
+            image_keys: vec![],
+            parent_id: None,
+        })
+        .collect();
+    let refs: Vec<&HistoryMessage> = many.iter().collect();
+    let text = assemble_history_with_files(&adapter, &refs, &Default::default(), dir.path()).await;
+    // Oldest message (om_0) exhausted the budget → annotated, not saved.
+    assert!(
+        text.contains("(lark_file_key: fk_x; msg_id: om_0)"),
+        "{text}"
+    );
+    // Newest is saved.
+    assert!(
+        text.contains(&format!(
+            "(saved: {})",
+            dir.path()
+                .join(format!("om_{FILE_HISTORY_DOWNLOAD_MAX}"))
+                .join("x.pdf")
+                .display()
+        )),
+        "{text}"
+    );
 }
 
 // ── Message gate reactions ──────────────────────────────────────────
@@ -8910,7 +9153,16 @@ async fn e2e_setup(
         reply_in_thread: true,
         ..ChannelConfig::default()
     };
-    let blocks = context_prefix(&adapter, &config, &store, "feishu", &msg, false).await;
+    let blocks = context_prefix(
+        &adapter,
+        &config,
+        &store,
+        "feishu",
+        &msg,
+        false,
+        std::path::Path::new("test-files-root"),
+    )
+    .await;
     (adapter, blocks)
 }
 

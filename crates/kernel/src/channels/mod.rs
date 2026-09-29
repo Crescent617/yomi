@@ -341,6 +341,17 @@ impl PlatformConfig {
     }
 }
 
+/// Outcome of a capped file-attachment download (see
+/// `hub::fetch_message_files`; design doc
+/// `docs/design/file-attachment-download.md`).
+#[derive(Debug)]
+pub enum FileFetch {
+    /// The file was saved to this local path.
+    Saved(std::path::PathBuf),
+    /// The attachment exceeds the size cap; nothing was written.
+    Oversize,
+}
+
 /// Platform-independent message from an external chat platform
 #[derive(Debug, Clone)]
 pub struct ChannelMessage {
@@ -1219,6 +1230,26 @@ pub trait PlatformAdapter: Send + Sync {
     ) -> Result<ContentBlock, ChannelError> {
         Err(ChannelError::Platform(
             "image download not supported for this platform".into(),
+        ))
+    }
+
+    /// Download a file attachment (`file`/`audio`/`media`) of a message
+    /// into `dest_dir`, capped at `max_bytes` (the caller decides the
+    /// cap; the hub uses this for `[file: … (lark_file_key: …)]`
+    /// placeholders, post-gate only — see `hub::fetch_message_files`).
+    /// Returns [`FileFetch::Oversize`] without writing anything when the
+    /// file exceeds the cap. `name` is a display name; implementations
+    /// sanitize it to a bare file name. Default: unsupported.
+    async fn download_message_file(
+        &self,
+        _message_id: &str,
+        _file_key: &str,
+        _name: &str,
+        _dest_dir: &std::path::Path,
+        _max_bytes: u64,
+    ) -> Result<FileFetch, ChannelError> {
+        Err(ChannelError::Platform(
+            "file download not supported for this platform".into(),
         ))
     }
 }
