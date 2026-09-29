@@ -22,54 +22,6 @@ jobs:
           fi
           echo "✅ HOMEBREW_TAP_TOKEN is set (length: ${#HOMEBREW_TAP_TOKEN})"
 
-  # ==================== 改动面判定 ====================
-  # tag 发版时对比上一枚 tag 的 diff 归类改动面，下游构建 job 据此
-  # 跳过无关产物：纯 kernel/CLI 提交不发 GUI 资产，纯 GUI 提交不跑
-  # TUI 矩阵与 docker。找不到上一枚 tag 或 diff 失败时 fail-open
-  # 全量构建。归类口径从保守：crates/gui/** 之外的一切（kernel/
-  # cli/tui、根 Cargo、workflows、scripts、docs）都算 kernel。
-  changes:
-    name: Detect Change Areas
-    runs-on: ubuntu-latest
-    outputs:
-      kernel: ${{ steps.diff.outputs.kernel }}
-      gui: ${{ steps.diff.outputs.gui }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Classify changed paths since previous tag
-        id: diff
-        shell: bash
-        run: |
-          set -euo pipefail
-          CUR="${GITHUB_REF_NAME}"
-          PREV=$(git describe --tags --abbrev=0 --match 'v*' --exclude "$CUR" 2>/dev/null || true)
-          if [ -z "$PREV" ]; then
-            echo "::warning::no previous tag found; building everything"
-            echo "kernel=true" >> "$GITHUB_OUTPUT"
-            echo "gui=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "diff base: $PREV"
-          git diff --name-only "$PREV" "$CUR" | tee changed.txt
-          if [ ! -s changed.txt ]; then
-            echo "::warning::empty diff since $PREV; building everything"
-            echo "kernel=true" >> "$GITHUB_OUTPUT"
-            echo "gui=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          kernel=false gui=false
-          while IFS= read -r p; do
-            case "$p" in
-              crates/gui/*) gui=true ;;
-              *) kernel=true ;;
-            esac
-          done < changed.txt
-          echo "kernel=$kernel" >> "$GITHUB_OUTPUT"
-          echo "gui=$gui" >> "$GITHUB_OUTPUT"
-
   # ==================== 先行创建 Release ====================
   # 各构建 job 完成后随即向此 release 上架自己的产物（即建即发：
   # mac 编译完不用等 Windows）；缺失产物由 audit 收尾标注。
@@ -96,9 +48,7 @@ jobs:
   # 随 sidecar 同源打包（见 build-gui 注释），此处不再重复全量编译。
   build-tui:
     name: Build TUI (linux)
-    needs: [check-precondition, create-release, changes]
-    # 纯 GUI 提交：CLI 无变化，跳过（产物与上一版逐字节同源）。
-    if: needs.changes.outputs.kernel == 'true'
+    needs: [check-precondition, create-release]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -150,10 +100,7 @@ jobs:
   # ==================== GUI 构建 (macOS DMG) ====================
   build-gui:
     name: Build GUI (macOS)
-    needs: [check-precondition, create-release, changes]
-    # DMG 内嵌 kernel + sidecar，任一面改动都要重建；全跳过只发生在
-    # fail-open 之外的两面皆未动时（实际不会发生，判据保留作保险）。
-    if: needs.changes.outputs.kernel == 'true' || needs.changes.outputs.gui == 'true'
+    needs: [check-precondition, create-release]
     runs-on: macos-latest
     permissions:
       contents: write
@@ -243,8 +190,7 @@ jobs:
   # 聚合下载转发 job），windows-e2e 不传 release-upload 只验证打包。
   build-gui-windows:
     name: Build GUI (Windows)
-    needs: [check-precondition, create-release, changes]
-    if: needs.changes.outputs.kernel == 'true' || needs.changes.outputs.gui == 'true'
+    needs: [check-precondition, create-release]
     permissions:
       contents: write
     uses: ./.github/workflows/build-gui-windows.yml
@@ -256,11 +202,8 @@ jobs:
     name: Build & Push Docker Image
     # 复用 build-tui 的 linux 二进制直接打包，不再用 nix 从头编译（编译曾是本 job 的大头）
     # linux leg 失败（无 artifact）时跳过而非报错——不 block 其他产物发布。
-    needs: [check-precondition, build-tui, changes]
-    # kernel 未动（纯 GUI 提交）时二进制无变化，docker 层只需重打包
-    # 旧镜像即可——但本 job 的设计就是复用 build-tui 二进制，没有二
-    # 进制可复用时整体跳过。
-    if: always() && needs.changes.outputs.kernel == 'true'
+    needs: [check-precondition, build-tui]
+    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -326,7 +269,7 @@ jobs:
   # 恢复干净）。产物本身已由各构建 job 即建即发。
   audit:
     name: Audit release assets
-    needs: [changes, build-tui, build-gui, build-gui-windows]
+    needs: [build-tui, build-gui, build-gui-windows]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -341,19 +284,13 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          # 缺失清单按改动面收敛：被 changes 跳过的产物不列入「缺失」
-          # （如纯 GUI 发布没有新 CLI 资产是有意的，不报警）。
           EXPECTED=(
+            "yomi-${VERSION}-aarch64-apple-darwin.tar.gz"
+            "yomi-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+            "yomi-${VERSION}-x86_64-pc-windows-msvc.zip"
             "Yomi_${VERSION}_aarch64.dmg"
             "Yomi_${VERSION}_x64_en-US.msi"
           )
-          if [ "${{ needs.changes.outputs.kernel }}" = "true" ]; then
-            EXPECTED+=(
-              "yomi-${VERSION}-aarch64-apple-darwin.tar.gz"
-              "yomi-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
-              "yomi-${VERSION}-x86_64-pc-windows-msvc.zip"
-            )
-          fi
           ASSETS=$(gh release view "${GITHUB_REF_NAME}" --repo "${{ github.repository }}" --json assets --jq '.assets[].name')
           MISSING=()
           for f in "${EXPECTED[@]}"; do
