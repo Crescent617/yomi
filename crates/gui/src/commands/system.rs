@@ -837,6 +837,8 @@ fn login_item_apply(enabled: bool) -> Result<(), String> {
     result.map_err(|e| format!("login item operation failed: {e}"))
 }
 
+// dev 构建（cargo run）注册的是 target/debug 路径：开发机上自启起的是
+// 旧 debug 二进制，调试自启行为时留意。
 #[cfg(target_os = "windows")]
 const AUTOSTART_KEY: &str = "Yomi";
 
@@ -871,7 +873,7 @@ fn login_item_apply(enabled: bool) -> Result<(), String> {
     }
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(target_os = "linux")]
 fn autostart_desktop_path() -> std::path::PathBuf {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
@@ -882,20 +884,21 @@ fn autostart_desktop_path() -> std::path::PathBuf {
 }
 
 /// XDG autostart desktop entry 内容（独立成函数便于测试）。
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(target_os = "linux")]
 fn autostart_desktop_entry(exe: &std::path::Path) -> String {
+    // Exec 含空格路径必须加引号（Desktop Entry Spec），否则 autostart 静默失效。
     format!(
-        "[Desktop Entry]\nType=Application\nName=Yomi\nExec={}\nX-GNOME-Autostart-enabled=true\n",
+        "[Desktop Entry]\nType=Application\nName=Yomi\nExec=\"{}\"\nTerminal=false\nX-GNOME-Autostart-enabled=true\n",
         exe.display()
     )
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(target_os = "linux")]
 fn login_item_status() -> bool {
     autostart_desktop_path().is_file()
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(target_os = "linux")]
 fn login_item_apply(enabled: bool) -> Result<(), String> {
     let path = autostart_desktop_path();
     if enabled {
@@ -919,9 +922,13 @@ pub async fn get_login_item() -> Result<bool, GuiError> {
     Ok(login_item_status())
 }
 
-/// 开关登录项，返回生效状态。
+/// 开关登录项，返回生效状态。幂等：系统侧已是目标状态（含用户在
+/// 系统侧手动删除后开关回落）直接成功，不重复注册/注销。
 #[tauri::command(rename_all = "snake_case")]
 pub async fn set_login_item(enabled: bool) -> Result<bool, GuiError> {
+    if login_item_status() == enabled {
+        return Ok(enabled);
+    }
     login_item_apply(enabled)
         .map(|()| enabled)
         .map_err(GuiError::unknown)

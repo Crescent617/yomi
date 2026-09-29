@@ -68,7 +68,8 @@
   let petSync = Promise.resolve();
   let keepAwakeSync = Promise.resolve();
 
-  // 登录项（macOS SMAppService）。非 macOS 命令不存在，探测失败即隐藏。
+  // 登录项（macOS SMAppService / Windows Run 键 / Linux XDG autostart）。
+  // mobile 与旧后端无此命令，探测失败即隐藏。
   let login_item_supported = $state(false);
   let login_item_enabled = $state(false);
   let login_item_busy = $state(false);
@@ -81,7 +82,7 @@
         login_item_enabled = state;
       })
       .catch((toggleError) => {
-        error = String(toggleError);
+        error = api.errorMessage(toggleError);
       })
       .finally(() => {
         login_item_busy = false;
@@ -619,8 +620,8 @@
             <div>
               <div class="text-sm text-foreground">Launch at login</div>
               <div class="text-xs text-muted-foreground">
-                Start Yomi when you log in. Also editable in System Settings →
-                General → Login Items.
+                Start Yomi when you log in. Also manageable in your system's
+                startup / login items.
               </div>
             </div>
             <input

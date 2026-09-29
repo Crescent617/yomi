@@ -132,11 +132,19 @@ async fn resolve_attachment_arg_rejects_workspace_escape() {
     assert!(err.to_string().contains("attachment unavailable"));
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(target_os = "linux")]
 #[test]
 fn autostart_desktop_entry_contains_exec() {
+    // 无空格路径：直接引用。
     let entry = super::autostart_desktop_entry(std::path::Path::new("/usr/bin/yomi-gui"));
     assert!(entry.contains("Type=Application"), "{entry}");
     assert!(entry.contains("Exec=/usr/bin/yomi-gui"), "{entry}");
+    assert!(entry.contains("Terminal=false"), "{entry}");
     assert!(entry.contains("X-GNOME-Autostart-enabled=true"), "{entry}");
+    // 含空格路径：Desktop Entry Spec 要求引号，否则 autostart 静默失效。
+    let spaced = super::autostart_desktop_entry(std::path::Path::new("/home/u/My Apps/yomi-gui"));
+    assert!(
+        spaced.contains("Exec=\"/home/u/My Apps/yomi-gui\""),
+        "{spaced}"
+    );
 }

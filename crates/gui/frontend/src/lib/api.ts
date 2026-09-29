@@ -382,12 +382,12 @@ export async function setKeepAwake(enabled: boolean): Promise<boolean> {
   return invokeCmd("set_keep_awake", { enabled });
 }
 
-/** macOS-only: 登录项当前状态。非 macOS 抛异常，前端据此隐藏开关。 */
+/** 登录项当前状态。桌面三平台可用；命令缺失（mobile/旧后端）时抛异常，前端据此隐藏开关。 */
 export async function getLoginItem(): Promise<boolean> {
   return invokeCmd("get_login_item");
 }
 
-/** macOS-only: 开关登录项，返回生效状态。 */
+/** 开关登录项，返回生效状态。幂等：系统侧已是目标状态直接成功。 */
 export async function setLoginItem(enabled: boolean): Promise<boolean> {
   return invokeCmd("set_login_item", { enabled });
 }
