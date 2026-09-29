@@ -313,18 +313,16 @@ jobs:
           gh release edit "${GITHUB_REF_NAME}" --repo "${{ github.repository }}" --notes-file release-notes.md
 
   # ==================== 更新 Homebrew（formula + cask） ====================
-  # 拆成两个 job 各等各自的产物：formula 只等 build-tui（TUI 一好，
-  # ~13min 用户即可 brew upgrade），不用等 DMG；cask 等 build-gui。
-  # 两者推同一个 tap repo，用 concurrency group 串行防 push 冲突
-  # （non-fast-forward）——formula 段只几分钟，cask 基本不等。
-  brew-formula:
-    name: Release TUI to Homebrew
-    needs: [create-release, build-tui, check-precondition]
+  # formula（mac+linux tar.gz gate）与 cask（DMG gate）同一 job 内顺
+  # 序执行：跨 job 拆开的唯一理由是提前 formula，但 formula 的
+  # macOS tarball 由 build-gui 产出（sidecar 同源设计），拆分后
+  # 仍要等 build-gui，提前量为零，只剩 tap push 冲突风险——不如
+  # 合 job。always() + 各自 gate：任一上游产物缺失只跳过对应半段，
+  # 不红。
+  brew:
+    needs: [create-release, build-tui, build-gui, check-precondition]
     if: always()
     runs-on: ubuntu-latest
-    concurrency:
-      group: homebrew-tap-${{ github.ref }}
-      cancel-in-progress: false
     env:
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
     steps:
@@ -357,19 +355,6 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           bash ./scripts/brew-release.sh "${GITHUB_REF_NAME#v}"
-
-  brew-cask:
-    name: Release GUI to Homebrew
-    needs: [create-release, build-gui, check-precondition]
-    if: always()
-    runs-on: ubuntu-latest
-    concurrency:
-      group: homebrew-tap-${{ github.ref }}
-      cancel-in-progress: false
-    env:
-      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-    steps:
-      - uses: actions/checkout@v6
 
       - name: Download DMG from Release
         id: dmg
