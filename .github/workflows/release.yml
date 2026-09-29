@@ -54,6 +54,12 @@ jobs:
           fi
           echo "diff base: $PREV"
           git diff --name-only "$PREV" "$CUR" | tee changed.txt
+          if [ ! -s changed.txt ]; then
+            echo "::warning::empty diff since $PREV; building everything"
+            echo "kernel=true" >> "$GITHUB_OUTPUT"
+            echo "gui=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           kernel=false gui=false
           while IFS= read -r p; do
             case "$p" in
@@ -86,34 +92,23 @@ jobs:
           body_path: release-notes.md
 
   # ==================== TUI 构建 ====================
+  # 只剩 linux 一个 leg：macOS/Windows 的 CLI 资产在对应 GUI job 里
+  # 随 sidecar 同源打包（见 build-gui 注释），此处不再重复全量编译。
   build-tui:
-    name: Build TUI ${{ matrix.target }}
+    name: Build TUI (linux)
     needs: [check-precondition, create-release, changes]
-    # 纯 GUI 提交：CLI 无变化，跳过 TUI 矩阵（产物与上一版逐字节同源）。
+    # 纯 GUI 提交：CLI 无变化，跳过（产物与上一版逐字节同源）。
     if: needs.changes.outputs.kernel == 'true'
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     permissions:
       contents: write
-
-    strategy:
-      # 单平台 leg 失败不取消其他 leg——各产物独立构建。
-      fail-fast: false
-      matrix:
-        include:
-          # Linux
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-
-          # macOS / Windows 的 CLI 资产已移入对应 GUI job——sidecar
-          # 本来就要在那编一遍 CLI，同一 target dir 里 kernel 只编
-          # 一次，资产与 sidecar 同源打包（此处不再重复全量编译）。
 
     steps:
       - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: x86_64-unknown-linux-gnu
 
       - uses: Swatinem/rust-cache@v2
 
@@ -124,58 +119,33 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       # Linux 用 clang 避坑 aws-lc
-      - name: Install clang (Linux only)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Install clang
         run: sudo apt-get update && sudo apt-get install -y clang
 
       - name: Build
         shell: bash
-        run: |
-          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            CC=clang CXX=clang++ cargo build --release --target ${{ matrix.target }} --bin yomi
-          else
-            cargo build --release --target ${{ matrix.target }} --bin yomi
-          fi
+        run: CC=clang CXX=clang++ cargo build --release --target x86_64-unknown-linux-gnu --bin yomi
 
       - name: Package
         shell: bash
         run: |
           set -euo pipefail
-
           VERSION=${GITHUB_REF_NAME#v}
-          NAME=yomi
-
-          BIN="target/${{ matrix.target }}/release/$NAME"
-          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
-            BIN="${BIN}.exe"
-          fi
-
-          OUT="${NAME}-${VERSION}-${{ matrix.target }}"
+          OUT="yomi-${VERSION}-x86_64-unknown-linux-gnu"
           mkdir -p "$OUT"
-          cp "$BIN" "$OUT/"
-
-          # Windows 产物打 zip（Windows 用户习惯；7z 是 runner 自带），
-          # 其余平台保持 tar.gz。
-          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
-            7z a -tzip "$OUT.zip" "./$OUT" >/dev/null
-          else
-            tar czf "$OUT.tar.gz" "$OUT"
-          fi
+          cp "target/x86_64-unknown-linux-gnu/release/yomi" "$OUT/"
+          tar czf "$OUT.tar.gz" "$OUT"
 
       - uses: actions/upload-artifact@v6
         with:
-          name: ${{ matrix.target }}
-          path: |
-            *.tar.gz
-            *.zip
+          name: x86_64-unknown-linux-gnu
+          path: yomi-*-x86_64-unknown-linux-gnu.tar.gz
 
-      # 即建即发：本 leg 产物随即上架 release（softprops 按 tag 找
+      # 即建即发：产物随即上架 release（softprops 按 tag 找
       # create-release 已建的 release 追加 asset，重传覆盖默认开启）。
       - uses: softprops/action-gh-release@v2
         with:
-          files: |
-            yomi-*.tar.gz
-            yomi-*.zip
+          files: yomi-*-x86_64-unknown-linux-gnu.tar.gz
 
   # ==================== GUI 构建 (macOS DMG) ====================
   build-gui:

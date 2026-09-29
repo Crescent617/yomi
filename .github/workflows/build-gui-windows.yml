@@ -23,19 +23,12 @@ jobs:
   build:
     name: msi
     runs-on: windows-latest
-    env:
-      # sccache 接管 rustc：跨版本编译依赖层命中 GHA 缓存，版本
-      # bump（Cargo.lock 变 → rust-cache 全量失效）不再触发依赖
-      # 全量重建——这是本 job 约半小时编译的大头。
-      RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
-
-      - uses: Mozilla-Actions/sccache-action@v0.0.7
 
       - uses: actions/setup-node@v4
         with:
