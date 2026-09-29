@@ -108,7 +108,7 @@
         login_item_enabled = state;
       })
       .catch(() => {
-        // 非 macOS：保持隐藏。
+        // 探测失败（mobile 或旧后端）：保持隐藏。
       });
     void api
       .listPetPacks()

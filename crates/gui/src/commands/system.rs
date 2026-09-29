@@ -836,8 +836,9 @@ fn login_item_apply(enabled: bool) -> Result<(), String> {
     result.map_err(|e| format!("login item operation failed: {e}"))
 }
 
-// dev 构建（cargo run）注册的是 target/debug 路径：开发机上自启起的是
-// 旧 debug 二进制，调试自启行为时留意。
+// dev 构建（cargo run）注册的是 target/debug 路径：重新编译后
+// current_exe() 变化，旧注册项即视为失效（status 要求值匹配，开关
+// 显示关，重开一次即重写）。
 #[cfg(target_os = "windows")]
 const AUTOSTART_KEY: &str = "Yomi";
 
@@ -845,10 +846,18 @@ const AUTOSTART_KEY: &str = "Yomi";
 fn login_item_status() -> bool {
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    // 值必须指向当前二进制：注册表键存在但指向已失效路径（程序
+    // 移动/重命名/重装）不算开——否则 set(true) 被幂等挡掉，陈旧
+    // 注册项永远不会被刷新。
+    let expected = format!("\"{}\"", exe.display());
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     hkcu.open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Run")
         .and_then(|k| k.get_value::<String, _>(AUTOSTART_KEY))
-        .is_ok()
+        .map(|v| v == expected)
+        .unwrap_or(false)
 }
 
 #[cfg(target_os = "windows")]
@@ -873,13 +882,13 @@ fn login_item_apply(enabled: bool) -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
-fn autostart_desktop_path() -> std::path::PathBuf {
+fn autostart_desktop_path() -> Result<std::path::PathBuf, String> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
         .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
-        .unwrap_or_default();
-    base.join("autostart").join("yomi.desktop")
+        .ok_or("neither XDG_CONFIG_HOME nor HOME is set")?;
+    Ok(base.join("autostart").join("yomi.desktop"))
 }
 
 /// XDG autostart desktop entry 内容（独立成函数便于测试）。
@@ -894,12 +903,24 @@ fn autostart_desktop_entry(exe: &std::path::Path) -> String {
 
 #[cfg(target_os = "linux")]
 fn login_item_status() -> bool {
-    autostart_desktop_path().is_file()
+    let Ok(path) = autostart_desktop_path() else {
+        return false;
+    };
+    // 内容必须匹配当前二进制：文件存在但 Exec 指向已失效路径（程序
+    // 移动/重命名/重装）不算开——否则 set(true) 被幂等挡掉，陈旧
+    // 桌面项永远不会被刷新。
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    content == autostart_desktop_entry(&exe)
 }
 
 #[cfg(target_os = "linux")]
 fn login_item_apply(enabled: bool) -> Result<(), String> {
-    let path = autostart_desktop_path();
+    let path = autostart_desktop_path()?;
     if enabled {
         let exe = std::env::current_exe().map_err(|e| format!("current exe: {e}"))?;
         let dir = path.parent().ok_or("autostart dir")?;
@@ -915,20 +936,44 @@ fn login_item_apply(enabled: bool) -> Result<(), String> {
     }
 }
 
-/// 登录项当前状态。全平台可用（命令缺失时前端隐藏开关）。
+// mobile（iOS/Android）无登录项：命令编译兜底必须报错而非返回
+// false——探测（get_login_item）失败前端才隐藏开关，返回 false 会
+// 在 mobile 上出一个点了必失败的死开关。
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn login_item_status() -> bool {
+    false
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn login_item_apply(_enabled: bool) -> Result<(), String> {
+    Err("login item is not supported on this platform".to_string())
+}
+
+/// 登录项当前状态。桌面三平台可用；mobile 无登录项，探测报错时前端隐藏开关。
 #[tauri::command(rename_all = "snake_case")]
 pub async fn get_login_item() -> Result<bool, GuiError> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    return Err(GuiError::unknown(
+        "login item is not supported on this platform".to_string(),
+    ));
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     Ok(login_item_status())
 }
 
 /// 开关登录项，返回**重新查询**的系统侧状态（不返回请求值——macOS
 /// 注册后可能立刻被系统置为 RequiresApproval，乐观显示会失同步）。
-/// 幂等：系统侧已是目标状态（含用户在系统侧手动删除后开关回落）
-/// 直接成功，不重复注册/注销。
+/// 幂等：系统侧已是目标状态直接成功，不重复注册/注销。
+/// 关闭路径无条件走一遍注销：apply(false) 自身幂等（缺失即成功），
+/// 顺手清掉指向已失效路径的陈旧注册项（status 已要求值匹配，陈旧
+/// 项表现为「关」，不主动注销会一直留在注册表/autostart 目录）。
 #[tauri::command(rename_all = "snake_case")]
 pub async fn set_login_item(enabled: bool) -> Result<bool, GuiError> {
-    if login_item_status() != enabled {
-        login_item_apply(enabled).map_err(GuiError::unknown)?;
+    if enabled {
+        if !login_item_status() {
+            login_item_apply(true).map_err(GuiError::unknown)?;
+        }
+    } else {
+        login_item_apply(false).map_err(GuiError::unknown)?;
     }
     Ok(login_item_status())
 }
