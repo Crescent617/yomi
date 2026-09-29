@@ -292,7 +292,7 @@ jobs:
 
   # ==================== 更新 Homebrew（formula + cask） ====================
   # formula（mac CLI tar.gz gate）与 cask（DMG gate）同一 job 内顺序
-  # 执行；两者皆纯 mac 产物（同出 build-osx），needs 只挂 build-gui。
+  # 执行；两者皆纯 mac 产物（同出 build-osx），needs 只挂 build-osx。
   # 跨 job 拆开的唯一理由是提前 formula，但拆分后仍要等 build-osx，
   # 提前量为零，只剩 tap push 冲突风险——不如合 job。always() 保证上游失败也来试；gate 一律硬拦（exit 1）——
   # warning 跳过会静默漏发（v0.10.53 formula 漏发即此因，靠人工对
@@ -300,7 +300,7 @@ jobs:
   brew:
     name: Release to Homebrew
     # formula 与 cask 都是纯 mac 产物（CLI tar.gz 与 DMG 皆 build-osx
-    # 产出），needs 只挂 build-gui。always() 保证上游失败也来试；
+    # 产出），needs 只挂 build-osx。always() 保证上游失败也来试；
     # gate 一律硬拦（exit 1）——warning 跳过会静默漏发（v0.10.53
     # formula 漏发即此因）；产物缺失属真故障，红了可见，re-run 即恢复。
     needs: [create-release, build-osx, check-precondition]
