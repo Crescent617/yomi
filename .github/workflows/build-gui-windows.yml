@@ -9,18 +9,33 @@ name: build-gui-windows
 
 on:
   workflow_call:
+    inputs:
+      release-upload:
+        description: >-
+          构建成功后直接把 msi 与 CLI zip 上架到当前 tag 的 GitHub
+          Release（即建即发）。仅 release.yml 发版时开启；
+          windows-e2e 验证打包不传，产物只留 artifact。
+        type: boolean
+        default: false
   workflow_dispatch:  # 手动验证 Windows GUI 编译（main 直推无 CI 门禁）
 
 jobs:
   build:
     name: msi
     runs-on: windows-latest
+    env:
+      # sccache 接管 rustc：跨版本编译依赖层命中 GHA 缓存，版本
+      # bump（Cargo.lock 变 → rust-cache 全量失效）不再触发依赖
+      # 全量重建——这是本 job 约半小时编译的大头。
+      RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+
+      - uses: Mozilla-Actions/sccache-action@v0.0.7
 
       - uses: actions/setup-node@v4
         with:
@@ -90,5 +105,17 @@ jobs:
           # bundle 产物在 workspace 根 target/（cargo 共享 target dir），
           # 与 macOS DMG 的 sha/upload 路径同惯例。
           path: |
+            target/release/bundle/msi/*.msi
+            yomi-*-x86_64-pc-windows-msvc.zip
+
+      # 即建即发（release.yml 传 release-upload: true 时）：msi 与
+      # CLI zip 直接上架当前 tag 的 release，不再由 release.yml 聚合
+      # 下载转发——省一整圈 artifact 下载+上传，Windows 编译完即
+      # 可发布，不等任何其他 job。需要调用方 job 给 contents: write。
+      - name: Upload installers to Release
+        if: inputs.release-upload
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
             target/release/bundle/msi/*.msi
             yomi-*-x86_64-pc-windows-msvc.zip

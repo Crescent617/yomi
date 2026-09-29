@@ -22,6 +22,48 @@ jobs:
           fi
           echo "✅ HOMEBREW_TAP_TOKEN is set (length: ${#HOMEBREW_TAP_TOKEN})"
 
+  # ==================== 改动面判定 ====================
+  # tag 发版时对比上一枚 tag 的 diff 归类改动面，下游构建 job 据此
+  # 跳过无关产物：纯 kernel/CLI 提交不发 GUI 资产，纯 GUI 提交不跑
+  # TUI 矩阵与 docker。找不到上一枚 tag 或 diff 失败时 fail-open
+  # 全量构建。归类口径从保守：crates/gui/** 之外的一切（kernel/
+  # cli/tui、根 Cargo、workflows、scripts、docs）都算 kernel。
+  changes:
+    name: Detect Change Areas
+    runs-on: ubuntu-latest
+    outputs:
+      kernel: ${{ steps.diff.outputs.kernel }}
+      gui: ${{ steps.diff.outputs.gui }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed paths since previous tag
+        id: diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          CUR="${GITHUB_REF_NAME}"
+          PREV=$(git describe --tags --abbrev=0 --match 'v*' --exclude "$CUR" 2>/dev/null || true)
+          if [ -z "$PREV" ]; then
+            echo "::warning::no previous tag found; building everything"
+            echo "kernel=true" >> "$GITHUB_OUTPUT"
+            echo "gui=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "diff base: $PREV"
+          git diff --name-only "$PREV" "$CUR" | tee changed.txt
+          kernel=false gui=false
+          while IFS= read -r p; do
+            case "$p" in
+              crates/gui/*) gui=true ;;
+              *) kernel=true ;;
+            esac
+          done < changed.txt
+          echo "kernel=$kernel" >> "$GITHUB_OUTPUT"
+          echo "gui=$gui" >> "$GITHUB_OUTPUT"
+
   # ==================== 先行创建 Release ====================
   # 各构建 job 完成后随即向此 release 上架自己的产物（即建即发：
   # mac 编译完不用等 Windows）；缺失产物由 audit 收尾标注。
@@ -46,7 +88,9 @@ jobs:
   # ==================== TUI 构建 ====================
   build-tui:
     name: Build TUI ${{ matrix.target }}
-    needs: [check-precondition, create-release]
+    needs: [check-precondition, create-release, changes]
+    # 纯 GUI 提交：CLI 无变化，跳过 TUI 矩阵（产物与上一版逐字节同源）。
+    if: needs.changes.outputs.kernel == 'true'
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -136,7 +180,10 @@ jobs:
   # ==================== GUI 构建 (macOS DMG) ====================
   build-gui:
     name: Build GUI (macOS)
-    needs: [check-precondition, create-release]
+    needs: [check-precondition, create-release, changes]
+    # DMG 内嵌 kernel + sidecar，任一面改动都要重建；全跳过只发生在
+    # fail-open 之外的两面皆未动时（实际不会发生，判据保留作保险）。
+    if: needs.changes.outputs.kernel == 'true' || needs.changes.outputs.gui == 'true'
     runs-on: macos-latest
     permissions:
       contents: write
@@ -222,40 +269,28 @@ jobs:
 
   # ==================== GUI 构建 (Windows MSI) ====================
   # 与 windows-e2e.yml 的手动打包共用 .github/workflows/build-gui-windows.yml
-  # 单一定义；产物经 release job 的 merge-multiple 下载随 Release 发布。
+  # 单一定义；产物由 reusable 内 release-upload 步骤即建即发（省掉原
+  # 聚合下载转发 job），windows-e2e 不传 release-upload 只验证打包。
   build-gui-windows:
     name: Build GUI (Windows)
-    needs: [check-precondition, create-release]
-    uses: ./.github/workflows/build-gui-windows.yml
-
-  # reusable 只负责构建（windows-e2e 共用，不该上架）；发布是
-  # release.yml 的事——下载 artifact 随即上架。
-  upload-gui-windows:
-    name: Upload Windows installers to Release
-    needs: [create-release, build-gui-windows]
-    runs-on: ubuntu-latest
+    needs: [check-precondition, create-release, changes]
+    if: needs.changes.outputs.kernel == 'true' || needs.changes.outputs.gui == 'true'
     permissions:
       contents: write
-    steps:
-      - uses: actions/download-artifact@v6
-        with:
-          name: gui-windows-installers
-      # artifact 内是嵌套两层（upload-artifact 多 path 按 LCA 保留
-      # 目录结构：msi/*.msi + 根 zip）——必须递归通配，根目录
-      # 通配会零匹配而 softprops 只 warn 不 fail（静默断供）。
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            **/Yomi_*.msi
-            **/yomi-*-pc-windows-msvc.zip
+    uses: ./.github/workflows/build-gui-windows.yml
+    with:
+      release-upload: true
 
   # ==================== Docker 镜像 (GHCR) ====================
   build-docker:
     name: Build & Push Docker Image
     # 复用 build-tui 的 linux 二进制直接打包，不再用 nix 从头编译（编译曾是本 job 的大头）
     # linux leg 失败（无 artifact）时跳过而非报错——不 block 其他产物发布。
-    needs: [check-precondition, build-tui]
-    if: always()
+    needs: [check-precondition, build-tui, changes]
+    # kernel 未动（纯 GUI 提交）时二进制无变化，docker 层只需重打包
+    # 旧镜像即可——但本 job 的设计就是复用 build-tui 二进制，没有二
+    # 进制可复用时整体跳过。
+    if: always() && needs.changes.outputs.kernel == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -321,7 +356,7 @@ jobs:
   # 恢复干净）。产物本身已由各构建 job 即建即发。
   audit:
     name: Audit release assets
-    needs: [build-tui, build-gui, upload-gui-windows]
+    needs: [changes, build-tui, build-gui, build-gui-windows]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -336,13 +371,19 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
+          # 缺失清单按改动面收敛：被 changes 跳过的产物不列入「缺失」
+          # （如纯 GUI 发布没有新 CLI 资产是有意的，不报警）。
           EXPECTED=(
-            "yomi-${VERSION}-aarch64-apple-darwin.tar.gz"
-            "yomi-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
-            "yomi-${VERSION}-x86_64-pc-windows-msvc.zip"
             "Yomi_${VERSION}_aarch64.dmg"
             "Yomi_${VERSION}_x64_en-US.msi"
           )
+          if [ "${{ needs.changes.outputs.kernel }}" = "true" ]; then
+            EXPECTED+=(
+              "yomi-${VERSION}-aarch64-apple-darwin.tar.gz"
+              "yomi-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+              "yomi-${VERSION}-x86_64-pc-windows-msvc.zip"
+            )
+          fi
           ASSETS=$(gh release view "${GITHUB_REF_NAME}" --repo "${{ github.repository }}" --json assets --jq '.assets[].name')
           MISSING=()
           for f in "${EXPECTED[@]}"; do
@@ -365,15 +406,18 @@ jobs:
           gh release edit "${GITHUB_REF_NAME}" --repo "${{ github.repository }}" --notes-file release-notes.md
 
   # ==================== 更新 Homebrew（formula + cask） ====================
-  # formula（mac+linux tar.gz gate）与 cask（DMG gate）同一 job 内顺
-  # 序执行：原跨 job 串行的唯一理由是防同一 tap repo 的 push 冲突
-  #（non-fast-forward），合 job 后该约束天然成立，还少一层 job 启
-  # 动与相互等待。always() + 各自 gate：任一上游产物缺失只跳过对
-  # 应半段，不红。
-  brew:
-    needs: [create-release, build-tui, build-gui, check-precondition]
+  # 拆成两个 job 各等各自的产物：formula 只等 build-tui（TUI 一好，
+  # ~13min 用户即可 brew upgrade），不用等 DMG；cask 等 build-gui。
+  # 两者推同一个 tap repo，用 concurrency group 串行防 push 冲突
+  # （non-fast-forward）——formula 段只几分钟，cask 基本不等。
+  brew-formula:
+    name: Release TUI to Homebrew
+    needs: [create-release, build-tui, check-precondition]
     if: always()
     runs-on: ubuntu-latest
+    concurrency:
+      group: homebrew-tap-${{ github.ref }}
+      cancel-in-progress: false
     env:
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
     steps:
@@ -406,6 +450,19 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           bash ./scripts/brew-release.sh "${GITHUB_REF_NAME#v}"
+
+  brew-cask:
+    name: Release GUI to Homebrew
+    needs: [create-release, build-gui, check-precondition]
+    if: always()
+    runs-on: ubuntu-latest
+    concurrency:
+      group: homebrew-tap-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
 
       - name: Download DMG from Release
         id: dmg
