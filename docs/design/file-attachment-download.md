@@ -78,6 +78,22 @@ data_dir 由 `kernel.data_dir()` 给出（`~/.yomi`），按消息分组便于
   说明行 `[Failed to download attachment(s): …]`，与图片失败路径
   （`[Failed to download image: …]`）同规，不静默。
 
+### history 里的文件（与图片同规）
+
+history 注入块（`[HH:MM] sender: …` 各行）里的文件占位符**同样下载**：
+每行带自己的 `message_id`，逐行解析占位符、按行 msg_id 下载、就地
+改写，与 `download_image_pairs` 完全同一姿势。两个硬理由：
+
+1. 不对称会被用户踩到：history 图片现在就能看，文件不能读，"图能
+   看图文件不能读"毫无道理。
+2. history 行不渲染 msg_id，占位符里的 key 凑不齐手动下载参数，是
+   死钥匙——"保持占位符"对该场景不是兜底。
+
+cap 与图片同机制取最新：每触发最多 [`FILE_HISTORY_DOWNLOAD_MAX`]
+个（提议 3，图片是 5——文件体积大），超限记 `[N more file(s)
+omitted]` 说明行。merge_forward 子消息文件随父 msg_id（与图片现状
+一致：端点认就通，不认则与图片同病，不另设特例）。
+
 ### 接线点（hub/handlers.rs）
 
 - `ChannelCommand::None`（主流触发）：`msg.content` 文本块先下载改
@@ -117,15 +133,15 @@ data_dir 由 `kernel.data_dir()` 给出（`~/.yomi`），按消息分组便于
    `<system_reminder>`。
 5. **失败不静默**：单个失败有可见说明行；全失败（如无平台支持）
    行为同今天（占位符 + 说明行）。
-6. **只覆盖触发消息本身**：history、merge_forward 子消息、卡片取回
-   体内的文件占位符维持现状（占位符 + key），v1 不下载
-   （merge_forward 子消息的文件 key 属于子消息 id，用父 id 下载会
-   400；要做需 sub-message id 随行，另行立项）。
+6. **触发消息与 history 一视同仁**：两处的文件占位符都下载改写；
+   唯一不下载的是无 key 的占位符（语法残缺，保留原文）。merge_forward
+   子消息文件随父 msg_id，与图片同现状。
 7. **其他平台默认 unsupported**：`download_message_file` 默认方法
    返回 unsupported 错误，走到失败说明行路径，telegram 等通道行为
    不变。
 8. **cap 常量集中**：`FILE_DOWNLOAD_MAX_BYTES = 100 * 1024 * 1024`
-   定义在 hub/context.rs（与 `IMAGE_DOWNLOAD_MAX` 并列），改阈值单点。
+   与 `FILE_HISTORY_DOWNLOAD_MAX = 3` 定义在 hub/context.rs（与
+   `IMAGE_DOWNLOAD_MAX` 并列），改阈值单点。
 
 ## 测试计划
 
@@ -139,13 +155,17 @@ data_dir 由 `kernel.data_dir()` 给出（`~/.yomi`），按消息分组便于
   空 message_id 直接跳过。
 - 单文件直发专项：触发消息正文只有占位符时，改写后 agent 可见
   `saved:` 路径；steer 路径同样生效（事故复现形态）。
+- history 注入：行内占位符按行 msg_id 下载改写；超 3 个记 omitted
+  说明行；无 key 占位符原样不动。
 - 回归：`just ci` 全绿；隔离 daemon 真链路 e2e（参考 v0.10.34
-  做法：测试账号发文件 → agent 侧文本含 saved 路径 → read 能读）。
+  做法：测试账号发文件 → agent 侧文本含 saved 路径 → read 能读；
+  补一条 history 场景：文件发在话题早期、后续 @bot 触发，agent
+  能从 history 行读到 saved 路径）。
 
 ## 决策记录（待拍板）
 
 - 上限 100MB 为拍板值（2026-09-29）；语义"小于下载、大于提示"。
+- history 文件每触发下载上限 3 个（图片是 5）为提议值，待拍板。
 - 落点 `<data_dir>/channels/<channel>/files/<msg_id>/` 为提议值。
 - reminder 用英文（与 `[Failed to download image]` 等既有
   agent-facing 字符串同语言）；如要中文可换。
-- v1 不含 merge_forward 子消息文件与 history 文件下载。
