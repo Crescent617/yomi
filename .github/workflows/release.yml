@@ -52,15 +52,18 @@ jobs:
         with:
           body_path: release-notes.md
 
-  # ==================== TUI 构建 ====================
-  # 只剩 linux 一个 leg：macOS/Windows 的 CLI 资产在对应 GUI job 里
-  # 随 sidecar 同源打包（见 build-gui 注释），此处不再重复全量编译。
-  build-tui:
-    name: Build TUI (linux)
+  # ==================== Linux 构建 ====================
+  # linux 的 CLI 资产与 docker 镜像同源于这一个 job：编一次二进制，
+  # 先发 tar.gz 上架（asset 优先于镜像，镜像 push 失败不影响 CLI
+  # 发布），再打包推 GHCR。三个 OS 的 job 各自编译、各自上架自己
+  # 的全部产物，互不干扰；audit 收尾清点。
+  build-linux:
+    name: Build CLI & Docker (linux)
     needs: [check-precondition, create-release]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      packages: write
 
     steps:
       - uses: actions/checkout@v6
@@ -85,7 +88,7 @@ jobs:
         shell: bash
         run: CC=clang CXX=clang++ cargo build --release --target x86_64-unknown-linux-gnu --bin yomi
 
-      - name: Package
+      - name: Package & upload CLI asset
         shell: bash
         run: |
           set -euo pipefail
@@ -95,18 +98,50 @@ jobs:
           cp "target/x86_64-unknown-linux-gnu/release/yomi" "$OUT/"
           tar czf "$OUT.tar.gz" "$OUT"
 
-      - uses: actions/upload-artifact@v6
-        with:
-          name: x86_64-unknown-linux-gnu
-          path: yomi-*-x86_64-unknown-linux-gnu.tar.gz
-
-      # 即建即发：产物随即上架 release（softprops 按 tag 找
-      # create-release 已建的 release 追加 asset，重传覆盖默认开启）。
+      # 即建即发（softprops 按 tag 找 create-release 已建的 release
+      # 追加 asset，重传覆盖默认开启）。
       - uses: softprops/action-gh-release@v2
         with:
           files: yomi-*-x86_64-unknown-linux-gnu.tar.gz
 
+      # ---- docker 镜像（复用上面编出的二进制，不再用 nix 从头编译）----
+
+      - name: Prepare build context
+        run: |
+          set -euo pipefail
+          cp target/x86_64-unknown-linux-gnu/release/yomi docker/yomi
+          VERSION="${GITHUB_REF_NAME#v}"
+          OWNER="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/${OWNER}/yomi" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        env:
+          # 不上传 buildx 构建记录 artifact（0 字节、无法解 zip，
+          # 会把 release job 的全量 artifact 下载搞挂）
+          DOCKER_BUILD_RECORD_UPLOAD: 'false'
+        with:
+          context: docker
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ env.VERSION }}
+            ${{ env.IMAGE }}:latest
+          # apt 工具链层跨 run 缓存；yomi 层每次新发
+          cache-from: type=gha,scope=yomi-docker
+          cache-to: type=gha,mode=max,scope=yomi-docker
+
   # ==================== GUI 构建 (macOS DMG) ====================
+  # mac 的全部产物（DMG + CLI tar.gz，sidecar 同源）在本 job 编译上架。
   build-gui:
     name: Build GUI (macOS)
     needs: [check-precondition, create-release]
@@ -206,79 +241,13 @@ jobs:
     with:
       release-upload: true
 
-  # ==================== Docker 镜像 (GHCR) ====================
-  build-docker:
-    name: Build & Push Docker Image
-    # 复用 build-tui 的 linux 二进制直接打包，不再用 nix 从头编译（编译曾是本 job 的大头）
-    # linux leg 失败（无 artifact）时跳过而非报错——不 block 其他产物发布。
-    needs: [check-precondition, build-tui]
-    if: always()
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Download linux artifact
-        id: dl
-        uses: actions/download-artifact@v6
-        continue-on-error: true
-        with:
-          name: x86_64-unknown-linux-gnu
-
-      - name: Skip when linux artifact missing
-        if: steps.dl.outcome != 'success'
-        run: echo "::warning::linux tui artifact missing (build leg failed); skipping docker image"
-
-      - name: Prepare build context
-        if: steps.dl.outcome == 'success'
-        run: |
-          set -euo pipefail
-          tar xzf yomi-*-x86_64-unknown-linux-gnu.tar.gz
-          cp yomi-*-x86_64-unknown-linux-gnu/yomi docker/yomi
-
-          VERSION="${GITHUB_REF_NAME#v}"
-          OWNER="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "IMAGE=ghcr.io/${OWNER}/yomi" >> "$GITHUB_ENV"
-
-      - uses: docker/setup-buildx-action@v3
-        if: steps.dl.outcome == 'success'
-
-      - name: Login to GHCR
-        if: steps.dl.outcome == 'success'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build & push
-        if: steps.dl.outcome == 'success'
-        uses: docker/build-push-action@v6
-        env:
-          # 不上传 buildx 构建记录 artifact（0 字节、无法解 zip，
-          # 会把 release job 的全量 artifact 下载搞挂）
-          DOCKER_BUILD_RECORD_UPLOAD: 'false'
-        with:
-          context: docker
-          push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ env.VERSION }}
-            ${{ env.IMAGE }}:latest
-          # apt 工具链层跨 run 缓存；yomi 层每次新发
-          cache-from: type=gha,scope=yomi-docker
-          cache-to: type=gha,mode=max,scope=yomi-docker
-
   # ==================== 收尾清点 ====================
   # 全部构建结束后清点 release 资产：缺失名单重写进 notes（从
   # CHANGELOG 重抽干净 notes 再追加——retry 补齐产物后 notes 自动
   # 恢复干净）。产物本身已由各构建 job 即建即发。
   audit:
     name: Audit release assets
-    needs: [build-tui, build-gui, build-gui-windows]
+    needs: [build-linux, build-gui, build-gui-windows]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -330,7 +299,7 @@ jobs:
   # warning 跳过会静默漏发（v0.10.53 formula 漏发即此因，靠人工对
   # tap 版本才发现）；产物缺失属真故障，红了可见，re-run 即恢复。
   brew:
-    needs: [create-release, build-tui, build-gui, check-precondition]
+    needs: [create-release, build-linux, build-gui, check-precondition]
     if: always()
     runs-on: ubuntu-latest
     env:
