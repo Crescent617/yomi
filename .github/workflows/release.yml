@@ -291,16 +291,19 @@ jobs:
           gh release edit "${GITHUB_REF_NAME}" --repo "${{ github.repository }}" --notes-file release-notes.md
 
   # ==================== 更新 Homebrew（formula + cask） ====================
-  # formula（mac+linux tar.gz gate）与 cask（DMG gate）同一 job 内顺
-  # 序执行：跨 job 拆开的唯一理由是提前 formula，但 formula 的
-  # macOS tarball 由 build-gui 产出（sidecar 同源设计），拆分后
-  # 仍要等 build-gui，提前量为零，只剩 tap push 冲突风险——不如
-  # 合 job。always() 保证上游失败也来试；gate 一律硬拦（exit 1）——
+  # formula（mac CLI tar.gz gate）与 cask（DMG gate）同一 job 内顺序
+  # 执行；两者皆纯 mac 产物（同出 build-gui），needs 只挂 build-gui。
+  # 跨 job 拆开的唯一理由是提前 formula，但拆分后仍要等 build-gui，
+  # 提前量为零，只剩 tap push 冲突风险——不如合 job。always() 保证上游失败也来试；gate 一律硬拦（exit 1）——
   # warning 跳过会静默漏发（v0.10.53 formula 漏发即此因，靠人工对
   # tap 版本才发现）；产物缺失属真故障，红了可见，re-run 即恢复。
   brew:
     name: Release to Homebrew
-    needs: [create-release, build-linux, build-gui, check-precondition]
+    # formula 与 cask 都是纯 mac 产物（CLI tar.gz 与 DMG 皆 build-gui
+    # 产出），needs 只挂 build-gui。always() 保证上游失败也来试；
+    # gate 一律硬拦（exit 1）——warning 跳过会静默漏发（v0.10.53
+    # formula 漏发即此因）；产物缺失属真故障，红了可见，re-run 即恢复。
+    needs: [create-release, build-gui, check-precondition]
     if: always()
     runs-on: ubuntu-latest
     env:
@@ -308,24 +311,22 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Gate on CLI tarballs
+      - name: Gate on CLI tarball
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          for p in aarch64-apple-darwin x86_64-unknown-linux-gnu; do
-            url="https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/yomi-${VERSION}-${p}.tar.gz"
-            # asset 刚上传存在秒级 404 窗口/瞬时网络抖动：重试后再判缺失
-            found=false
-            for i in 1 2 3 4 5; do
-              curl -fsI "$url" >/dev/null && { found=true; break; }
-              sleep 15
-            done
-            if [ "$found" = false ]; then
-              echo "::error::missing release asset: $url"
-              echo "❌ formula 依赖的 tarball 未就位（上游构建未完成或失败）；构建修复后 re-run 本 job 即恢复" >&2
-              exit 1
-            fi
+          url="https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/yomi-${VERSION}-aarch64-apple-darwin.tar.gz"
+          # asset 刚上传存在秒级 404 窗口/瞬时网络抖动：重试后再判缺失
+          found=false
+          for i in 1 2 3 4 5; do
+            curl -fsI "$url" >/dev/null && { found=true; break; }
+            sleep 15
           done
+          if [ "$found" = false ]; then
+            echo "::error::missing release asset: $url"
+            echo "❌ formula 依赖的 tarball 未就位（上游构建未完成或失败）；构建修复后 re-run 本 job 即恢复" >&2
+            exit 1
+          fi
 
       # 两个 gate 都在任何 tap push 之前：DMG 缺失时 fail 不会留下
       # formula 已推、cask 未推的中间态。
@@ -343,13 +344,13 @@ jobs:
           done
           echo "DMG_SHA256=$(sha256sum Yomi.dmg | cut -d' ' -f1)" >> "$GITHUB_ENV"
 
-      - name: Release TUI to Homebrew
+      - name: Release CLI formula to Homebrew
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           bash ./scripts/brew-release.sh "${GITHUB_REF_NAME#v}"
 
-      - name: Release GUI to Homebrew
+      - name: Release GUI cask to Homebrew
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"

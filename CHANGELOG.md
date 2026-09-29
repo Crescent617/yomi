@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- Homebrew 不再提供 Linux 安装（formula 移除 on_linux，仅保留 macOS）；Linux 请直接下载 release 二进制或使用 Docker 镜像。
+
 ## [0.10.53] - 2026-09-29
 
 ### Added

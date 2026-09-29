@@ -49,10 +49,11 @@ done
 
 # Calculate SHA256 hashes from GitHub release assets
 # Format: platform -> sha256
+# macOS only：Linux 不走 Homebrew（直下载二进制或 docker 镜像，
+# 2026-09-29 定）。
 declare -A SHA256S
 PLATFORMS=(
     "aarch64-apple-darwin"
-    "x86_64-unknown-linux-gnu"
 )
 
 log "Fetching release assets from GitHub..."
@@ -86,11 +87,6 @@ class Yomi < Formula
       url "https://github.com/${REPO}/releases/download/v${VERSION}/yomi-${VERSION}-aarch64-apple-darwin.tar.gz"
       sha256 "${SHA256S[aarch64-apple-darwin]}"
     end
-  end
-
-  on_linux do
-    url "https://github.com/${REPO}/releases/download/v${VERSION}/yomi-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
-    sha256 "${SHA256S[x86_64-unknown-linux-gnu]}"
   end
 
   def install
