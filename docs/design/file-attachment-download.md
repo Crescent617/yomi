@@ -1,7 +1,7 @@
 # 设计文档：飞书文件附件自动下载（file attachment auto-download）
 
 > **状态（2026-09-29）：待拍板**。2026-09-29 事故驱动：用户发 PPT/PDF，
-> 会话只收到 `[file: xxx (key: file_v3_…)]` 占位文本，agent 不知文件落点，
+> 会话只收到 `[file: xxx (lark_file_key: file_v3_…)]` 占位文本，agent 不知文件落点，
 > 两次误判"没收到"。对比图片（`image_keys` post-gate 自动下载内嵌），
 > 文件类消息（`file`/`audio`/`media`）自 v0.10.34 起只注入占位符
 > （`feishu_text.rs::attachment_placeholder`），下载完全甩给 agent 猜。
@@ -63,9 +63,14 @@ data_dir 由 `kernel.data_dir()` 给出（`~/.yomi`），按消息分组便于
 [file: 入园入孵.pptx (key: file_v3_abc)]  →  [file: 入园入孵.pptx (saved: /Users/…/files/om_xxx/入园入孵.pptx)]
 ```
 
-- 只改写触发消息**自身**文本块里的 `(key: K)`（按 key 精确替换
-  一次）；history 注入块里的旧占位符不碰（msg_id 对不上，下载必
-  400）。
+- 占位符后缀从 `(key: K)` 改为 **`(lark_file_key: K)`**（2026-09-29
+  hrli 提议）：`key` 是无主语字符串，agent 看不出用途；平台命名让
+  手动兜底自解释——"这是飞书 file_key，用 lark 下载"。mint 点
+  （`feishu_text.rs::attachment_placeholder`）与解析点同步改。
+- **解析向后兼容**：改写/下载逻辑同时认 `key` 与 `lark_file_key`
+  两种后缀——旧 transcript 与 history 里全是旧格式，不能断。
+- 只改写触发消息**自身**文本块里的后缀（按 key 精确替换一次）；
+  history 注入块里的旧占位符同样按行 msg_id 处理（见下节）。
 - 文件名含 `]` 等导致解析失败：不改写、不下载，占位符原样保留
   （行为同今天，无回归）。
 
@@ -73,7 +78,7 @@ data_dir 由 `kernel.data_dir()` 给出（`~/.yomi`），按消息分组便于
 
 - 每个超限文件计入清单，全部下载完后追加**恰好一条**
   `<system_reminder>`：列文件名 + 手动下载指引
-  （`lark im dl <msg_id> <file_key>`）。
+  （`lark im dl <msg_id> <lark_file_key>`）。
 - 单个文件下载失败（网络/权限/平台不支持）：占位符保留，追加可见
   说明行 `[Failed to download attachment(s): …]`，与图片失败路径
   （`[Failed to download image: …]`）同规，不静默。
@@ -150,7 +155,7 @@ omitted]` 说明行。merge_forward 子消息文件随父 msg_id（与图片现�
   Content-Length 或服务端多送）→ `Oversize` 且不留半成品；文件名
   含路径成分 → 取 file_name 片段。
 - `hub_test.rs`（context）：占位符解析（有/无 name、audio/media
-  同类、`]` 畸形输入不改写不 panic）；下载成功 → 文本块就地改写；
+  同类、`]` 畸形输入、旧 `key` 后缀兼容不改写不 panic）；下载成功 → 文本块就地改写；
   超限 → 占位符原样 + 恰好一条 `<system_reminder>`；失败 → 说明行；
   空 message_id 直接跳过。
 - 单文件直发专项：触发消息正文只有占位符时，改写后 agent 可见
