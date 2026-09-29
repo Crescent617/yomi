@@ -810,6 +810,38 @@ pub async fn get_git_info(path: String) -> Result<serde_json::Value, GuiError> {
     }))
 }
 
+/// 登录项当前状态（系统设置 → 通用 → 登录项）。非 macOS 无此命令，
+/// 前端探测失败即隐藏开关。
+#[cfg(target_os = "macos")]
+#[tauri::command(rename_all = "snake_case")]
+pub async fn get_login_item() -> Result<bool, GuiError> {
+    use objc2_service_management::{SMAppService, SMAppServiceStatus};
+    // 主线程无关（SMAppService 状态查询可在任意线程）。
+    let service = unsafe { SMAppService::mainAppService() };
+    let status = unsafe { service.status() };
+    Ok(matches!(
+        status,
+        SMAppServiceStatus::Enabled | SMAppServiceStatus::RequiresApproval
+    ))
+}
+
+/// 开关登录项。开启 = 注册（幂等）；关闭 = 注销（用户在系统设置里
+/// 手动删除的，状态查询会回落为 false，与本开关自然对齐）。
+#[cfg(target_os = "macos")]
+#[tauri::command(rename_all = "snake_case")]
+pub async fn set_login_item(enabled: bool) -> Result<bool, GuiError> {
+    use objc2_service_management::SMAppService;
+    let service = unsafe { SMAppService::mainAppService() };
+    let result = if enabled {
+        unsafe { service.registerAndReturnError() }
+    } else {
+        unsafe { service.unregisterAndReturnError() }
+    };
+    result
+        .map(|()| enabled)
+        .map_err(|e| GuiError::unknown(format!("login item operation failed: {e}")))
+}
+
 #[cfg(test)]
 #[path = "system_test.rs"]
 mod tests;

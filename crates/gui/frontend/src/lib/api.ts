@@ -382,6 +382,16 @@ export async function setKeepAwake(enabled: boolean): Promise<boolean> {
   return invokeCmd("set_keep_awake", { enabled });
 }
 
+/** macOS-only: 登录项当前状态。非 macOS 抛异常，前端据此隐藏开关。 */
+export async function getLoginItem(): Promise<boolean> {
+  return invokeCmd("get_login_item");
+}
+
+/** macOS-only: 开关登录项，返回生效状态。 */
+export async function setLoginItem(enabled: boolean): Promise<boolean> {
+  return invokeCmd("set_login_item", { enabled });
+}
+
 export async function getCwd(): Promise<string> {
   return invokeCmd("get_cwd");
 }

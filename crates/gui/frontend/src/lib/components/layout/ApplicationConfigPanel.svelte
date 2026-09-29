@@ -7,6 +7,7 @@
     Monitor,
     Moon,
     PanelLeft,
+    Power,
     Rabbit,
     Sun,
     Type,
@@ -67,6 +68,26 @@
   let petSync = Promise.resolve();
   let keepAwakeSync = Promise.resolve();
 
+  // 登录项（macOS SMAppService）。非 macOS 命令不存在，探测失败即隐藏。
+  let login_item_supported = $state(false);
+  let login_item_enabled = $state(false);
+  let login_item_busy = $state(false);
+
+  function toggleLoginItem(enabled: boolean): Promise<void> {
+    login_item_busy = true;
+    return api
+      .setLoginItem(enabled)
+      .then((state) => {
+        login_item_enabled = state;
+      })
+      .catch((toggleError) => {
+        error = String(toggleError);
+      })
+      .finally(() => {
+        login_item_busy = false;
+      });
+  }
+
   const selected_pet_pack_id = $derived(
     pet_packs.some(
       (pack) => pack.id === guiPreferences.desktop_pet.selected_pet_id,
@@ -77,6 +98,17 @@
 
   onMount(() => {
     let disposed = false;
+    // 探测登录项支持（macOS 才有该命令）。
+    void api
+      .getLoginItem()
+      .then((state) => {
+        if (disposed) return;
+        login_item_supported = true;
+        login_item_enabled = state;
+      })
+      .catch(() => {
+        // 非 macOS：保持隐藏。
+      });
     void api
       .listPetPacks()
       .then((packs) => {
@@ -571,6 +603,37 @@
           />
         </label>
       </section>
+
+      {#if login_item_supported}
+        <section
+          class="overflow-hidden rounded-xl border border-border bg-card/45"
+        >
+          <div class="border-b border-border px-4 py-3">
+            <div class="flex items-center gap-2 text-sm font-medium">
+              <Power size={15} class="text-muted-foreground" /> Startup
+            </div>
+          </div>
+          <label
+            class="flex cursor-pointer items-center justify-between gap-4 px-4 py-3.5"
+          >
+            <div>
+              <div class="text-sm text-foreground">Launch at login</div>
+              <div class="text-xs text-muted-foreground">
+                Start Yomi when you log in. Also editable in System Settings →
+                General → Login Items.
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              checked={login_item_enabled}
+              disabled={login_item_busy}
+              onchange={(event) =>
+                void toggleLoginItem(event.currentTarget.checked)}
+              class="h-4 w-4 accent-primary"
+            />
+          </label>
+        </section>
+      {/if}
     </div>
   </div>
 </div>

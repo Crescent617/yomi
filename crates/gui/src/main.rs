@@ -97,17 +97,6 @@ fn app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wr
     )
 }
 
-#[cfg(target_os = "macos")]
-fn register_login_item() {
-    use objc2_service_management::SMAppService;
-    // setup 跑在主线程；mainAppService 注册标准登录项（系统设置 →
-    // 通用 → 登录项可见可删），幂等。
-    let service = unsafe { SMAppService::mainAppService() };
-    if let Err(e) = unsafe { service.registerAndReturnError() } {
-        tracing::warn!("login item registration failed: {e}");
-    }
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Install rustls crypto provider before any TLS operations.
@@ -129,8 +118,6 @@ pub fn run() {
 
     let builder = builder
         .setup(|app| {
-            #[cfg(target_os = "macos")]
-            register_login_item();
             let (kernel, data_dir) = tauri::async_runtime::block_on(daemon::get_kernel())
                 .map_err(|e| format!("failed to get kernel: {e}"))?;
             let mut restart_rx = daemon::take_restart_receiver()
@@ -277,6 +264,8 @@ pub fn run() {
             commands::system::disconnect_remote,
             commands::system::restart_daemon,
             commands::system::get_cwd,
+            commands::system::get_login_item,
+            commands::system::set_login_item,
             commands::system::get_config_toml,
             commands::system::save_config_toml,
             commands::system::get_config,
