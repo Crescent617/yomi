@@ -299,6 +299,12 @@ jobs:
   # tap 版本才发现）；产物缺失属真故障，红了可见，re-run 即恢复。
   brew:
     name: Release to Homebrew
+    # 同一 tap repo 全局串行：两次 release run 重叠时（连发 tag）
+    # 两个 brew job 并发 push 会 non-fast-forward 必挂其一；排队
+    # 而非取消（cancel-in-progress: false），后者等前者推完再推。
+    concurrency:
+      group: homebrew-tap
+      cancel-in-progress: false
     # formula 与 cask 都是纯 mac 产物（CLI tar.gz 与 DMG 皆 build-osx
     # 产出），needs 只挂 build-osx。always() 保证上游失败也来试；
     # gate 一律硬拦（exit 1）——warning 跳过会静默漏发（v0.10.53
