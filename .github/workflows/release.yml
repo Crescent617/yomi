@@ -39,6 +39,15 @@ jobs:
         shell: bash
         run: bash ./scripts/extract-release-notes.sh "${GITHUB_REF_NAME#v}" release-notes.md
 
+      # 无 notes 硬拦：忘写 CHANGELOG section 的 tag 不发出去（补写后
+      # 删 tag 重推即可）；只 warning 会产出没有说明的裸 release。
+      - name: Gate on non-empty release notes
+        run: |
+          if [ ! -s release-notes.md ]; then
+            echo "❌ CHANGELOG.md has no [${GITHUB_REF_NAME#v}] section; add it and re-push the tag" >&2
+            exit 1
+          fi
+
       - uses: softprops/action-gh-release@v2
         with:
           body_path: release-notes.md
@@ -317,8 +326,9 @@ jobs:
   # 序执行：跨 job 拆开的唯一理由是提前 formula，但 formula 的
   # macOS tarball 由 build-gui 产出（sidecar 同源设计），拆分后
   # 仍要等 build-gui，提前量为零，只剩 tap push 冲突风险——不如
-  # 合 job。always() + 各自 gate：任一上游产物缺失只跳过对应半段，
-  # 不红。
+  # 合 job。always() 保证上游失败也来试；gate 一律硬拦（exit 1）——
+  # warning 跳过会静默漏发（v0.10.53 formula 漏发即此因，靠人工对
+  # tap 版本才发现）；产物缺失属真故障，红了可见，re-run 即恢复。
   brew:
     needs: [create-release, build-tui, build-gui, check-precondition]
     if: always()
@@ -343,14 +353,17 @@ jobs:
               sleep 15
             done
             if [ "$found" = false ]; then
-              echo "::warning::missing release asset: $url"
+              echo "::error::missing release asset: $url"
               ok=false
             fi
           done
-          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+          if [ "$ok" = false ]; then
+            echo "❌ formula 依赖的 tarball 未就位（上游构建未完成或失败）；构建修复后 re-run 本 job 即恢复" >&2
+            exit 1
+          fi
+          echo "ok=true" >> "$GITHUB_OUTPUT"
 
       - name: Release TUI to Homebrew
-        if: steps.gate.outputs.ok == 'true'
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
@@ -358,7 +371,6 @@ jobs:
 
       - name: Download DMG from Release
         id: dmg
-        continue-on-error: true
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
@@ -366,17 +378,12 @@ jobs:
           # asset 刚上传存在秒级 404 窗口/瞬时网络抖动：重试后再判缺失
           for i in 1 2 3 4 5; do
             curl -fsL -o Yomi.dmg "$DMG_URL" && break
-            [ "$i" = 5 ] && exit 1
+            [ "$i" = 5 ] && { echo "::error::DMG not on release (macOS build failed or still uploading); re-run after it lands"; exit 1; }
             sleep 15
           done
           echo "DMG_SHA256=$(sha256sum Yomi.dmg | cut -d' ' -f1)" >> "$GITHUB_ENV"
 
-      - name: Skip when DMG missing
-        if: steps.dmg.outcome != 'success'
-        run: echo "::warning::DMG not on release (macOS build failed); skipping cask update"
-
       - name: Release GUI to Homebrew
-        if: steps.dmg.outcome == 'success'
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
