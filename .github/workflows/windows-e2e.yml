@@ -55,7 +55,7 @@ jobs:
         run: cargo build --release --target x86_64-pc-windows-msvc --bin yomi --locked
 
   # Windows GUI 手动打包验证入口（不发版）。正式构建在 release.yml；
-  # 两侧共用 .github/workflows/build-gui-windows.yml 单一定义。
+  # 两侧共用 .github/workflows/build-windows.yml 单一定义。
   gui-build:
     name: Build GUI (Windows)
-    uses: ./.github/workflows/build-gui-windows.yml
+    uses: ./.github/workflows/build-windows.yml

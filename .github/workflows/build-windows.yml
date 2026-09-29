@@ -5,7 +5,7 @@
 #   - windows-e2e.yml：手动触发，不发版验证打包（修复后预演）
 # 产物无 Authenticode 签名（SmartScreen 会提示，按需后续补签名）。
 
-name: build-gui-windows
+name: build-windows
 
 on:
   workflow_call:

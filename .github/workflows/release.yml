@@ -140,10 +140,10 @@ jobs:
           cache-from: type=gha,scope=yomi-docker
           cache-to: type=gha,mode=max,scope=yomi-docker
 
-  # ==================== GUI 构建 (macOS DMG) ====================
+  # ==================== macOS 构建 ====================
   # mac 的全部产物（DMG + CLI tar.gz，sidecar 同源）在本 job 编译上架。
-  build-gui:
-    name: Build GUI (macOS)
+  build-osx:
+    name: Build macOS (DMG + CLI)
     needs: [check-precondition, create-release]
     runs-on: macos-latest
     permissions:
@@ -228,16 +228,16 @@ jobs:
         with:
           files: ${{ steps.sha.outputs.dmg }}
 
-  # ==================== GUI 构建 (Windows MSI) ====================
-  # 与 windows-e2e.yml 的手动打包共用 .github/workflows/build-gui-windows.yml
+  # ==================== Windows 构建 ====================
+  # 与 windows-e2e.yml 的手动打包共用 .github/workflows/build-windows.yml
   # 单一定义；产物由 reusable 内 release-upload 步骤即建即发（省掉原
   # 聚合下载转发 job），windows-e2e 不传 release-upload 只验证打包。
-  build-gui-windows:
-    name: Build GUI (Windows)
+  build-windows:
+    name: Build Windows (msi + CLI)
     needs: [check-precondition, create-release]
     permissions:
       contents: write
-    uses: ./.github/workflows/build-gui-windows.yml
+    uses: ./.github/workflows/build-windows.yml
     with:
       release-upload: true
 
@@ -247,7 +247,7 @@ jobs:
   # 恢复干净）。产物本身已由各构建 job 即建即发。
   audit:
     name: Audit release assets
-    needs: [build-linux, build-gui, build-gui-windows]
+    needs: [build-linux, build-osx, build-windows]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -292,18 +292,18 @@ jobs:
 
   # ==================== 更新 Homebrew（formula + cask） ====================
   # formula（mac CLI tar.gz gate）与 cask（DMG gate）同一 job 内顺序
-  # 执行；两者皆纯 mac 产物（同出 build-gui），needs 只挂 build-gui。
-  # 跨 job 拆开的唯一理由是提前 formula，但拆分后仍要等 build-gui，
+  # 执行；两者皆纯 mac 产物（同出 build-osx），needs 只挂 build-gui。
+  # 跨 job 拆开的唯一理由是提前 formula，但拆分后仍要等 build-osx，
   # 提前量为零，只剩 tap push 冲突风险——不如合 job。always() 保证上游失败也来试；gate 一律硬拦（exit 1）——
   # warning 跳过会静默漏发（v0.10.53 formula 漏发即此因，靠人工对
   # tap 版本才发现）；产物缺失属真故障，红了可见，re-run 即恢复。
   brew:
     name: Release to Homebrew
-    # formula 与 cask 都是纯 mac 产物（CLI tar.gz 与 DMG 皆 build-gui
+    # formula 与 cask 都是纯 mac 产物（CLI tar.gz 与 DMG 皆 build-osx
     # 产出），needs 只挂 build-gui。always() 保证上游失败也来试；
     # gate 一律硬拦（exit 1）——warning 跳过会静默漏发（v0.10.53
     # formula 漏发即此因）；产物缺失属真故障，红了可见，re-run 即恢复。
-    needs: [create-release, build-gui, check-precondition]
+    needs: [create-release, build-osx, check-precondition]
     if: always()
     runs-on: ubuntu-latest
     env:
