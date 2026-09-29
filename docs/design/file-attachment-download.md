@@ -76,12 +76,14 @@ data_dir 由 `kernel.data_dir()` 给出（`~/.yomi`），按消息分组便于
 
 ### 超限与失败
 
-- 每个超限文件计入清单，全部下载完后追加**恰好一条**
-  `<system_reminder>`：列文件名 + 手动下载指引
-  （`lark im dl <msg_id> <lark_file_key>`）。
-- 单个文件下载失败（网络/权限/平台不支持）：占位符保留，追加可见
-  说明行 `[Failed to download attachment(s): …]`，与图片失败路径
-  （`[Failed to download image: …]`）同规，不静默。
+- **触发消息**：超限或下载失败**不发 reminder、不发说明行**，占位符
+  保持 `(lark_file_key: K)` 原样。理由（2026-09-29 hrli 拍板方向）：
+  header 自带 `[msg_id: …]`，key 平台命名自解释，agent 自己就能拼出
+  `lark im dl <msg_id> <lark_file_key>`——额外提示是重复信息。
+- **history 行**：行格式 `[HH:MM] sender: 文本` 不含 msg_id，占位符
+  只有 key，手动下载凑不齐参数。此时聚合发**恰好一条**
+  `<system_reminder>`：逐文件给出 `name — lark im dl <行msg_id>
+  <lark_file_key>`。reminder 语义=补占位符缺的信息，不是重复提示。
 
 ### history 里的文件（与图片同规）
 
@@ -133,11 +135,13 @@ omitted]` 说明行。merge_forward 子消息文件随父 msg_id（与图片现�
 2. **就地改写是唯一交付**：agent 看到的用户消息里，已下载文件的
    占位符直接给出绝对路径；不再有"自己去某处找文件"的猜谜。
 3. **超限不下载、不截断**：超过上限的文件永远不会以半截形式落盘；
-   提示语给出原始 key 与手动下载命令。
-4. **reminder 恰好一次**：一条触发消息无论几个超限文件，只有一条
-   `<system_reminder>`。
-5. **失败不静默**：单个失败有可见说明行；全失败（如无平台支持）
-   行为同今天（占位符 + 说明行）。
+  触发消息靠自解释占位符手动兜底，history 行由 reminder 补 msg_id。
+4. **reminder 只在 history 缺 msg_id 时发**：一条触发消息无论几个
+  history 文件下载不了，只有一条 `<system_reminder>`；触发消息本身
+   永不发 reminder。
+5. **失败不静默但零噪音**：下载失败在日志（warn!）留痕，消息面不加
+   说明行——占位符没被改写成 `(saved: …)` 本身就是"未下载"信号，
+   自解释 key + header msg_id 足够 agent 自处。
 6. **触发消息与 history 一视同仁**：两处的文件占位符都下载改写；
    唯一不下载的是无 key 的占位符（语法残缺，保留原文）。merge_forward
    子消息文件随父 msg_id，与图片同现状。
@@ -155,9 +159,10 @@ omitted]` 说明行。merge_forward 子消息文件随父 msg_id（与图片现�
   Content-Length 或服务端多送）→ `Oversize` 且不留半成品；文件名
   含路径成分 → 取 file_name 片段。
 - `hub_test.rs`（context）：占位符解析（有/无 name、audio/media
-  同类、`]` 畸形输入、旧 `key` 后缀兼容不改写不 panic）；下载成功 → 文本块就地改写；
-  超限 → 占位符原样 + 恰好一条 `<system_reminder>`；失败 → 说明行；
-  空 message_id 直接跳过。
+  同类、`]` 畸形输入、旧 `key` 后缀兼容不改写不 panic）；下载成功 →
+  文本块就地改写；触发消息超限/失败 → 占位符原样、**无 reminder
+  无说明行**；history 行超限 → 恰好一条带行 msg_id 的
+  `<system_reminder>`；空 message_id 直接跳过。
 - 单文件直发专项：触发消息正文只有占位符时，改写后 agent 可见
   `saved:` 路径；steer 路径同样生效（事故复现形态）。
 - history 注入：行内占位符按行 msg_id 下载改写；超 3 个记 omitted
