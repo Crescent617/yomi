@@ -387,7 +387,7 @@ export async function getLoginItem(): Promise<boolean> {
   return invokeCmd("get_login_item");
 }
 
-/** 开关登录项，返回生效状态。幂等：系统侧已是目标状态直接成功。 */
+/** 开关登录项，返回系统侧重新查询的状态（非请求值）。幂等。 */
 export async function setLoginItem(enabled: boolean): Promise<boolean> {
   return invokeCmd("set_login_item", { enabled });
 }

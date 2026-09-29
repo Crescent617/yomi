@@ -819,10 +819,9 @@ pub async fn get_git_info(path: String) -> Result<serde_json::Value, GuiError> {
 fn login_item_status() -> bool {
     use objc2_service_management::{SMAppService, SMAppServiceStatus};
     let service = unsafe { SMAppService::mainAppService() };
-    matches!(
-        unsafe { service.status() },
-        SMAppServiceStatus::Enabled | SMAppServiceStatus::RequiresApproval
-    )
+    // 只认 Enabled：RequiresApproval 按苹果文档是「用户已拒绝/停用」，
+    // 计为开会造成用户在系统设置关闭后我们 UI 仍显示开的失同步。
+    matches!(unsafe { service.status() }, SMAppServiceStatus::Enabled)
 }
 
 #[cfg(target_os = "macos")]
@@ -922,16 +921,16 @@ pub async fn get_login_item() -> Result<bool, GuiError> {
     Ok(login_item_status())
 }
 
-/// 开关登录项，返回生效状态。幂等：系统侧已是目标状态（含用户在
-/// 系统侧手动删除后开关回落）直接成功，不重复注册/注销。
+/// 开关登录项，返回**重新查询**的系统侧状态（不返回请求值——macOS
+/// 注册后可能立刻被系统置为 RequiresApproval，乐观显示会失同步）。
+/// 幂等：系统侧已是目标状态（含用户在系统侧手动删除后开关回落）
+/// 直接成功，不重复注册/注销。
 #[tauri::command(rename_all = "snake_case")]
 pub async fn set_login_item(enabled: bool) -> Result<bool, GuiError> {
-    if login_item_status() == enabled {
-        return Ok(enabled);
+    if login_item_status() != enabled {
+        login_item_apply(enabled).map_err(GuiError::unknown)?;
     }
-    login_item_apply(enabled)
-        .map(|()| enabled)
-        .map_err(GuiError::unknown)
+    Ok(login_item_status())
 }
 
 #[cfg(test)]
