@@ -301,12 +301,7 @@ pub(crate) async fn prepare_trigger(
     )
     .await?;
     record_receipt(config, obs, kernel, &sid, msg);
-    let files_root = kernel
-        .data_dir()
-        .await
-        .join("channels")
-        .join(channel_name)
-        .join("files");
+    let files_root = files_root(&kernel.data_dir().await, channel_name);
     let blocks = context_prefix(
         adapter,
         config,
@@ -339,7 +334,7 @@ pub(crate) async fn context_prefix(
     } else {
         RootDelivery::Pending
     };
-    let quoted = maybe_quoted_prefix(adapter, msg, root).await;
+    let quoted = maybe_quoted_prefix(adapter, msg, root, files_root).await;
     // A quoted chain containing the thread root flips the state.
     if quoted.as_ref().is_some_and(|(_, in_chain)| *in_chain) {
         root = RootDelivery::ByQuote;
@@ -364,6 +359,7 @@ pub(crate) async fn maybe_quoted_prefix(
     adapter: &Arc<dyn PlatformAdapter>,
     msg: &ChannelMessage,
     root: RootDelivery,
+    files_root: &std::path::Path,
 ) -> Option<(Vec<ContentBlock>, bool)> {
     let parent_id = msg.parent_id.as_deref()?;
     if root != RootDelivery::Pending
@@ -399,9 +395,25 @@ pub(crate) async fn maybe_quoted_prefix(
     }
     // Ancestors first, the quoted message last — chronological reading.
     chain.reverse();
-    let lines = chain.iter().map(sender_line).collect::<Vec<_>>().join("\n");
+    // File attachments process per line against that line's own message
+    // id (history budget; failures annotate `; msg_id:` in place) — same
+    // contract as the history block.
+    let mut lines: Vec<String> = Vec::with_capacity(chain.len());
+    let mut budget = FILE_HISTORY_DOWNLOAD_MAX;
+    for m in &chain {
+        let mut line = sender_line(m);
+        process_files_in_text(
+            adapter,
+            &m.message_id,
+            &mut line,
+            &files_root.join(&m.message_id),
+            Some(&mut budget),
+        )
+        .await;
+        lines.push(line);
+    }
     let mut blocks = vec![ContentBlock::Text {
-        text: format!("<quoted_message>\n{lines}\n</quoted_message>"),
+        text: format!("<quoted_message>\n{}\n</quoted_message>", lines.join("\n")),
     }];
     // The quoted message's own images win over its ancestors' under the
     // cap (chain is oldest-first; iterate newest-first here).
@@ -534,21 +546,23 @@ fn parse_file_inner(inner: &str, base: usize) -> Option<FileRef> {
 /// message `message_id`), rewriting in place:
 ///
 /// - success → `(saved: <local path>)`
-/// - failure or exhausted `budget` → `; msg_id: <id>` appended to the
-///   suffix, but only when `annotate` (history lines: the line format
-///   carries no `msg_id`). Trigger-message texts pass `annotate: false` —
-///   their header already has the id, so failures keep the bare
-///   placeholder (design doc: no reminder, no note lines).
+/// - failure or an exhausted history budget → `; msg_id: <id>` appended
+///   to the suffix — but only for history lines (`history_budget` is
+///   `Some`): the `[HH:MM] sender:` line format carries no `msg_id`, and
+///   `/im/v1/files/{key}` rejects message keys, so the id is the only
+///   manual-fetch path. Trigger-message texts pass `None` — their header
+///   already has the id, so failures keep the bare placeholder (design
+///   doc: no reminder, no note lines).
 ///
-/// `budget` counts download attempts across calls (history keeps the
-/// newest); `usize::MAX` means unlimited (trigger path).
+/// `history_budget` caps download attempts across calls (history keeps
+/// the newest); budget-exceeded placeholders are annotated like failures
+/// — nothing becomes unfetchable.
 pub(crate) async fn process_files_in_text(
     adapter: &Arc<dyn PlatformAdapter>,
     message_id: &str,
     text: &mut String,
     dest_dir: &std::path::Path,
-    annotate: bool,
-    budget: &mut usize,
+    history_budget: Option<&mut usize>,
 ) {
     if message_id.is_empty() || text.is_empty() {
         return;
@@ -557,40 +571,44 @@ pub(crate) async fn process_files_in_text(
     if refs.is_empty() {
         return;
     }
-    let results = futures::future::join_all(refs.iter().map(|r| {
-        if *budget == 0 {
-            return futures::future::Either::Right(futures::future::ready(Ok(
-                crate::channels::FileFetch::Oversize,
-            )));
+    let annotate = history_budget.is_some();
+    let fetchable = match history_budget {
+        Some(budget) => {
+            let f = refs.len().min(*budget);
+            *budget -= f;
+            f
         }
-        *budget -= 1;
-        futures::future::Either::Left(adapter.download_message_file(
+        None => refs.len(),
+    };
+    let results = futures::future::join_all(refs[..fetchable].iter().map(|r| {
+        adapter.download_message_file(
             message_id,
             &r.key,
             &r.name,
             dest_dir,
             FILE_DOWNLOAD_MAX_BYTES,
-        ))
+        )
     }))
     .await;
     // Front-to-back rebuild; spans shift as the text grows/shrinks.
     let mut shift: isize = 0;
-    for (r, result) in refs.iter().zip(results) {
+    for (idx, r) in refs.iter().enumerate() {
         let span = (
             (r.suffix.0 as isize + shift) as usize,
             (r.suffix.1 as isize + shift) as usize,
         );
-        let replacement = match result {
-            Ok(crate::channels::FileFetch::Saved(path)) => {
+        let replacement = match results.get(idx) {
+            Some(Ok(crate::channels::FileFetch::Saved(path))) => {
                 format!("(saved: {})", path.display())
             }
-            Ok(crate::channels::FileFetch::Oversize) => {
+            Some(Ok(crate::channels::FileFetch::Oversize)) | None => {
+                // Oversize, or budget-exceeded (annotated like a failure).
                 if !annotate {
                     continue; // trigger: bare placeholder, header has the id
                 }
                 format!("(lark_file_key: {}; msg_id: {})", r.key, message_id)
             }
-            Err(e) => {
+            Some(Err(e)) => {
                 warn!(error = %e, file_key = %r.key, "file attachment download failed");
                 if !annotate {
                     continue;
@@ -605,46 +623,42 @@ pub(crate) async fn process_files_in_text(
 }
 
 /// Post-gate download of the triggering message's own file attachments
-/// (deferred like images, same call sites). Processes only the text
-/// blocks it's given — history blocks go through
-/// `assemble_history_with_files` instead, keyed per line.
+/// (deferred like images, same call site — the `None` command arm; a
+/// file arriving mid-run flows through here into `send_steer`).
+/// Processes only the text blocks it's given — history/quoted blocks go
+/// through `assemble_history_with_files` / the quoted-chain processing
+/// instead, keyed per line.
 pub(crate) async fn fetch_message_files(
     adapter: &Arc<dyn PlatformAdapter>,
     message_id: &str,
     content: &mut [ContentBlock],
     dest_dir: &std::path::Path,
 ) {
-    let mut budget = usize::MAX;
     for block in content.iter_mut() {
         let ContentBlock::Text { text } = block else {
             continue;
         };
-        process_files_in_text(adapter, message_id, text, dest_dir, false, &mut budget).await;
+        process_files_in_text(adapter, message_id, text, dest_dir, None).await;
     }
 }
 
-/// One history block line: `[HH:MM] sender: text` plus the inline
-/// quote snippet when the message quote-replies (` ↩ sender: text`).
-fn history_line(m: &HistoryMessage, quotes: &std::collections::HashMap<String, String>) -> String {
-    let mut line = sender_line(m);
-    if let Some(q) = quotes.get(&m.message_id) {
-        line.push_str(" ↩ ");
-        line.push_str(q);
-    }
-    line
+/// Attachment landing root for a channel:
+/// `<data_dir>/channels/<channel>/files/` (one `<message_id>/`
+/// subdirectory per message, created by the downloader).
+pub(crate) fn files_root(data_dir: &std::path::Path, channel_name: &str) -> std::path::PathBuf {
+    data_dir.join("channels").join(channel_name).join("files")
 }
 
-/// Format fetched messages as a context block: chronological, one line
-/// each (`[HH:MM] sender: text`, per-message capped; sender = display
-/// name when resolved, else `open_id`), quote-replies carrying an
-/// inline snippet of the quoted message (` ↩ sender: text`) — plus
-/// per-line file-attachment downloads (design doc
-/// docs/design/file-attachment-download.md): each line's placeholders
-/// download against that line's own message id, at most
-/// [`FILE_HISTORY_DOWNLOAD_MAX`] newest per trigger. Failures and
+/// [`HistoryMessage`] rendering plus per-message file-attachment
+/// downloads (design doc docs/design/file-attachment-download.md):
+/// each message's own text downloads against its own message id, at
+/// most [`FILE_HISTORY_DOWNLOAD_MAX`] newest per trigger. Failures and
 /// budget-exceeded placeholders get `; msg_id:` annotated in place —
-/// the line format carries no `msg_id`, and `/im/v1/files/{key}` rejects
-/// message keys, so the id is the only manual-fetch path.
+/// the line format carries no `msg_id`, and `/im/v1/files/{key}`
+/// rejects message keys, so the id is the only manual-fetch path.
+/// The quote snippet (` ↩ …`, the QUOTED message's text) is appended
+/// after processing: it is not this line's content and its keys would
+/// 400 against the quoting message's id.
 pub(crate) async fn assemble_history_with_files(
     adapter: &Arc<dyn PlatformAdapter>,
     messages: &[&HistoryMessage],
@@ -657,16 +671,19 @@ pub(crate) async fn assemble_history_with_files(
     // Newest first for the download budget; lines render chronological.
     let mut lines: Vec<String> = Vec::with_capacity(messages.len());
     for m in messages.iter().rev() {
-        let mut line = history_line(m, quotes);
+        let mut line = sender_line(m);
         process_files_in_text(
             adapter,
             &m.message_id,
             &mut line,
             &files_root.join(&m.message_id),
-            true,
-            &mut budget,
+            Some(&mut budget),
         )
         .await;
+        if let Some(q) = quotes.get(&m.message_id) {
+            line.push_str(" ↩ ");
+            line.push_str(q);
+        }
         lines.push(line);
     }
     for line in lines.into_iter().rev() {

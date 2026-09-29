@@ -1567,18 +1567,13 @@ impl PlatformAdapter for FeishuAdapter {
         }
         std::fs::create_dir_all(dest_dir)
             .map_err(|e| ChannelError::Platform(format!("file dir create: {e}")))?;
-        let path = unique_attachment_path(dest_dir, name, file_key);
-        let mut file = std::fs::File::create(&path)
-            .map_err(|e| ChannelError::Platform(format!("file create: {e}")))?;
-        if !write_capped(resp.bytes_stream(), &mut file, max_bytes).await? {
+        let (mut file, path) = claim_attachment_path(dest_dir, name, file_key)?;
+        let (complete, written) = write_capped(resp.bytes_stream(), &mut file, max_bytes).await?;
+        if !complete {
             drop(file);
             let _ = std::fs::remove_file(&path);
             return Ok(crate::channels::FileFetch::Oversize);
         }
-        let written = file
-            .metadata()
-            .map_err(|e| ChannelError::Platform(format!("file metadata: {e}")))?
-            .len();
         info!(
             file_key,
             path = %path.display(),
@@ -1589,14 +1584,15 @@ impl PlatformAdapter for FeishuAdapter {
     }
 }
 
-/// Write a byte stream into `file`, returning `Ok(false)` the moment
-/// `max_bytes` would be exceeded (the caller deletes the partial file)
-/// and `Ok(true)` when the stream completed under the cap.
+/// Write a byte stream into `file`. Returns `(complete, written)`:
+/// `complete: false` the moment `max_bytes` would be exceeded (the
+/// caller deletes the partial file); `true` when the stream finished
+/// under the cap, with the byte count.
 async fn write_capped<S, B>(
     mut stream: S,
     file: &mut std::fs::File,
     max_bytes: u64,
-) -> Result<bool, ChannelError>
+) -> Result<(bool, u64), ChannelError>
 where
     S: futures::Stream<Item = Result<B, reqwest::Error>> + Unpin,
     B: AsRef<[u8]>,
@@ -1608,26 +1604,45 @@ where
         let chunk = chunk.map_err(|e| ChannelError::Platform(format!("file download: {e}")))?;
         written += chunk.as_ref().len() as u64;
         if written > max_bytes {
-            return Ok(false);
+            return Ok((false, written));
         }
         file.write_all(chunk.as_ref())
             .map_err(|e| ChannelError::Platform(format!("file write: {e}")))?;
     }
-    Ok(true)
+    Ok((true, written))
 }
 
-/// Attachment landing path: the bare file-name part of `name` (path
-/// components and `..` dropped), falling back to the file key; suffixed
-/// `-1`, `-2`, … on collision so two attachments can't clobber.
-fn unique_attachment_path(dir: &std::path::Path, name: &str, key: &str) -> std::path::PathBuf {
+/// Atomically claim an attachment landing path: the bare file-name part
+/// of `name` (path components and `..` dropped), falling back to the
+/// file key; suffixed `-1`, `-2`, … on collision. `create_new(true)`
+/// makes the claim one atomic step — `process_files_in_text` downloads
+/// a message's attachments concurrently, so a check-then-create would
+/// race two same-named files into clobbering each other. Returns the
+/// open exclusive file plus its path.
+fn claim_attachment_path(
+    dir: &std::path::Path,
+    name: &str,
+    key: &str,
+) -> Result<(std::fs::File, std::path::PathBuf), ChannelError> {
+    use std::io::ErrorKind;
+    let open = |p: &std::path::Path| {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(p)
+    };
     let base = std::path::Path::new(name)
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| key.to_string());
     let candidate = dir.join(&base);
-    if !candidate.exists() {
-        return candidate;
+    match open(&candidate) {
+        Ok(file) => return Ok((file, candidate)),
+        Err(e) if e.kind() != ErrorKind::AlreadyExists => {
+            return Err(ChannelError::Platform(format!("file create: {e}")));
+        }
+        Err(_) => {}
     }
     let stem = std::path::Path::new(&base)
         .file_stem()
@@ -1637,11 +1652,17 @@ fn unique_attachment_path(dir: &std::path::Path, name: &str, key: &str) -> std::
         .map_or_else(String::new, |s| format!(".{}", s.to_string_lossy()));
     for i in 1..1000 {
         let candidate = dir.join(format!("{stem}-{i}{ext}"));
-        if !candidate.exists() {
-            return candidate;
+        match open(&candidate) {
+            Ok(file) => return Ok((file, candidate)),
+            Err(e) if e.kind() != ErrorKind::AlreadyExists => {
+                return Err(ChannelError::Platform(format!("file create: {e}")));
+            }
+            Err(_) => {}
         }
     }
-    dir.join(format!("{stem}-{}{ext}", base.len()))
+    Err(ChannelError::Platform(format!(
+        "no free attachment path for {base}"
+    )))
 }
 
 // ── Message handlers ────────────────────────────────────────────────

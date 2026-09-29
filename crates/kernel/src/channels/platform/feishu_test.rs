@@ -1741,8 +1741,9 @@ async fn write_capped_stops_past_the_limit() {
         Ok::<_, reqwest::Error>(b"abc".to_vec()),
         Ok::<_, reqwest::Error>(b"def".to_vec()),
     ]);
-    let complete = super::write_capped(stream, &mut file, 5).await.unwrap();
+    let (complete, written) = super::write_capped(stream, &mut file, 5).await.unwrap();
     assert!(!complete, "second chunk crosses the cap");
+    assert_eq!(written, 6);
     drop(file);
     // The caller owns cleanup of the partial file (download_message_file).
     let _ = std::fs::remove_file(&path);
@@ -1750,8 +1751,9 @@ async fn write_capped_stops_past_the_limit() {
 
     let stream = futures::stream::iter(vec![Ok::<_, reqwest::Error>(b"abc".to_vec())]);
     let mut file = std::fs::File::create(&path).unwrap();
-    let complete = super::write_capped(stream, &mut file, 5).await.unwrap();
+    let (complete, written) = super::write_capped(stream, &mut file, 5).await.unwrap();
     assert!(complete, "under the cap completes");
+    assert_eq!(written, 3);
     assert_eq!(std::fs::read(&path).unwrap(), b"abc");
 }
 

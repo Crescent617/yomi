@@ -5049,9 +5049,14 @@ async fn test_quoted_prefix_rules() {
     let base = group_msg(None);
 
     // No quote → nothing, and no fetch attempted.
-    assert!(maybe_quoted_prefix(&adapter, &base, RootDelivery::Pending)
-        .await
-        .is_none());
+    assert!(maybe_quoted_prefix(
+        &adapter,
+        &base,
+        RootDelivery::Pending,
+        std::path::Path::new("test-files-root")
+    )
+    .await
+    .is_none());
     assert!(mock.quoted_calls.lock().await.is_empty());
 
     // Routine thread reply to the root in a reused session → skipped
@@ -5060,11 +5065,14 @@ async fn test_quoted_prefix_rules() {
     thread_reply.thread_id = Some("omt_1".into());
     thread_reply.root_id = Some("om_root".into());
     thread_reply.parent_id = Some("om_root".into());
-    assert!(
-        maybe_quoted_prefix(&adapter, &thread_reply, RootDelivery::Consumed)
-            .await
-            .is_none()
-    );
+    assert!(maybe_quoted_prefix(
+        &adapter,
+        &thread_reply,
+        RootDelivery::Consumed,
+        std::path::Path::new("test-files-root")
+    )
+    .await
+    .is_none());
     assert!(mock.quoted_calls.lock().await.is_empty());
 
     // Same reply on a FRESH session (human-created thread): the root is
@@ -5082,9 +5090,14 @@ async fn test_quoted_prefix_rules() {
             parent_id: None,
         },
     );
-    let (blocks, in_chain) = maybe_quoted_prefix(&adapter, &thread_reply, RootDelivery::Pending)
-        .await
-        .expect("fresh thread root injected");
+    let (blocks, in_chain) = maybe_quoted_prefix(
+        &adapter,
+        &thread_reply,
+        RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
+    )
+    .await
+    .expect("fresh thread root injected");
     assert!(blocks_text(&blocks).contains("<quoted_message>"));
     assert!(in_chain, "the chain link IS the root");
 
@@ -5092,9 +5105,14 @@ async fn test_quoted_prefix_rules() {
     let mut top_quote = base.clone();
     top_quote.parent_id = Some("om_q".into());
     top_quote.root_id = Some("om_q".into());
-    let (blocks, _) = maybe_quoted_prefix(&adapter, &top_quote, RootDelivery::Pending)
-        .await
-        .expect("quoted block");
+    let (blocks, _) = maybe_quoted_prefix(
+        &adapter,
+        &top_quote,
+        RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
+    )
+    .await
+    .expect("quoted block");
     let text = blocks_text(&blocks);
     assert!(text.contains("<quoted_message>"), "{text}");
     assert!(text.contains("ou_x: 被引用的内容"), "{text}");
@@ -5104,11 +5122,14 @@ async fn test_quoted_prefix_rules() {
     mid_quote.thread_id = Some("omt_1".into());
     mid_quote.root_id = Some("om_root".into());
     mid_quote.parent_id = Some("om_q".into());
-    assert!(
-        maybe_quoted_prefix(&adapter, &mid_quote, RootDelivery::Consumed)
-            .await
-            .is_some()
-    );
+    assert!(maybe_quoted_prefix(
+        &adapter,
+        &mid_quote,
+        RootDelivery::Consumed,
+        std::path::Path::new("test-files-root")
+    )
+    .await
+    .is_some());
 
     assert_eq!(
         mock.quoted_calls.lock().await.as_slice(),
@@ -5133,9 +5154,14 @@ async fn test_quoted_prefix_includes_images() {
 
     let mut msg = group_msg(None);
     msg.parent_id = Some("om_img".into());
-    let (blocks, _) = maybe_quoted_prefix(&adapter, &msg, RootDelivery::Pending)
-        .await
-        .expect("quoted block");
+    let (blocks, _) = maybe_quoted_prefix(
+        &adapter,
+        &msg,
+        RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
+    )
+    .await
+    .expect("quoted block");
     assert!(
         blocks
             .iter()
@@ -5180,9 +5206,14 @@ async fn test_quoted_prefix_walks_quote_chain() {
     let mut msg = group_msg(Some("omt_1".into()));
     msg.root_id = Some("om_r".into());
     msg.parent_id = Some("om_r".into());
-    let (blocks, in_chain) = maybe_quoted_prefix(&adapter, &msg, RootDelivery::Pending)
-        .await
-        .expect("quoted chain");
+    let (blocks, in_chain) = maybe_quoted_prefix(
+        &adapter,
+        &msg,
+        RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
+    )
+    .await
+    .expect("quoted chain");
     let text = blocks_text(&blocks);
     let ancestor = text.find("ou_a: 原始消息").expect("ancestor: {text}");
     let quoted = text.find("ou_b: 引用回复").expect("quoted: {text}");
@@ -5215,9 +5246,14 @@ async fn test_quoted_prefix_chain_capped_and_partial() {
     }
     let mut msg = group_msg(None);
     msg.parent_id = Some("m1".into());
-    let (blocks, _) = maybe_quoted_prefix(&adapter, &msg, RootDelivery::Pending)
-        .await
-        .expect("chain");
+    let (blocks, _) = maybe_quoted_prefix(
+        &adapter,
+        &msg,
+        RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
+    )
+    .await
+    .expect("chain");
     let text = blocks_text(&blocks);
     assert!(text.contains("m3"), "three links assembled: {text}");
     assert!(!text.contains("m4"), "capped before the fourth: {text}");
@@ -5240,9 +5276,14 @@ async fn test_quoted_prefix_chain_capped_and_partial() {
     );
     let mut msg2 = group_msg(None);
     msg2.parent_id = Some("only".into());
-    let (blocks, _) = maybe_quoted_prefix(&adapter2, &msg2, RootDelivery::Pending)
-        .await
-        .expect("partial chain");
+    let (blocks, _) = maybe_quoted_prefix(
+        &adapter2,
+        &msg2,
+        RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
+    )
+    .await
+    .expect("partial chain");
     assert!(blocks_text(&blocks).contains("第一层"));
     assert_eq!(
         mock2.quoted_calls.lock().await.as_slice(),
@@ -6802,6 +6843,90 @@ async fn history_files_download_per_line_and_annotate_failures() {
                 .display()
         )),
         "{text}"
+    );
+}
+
+#[tokio::test]
+async fn history_quote_snippet_is_not_downloaded() {
+    use super::context::assemble_history_with_files;
+
+    // The `↩` snippet is the QUOTED message's text: its placeholder must
+    // not be downloaded against the quoting message's id (doomed fetch,
+    // dead annotation). It passes through verbatim.
+    let adapter: Arc<dyn PlatformAdapter> = file_mock("ok").await;
+    let dir = tempfile::tempdir().unwrap();
+    let messages = [HistoryMessage {
+        message_id: "om_quoter".into(),
+        create_time: 1_700_000_000_000,
+        sender_id: "ou_1".into(),
+        sender_name: None,
+        text: "回复你".into(),
+        image_keys: vec![],
+        parent_id: None,
+    }];
+    let refs: Vec<&HistoryMessage> = messages.iter().collect();
+    let quotes = std::collections::HashMap::from([(
+        "om_quoter".to_string(),
+        "ou_x: [file: 原文.pdf (lark_file_key: fk_parent)]".to_string(),
+    )]);
+    let text = assemble_history_with_files(&adapter, &refs, &quotes, dir.path()).await;
+    assert!(
+        text.contains("↩ ou_x: [file: 原文.pdf (lark_file_key: fk_parent)]"),
+        "snippet verbatim: {text}"
+    );
+    assert!(
+        !text.contains("msg_id"),
+        "no annotation on the snippet: {text}"
+    );
+    assert!(!text.contains("(saved:"), "no download attempted: {text}");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn quoted_prefix_downloads_with_its_own_message_id() {
+    // A quote-reply to a file message: the quoted block processes the
+    // placeholder against the QUOTED message's id (annotate mode — the
+    // line format carries no msg_id of its own).
+    let mock = file_mock("err").await;
+    *mock.quoted.lock().await = Some(HistoryMessage {
+        message_id: "om_file".into(),
+        create_time: 1_700_000_000_000,
+        sender_id: "ou_x".into(),
+        sender_name: None,
+        text: "[file: 原文件.pdf (lark_file_key: fk_f)]".into(),
+        image_keys: vec![],
+        parent_id: None,
+    });
+    let msg = ChannelMessage {
+        external_chat_id: "oc_1".into(),
+        external_user_id: "ou_1".into(),
+        external_message_id: Some("om_q".into()),
+        is_mention: true,
+        raw_text: Some("看看这个".into()),
+        content: vec![],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: Some("om_file".into()),
+        is_group: true,
+        create_time: None,
+        doc_comment: None,
+    };
+    let adapter: Arc<dyn PlatformAdapter> = mock;
+    let (blocks, _) = maybe_quoted_prefix(
+        &adapter,
+        &msg,
+        RootDelivery::Pending,
+        std::path::Path::new("test-files-root"),
+    )
+    .await
+    .expect("quoted block");
+    let ContentBlock::Text { text } = &blocks[0] else {
+        panic!("expected text block: {blocks:?}");
+    };
+    assert!(
+        text.contains("(lark_file_key: fk_f; msg_id: om_file)"),
+        "annotated with the QUOTED message's id: {text}"
     );
 }
 

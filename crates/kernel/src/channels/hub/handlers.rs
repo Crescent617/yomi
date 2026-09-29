@@ -16,7 +16,7 @@ use crate::channels::hub_command::{
     HELP_SHORT, HELP_TEXT,
 };
 use crate::channels::hub_context::{
-    append_message_images, fetch_message_files, prepare_trigger, TriggerKind,
+    append_message_images, fetch_message_files, files_root, prepare_trigger, TriggerKind,
 };
 use crate::channels::hub_deliver::send_info_reply;
 use crate::channels::hub_routing::{
@@ -158,16 +158,7 @@ pub(crate) async fn handle_incoming_message(
             )
             .await?;
             kernel.note_title_input(&sid, &text);
-            let mut user_blocks = vec![ContentBlock::Text { text }];
-            fetch_trigger_files(
-                &kernel,
-                channel_name,
-                adapter,
-                msg.external_message_id.as_deref().unwrap_or(""),
-                &mut user_blocks,
-            )
-            .await;
-            blocks.extend(user_blocks);
+            blocks.push(ContentBlock::Text { text });
             kernel.send_steer(&sid, blocks).await;
             Ok(None)
         }
@@ -191,16 +182,7 @@ pub(crate) async fn handle_incoming_message(
             )
             .await?;
             kernel.note_title_input(&sid, &text);
-            let mut user_blocks = vec![ContentBlock::Text { text }];
-            fetch_trigger_files(
-                &kernel,
-                channel_name,
-                adapter,
-                msg.external_message_id.as_deref().unwrap_or(""),
-                &mut user_blocks,
-            )
-            .await;
-            blocks.extend(user_blocks);
+            blocks.push(ContentBlock::Text { text });
             // Deferred image download — as for a plain trigger, only
             // now, after the gate, does an attached image cost
             // bandwidth.
@@ -253,16 +235,7 @@ pub(crate) async fn handle_incoming_message(
             )
             .await?;
             kernel.note_title_input(&sid, &text);
-            let mut user_blocks = vec![ContentBlock::Text { text }];
-            fetch_trigger_files(
-                &kernel,
-                channel_name,
-                adapter,
-                msg.external_message_id.as_deref().unwrap_or(""),
-                &mut user_blocks,
-            )
-            .await;
-            blocks.extend(user_blocks);
+            blocks.push(ContentBlock::Text { text });
             // The title was just fed from the user's own text — don't
             // let send_message re-extract it from the merged blocks.
             // Deferred image download — as for a plain trigger, only
@@ -835,13 +808,7 @@ async fn fetch_trigger_files(
     msg_id: &str,
     content: &mut Vec<ContentBlock>,
 ) {
-    let dest = kernel
-        .data_dir()
-        .await
-        .join("channels")
-        .join(channel_name)
-        .join("files")
-        .join(msg_id);
+    let dest = files_root(&kernel.data_dir().await, channel_name).join(msg_id);
     fetch_message_files(adapter, msg_id, content, &dest).await;
 }
 

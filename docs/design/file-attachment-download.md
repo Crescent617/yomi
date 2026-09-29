@@ -101,18 +101,25 @@ history 注入块（`[HH:MM] sender: …` 各行）里的文件占位符**同样
    死钥匙——"保持占位符"对该场景不是兜底。
 
 cap 与图片同机制取最新：每触发最多 [`FILE_HISTORY_DOWNLOAD_MAX`]
-个（提议 3，图片是 5——文件体积大），超限记 `[N more file(s)
-omitted]` 说明行。merge_forward 子消息文件随父 msg_id（与图片现状
-一致：端点认就通，不认则与图片同病，不另设特例）。
+个（提议 3，图片是 5——文件体积大）。超限和失败一样就地标注
+`; msg_id:`（不记 omitted 说明行——标注后的占位符手动可拉，信息无
+损）。merge_forward 子消息文件随父 msg_id（与图片现状一致：端点认
+就通，不认则与图片同病，不另设特例）。
 
-### 接线点（hub/handlers.rs）
+### 接线点（hub/handlers.rs + hub/context.rs）
 
-- `ChannelCommand::None`（主流触发）：`msg.content` 文本块先下载改
-  写再 extend 进 content。
-- `ChannelCommand::Steer`（运行中到达的文件，2026-09-29 事故实际
-  走的就是这条）：text 块同样处理。
-- `/thread`、`/queue` 命令路径不含文件占位符（命令文本为 `/` 开头
-  参数），不接。
+- 唯一接线点：`ChannelCommand::None` 臂（`msg.content` 文本块先下载
+  改写再 extend 进 content）。运行中到达的文件消息**也走这条**——
+  transcript 里的 `user (steer)` 是 kernel 层 send_steer 的投递标签，
+  不是 `ChannelCommand::Steer`（后者只从 `/steer <text>` 构造，文本
+  永不携带 minted 占位符）。
+- `/steer`、`/thread`、`/queue` 命令路径不接：命令参数文本不含
+  minted 占位符（2026-09-29 review 结论，死接线已拆）。
+- quoted 前缀块（`maybe_quoted_prefix`）与 history 块同规处理：链上
+  每条消息按自己的 msg_id 下载改写（annotate 模式）。
+- history 行的 `↩` 引文 snippet 不参与下载：它是被引消息的文本，
+  用引用方 msg_id 下载必 400——snippet 原样拼接（2026-09-29 review
+  修复，回归测试锁定）。
 
 ## 单文件直发（无伴随文本）
 
@@ -125,9 +132,9 @@ omitted]` 说明行。merge_forward 子消息文件随父 msg_id（与图片现�
 2. **agent 看到的是**：元信息头（`[From User] …[msg_id: …]`）+ 改写后
    的 `[file: name (saved: 路径)]`，除此之外无任何指令。agent 从路径
    `read` 文件内容，按会话既有上下文决定怎么用（填表/摘要/转换…）。
-3. **steer 路径必须覆盖**：2026-09-29 事故的实际形态就是运行中到达的
-   单文件 steer（PPT、PDF 各一条），`ChannelCommand::Steer` 的接线
-   与 `None` 同等重要，测试用例从这里出。
+3. **中运行投递必须覆盖**：2026-09-29 事故的实际形态就是运行中到达
+   的单文件（PPT、PDF 各一条）——kernel 层表现为 `user (steer)`，
+   通道层走 `None` 臂的 send_steer。e2e 复现走这条路径。
 4. **不加"这是用户发来的文件"之类的系统提示**：文件内容自解释，
    v1 不为单文件场景注入额外说明，省 token；若实测发现 agent 对
    裸路径文件消息反应不佳，再评估补一行引导。
