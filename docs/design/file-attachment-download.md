@@ -11,8 +11,8 @@
 
 - **< 100MB 自动下载**，占位符就地改写为本地路径：agent 零额外动作
   即可 `read` 文件（pptx/pdf/zip 全走文件路径）。
-- **> 100MB 不下载**，保留占位符，追加一条 `<system_reminder>` 提示
-  超限并给出手动下载命令（key 仍在占位符里）。
+- **> 100MB 不下载**，占位符保持 `lark_file_key` 原样自解释
+  （history 失败行内补 `msg_id`，见「超限与失败」）。
 - **100MB = 100 × 1024 × 1024 字节**，等于上限可过，超出即拒。
 
 ### 候选方案与取舍
@@ -76,14 +76,18 @@ data_dir 由 `kernel.data_dir()` 给出（`~/.yomi`），按消息分组便于
 
 ### 超限与失败
 
-- **触发消息**：超限或下载失败**不发 reminder、不发说明行**，占位符
-  保持 `(lark_file_key: K)` 原样。理由（2026-09-29 hrli 拍板方向）：
-  header 自带 `[msg_id: …]`，key 平台命名自解释，agent 自己就能拼出
+- **触发消息**：超限或下载失败**不加任何提示**，占位符保持
+  `(lark_file_key: K)` 原样。理由（2026-09-29 hrli 拍板方向）：header
+  自带 `[msg_id: …]`，key 平台命名自解释，agent 自己就能拼出
   `lark im dl <msg_id> <lark_file_key>`——额外提示是重复信息。
-- **history 行**：行格式 `[HH:MM] sender: 文本` 不含 msg_id，占位符
-  只有 key，手动下载凑不齐参数。此时聚合发**恰好一条**
-  `<system_reminder>`：逐文件给出 `name — lark im dl <行msg_id>
-  <lark_file_key>`。reminder 语义=补占位符缺的信息，不是重复提示。
+- **history 行**：行格式 `[HH:MM] sender: 文本` 不含 msg_id，而
+  `GET /im/v1/files/{file_key}` 只服务 app 自己上传的文件（实测
+  message file_key 打该端点回 234008 "not the resource sender"），
+  **msg_id 不可省**。做法（hrli 提议）：不在行格式上全局拼 msg_id，
+  而是**只在下载失败/超限的行内**把占位符后缀扩成
+  `(lark_file_key: K; msg_id: om_…)`——信息恰好出现在需要它的
+  地方，成功行零噪音，`<system_reminder>` 整个移除。解析器容忍
+  后缀里的 `; msg_id:` 字段（下载只取 key，忽略其余）。
 
 ### history 里的文件（与图片同规）
 
@@ -135,13 +139,13 @@ omitted]` 说明行。merge_forward 子消息文件随父 msg_id（与图片现�
 2. **就地改写是唯一交付**：agent 看到的用户消息里，已下载文件的
    占位符直接给出绝对路径；不再有"自己去某处找文件"的猜谜。
 3. **超限不下载、不截断**：超过上限的文件永远不会以半截形式落盘；
-  触发消息靠自解释占位符手动兜底，history 行由 reminder 补 msg_id。
-4. **reminder 只在 history 缺 msg_id 时发**：一条触发消息无论几个
-  history 文件下载不了，只有一条 `<system_reminder>`；触发消息本身
-   永不发 reminder。
-5. **失败不静默但零噪音**：下载失败在日志（warn!）留痕，消息面不加
-   说明行——占位符没被改写成 `(saved: …)` 本身就是"未下载"信号，
-   自解释 key + header msg_id 足够 agent 自处。
+   触发消息靠自解释占位符手动兜底，history 失败行内补 msg_id。
+4. **无 system_reminder**：整条链路不产生 reminder。失败信息一律
+   就地携带——触发消息的 msg_id 在 header，history 行的 msg_id 拼进
+   失败占位符后缀。
+5. **失败零噪音**：下载失败在日志（warn!）留痕，消息面不加说明行
+   ——占位符没被改写成 `(saved: …)` 本身就是"未下载"信号，自解释
+   key + msg_id（header 或行内）足够 agent 自处。
 6. **触发消息与 history 一视同仁**：两处的文件占位符都下载改写；
    唯一不下载的是无 key 的占位符（语法残缺，保留原文）。merge_forward
    子消息文件随父 msg_id，与图片同现状。
@@ -159,10 +163,11 @@ omitted]` 说明行。merge_forward 子消息文件随父 msg_id（与图片现�
   Content-Length 或服务端多送）→ `Oversize` 且不留半成品；文件名
   含路径成分 → 取 file_name 片段。
 - `hub_test.rs`（context）：占位符解析（有/无 name、audio/media
-  同类、`]` 畸形输入、旧 `key` 后缀兼容不改写不 panic）；下载成功 →
-  文本块就地改写；触发消息超限/失败 → 占位符原样、**无 reminder
-  无说明行**；history 行超限 → 恰好一条带行 msg_id 的
-  `<system_reminder>`；空 message_id 直接跳过。
+  同类、`]` 畸形输入、旧 `key` 后缀兼容、`; msg_id:` 扩展字段容忍，
+  不改写不 panic）；下载成功 → 文本块就地改写；触发消息超限/失败 →
+  占位符原样、无 reminder 无说明行；history 行超限 → 后缀扩
+  `; msg_id:`，**全链路无 `<system_reminder>`**；空 message_id 直接
+  跳过。
 - 单文件直发专项：触发消息正文只有占位符时，改写后 agent 可见
   `saved:` 路径；steer 路径同样生效（事故复现形态）。
 - history 注入：行内占位符按行 msg_id 下载改写；超 3 个记 omitted
@@ -172,10 +177,13 @@ omitted]` 说明行。merge_forward 子消息文件随父 msg_id（与图片现�
   补一条 history 场景：文件发在话题早期、后续 @bot 触发，agent
   能从 history 行读到 saved 路径）。
 
-## 决策记录（待拍板）
+## 决策记录
 
-- 上限 100MB 为拍板值（2026-09-29）；语义"小于下载、大于提示"。
+- 上限 100MB 为拍板值（2026-09-29）；语义"小于下载、大于不下载"。
+- **无 system_reminder**（2026-09-29 hrli 拍板）：失败信息就地携带，
+  全链路不产生 reminder。
+- **history 失败行内补 msg_id**（2026-09-29 hrli 提议落地）：
+  `(lark_file_key: K; msg_id: om_…)`；实测 `/im/v1/files/{key}` 只
+  服务 app 上传的文件（234008），msg_id 不可省。
 - history 文件每触发下载上限 3 个（图片是 5）为提议值，待拍板。
 - 落点 `<data_dir>/channels/<channel>/files/<msg_id>/` 为提议值。
-- reminder 用英文（与 `[Failed to download image]` 等既有
-  agent-facing 字符串同语言）；如要中文可换。
