@@ -810,26 +810,23 @@ pub async fn get_git_info(path: String) -> Result<serde_json::Value, GuiError> {
     }))
 }
 
-/// 登录项当前状态（系统设置 → 通用 → 登录项）。非 macOS 无此命令，
-/// 前端探测失败即隐藏开关。
+// 登录项自启，三平台标准机制：
+// - macOS: SMAppService（系统设置 → 通用 → 登录项）
+// - Windows: HKCU\Software\Microsoft\Windows\CurrentVersion\Run 注册表键
+// - Linux: XDG ~/.config/autostart/yomi.desktop
+// 状态以系统侧为准：用户在系统侧删除后，状态查询回落为关。
 #[cfg(target_os = "macos")]
-#[tauri::command(rename_all = "snake_case")]
-pub async fn get_login_item() -> Result<bool, GuiError> {
+fn login_item_status() -> bool {
     use objc2_service_management::{SMAppService, SMAppServiceStatus};
-    // 主线程无关（SMAppService 状态查询可在任意线程）。
     let service = unsafe { SMAppService::mainAppService() };
-    let status = unsafe { service.status() };
-    Ok(matches!(
-        status,
+    matches!(
+        unsafe { service.status() },
         SMAppServiceStatus::Enabled | SMAppServiceStatus::RequiresApproval
-    ))
+    )
 }
 
-/// 开关登录项。开启 = 注册（幂等）；关闭 = 注销（用户在系统设置里
-/// 手动删除的，状态查询会回落为 false，与本开关自然对齐）。
 #[cfg(target_os = "macos")]
-#[tauri::command(rename_all = "snake_case")]
-pub async fn set_login_item(enabled: bool) -> Result<bool, GuiError> {
+fn login_item_apply(enabled: bool) -> Result<(), String> {
     use objc2_service_management::SMAppService;
     let service = unsafe { SMAppService::mainAppService() };
     let result = if enabled {
@@ -837,9 +834,97 @@ pub async fn set_login_item(enabled: bool) -> Result<bool, GuiError> {
     } else {
         unsafe { service.unregisterAndReturnError() }
     };
-    result
+    result.map_err(|e| format!("login item operation failed: {e}"))
+}
+
+#[cfg(target_os = "windows")]
+const AUTOSTART_KEY: &str = "Yomi";
+
+#[cfg(target_os = "windows")]
+fn login_item_status() -> bool {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    hkcu.open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Run")
+        .and_then(|k| k.get_value::<String, _>(AUTOSTART_KEY))
+        .is_ok()
+}
+
+#[cfg(target_os = "windows")]
+fn login_item_apply(enabled: bool) -> Result<(), String> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (run, _) = hkcu
+        .create_subkey(r"Software\Microsoft\Windows\CurrentVersion\Run")
+        .map_err(|e| format!("open Run key: {e}"))?;
+    if enabled {
+        let exe = std::env::current_exe()
+            .map_err(|e| format!("current exe: {e}"))?
+            .display()
+            .to_string();
+        run.set_value(AUTOSTART_KEY, &format!("\"{exe}\""))
+            .map_err(|e| format!("write Run value: {e}"))
+    } else {
+        run.delete_value(AUTOSTART_KEY)
+            .map_err(|e| format!("delete Run value: {e}"))
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn autostart_desktop_path() -> std::path::PathBuf {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
+        .unwrap_or_default();
+    base.join("autostart").join("yomi.desktop")
+}
+
+/// XDG autostart desktop entry 内容（独立成函数便于测试）。
+#[cfg(all(unix, not(target_os = "macos")))]
+fn autostart_desktop_entry(exe: &std::path::Path) -> String {
+    format!(
+        "[Desktop Entry]\nType=Application\nName=Yomi\nExec={}\nX-GNOME-Autostart-enabled=true\n",
+        exe.display()
+    )
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn login_item_status() -> bool {
+    autostart_desktop_path().is_file()
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn login_item_apply(enabled: bool) -> Result<(), String> {
+    let path = autostart_desktop_path();
+    if enabled {
+        let exe = std::env::current_exe().map_err(|e| format!("current exe: {e}"))?;
+        let dir = path.parent().ok_or("autostart dir")?;
+        std::fs::create_dir_all(dir).map_err(|e| format!("mkdir autostart: {e}"))?;
+        std::fs::write(&path, autostart_desktop_entry(&exe))
+            .map_err(|e| format!("write desktop entry: {e}"))
+    } else {
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("remove desktop entry: {e}")),
+        }
+    }
+}
+
+/// 登录项当前状态。全平台可用（命令缺失时前端隐藏开关）。
+#[tauri::command(rename_all = "snake_case")]
+pub async fn get_login_item() -> Result<bool, GuiError> {
+    Ok(login_item_status())
+}
+
+/// 开关登录项，返回生效状态。
+#[tauri::command(rename_all = "snake_case")]
+pub async fn set_login_item(enabled: bool) -> Result<bool, GuiError> {
+    login_item_apply(enabled)
         .map(|()| enabled)
-        .map_err(|e| GuiError::unknown(format!("login item operation failed: {e}")))
+        .map_err(GuiError::unknown)
 }
 
 #[cfg(test)]

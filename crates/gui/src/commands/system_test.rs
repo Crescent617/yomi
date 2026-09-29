@@ -131,3 +131,12 @@ async fn resolve_attachment_arg_rejects_workspace_escape() {
         .unwrap_err();
     assert!(err.to_string().contains("attachment unavailable"));
 }
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn autostart_desktop_entry_contains_exec() {
+    let entry = super::autostart_desktop_entry(std::path::Path::new("/usr/bin/yomi-gui"));
+    assert!(entry.contains("Type=Application"), "{entry}");
+    assert!(entry.contains("Exec=/usr/bin/yomi-gui"), "{entry}");
+    assert!(entry.contains("X-GNOME-Autostart-enabled=true"), "{entry}");
+}
