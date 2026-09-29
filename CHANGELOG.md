@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.53] - 2026-09-29
+
 ### Added
 - GUI 设置页（Application → Startup）新增「Launch at login」开关，控制登录时自动启动 Yomi；macOS 走系统登录项（系统设置 → 通用 → 登录项中可见可删），Windows 写当前用户注册表启动项，Linux 写 XDG autostart 桌面项。
 
