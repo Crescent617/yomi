@@ -35,16 +35,24 @@ cp -R "${MOUNT}/Yomi.app" "$WORK_DIR/"
 hdiutil detach "$MOUNT" >/dev/null 2>&1
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-# Re-sign with a stable identity when available (self-signed "yomi-dev"), so
-# macOS TCC grants (accessibility/automation/...) survive app upgrades.
-# Without one, fall back to ad-hoc (new CDHash per build, grants reset).
+# Re-sign with a stable identity so macOS TCC grants (accessibility /
+# automation / ...) survive app upgrades. Preference order:
+#   1. rcodesign + p12 (headless; no keychain/SecurityAgent involved)
+#   2. apple codesign identity via SIGN_IDENTITY (needs unlocked keychain)
+#   3. ad-hoc (new CDHash per build, grants reset)
 SIGN_IDENTITY="${SIGN_IDENTITY:-}"
+RCODESIGN="${RCODESIGN:-}"
+SIGN_P12_PATH="${SIGN_P12_PATH:-}"
+SIGN_P12_PASSWORD="${SIGN_P12_PASSWORD:-}"
 codesign --remove-signature "$WORK_DIR/Yomi.app" 2>/dev/null || true
-if [[ -n "$SIGN_IDENTITY" ]] && security find-identity -p codesigning | grep -q "\"$SIGN_IDENTITY\""; then
+if [[ -n "$RCODESIGN" && -x "$RCODESIGN" && -n "$SIGN_P12_PATH" ]]; then
+    echo "Signing with rcodesign (p12: $SIGN_P12_PATH)"
+    "$RCODESIGN" sign --p12-file "$SIGN_P12_PATH" --p12-password "$SIGN_P12_PASSWORD" "$WORK_DIR/Yomi.app"
+elif [[ -n "$SIGN_IDENTITY" ]] && security find-identity -p codesigning | grep -q "\"$SIGN_IDENTITY\""; then
     echo "Signing with identity: $SIGN_IDENTITY"
     codesign --force --deep --sign "$SIGN_IDENTITY" "$WORK_DIR/Yomi.app"
 else
-    echo "Signing ad-hoc (SIGN_IDENTITY='${SIGN_IDENTITY:-unset}')"
+    echo "Signing ad-hoc (no rcodesign p12, SIGN_IDENTITY='${SIGN_IDENTITY:-unset}')"
     codesign --force --deep --sign - "$WORK_DIR/Yomi.app"
 fi
 codesign --verify --deep --strict "$WORK_DIR/Yomi.app"

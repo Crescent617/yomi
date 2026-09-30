@@ -204,9 +204,9 @@ jobs:
         with:
           files: yomi-*-aarch64-apple-darwin.tar.gz
 
-      - name: Import GUI signing key
-        # Stable self-signed identity: keeps macOS TCC grants across upgrades.
-        # Secret = base64 of the p12 (password: yomi-dev). Skip ad-hoc if unset.
+      - name: Install rcodesign & write signing key
+        # rcodesign 直接读 p12 签名，不走钥匙串/SecurityAgent——apple
+        # codesign 的 keychain ACL 授权弹窗在无头 runner 上会挂死 job。
         env:
           YOMI_SIGN_P12: ${{ secrets.YOMI_SIGN_P12 }}
         run: |
@@ -216,12 +216,15 @@ jobs:
             exit 0
           fi
           echo "$YOMI_SIGN_P12" | base64 -d > /tmp/yomi-sign.p12
-          security create-keychain -p "yomi-dev" /tmp/yomi-sign.keychain
-          security import /tmp/yomi-sign.p12 -k /tmp/yomi-sign.keychain -P "yomi-dev" -T /usr/bin/codesign
-          security unlock-keychain -p "yomi-dev" /tmp/yomi-sign.keychain
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -k "yomi-dev" -l "yomi-dev" /tmp/yomi-sign.keychain
-          security list-keychains -s /tmp/yomi-sign.keychain "$HOME/Library/Keychains/login.keychain-db"
-          echo "SIGN_IDENTITY=yomi-dev" >> "$GITHUB_ENV"
+          cd /tmp
+          curl -fsSL -o rcodesign.tar.gz https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F0.29.0/apple-codesign-0.29.0-aarch64-apple-darwin.tar.gz
+          echo "d1a532150adaf90048260d76359261aa716abafc45c53c5dc18845029184334a  rcodesign.tar.gz" | shasum -a 256 -c -
+          tar xzf rcodesign.tar.gz
+          {
+            echo "RCODESIGN=/tmp/apple-codesign-0.29.0-aarch64-apple-darwin/rcodesign"
+            echo "SIGN_P12_PATH=/tmp/yomi-sign.p12"
+            echo "SIGN_P12_PASSWORD=yomi-dev"
+          } >> "$GITHUB_ENV"
 
       - name: Build & Sign DMG
         working-directory: crates/gui
