@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.54] - 2026-09-30
+
+### Changed
+- GUI 应用改用固定开发者证书签名：以后升级版本时系统不再把 Yomi 当成新应用，已授予的系统权限（如辅助功能）无需重新授权。
+
 ### Removed
 - Homebrew 不再提供 Linux 安装（formula 移除 on_linux，仅保留 macOS）；Linux 请直接下载 release 二进制或使用 Docker 镜像。
 
