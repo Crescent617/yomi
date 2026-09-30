@@ -94,8 +94,8 @@ pub(crate) fn contract_sections(enable_attachments: bool, channel_routed: bool) 
 /// Channel rules: `<data_dir>/channels/rules/<chat_id>.md`, appended to
 /// the prompt **verbatim** at spawn when the file exists and is
 /// non-empty — no header, no framing, the file speaks for itself (the
-/// capability contract lives in the `yomi-self` skill, not in the
-/// prompt). No file → no injection: zero prompt noise for chats
+/// capability contract lives in workspace skills, not in the prompt). No
+/// file → no injection: zero prompt noise for chats
 /// without rules. Capped at [`SESSION_RULES_MAX_BYTES`] with a
 /// truncation marker so an oversized file can't bloat every prompt.
 pub(crate) const SESSION_RULES_MAX_BYTES: usize = 4096;

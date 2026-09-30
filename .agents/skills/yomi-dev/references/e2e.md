@@ -1,9 +1,4 @@
----
-name: yomi-e2e
-description: "yomi 隔离真机 E2E：起与生产完全隔离的测试 daemon，经 lark-cli 用户身份触发飞书事件，从日志 / session / sqlite 验证行为。当飞书通道或 daemon、CLI、cron 等改动需要真机端到端验证时使用。"
----
-
-# Skill: yomi-e2e 隔离真机 E2E
+# 隔离真机 E2E
 
 ## 1. 隔离环境
 
@@ -17,7 +12,7 @@ YOMI_SOCKET=unix:///tmp/yomi-daemon-test.sock
 
 ```bash
 # 起（restart 幂等：没在跑 = 直接起）
-cd /Volumes/Data/repos/yomi && cargo build
+cd ~/repos/yomi && cargo build
 <三件套> ./target/debug/yomi daemon restart
 
 # 验（全过才继续）
@@ -93,6 +88,8 @@ cargo test -p kernel e2e_feishu -- --ignored --nocapture
 ```
 
 **E. 非通道类（cron 等）**：CLI 驱动 + sqlite/jsonl 断言。以 cron per-run 为例：① create 省略 `--session` → get `session_id:null` + `session_template`；② 同 job trigger×2 → 两个不同新 session，各收各的消息；③ 排下一分钟 + max_runs 1 → 新 session、`run_count=1`、自动 completed；④ `--session` 绑定 → 消息追加进该 session、不新建；⑤ update 带 `--session` 绑定 / 不带解绑；⑥ 收尾删测试 job。
+
+**收尾**：场景全部跑完 → `<三件套> ./target/debug/yomi daemon stop` 拆环境——别留测试 daemon 过夜（与生产并行占 socket 和 test bot 长连接）。
 
 ## 3. 排错对照
 

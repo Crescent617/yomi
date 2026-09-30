@@ -152,7 +152,7 @@ dropdown/click-outside 范式）。popover 内容：生效值 + 来源行
 - settings 卡：第 4 行渲染（档位/伪选项/当前值）、`cfg_ctx` 回调映射
   （档位设置、default 清除、未知 option 不动）、Reset all 联动。
 - wire：两方法 dispatcher roundtrip。
-- 真链路（yomi-e2e）：settings 卡切档位 → 该 chat session 回复尾 ctx%
+- 真链路（yomi-dev）：settings 卡切档位 → 该 chat session 回复尾 ctx%
   分母变化；TUI/GUI 手动验证。
 
 ## 实现顺序建议

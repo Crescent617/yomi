@@ -170,7 +170,7 @@ agent 调用 `stock_quote {"symbol":"600519"}`：
 - `examples/yomi_ext.py` → 换两个示例（sh guard + python tool，各约 20
   行）。SDK 不复存在——这是特性不是缺失。
 - 文档：EXTENSIONS.md 重写为《yomi 外挂》（用户文档，两个表面一个
-  引擎）；yomi-self skill 的 references/hook.md 同步。
+  引擎）；hook 契约文档随 EXTENSIONS.md 同步维护。
 
 ## 分期落地
 

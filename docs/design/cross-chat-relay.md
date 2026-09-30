@@ -142,7 +142,7 @@ CLI（RPC 薄前端，同 `channel new-thread` 先例）：
 - `yomi channel send --chat <oc_> --text … [--relay] [--sticky] [--reply-to <om_>]`
 - `yomi channel relay list [--chat <oc_>]` / `yomi channel relay release <om_>`
 
-agent 教学走 yomi-self skill 增补一节，不进内置工具面（理由见决策 6）。
+agent 教学走工作区 skill 增补一节，不进内置工具面（理由见决策 6）。
 
 ## 权限
 
