@@ -35,9 +35,18 @@ cp -R "${MOUNT}/Yomi.app" "$WORK_DIR/"
 hdiutil detach "$MOUNT" >/dev/null 2>&1
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-# Re-sign
+# Re-sign with a stable identity when available (self-signed "yomi-dev"), so
+# macOS TCC grants (accessibility/automation/...) survive app upgrades.
+# Without one, fall back to ad-hoc (new CDHash per build, grants reset).
+SIGN_IDENTITY="${SIGN_IDENTITY:-}"
 codesign --remove-signature "$WORK_DIR/Yomi.app" 2>/dev/null || true
-codesign --force --deep --sign - "$WORK_DIR/Yomi.app"
+if [[ -n "$SIGN_IDENTITY" ]] && security find-identity -p codesigning | grep -q "\"$SIGN_IDENTITY\""; then
+    echo "Signing with identity: $SIGN_IDENTITY"
+    codesign --force --deep --sign "$SIGN_IDENTITY" "$WORK_DIR/Yomi.app"
+else
+    echo "Signing ad-hoc (SIGN_IDENTITY='${SIGN_IDENTITY:-unset}')"
+    codesign --force --deep --sign - "$WORK_DIR/Yomi.app"
+fi
 codesign --verify --deep --strict "$WORK_DIR/Yomi.app"
 echo "✅ Signature verified"
 

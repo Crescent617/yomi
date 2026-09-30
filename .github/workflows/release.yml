@@ -204,6 +204,25 @@ jobs:
         with:
           files: yomi-*-aarch64-apple-darwin.tar.gz
 
+      - name: Import GUI signing key
+        # Stable self-signed identity: keeps macOS TCC grants across upgrades.
+        # Secret = base64 of the p12 (password: yomi-dev). Skip ad-hoc if unset.
+        env:
+          YOMI_SIGN_P12: ${{ secrets.YOMI_SIGN_P12 }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${YOMI_SIGN_P12:-}" ]]; then
+            echo "YOMI_SIGN_P12 secret not set; DMG will be ad-hoc signed"
+            exit 0
+          fi
+          echo "$YOMI_SIGN_P12" | base64 -d > /tmp/yomi-sign.p12
+          security create-keychain -p "yomi-dev" /tmp/yomi-sign.keychain
+          security import /tmp/yomi-sign.p12 -k /tmp/yomi-sign.keychain -P "yomi-dev" -T /usr/bin/codesign
+          security unlock-keychain -p "yomi-dev" /tmp/yomi-sign.keychain
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -k "yomi-dev" -l "yomi-dev" /tmp/yomi-sign.keychain
+          security list-keychains -s /tmp/yomi-sign.keychain "$HOME/Library/Keychains/login.keychain-db"
+          echo "SIGN_IDENTITY=yomi-dev" >> "$GITHUB_ENV"
+
       - name: Build & Sign DMG
         working-directory: crates/gui
         run: |
