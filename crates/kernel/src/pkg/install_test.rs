@@ -556,3 +556,43 @@ async fn oversized_file_rejected_before_touching_slots() {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn git_metadata_dir_is_not_packaged() {
+    // git 源 = clone 到临时目录直接喂 install：.git 是 VCS 元数据不是
+    // 包内容，里面的 pack 文件动辄超 1MB——不排除会在默认玩法上把真实
+    // 仓误判成"包文件超限"拒装。hash 与复制同口径跳过。
+    let pkg = write_pkg();
+    std::fs::create_dir_all(pkg.path().join(".git/objects/pack")).unwrap();
+    std::fs::write(
+        pkg.path().join(".git/objects/pack/x.pack"),
+        vec![b'x'; 2 * 1024 * 1024],
+    )
+    .unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let store = test_cron_store().await;
+
+    // 超大 pack 不触发 1MB 拒绝。
+    install(
+        data.path(),
+        pkg.path(),
+        &store,
+        crate::permission::Level::Caution,
+        &manifest_of(&pkg),
+        false,
+        &provenance(),
+    )
+    .await
+    .unwrap();
+
+    let ext_dir = data.path().join("extensions/demo");
+    assert!(!ext_dir.join(".git").exists(), ".git not copied");
+    assert!(ext_dir.join("bin/recall").is_file());
+    // hash 一致性：list 侧重算仍须 ok。
+    let installed = super::super::read_installed(&ext_dir).unwrap();
+    let meta = installed.meta.unwrap();
+    assert_eq!(
+        super::super::package_hash(&ext_dir).unwrap(),
+        meta.content_hash
+    );
+}

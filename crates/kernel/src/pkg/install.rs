@@ -281,6 +281,13 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), PkgError> {
         let path = entry.path();
         let ft = entry.file_type()?;
         if ft.is_dir() {
+            // `.git` 是 VCS 元数据不是包内容：git 源 clone 到临时目录后
+            // 直接喂 install（默认玩法），pack 文件动辄超 1MB 会被误判成
+            // "包文件超限"拒装，复制进 extensions/ 也是纯膨胀。hash 与
+            // copy_dir 同口径跳过，一致性不受破坏。
+            if entry.file_name() == ".git" {
+                continue;
+            }
             collect_files(&path, out)?;
         } else if ft.is_file() {
             out.push(path);
@@ -670,6 +677,11 @@ async fn copy_dir(src: &Path, dst: &Path) -> Result<(), PkgError> {
         let to = dst.join(entry.file_name());
         let ft = entry.file_type().await?;
         if ft.is_dir() {
+            // `.git` 不复制（VCS 元数据非包内容；与 collect_files 的
+            // hash 跳过同口径）。
+            if entry.file_name() == ".git" {
+                continue;
+            }
             Box::pin(copy_dir(&from, &to)).await?;
         } else if ft.is_file() {
             tokio::fs::copy(&from, &to).await?;
