@@ -343,16 +343,6 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     .await
     .map_err(|e| KernelError::storage(format!("Failed to create _schema_migrations table: {e}")))?;
 
-    // 未发布版本曾建过 ext_installs 表（扩展包注册表后来改为文件系统，
-    // 见 docs/design/ext-packages.md 决策 11）。幂等清理：当时的开发库
-    // 可能留着这张空表，DROP 掉避免被误读成还有 sqlite 注册表；新库
-    // no-op。刻意不进版本化迁移——老库的 _schema_migrations 里已有
-    // 高于此处的版本号，版本化迁移不会重跑。
-    sqlx::query("DROP TABLE IF EXISTS ext_installs")
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| KernelError::storage(format!("Failed to drop legacy ext_installs: {e}")))?;
-
     // Get current version
     let current_version: i64 =
         sqlx::query_scalar("SELECT COALESCE(MAX(version), -1) FROM _schema_migrations")
