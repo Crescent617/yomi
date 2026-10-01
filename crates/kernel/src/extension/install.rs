@@ -478,7 +478,7 @@ fn pkg_lock(name: &str) -> Arc<tokio::sync::Mutex<()>> {
     LOCKS
         .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
         .lock()
-        .expect("pkg lock map poisoned")
+        .expect("extension lock map poisoned")
         .entry(name.to_string())
         .or_default()
         .clone()

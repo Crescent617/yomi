@@ -2213,34 +2213,39 @@ impl Kernel {
     /// 的 ext.lock：来源/版本/hash/资源清单）→ 挂载
     /// hooks/bin → 收养 cron。统一 copy；重装 = 重新取货 + 原位替换
     /// （更新语义）。幂等可重放。
-    pub async fn extension_install(&self, source: String) -> Result<crate::pkg::InstallReport> {
+    pub async fn extension_install(
+        &self,
+        source: String,
+    ) -> Result<crate::extension::InstallReport> {
         let cron_store = self
             .cron_store
             .as_ref()
             .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
         let data_dir = self.data_dir().await;
-        let src = crate::pkg::parse_source(&source)
+        let src = crate::extension::parse_source(&source)
             .map_err(|e| crate::types::KernelError::storage(e.to_string()))?;
-        let (_tmp, root, rev) = crate::pkg::fetch_source(&src)
+        let (_tmp, root, rev) = crate::extension::fetch_source(&src)
             .await
             .map_err(|e| crate::types::KernelError::storage(e.to_string()))?;
         // 只 parse 一次：name/已装查询/物化共用同一 manifest（TOCTOU）。
-        let manifest = crate::pkg::parse_manifest(&root)?;
+        let manifest = crate::extension::parse_manifest(&root)?;
         // 已装目录（带 ext.lock）决定可否原位刷新；
         // 读不到 = 槽位空或 foreign（用户手放），按不可刷新处理。
-        let record = crate::pkg::read_installed(
-            &data_dir.join(crate::pkg::DIR_NAME).join(&manifest.ext.name),
+        let record = crate::extension::read_installed(
+            &data_dir
+                .join(crate::extension::DIR_NAME)
+                .join(&manifest.ext.name),
         )
         .ok();
         let allow_replace = record.as_ref().is_some_and(|i| i.meta.is_some());
-        let result = crate::pkg::install(
+        let result = crate::extension::install(
             &data_dir,
             &root,
             cron_store,
             self.agent_shared.config_auto_approve,
             &manifest,
             allow_replace,
-            &crate::pkg::Provenance {
+            &crate::extension::Provenance {
                 source: source.clone(),
                 rev: rev.clone(),
             },
@@ -2270,10 +2275,10 @@ impl Kernel {
     pub async fn extension_list(&self) -> Result<Vec<serde_json::Value>> {
         let data_dir = self.data_dir().await;
         let mut out = Vec::new();
-        for installed in crate::pkg::list_installed(&data_dir).await {
+        for installed in crate::extension::list_installed(&data_dir).await {
             let health = match &installed.meta {
                 None => "foreign",
-                Some(meta) => match crate::pkg::package_hash(&installed.dir) {
+                Some(meta) => match crate::extension::package_hash(&installed.dir) {
                     Ok(h) if h == meta.content_hash => "ok",
                     Ok(_) => "modified",
                     Err(_) => "unreadable",
@@ -2304,17 +2309,20 @@ impl Kernel {
 
     /// 卸载：cron 前缀清扫 → 摘挂载（指向判定）→ 删 extensions/<名>。
     /// 已装清单缺失退化为扫包目录 + 前缀（正确性不依赖清单）。
-    pub async fn extension_remove(&self, name: String) -> Result<crate::pkg::RemoveReport> {
+    pub async fn extension_remove(&self, name: String) -> Result<crate::extension::RemoveReport> {
         let cron_store = self
             .cron_store
             .as_ref()
             .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
         let data_dir = self.data_dir().await;
-        // 已装清单（ext.lock）驱动回滚；读不到 = 未安装，pkg::remove
+        // 已装清单（ext.lock）驱动回滚；读不到 = 未安装，extension::remove
         // 产出全空报告，CLI 报 "not installed"。
-        let installed =
-            crate::pkg::read_installed(&data_dir.join(crate::pkg::DIR_NAME).join(&name)).ok();
-        let result = crate::pkg::remove(&data_dir, &name, cron_store, installed.as_ref()).await;
+        let installed = crate::extension::read_installed(
+            &data_dir.join(crate::extension::DIR_NAME).join(&name),
+        )
+        .ok();
+        let result =
+            crate::extension::remove(&data_dir, &name, cron_store, installed.as_ref()).await;
         let report = match result {
             Ok(report) => report,
             Err(e) => {

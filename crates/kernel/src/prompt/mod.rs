@@ -341,7 +341,7 @@ impl<'a> SystemPromptBuilder<'a> {
         if let Some(dir) = self.data_dir {
             // TTL 缓存 + 并发单飞（对齐 skills 的 SkillLoader）；TTL 即
             // snippet 改动的生效延迟上限。
-            let snippets = crate::pkg::SnippetLoader::global().load(dir).await;
+            let snippets = crate::extension::SnippetLoader::global().load(dir).await;
             for snippet in snippets.iter() {
                 prompt.push_str("\n\n# Extension: ");
                 prompt.push_str(&snippet.ext);

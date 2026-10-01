@@ -742,7 +742,7 @@ impl KernelApi for RemoteKernel {
         .await
     }
 
-    async fn extension_install(&self, source: String) -> Result<crate::pkg::InstallReport> {
+    async fn extension_install(&self, source: String) -> Result<crate::extension::InstallReport> {
         self.call_json(ReqMethod::ExtensionInstall { source }).await
     }
 
@@ -750,7 +750,7 @@ impl KernelApi for RemoteKernel {
         self.call_json(ReqMethod::ExtensionList).await
     }
 
-    async fn extension_remove(&self, name: String) -> Result<crate::pkg::RemoveReport> {
+    async fn extension_remove(&self, name: String) -> Result<crate::extension::RemoveReport> {
         self.call_json(ReqMethod::ExtensionRemove { name }).await
     }
 

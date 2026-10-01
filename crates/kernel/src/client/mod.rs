@@ -310,9 +310,9 @@ pub trait KernelApi: Send + Sync {
     async fn trigger_cron_job(&self, id: &crate::cron::CronJobId) -> Result<()>;
 
     // ── Extension packages（扩展包；设计 docs/design/ext-packages.md）──
-    async fn extension_install(&self, source: String) -> Result<crate::pkg::InstallReport>;
+    async fn extension_install(&self, source: String) -> Result<crate::extension::InstallReport>;
     async fn extension_list(&self) -> Result<Vec<serde_json::Value>>;
-    async fn extension_remove(&self, name: String) -> Result<crate::pkg::RemoveReport>;
+    async fn extension_remove(&self, name: String) -> Result<crate::extension::RemoveReport>;
 
     // ── Channels ───────────────────────────────────────────────────────
     /// Open a platform thread in `chat_id` and run `text` in a fresh

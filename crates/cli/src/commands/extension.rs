@@ -16,7 +16,7 @@ async fn connect() -> Result<kernel::client::RemoteKernel> {
 /// `source` 是 GitHub 简写/URL 或本地目录。
 pub async fn install(_global: &GlobalArgs, source: String) -> Result<()> {
     let kernel = connect().await?;
-    let report: kernel::pkg::InstallReport = kernel
+    let report: kernel::extension::InstallReport = kernel
         .extension_install(source)
         .await
         .context("Failed to install extension")?;
@@ -39,8 +39,8 @@ pub async fn install(_global: &GlobalArgs, source: String) -> Result<()> {
     }
     for m in report.hooks.iter().chain(report.bins.iter()) {
         let status = match m.status {
-            kernel::pkg::MountStatus::Linked => "linked",
-            kernel::pkg::MountStatus::Already => "already linked",
+            kernel::extension::MountStatus::Linked => "linked",
+            kernel::extension::MountStatus::Already => "already linked",
         };
         println!("  {} ({status})", m.path);
     }

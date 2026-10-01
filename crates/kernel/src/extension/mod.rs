@@ -1,4 +1,4 @@
-//! pkg —— 扩展包（extension packages）：安装与生命周期层。
+//! extension —— 扩展包（extension packages）：安装与生命周期层。
 //!
 //! 定位见 `docs/design/ext-packages.md`：不是新的扩展端口，而是把已有
 //! 注册表（hooks/bin 目录、cron 表、SP snippet 拼装）的**物化与回收**

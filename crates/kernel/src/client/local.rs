@@ -415,7 +415,7 @@ impl KernelApi for Kernel {
         Self::trigger_cron_job(self, id).await
     }
 
-    async fn extension_install(&self, source: String) -> Result<crate::pkg::InstallReport> {
+    async fn extension_install(&self, source: String) -> Result<crate::extension::InstallReport> {
         Self::extension_install(self, source).await
     }
 
@@ -423,7 +423,7 @@ impl KernelApi for Kernel {
         Self::extension_list(self).await
     }
 
-    async fn extension_remove(&self, name: String) -> Result<crate::pkg::RemoveReport> {
+    async fn extension_remove(&self, name: String) -> Result<crate::extension::RemoveReport> {
         Self::extension_remove(self, name).await
     }
 

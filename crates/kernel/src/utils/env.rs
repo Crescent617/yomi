@@ -37,7 +37,7 @@ pub fn inject_child_env<'a>(
         Some(dir) => {
             cmd.env(YOMI_DATA_DIR, dir);
             // `<data_dir>/bin` 是用户与扩展的命令层（扩展包 bin/ 资源
-            // 挂载点，见 crate::pkg）：prepend 进 PATH，所有 yomi 子进程
+            // 挂载点，见 crate::extension）：prepend 进 PATH，所有 yomi 子进程
             // （shell 工具、cron、hook、外挂 tool）同一入口获得解析。
             // 与 `path::prepend_exe_dir_to_path`（sidecar CLI 同版保证）
             // 同哲学：exe 目录归内核自带，bin 目录归用户与扩展。目录

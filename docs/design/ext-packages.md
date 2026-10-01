@@ -21,7 +21,8 @@
 
 ## 决策记录
 
-1. **命名：命令 `yomi extension`，目录 `extensions/`，内部模块 `pkg`**。
+1. **命名：命令 `yomi extension`，目录 `extensions/`，内部模块
+   `extension`**（曾用 `pkg`，0.10.55 后改——pkg 太通用）。
    `ext` 已被外挂体系占用（`tools/ext.rs`、`[ext:<名>]` 错误前缀、卡片
    `ext_` 命名空间），再派给包管理会一詞两义。CLI 侧与现有全词命令
    （session/cron/channel/skill）风格一致。
