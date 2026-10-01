@@ -1,22 +1,23 @@
-//! 已装扩展的元数据：npm package.json 玩法——install 复制包后往
-//! `extensions/<名>/ext.toml` 追加 `[install]` 段，目录本身就是注册表。
+//! 已装扩展的元数据：install 复制包后往目录里盖 `ext.lock`（等价
+//! Cargo.lock 对 Cargo.toml——ext.toml 是作者的 manifest，原封不动），
+//! 目录本身就是注册表。
 //!
 //! 相比 sqlite 记录：没有两份真相的漂移面（list/remove/doctor 全读
 //! 文件系统，与 hooks/tools/skills 的"目录即注册表"一致）；重装自然
-//! 重写元数据。正确性仍不依赖元数据——remove 的兜底（cron 前缀清扫
-//! + 挂载指向判定）不变，元数据只是让回滚更精确。
+//! 重写 lock。正确性仍不依赖元数据——remove 的兜底（cron 前缀清扫
+//! + 挂载指向判定）不变，lock 只是让回滚更精确。
 //!
-//! `[install]` 段在包内容 hash 计算**之后**写入：hash 覆盖包内容
-//! （含 `[ext]` 段）用于本地改动侦测；`[install]` 是我们的、每次重装
-//! 重写，不入 hash。
+//! ext.lock 在包内容 hash 计算**之后**写入，且 hash 算法跳过它：
+//! hash 覆盖包内容（含 `[ext]` 段）用于本地改动侦测；lock 是我们的、
+//! 每次重装重写，不入 hash。
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::{parse_manifest, ExtManifest, DIR_NAME, MANIFEST_FILE};
+use super::{parse_manifest, ExtManifest, DIR_NAME, LOCK_FILE};
 
-/// 一次安装收编的资源清单（remove 精确回滚用；随 `[install]` 段落盘）。
+/// 一次安装收编的资源清单（remove 精确回滚用；随 ext.lock 落盘）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct Resources {
@@ -30,7 +31,7 @@ pub struct Resources {
     pub snippets: Vec<String>,
 }
 
-/// 安装来源溯源（写入 `[install]` 段）。
+/// 安装来源溯源（写入 ext.lock）。
 #[derive(Debug, Clone)]
 pub struct Provenance {
     /// 用户给的原始来源字符串（GitHub URL 或本地路径）。
@@ -39,7 +40,7 @@ pub struct Provenance {
     pub rev: Option<String>,
 }
 
-/// install 时写入 ext.toml 的 `[install]` 段。
+/// install 时写入 ext.lock 的溯源信息。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct InstallMeta {
@@ -54,7 +55,7 @@ pub struct InstallMeta {
     pub installed_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// 一个已装扩展 = 其 manifest + [install] 元数据（元数据可缺：用户手
+/// 一个已装扩展 = 其 manifest + ext.lock 元数据（可缺：用户手
 /// 放的目录——list 展示为 foreign，remove 拒绝）。
 #[derive(Debug, Clone)]
 pub struct InstalledExt {
@@ -85,17 +86,9 @@ impl InstalledExt {
     }
 }
 
-/// 一次安装溯源信息的序列化信封：包一层才带 `[install]` 表头——直接
-/// 序列化 `InstallMeta` 只会得到散在顶层的 key，追加进 ext.toml 时与
-/// [ext] 段串台。
-#[derive(serde::Serialize)]
-struct InstallSection<'a> {
-    install: &'a InstallMeta,
-}
-
-/// 把 `[install]` 段写进已装目录的 ext.toml（hash 计算之后调用）。
-/// 整篇重写而非追加：先剥离包内可能自带的同名表（防伪造归属证明/
-/// 重复表损坏 TOML），再落新段——并发/重试下结果确定。
+/// 把安装溯源写进已装目录的 `ext.lock`（hash 计算之后调用）。ext.toml
+/// 是作者的 manifest，**原封不动**——lock 独立成文件，等价 Cargo.lock
+/// 对 Cargo.toml。整篇重写（不留旧内容），并发/重试下结果确定。
 pub fn write_install_meta(
     ext_dir: &Path,
     content_hash: &str,
@@ -109,40 +102,25 @@ pub fn write_install_meta(
         resources: resources.clone(),
         installed_at: chrono::Utc::now(),
     };
-    // 用信封序列化（见 InstallSection）。
-    let section = toml::to_string_pretty(&InstallSection { install: &meta })
-        .map_err(|e| format!("serialize install meta: {e}"))?;
-    let path = ext_dir.join(MANIFEST_FILE);
-    let raw =
-        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    // manifest 已在此前的 parse_manifest 校验过，这里解析失败属 IO 竞
-    // 态——按原样保留正文 + 新段照旧尝试，不因剥离失败丢安装记录。
-    let mut body = match raw.parse::<toml::Table>() {
-        Ok(mut t) => {
-            t.remove("install");
-            toml::to_string_pretty(&t).unwrap_or_else(|_| raw.clone())
-        }
-        Err(_) => raw.clone(),
-    };
-    body.push('\n');
-    body.push_str(&section);
-    std::fs::write(&path, body).map_err(|e| format!("write {}: {e}", path.display()))
+    let text = toml::to_string_pretty(&meta).map_err(|e| format!("serialize install meta: {e}"))?;
+    // tmp + rename 原子写：崩溃不留半截 lock（半截 = meta None = foreign =
+    // 重装被 occupied 挡，要手工清）。tmp 以 . 开头，扫描器跳过。
+    let tmp = ext_dir.join(".ext.lock.tmp");
+    std::fs::write(&tmp, text).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, ext_dir.join(LOCK_FILE))
+        .map_err(|e| format!("rename {}: {e}", tmp.display()))
 }
 
-/// 解析单个已装目录的 ext.toml（[ext] + 可选 [install]）。manifest
-/// 本身损坏时返回 Err（调用方归类为 broken）。
+/// 解析单个已装目录：ext.toml（[ext]，作者 manifest）+ 可选 ext.lock
+/// （install 盖的溯源/资源清单；缺席 = foreign 目录）。manifest 本身
+/// 损坏时返回 Err（调用方归类为 unreadable）。
 pub fn read_installed(ext_dir: &Path) -> Result<InstalledExt, String> {
-    let path = ext_dir.join(MANIFEST_FILE);
-    let raw =
-        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let manifest = parse_manifest(ext_dir).map_err(|e| e.to_string())?;
-    // [install] 段缺席不算错（foreign 目录）。整篇文档用 Table 解析
-    // （Value 的 FromStr 只收单个值，整篇会报 "unexpected content"）。
-    let meta = raw
-        .parse::<toml::Table>()
+    // ext.lock 缺席不算错（foreign 目录）；存在但损坏按无 meta 处理
+    // （目录仍可见，健康检查报 foreign——总比整目录消失好）。
+    let meta = std::fs::read_to_string(ext_dir.join(LOCK_FILE))
         .ok()
-        .and_then(|mut t| t.remove("install"))
-        .and_then(|v| InstallMeta::deserialize(v).ok());
+        .and_then(|raw| toml::from_str::<InstallMeta>(&raw).ok());
     Ok(InstalledExt {
         manifest,
         meta,

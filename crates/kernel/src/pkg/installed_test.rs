@@ -1,4 +1,4 @@
-//! installed（[install] 段读写与扫描）测试。
+//! installed（ext.lock 读写与扫描）测试。
 
 use super::{list_installed, read_installed, write_install_meta, Provenance, Resources};
 
@@ -103,8 +103,9 @@ fn broken_dir_placeholder() {
 }
 
 #[test]
-fn install_meta_serializes_as_install_section() {
+fn install_meta_written_to_lock_and_manifest_untouched() {
     let (_data, ext) = pkg_with_meta();
+    let manifest_before = std::fs::read_to_string(ext.join("ext.toml")).unwrap();
     write_install_meta(
         &ext,
         "h",
@@ -115,10 +116,16 @@ fn install_meta_serializes_as_install_section() {
         &Resources::default(),
     )
     .unwrap();
-    let raw = std::fs::read_to_string(ext.join("ext.toml")).unwrap();
-    assert!(raw.contains("[install]"), "{raw}");
-    // 追加后整体仍是合法 TOML，且 [ext] 段完好。
+    // ext.toml 原封不动（作者的 manifest 归作者）。
+    assert_eq!(
+        std::fs::read_to_string(ext.join("ext.toml")).unwrap(),
+        manifest_before
+    );
+    // ext.lock 独立成文件，合法 TOML，字段齐全。
+    let raw = std::fs::read_to_string(ext.join("ext.lock")).unwrap();
     let v: toml::Table = raw.parse().unwrap();
-    assert_eq!(v["ext"]["name"].as_str(), Some("demo"));
-    assert_eq!(v["install"]["content_hash"].as_str(), Some("h"));
+    assert_eq!(v["source"].as_str(), Some("s"));
+    assert_eq!(v["content_hash"].as_str(), Some("h"));
+    assert!(v["installed_at"].as_str().is_some());
+    assert!(v["resources"].is_table());
 }

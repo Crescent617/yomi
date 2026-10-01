@@ -2210,7 +2210,7 @@ impl Kernel {
 
     /// 安装扩展包：解析来源（GitHub URL / 本地目录）→ 取货（git clone
     /// 到临时目录）→ 校验 manifest → 复制进 extensions/<名>（已装目录
-    /// 的 ext.toml 追加 [install] 段：来源/版本/hash/资源清单）→ 挂载
+    /// 的 ext.lock：来源/版本/hash/资源清单）→ 挂载
     /// hooks/bin → 收养 cron。统一 copy；重装 = 重新取货 + 原位替换
     /// （更新语义）。幂等可重放。
     pub async fn extension_install(&self, source: String) -> Result<crate::pkg::InstallReport> {
@@ -2226,7 +2226,7 @@ impl Kernel {
             .map_err(|e| crate::types::KernelError::storage(e.to_string()))?;
         // 只 parse 一次：name/已装查询/物化共用同一 manifest（TOCTOU）。
         let manifest = crate::pkg::parse_manifest(&root)?;
-        // 已装目录（带 [install] 段的 ext.toml）决定可否原位刷新；
+        // 已装目录（带 ext.lock）决定可否原位刷新；
         // 读不到 = 槽位空或 foreign（用户手放），按不可刷新处理。
         let record = crate::pkg::read_installed(
             &data_dir.join(crate::pkg::DIR_NAME).join(&manifest.ext.name),
@@ -2264,8 +2264,8 @@ impl Kernel {
     }
 
     /// 已安装扩展清单：extensions/ 目录本身就是注册表（每个已装目录的
-    /// ext.toml 带 [install] 段）。health：foreign = 目录在手但没有
-    /// [install] 段（用户手放）；modified = 内容与安装时不一致（本地
+    /// ext.toml 旁有 ext.lock）。health：foreign = 目录在手但没有
+    /// ext.lock（用户手放）；modified = 内容与安装时不一致（本地
     /// 改动）；ok = 一致。
     pub async fn extension_list(&self) -> Result<Vec<serde_json::Value>> {
         let data_dir = self.data_dir().await;
@@ -2310,7 +2310,7 @@ impl Kernel {
             .as_ref()
             .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
         let data_dir = self.data_dir().await;
-        // 已装清单（[install] 段）驱动回滚；读不到 = 未安装，pkg::remove
+        // 已装清单（ext.lock）驱动回滚；读不到 = 未安装，pkg::remove
         // 产出全空报告，CLI 报 "not installed"。
         let installed =
             crate::pkg::read_installed(&data_dir.join(crate::pkg::DIR_NAME).join(&name)).ok();

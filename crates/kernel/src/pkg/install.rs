@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::installed::{InstalledExt, Resources};
-use super::{cron_name, PkgError, BIN_DIR, DIR_NAME, HOOKS_DIR, MANIFEST_FILE, SNIPPETS_DIR};
+use super::{cron_name, PkgError, BIN_DIR, DIR_NAME, HOOKS_DIR, LOCK_FILE, SNIPPETS_DIR};
 use crate::cron::{CronAction, CronSessionTemplate, CronStore};
 use crate::permission::Level;
 
@@ -18,7 +18,7 @@ use crate::permission::Level;
 pub struct InstallReport {
     pub name: String,
     pub version: String,
-    /// 安装内容的内容 hash（blake3，十六进制；不含 [install] 段）：
+    /// 安装内容的内容 hash（blake3，十六进制；不含 ext.lock）：
     /// list/doctor 的本地改动侦测基准。
     pub content_hash: String,
     /// cron 收养结果：`created=false` = 已存在未动（ensure 语义）。
@@ -82,7 +82,7 @@ pub async fn install(
     // 换名会导致刷新拿着 A 的记录删 B 槽位的目录（TOCTOU）。
     manifest: &super::ExtManifest,
     allow_replace: bool,
-    // 来源溯源：写进已装目录 ext.toml 的 [install] 段。
+    // 来源溯源：写进已装目录的 ext.lock。
     provenance: &super::Provenance,
 ) -> Result<InstallReport, PkgError> {
     let source = source
@@ -96,21 +96,17 @@ pub async fn install(
     }
     let name = manifest.ext.name.clone();
     // 同名包串行：并发的两次 install/remove 会在 copy_refresh 的临时
-    // 目录、ext.toml 重写上互踩（各自的"原子"操作叠加起来不原子）。
+    // 目录、ext.lock 重写上互踩（各自的"原子"操作叠加起来不原子）。
     let _lock = pkg_lock(&name);
     let _guard = _lock.lock().await;
     let ext_dir = data_dir.join(DIR_NAME).join(&name);
 
     // 先对源做完整 walk（含 1MB 上限与 ext.toml 可解析性）：超限在此
     // 拒绝，不碰任何槽位——此前把这一步放在复制/挂载/cron 之后，拒
-    // 绝时留下的无段目录会被重跑当成 occupied 撞 Conflict。
+    // 绝时留下的无 lock 目录会被重跑当成 occupied 撞 Conflict。
     hash_package(&source)?;
 
     place_or_refresh(&ext_dir, &source, allow_replace).await?;
-    // 包内自带的 [install] 表在复制后剥掉：它要么是伪装的归属证明
-    // （remove 会因此误删用户目录），要么与随后写入的真段撞重复表、
-    // 整篇 TOML 解析失败。剥离后 ext.toml 内容进 hash，两侧规则一致。
-    strip_install_section(&ext_dir)?;
 
     // 挂载 hooks 与 bin：先全部走完收集冲突，有冲突整体报错——
     // 已建部分不用回滚，所有权规则保证重跑 install 收敛。
@@ -144,7 +140,7 @@ pub async fn install(
     }
     if !conflicts.is_empty() {
         // 挂载冲突整体拒绝，但目录与已建挂载已是事实。落一份部分资源
-        // 的 [install] 段（best-effort）：重跑 install 据此拿到
+        // 的 ext.lock（best-effort）：重跑 install 据此拿到
         // allow_replace 原位刷新收敛，remove 也能精确回滚已建部分——
         // 否则无段目录会把重跑挡成 occupied Conflict，"re-run to
         // converge" 成空话。
@@ -195,7 +191,7 @@ pub async fn install(
     let snippets = list_snippets(&ext_dir).await;
     let content_hash = hash_package(&ext_dir)?;
 
-    // [install] 段（hash 之后写：段是我们的、每次重装重写，不入 hash）。
+    // ext.lock（hash 之后写：lock 是我们的、每次重装重写，hash 跳过它）。
     let resources = resources_from_report(&cron, &hooks, &bins, &snippets);
     super::write_install_meta(&ext_dir, &content_hash, provenance, &resources)
         .map_err(PkgError::Invalid)?;
@@ -229,9 +225,20 @@ fn hash_package(dir: &Path) -> Result<String, PkgError> {
     files.sort();
     for file in files {
         let rel = file.strip_prefix(dir).unwrap_or(&file);
+        // ext.lock 是工具盖的戳（见 write_install_meta）：不入包内容
+        // 指纹，两侧（源 walk / list 重算）都跳过，本地改动侦测只对
+        // 作者的文件生效。大小写不敏感比较：case-insensitive 文件系统
+        // 上 join("ext.lock") 会打开作者的 EXT.LOCK，跳过口径必须与
+        // 写入解析一致，否则 author's 文件被覆盖且 hash 永久对不上。
+        if rel
+            .file_name()
+            .is_some_and(|n| n.eq_ignore_ascii_case(LOCK_FILE))
+        {
+            continue;
+        }
         hasher.update(rel.to_string_lossy().as_bytes());
         hasher.update(&[0]);
-        let mut buf = read_hash_input(dir, &file)?;
+        let mut buf = read_bounded(&file, rel)?;
         if buf.len() as u64 > HASH_FILE_MAX_BYTES {
             return Err(PkgError::Invalid(format!(
                 "package file {} exceeds {HASH_FILE_MAX_BYTES} bytes",
@@ -244,16 +251,12 @@ fn hash_package(dir: &Path) -> Result<String, PkgError> {
     Ok(hasher.finalize().to_hex().to_string())
 }
 
-/// 读取一个待 hash 文件的内容。根 ext.toml 特殊处理：剥掉 `[install]`
-/// 表再序列化后 hash——该段是我们的、每次重装重写（见
-/// `write_install_meta`），两边用同一规则才能比对出本地改动。其余
-/// 文件原样读。单文件上限 1MB——包是"约定 + 小脚本"的载体，藏超大
-/// 文件按恶意/损坏处理，install 直接拒。
-fn read_hash_input(dir: &Path, file: &Path) -> Result<Vec<u8>, PkgError> {
-    let rel = file.strip_prefix(dir).unwrap_or(file);
+/// 读取一个待 hash 文件的内容：fstat 预检尺寸 + `take` 封顶读取——
+/// 元数据检查与读之间有竞态窗（装到一半文件被换成超大文件），take
+/// 保证内存占用有界。单文件上限 1MB——包是"约定 + 小脚本"的载体，
+/// 藏超大文件按恶意/损坏处理，install 直接拒。
+fn read_bounded(file: &Path, rel: &Path) -> Result<Vec<u8>, PkgError> {
     let f = std::fs::File::open(file)?;
-    // fstat 先看尺寸；读取用 take 封顶——元数据检查与读之间有竞态窗
-    // （装到一半文件被换成超大文件），take 保证内存占用有界。
     if f.metadata()?.len() > HASH_FILE_MAX_BYTES {
         return Err(PkgError::Invalid(format!(
             "package file {} exceeds {HASH_FILE_MAX_BYTES} bytes",
@@ -268,25 +271,6 @@ fn read_hash_input(dir: &Path, file: &Path) -> Result<Vec<u8>, PkgError> {
             "package file {} exceeds {HASH_FILE_MAX_BYTES} bytes",
             rel.display()
         )));
-    }
-    // 大小写不敏感比较文件名：macOS/Windows 文件系统对大小写不敏感，
-    // 仓里叫 EXT.TOML 的包 parse_manifest 能读进，hash 侧也必须剥段，
-    // 否则装完即永久 modified。实现按文件名匹配（不限根目录）——比
-    // 磁盘剥段（只剥根）宽，但两侧 hash 同一函数，比对仍一致。
-    if rel
-        .file_name()
-        .is_some_and(|n| n.eq_ignore_ascii_case("ext.toml"))
-    {
-        if let Ok(text) = std::str::from_utf8(&raw) {
-            if let Ok(mut table) = text.parse::<toml::Table>() {
-                table.remove("install");
-                if let Ok(text) = toml::to_string_pretty(&table) {
-                    return Ok(text.into_bytes());
-                }
-            }
-        }
-        // 非 UTF-8 / 解析失败：回落原样 hash（parse_manifest 在 install
-        // 路径已门禁，list 重算走不到这）。
     }
     Ok(raw)
 }
@@ -356,7 +340,7 @@ async fn remove_inner(
         }
     }
 
-    // 挂载名单：已装清单（[install] 段）优先；包目录还在则并集（清单
+    // 挂载名单：已装清单（ext.lock）优先；包目录还在则并集（清单
     // 缺失的退化路径）。scan 失败静默用名单即可。
     let mut mount_rels: Vec<String> = installed.map(|i| i.mount_paths()).unwrap_or_default();
     if let Ok(list) = try_scan_hook_rels(&ext_dir).await {
@@ -408,7 +392,7 @@ async fn remove_inner(
             tokio::fs::remove_file(&ext_dir).await?;
             true
         }
-        // 实体目录：只有 [install] 段证明是我们装的才删；用户把自己的
+        // 实体目录：只有 ext.lock 证明是我们装的才删；用户把自己的
         // 目录放进槽位时留下并 warn（设计：全程只动能证明属于自己的东西）。
         Ok(_) if installed.is_some_and(|i| i.meta.is_some()) => {
             tokio::fs::remove_dir_all(&ext_dir).await?;
@@ -491,24 +475,6 @@ fn pkg_lock(name: &str) -> Arc<tokio::sync::Mutex<()>> {
         .entry(name.to_string())
         .or_default()
         .clone()
-}
-
-/// 剥掉已装目录 ext.toml 里包内自带的 `[install]` 表（复制后、hash
-/// 前调用）：防伪造归属证明（remove 据此误删用户目录）与重复表损坏
-/// TOML。ext.toml 已在 manifest 校验阶段验证可解析，这里失败只可能是
-/// IO 竞态——升级为 Err 让 install 拒绝（不留状态分叉）。
-fn strip_install_section(ext_dir: &Path) -> Result<(), PkgError> {
-    let path = ext_dir.join(MANIFEST_FILE);
-    let raw = std::fs::read_to_string(&path)?;
-    let mut table = raw
-        .parse::<toml::Table>()
-        .map_err(|e| PkgError::Invalid(format!("re-parse {}: {e}", path.display())))?;
-    if table.remove("install").is_some() {
-        let text = toml::to_string_pretty(&table)
-            .map_err(|e| PkgError::Invalid(format!("re-serialize {}: {e}", path.display())))?;
-        std::fs::write(&path, text)?;
-    }
-    Ok(())
 }
 
 /// 挂载一条 symlink，返回本次动作。槽位被占记入 `conflicts`（不覆盖），
@@ -724,7 +690,7 @@ async fn copy_dir(src: &Path, dst: &Path) -> Result<(), PkgError> {
     Ok(())
 }
 
-/// 资源清单组装（写入 [install] 段；remove 按它精确回滚）。
+/// 资源清单组装（写入 ext.lock；remove 按它精确回滚）。
 fn resources_from_report(
     cron: &[CronAdoptReport],
     hooks: &[MountReport],

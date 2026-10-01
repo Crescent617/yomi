@@ -5,8 +5,8 @@
 # 与日常 daemon 完全并存。装一个带全资源（cron/hooks/bin/snippets）的
 # demo 包，逐项断言 install/list/remove 全链（CLI→wire→kernel→fs/sqlite），
 # 并用 cron shell job 验证 PATH 注入（不依赖模型调用）。注册表是
-# extensions/<名>/ext.toml 的 [install] 段（npm package.json 玩法，
-# 不再有 sqlite ext_installs 表）。
+# extensions/<名>/ext.lock（等价 Cargo.lock；ext.toml 归作者原封
+# 不动，不再有 sqlite ext_installs 表）。
 #
 # 用法：evals/ext-e2e.sh    （需 target/debug/yomi；约 1 分钟，无模型调用）
 
@@ -86,11 +86,12 @@ rows=$(sqlite3 "$DB" "SELECT COUNT(*) FROM cron_jobs WHERE name LIKE 'ext:e2e-de
 check "cron adopted (2 jobs)" "2" "$rows"
 content=$(sqlite3 "$DB" "SELECT action FROM cron_jobs WHERE name='ext:e2e-demo:tick'")
 echo "$content" | grep -q "tick via file" && ok "cron message from file" || bad "cron message from file" "$content"
-# [install] 段：来源、hash、资源清单都落盘（注册表即文件系统）。
-inst="$DATA/extensions/e2e-demo/ext.toml"
-grep -q '^\[install\]' "$inst" && ok "install section present" || bad "install section present" "missing"
-grep -q "^source = " "$inst" && ok "provenance recorded" || bad "provenance recorded" "missing"
-grep -q '^content_hash = "[0-9a-f]\{64\}"' "$inst" && ok "content hash recorded" || bad "content hash recorded" "missing"
+# ext.lock：来源、hash、资源清单都落盘（注册表即文件系统）；
+# ext.toml 是作者的 manifest，必须原封不动。
+lock="$DATA/extensions/e2e-demo/ext.lock"
+grep -q '^source = ' "$lock" && ok "provenance in ext.lock" || bad "provenance in ext.lock" "missing"
+grep -q '^content_hash = "[0-9a-f]\{64\}"' "$lock" && ok "content hash in ext.lock" || bad "content hash in ext.lock" "missing"
+cmp -s "$PKG/ext.toml" "$DATA/extensions/e2e-demo/ext.toml" && ok "ext.toml verbatim" || bad "ext.toml verbatim" "changed"
 
 # 幂等重跑
 out=$("$YOMI" extension install "$PKG" 2>&1)
@@ -120,7 +121,7 @@ echo "$out" | grep -q "Removed extension e2e-demo" && ok "remove report" || bad 
 [ ! -e "$DATA/extensions/e2e-demo" ] && ok "extensions dir removed" || bad "extensions dir removed" "still there"
 rows=$(sqlite3 "$DB" "SELECT COUNT(*) FROM cron_jobs WHERE name LIKE 'ext:e2e-demo:%'")
 check "cron swept" "0" "$rows"
-[ ! -f "$inst" ] && ok "install section gone with dir" || bad "install section gone with dir" "still there"
+[ ! -f "$lock" ] && ok "ext.lock gone with dir" || bad "ext.lock gone with dir" "still there"
 
 # 槽位保护：用户文件占 bin 槽位时 install 拒绝且不覆盖
 mkdir -p "$DATA/bin"

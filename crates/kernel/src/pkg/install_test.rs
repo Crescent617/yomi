@@ -116,13 +116,13 @@ async fn install_creates_everything() {
     assert!(hook_link.is_file());
     assert!(data.path().join("bin/recall").is_file());
 
-    // [install] 段落盘：source 记录 + hash 与包内容一致。
+    // ext.lock 落盘：source 记录 + hash 与包内容一致。
     let installed = super::super::read_installed(&ext_dir).unwrap();
-    let meta = installed.meta.expect("[install] written");
+    let meta = installed.meta.expect("ext.lock written");
     assert_eq!(meta.source, "test/pkg");
     assert_eq!(meta.content_hash, report.content_hash);
     // list 侧健康判定的不变量：装完立刻重算必须仍是同一 hash（段已写入
-    // 也能比对——hash 算法剔除了 [install] 表）。
+    // 也能比对——hash 算法跳过 ext.lock）。
     let now = super::super::package_hash(&ext_dir).unwrap();
     assert_eq!(
         now, meta.content_hash,
@@ -212,7 +212,7 @@ async fn install_refuses_occupied_slot() {
         .symlink_metadata()
         .is_ok());
     assert!(cron_job_names(&store).await.is_empty());
-    // 部分安装落了 [install] 段（资源=已建挂载）：挪走冲突项后重跑
+    // 部分安装落了 ext.lock（资源=已建挂载）：挪走冲突项后重跑
     // 拿 allow_replace 原位刷新收敛，remove 也能精确回滚已建部分。
     let ext_dir = data.path().join("extensions/demo");
     let installed = super::super::read_installed(&ext_dir).unwrap();
@@ -242,7 +242,7 @@ async fn install_recovers_after_partial_mounts() {
     let store = test_cron_store().await;
 
     // 完整装一次，然后模拟"挂载阶段被中断"的现场：hook/bin symlink
-    // 与 cron job 都消失，只剩实体目录 + [install] 段。
+    // 与 cron job 都消失，只剩实体目录 + ext.lock。
     install(
         data.path(),
         pkg.path(),
@@ -375,7 +375,7 @@ async fn remove_rolls_back_everything() {
     assert!(!data.path().join("bin/recall").exists());
     assert!(cron_job_names(&store).await.is_empty());
 
-    // 带上 read_installed 的结果（含 [install] 段）：目录也删掉。
+    // 带上 read_installed 的结果（含 ext.lock）：目录也删掉。
     let ext_dir = data.path().join("extensions/demo");
     let installed = super::super::read_installed(&ext_dir).ok();
     let report = remove(data.path(), "demo", &store, installed.as_ref())
@@ -431,7 +431,7 @@ async fn remove_leaves_foreign_dir() {
     let data = tempfile::tempdir().unwrap();
     let store = test_cron_store().await;
 
-    // 用户把自己的目录放进槽位（无 [install] 段 = foreign）：不删。
+    // 用户把自己的目录放进槽位（无 ext.lock = foreign）：不删。
     let ext_dir = data.path().join("extensions/demo");
     std::fs::create_dir_all(ext_dir.join("my-notes")).unwrap();
     std::fs::write(ext_dir.join("my-notes/keep.txt"), "precious").unwrap();
@@ -477,15 +477,13 @@ async fn remove_deletes_installed_dir_with_meta() {
 }
 
 #[tokio::test]
-async fn package_supplied_install_section_is_stripped() {
-    // 包内自带 [install] 表 = 伪造归属证明：装时被剥掉，hash 覆盖剥后
-    // 内容；之后 remove 走正常归属判定，用户数据不误删。
+async fn manifest_copied_verbatim() {
+    // ext.toml 原封不动：包内带 [install] 表也随它进副本——无害（归属
+    // 只看 ext.lock），author 的文件 byte 级保持原样。hash 与副本一致：
+    // list 侧重算必须 ok。
     let pkg = write_pkg();
-    std::fs::write(
-        pkg.path().join("ext.toml"),
-        format!("{MANIFEST}\n[install]\nsource = \"fake\"\ncontent_hash = \"x\"\n"),
-    )
-    .unwrap();
+    let authored = format!("{MANIFEST}\n[install]\nsource = \"fake\"\n");
+    std::fs::write(pkg.path().join("ext.toml"), &authored).unwrap();
     let data = tempfile::tempdir().unwrap();
     let store = test_cron_store().await;
 
@@ -502,17 +500,14 @@ async fn package_supplied_install_section_is_stripped() {
     .unwrap();
 
     let ext_dir = data.path().join("extensions/demo");
-    let raw = std::fs::read_to_string(ext_dir.join("ext.toml")).unwrap();
-    let table: toml::Table = raw.parse().unwrap();
-    let install_section = table.get("install").expect("our [install] written");
-    // 只剩我们写的段（source 是 provenance 的，不是包内伪造的）。
     assert_eq!(
-        install_section.get("source").and_then(|v| v.as_str()),
-        Some("test/pkg")
+        std::fs::read_to_string(ext_dir.join("ext.toml")).unwrap(),
+        authored,
+        "manifest byte-identical"
     );
-    // hash 与剥后内容一致：list 侧重算必须是 ok。
     let installed = super::super::read_installed(&ext_dir).unwrap();
-    let meta = installed.meta.unwrap();
+    let meta = installed.meta.expect("ext.lock written");
+    assert_eq!(meta.source, "test/pkg");
     assert_eq!(
         super::super::package_hash(&ext_dir).unwrap(),
         meta.content_hash

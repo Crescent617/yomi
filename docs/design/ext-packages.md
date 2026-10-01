@@ -54,9 +54,10 @@
     不再有 symlink/copy 双模式——没有 broken source、模式切换、记录
     与磁盘分叉这些状态面；代价是源仓后续 commit 不会自动生效，要
     更新就重装。
-11. **注册表 = 文件系统，不是 sqlite**：install 复制完往包内
-    `ext.toml` 追加 `[install]` 段（来源/版本/hash/资源清单/安装
-    时间），`extensions/` 目录本身就是索引——npm package.json 玩法。
+11. **注册表 = 文件系统，不是 sqlite**：install 复制完在包目录里
+    盖 `ext.lock`（来源/版本/hash/资源清单/安装时间），`extensions/`
+    目录本身就是索引。`ext.toml` 是作者的 manifest，**原封不动**——
+    等价 Cargo.toml 对 Cargo.lock 的关系。
     这是对 AGENTS.md「extension state lives in sqlite/config — never
     private」的**有意偏离**：该条的精神是"状态必须可被外部工具读写
     审计"，而 TOML 段比 sqlite 表更外部（cat 即读），且消除了两份
@@ -64,14 +65,15 @@
     extensions/ 级 lock/index 文件：包间无跨包事务，那会再造第二
     真相源。正确性仍不依赖元数据（决策 2 不变：前缀清扫 + 指向
     判定兜底）。
-12. **provenance 与内容 hash 落盘**：`[install]` 段记录用户给的原始
+12. **provenance 与内容 hash 落盘**：`ext.lock` 记录用户给的原始
     来源字符串与 git resolved commit sha（rev），以及安装时刻的包
     内容 hash（blake3，按相对路径排序喂 路径+内容，单文件 1MB 上限，
     超出按恶意/损坏拒绝 install；symlink 跟随到文件按其内容算）。
-    hash 算法剔除根 ext.toml 的 `[install]` 表（段是我们的、每次重装
-    重写），装完即比对必须一致（health=ok 的不变量）；list/doctor
-    用同算法重算比对 → `modified` 健康态暴露本地手改。包内自带
-    `[install]` 表在复制后剥离——防伪造归属证明与重复表损坏 TOML。
+    hash 算法跳过 `ext.lock`（lock 是我们的、每次重装重写），装完
+    即比对必须一致（health=ok 的不变量）；list/doctor 用同算法重算
+    比对 → `modified` 健康态暴露本地手改。作者 manifest 里的任何
+    内容（哪怕自己写了 `[install]` 表）原样进 hash——不归我们管，
+    也伪造不了归属（归属只看 ext.lock）。
 
 ## 包格式
 
@@ -134,10 +136,10 @@ hook 执行序注意：扩展条目与用户条目混排按字典序，包作者
    全量 clone + checkout）到临时目录，`owner/repo[/子目录][@ref]`；
    本地目录直接用。clone 超时 3 分钟；网络失败不脏任何槽位。取货后
    记录 `git rev-parse HEAD` 为 rev（本地源为 None）。
-2. **收编** `extensions/<name>`：空 → 实体复制；已有且带 `[install]`
-   段（上次本包安装的归属证明）→ 原位刷新（先拷到隐藏临时目录再
+2. **收编** `extensions/<name>`：空 → 实体复制；已有且带 ext.lock
+   （上次本包安装的归属证明）→ 原位刷新（先拷到隐藏临时目录再
    swap，不留"删完没拷上"的窗口）；其他（用户目录、无归属证明的
-   残留）→ 拒绝（提示先 remove）。调用方以已装目录的 `[install]` 段
+   残留）→ 拒绝（提示先 remove）。调用方以已装目录的 ext.lock
    决定 allow_replace，并用同一个预解析 manifest 查记录（防两次
    parse 之间文件被换名的 TOCTOU）。
 3. **挂载** hooks/bin：逐槽位三种情况——空则建 symlink（创建撞
@@ -147,9 +149,9 @@ hook 执行序注意：扩展条目与用户条目混排按字典序，包作者
    重跑安全）。
 4. **收养 cron**：逐条 `create_cron_job`（ensure：同名即返回不动，
    缺才建）。输出区分 `created` / `exists (untouched)`。
-5. **写 `[install]` 段**：包内容 hash 先算（段不入 hash），然后追加
-   进复制后 `ext.toml` 的 `[install]` 段：source、rev、content_hash、
-   资源清单、installed_at。放最后：段存在 ⇒ 资源大概率在。
+5. **写 `ext.lock`**：包内容 hash 先算（lock 不入 hash），然后落
+   `ext.lock`：source、rev、content_hash、资源清单、installed_at。
+   放最后：lock 存在 ⇒ 资源大概率在。
 
 冲突时的原子性：不做跨 fs/sqlite 事务（做不了）；同一扩展名的
 install/remove 由进程内按名锁串行，跨扩展的残余竞争靠"所有权可重入"
@@ -159,16 +161,16 @@ install/remove 由进程内按名锁串行，跨扩展的残余竞争靠"所有�
 ## remove 语义（精确回滚）
 
 `name` 参数与 install 同一名字规则校验（字母开头 `[a-z0-9-]` ≤32），
-`../` 穿越在入口硬拒。读已装目录（`[install]` 段损坏/缺失则退化：
+`../` 穿越在入口硬拒。读已装目录（ext.lock 损坏/缺失则退化：
 cron 按 `ext:<名>:` 前缀扫、挂载按指向判定 + 扫包目录）→ 删 cron
 （store 层前缀查询，无分页漏删窗口）→ 摘挂载（**仅当** symlink 确认
 指向本包；被用户换掉的留下并 warn）→ 删 `extensions/<名>`（仅当
-`[install]` 段证明是本包装的内容）→ 目录随删除消失，注册表零残留。
+ext.lock 证明是本包装的内容）→ 目录随删除消失，注册表零残留。
 全程只动能证明属于自己的东西。处置细则：
 
 - 挂载槽位被用户换成别的 symlink 或实体文件 → 留下，warn。
-- `extensions/<名>` 槽位是实体目录时：仅当 `[install]` 段在场才
-  `remove_dir_all`；无段（foreign，用户把自己的目录放进槽位）→ 留下，
+- `extensions/<名>` 槽位是实体目录时：仅当 ext.lock 在场才
+  `remove_dir_all`；无 lock（foreign，用户把自己的目录放进槽位）→ 留下，
   warn（绝不删用户数据）。
 - 用户手动改过的 cron job（仍在 `ext:<名>:` 命名空间）→ 随前缀
   清扫删除：它属于扩展命名空间，改动随包走。
@@ -178,9 +180,9 @@ cron 按 `ext:<名>:` 前缀扫、挂载按指向判定 + 扫包目录）→ 删
 `yomi extension list`：每扩展一行——name、version、source、rev、
 installed_at、资源计数（cron/hooks/bins/snippets）、健康状态：
 
-- `ok`：`[install]` 段在且内容 hash 与目录现状一致。
-- `modified`：段在但 hash 对不上（装完本地手改过包内容）。
-- `foreign`：目录在但没有 `[install]` 段（用户手放，不归包系统管）。
+- `ok`：ext.lock 在且内容 hash 与目录现状一致。
+- `modified`：lock 在但 hash 对不上（装完本地手改过包内容）。
+- `foreign`：目录在但没有 ext.lock（用户手放，不归包系统管）。
 - `unreadable`：ext.toml 读不了/解析失败。
 
 ensure 语义下"manifest 改了但 job 没更新"是设计内行为，v1 靠
@@ -244,18 +246,19 @@ cron 的 session 模板：不绑定固定 session（per-run 新会话），工�
 dispatcher / KernelApi / RemoteKernel 三处同加。CLI `yomi extension
 install|list|remove` 全走 KernelApi（requires daemon，与 cron 一致）。
 
-## 安装元数据：`ext.toml` 的 `[install]` 段（决策 11）
+## 安装元数据：`ext.lock`（决策 11）
 
-install 复制完、hash 计算之后，往 `extensions/<名>/ext.toml` 追加：
+install 复制完、hash 计算之后，在 `extensions/<名>/` 里写
+`ext.lock`（作者 manifest `ext.toml` 原封不动——等价 Cargo.lock
+对 Cargo.toml）：
 
 ```toml
-[install]
 source = "owner/repo/ext/demo@main"     # 用户给的原始来源字符串
 rev = "1a2b3c..."                        # git resolved commit sha（本地源无此行）
-content_hash = "..."                     # blake3 十六进制；不含本段
+content_hash = "..."                     # blake3 十六进制；不含本 lock
 installed_at = "2026-10-01T08:00:00Z"
 
-[install.resources]
+[resources]
 cron = ["ext:demo:tick"]                 # cron 全名
 hooks = ["pre_tool_use/50-guard"]        # 相对 hooks/ 的路径
 bins = ["recall"]                        # 文件名
@@ -263,9 +266,10 @@ snippets = ["memory.md"]
 ```
 
 `extensions/` 目录本身就是注册表与索引，没有 sqlite 表、没有
-extensions/ 级 lock 文件。段是审计与展示数据，不参与正确性（决策 2
-不变）——它唯一参与判定的地方是"目录删除的归属证明"（remove 只删
-带段的实体目录）与"原位刷新的许可"（install 见段才 allow_replace）。
+extensions/ 级总 lock。ext.lock 是审计与展示数据，不参与正确性
+（决策 2 不变）——它唯一参与判定的地方是"目录删除的归属证明"
+（remove 只删带 lock 的实体目录）与"原位刷新的许可"（install 见
+lock 才 allow_replace）。
 
 ## 安全与信任边界
 

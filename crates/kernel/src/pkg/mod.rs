@@ -33,8 +33,12 @@ pub use manifest::{parse_manifest, CronEntry, ExtManifest, ExtMeta};
 pub use snippets::{load_snippets, Snippet, SnippetLoader};
 pub use source::{fetch_source, parse_source, PkgSource};
 
-/// 包内 manifest 文件名。
+/// 包内 manifest 文件名（作者手写，install 后原封不动）。
 pub const MANIFEST_FILE: &str = "ext.toml";
+/// 安装锁文件名：install 盖在已装目录里的溯源/资源清单（等价
+/// Cargo.lock 对 Cargo.toml——manifest 归作者，lock 归工具）。
+/// 存在与否 = 目录是不是 yomi 装的（foreign 判定）；hash 时整体跳过。
+pub const LOCK_FILE: &str = "ext.lock";
 /// 已安装扩展的库目录名（相对 `data_dir`）。
 pub const DIR_NAME: &str = "extensions";
 /// 包内 snippet 目录名（约定式资源，文件名排序拼 SP）。

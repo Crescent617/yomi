@@ -72,16 +72,17 @@ yomi extension remove <名>     # cron 前缀清扫 + 挂载指向判定回滚
    clone + checkout）到临时目录，支持 `owner/repo[/子目录][@ref]`；
    本地目录直接用。clone 超时 180s，网络失败不脏任何槽位。
 2. 复制进 `extensions/<名>`：空槽位 → 实体复制；槽位已有且是上次
-   本包安装的（`ext.toml` 带 `[install]` 段证明）→ **原位刷新**；
+   本包安装的（目录带 `ext.lock` 证明）→ **原位刷新**；
    其他（用户目录、无归属证明的残留）→ **拒绝**。
 3. 挂载 hooks/bin：逐槽位——空则建 symlink；已指向本包则跳过；
    被用户或其他扩展占用则**整体拒绝并列出占用**（已建部分不回滚，
    重跑 install 收敛）。
 4. 收养 cron：ensure-by-name（缺才建、已存在不动，防覆盖手改；
    更新内容请用 `yomi cron update`，清扫只在 remove）。
-5. 写 `[install]` 段进复制后的 `ext.toml`：来源（source/rev）、内容
-   hash（blake3）、资源清单、安装时间。这是唯一注册表——没有
-   sqlite 表，目录本身就是索引。
+5. 写 `ext.lock` 进包目录：来源（source/rev）、内容 hash（blake3）、
+   资源清单、安装时间。`ext.toml` 是作者的 manifest，**原封不动**——
+   等价 Cargo.toml 对 Cargo.lock。这是唯一注册表：没有 sqlite 表，
+   目录本身就是索引。
 
 bin 内的可执行文件装完即在 PATH 上（`<data_dir>/bin` 由内核注入所有
 子进程）：snippet/文档只写命令名，不写路径。
@@ -95,17 +96,17 @@ snippets 改动源仓不影响已装内容，**cron 消息也不更新**（ensur
 
 cron 按 `ext:<名>:` 前缀清扫 → 摘 hooks/bin 挂载（**仅当** symlink
 文本目标仍指向本包；被换掉的留下并 warn）→ 删 `extensions/<名>`
-（仅当 `[install]` 段证明是本包装的内容；用户目录留下并 warn）。
-卸载不需要 `[install]` 段在场也能精确回滚 cron 与挂载（前缀 + 指向
-判定），段只是让目录删除有归属证明。
+（仅当 ext.lock 证明是本包装的内容；用户目录留下并 warn）。
+卸载不需要 ext.lock 在场也能精确回滚 cron 与挂载（前缀 + 指向
+判定），lock 只是让目录删除有归属证明。
 
 ## health（`extension list` / `doctor`）
 
 | 值 | 含义 |
 |---|---|
-| `ok` | `[install]` 段在且内容 hash 与当前目录一致 |
-| `modified` | 段在但 hash 对不上（本地手改过包内容） |
-| `foreign` | 目录在但没有 `[install]` 段（用户手放，不归包系统管） |
+| `ok` | ext.lock 在且内容 hash 与当前目录一致 |
+| `modified` | lock 在但 hash 对不上（本地手改过包内容） |
+| `foreign` | 目录在但没有 ext.lock（用户手放，不归包系统管） |
 | `unreadable` | ext.toml 读不了/解析失败 |
 
 ## snippet 拼装
@@ -132,7 +133,7 @@ cron 按 `ext:<名>:` 前缀清扫 → 摘 hooks/bin 挂载（**仅当** symlink
 | 现象 | 原因与处置 |
 |---|---|
 | `mount conflict: ...` | 槽位被用户文件或其他扩展占用。挪走冲突项后重跑 install（幂等）。 |
-| install 报槽位 occupied | `extensions/<名>` 有目录但无 `[install]` 段（用户手放或上次装失败残留）。确认无用后手动删目录，或换个包名。 |
+| install 报槽位 occupied | `extensions/<名>` 有目录但无 ext.lock（用户手放或上次装失败残留）。确认无用后手动删目录，或换个包名。 |
 | `extension list` 显示 `modified` | 装完手改过包内容。属预期则忽略；想回到安装态 remove + install。 |
 | install 成功但 cron 报 `exists, untouched` | ensure 语义：同名 job 已存在，未覆盖。要改内容用 `yomi cron update`，或 remove + install。 |
 | `invalid package: ...` | ext.toml 校验失败（名字规则、message 二选一、`../` 逃逸、schedule 无未来触发点、同名条目重复）。按报错逐条修。 |
