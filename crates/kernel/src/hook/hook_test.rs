@@ -834,13 +834,19 @@ async fn session_point_chains_serialize_per_session_only() {
     a.unwrap();
     b.unwrap();
     let text = std::fs::read_to_string(&log).unwrap();
-    let (ia_start, ia_end) = (
-        text.find("start sess_a").unwrap(),
-        text.find("end sess_a").unwrap(),
-    );
-    let ib_start = text.find("start sess_b").unwrap();
+    // 只断言两链时间段**重叠**（跨 session 不串行化是本测试的实质）；
+    // 不断言先后次序——tokio::join 不保证 spawn 顺序，满负载下后 spawn
+    // 的链先拿到执行，次序断言会成偶发假败（连续两次在 just ci 下复现）。
+    let pos = |s: &str| {
+        (
+            text.find(&format!("start {s}")).unwrap(),
+            text.find(&format!("end {s}")).unwrap(),
+        )
+    };
+    let (a_start, a_end) = pos("sess_a");
+    let (b_start, b_end) = pos("sess_b");
     assert!(
-        ib_start < ia_end && ia_start < ib_start,
+        a_start < b_end && b_start < a_end,
         "different sessions must run concurrently: {text}"
     );
 }
