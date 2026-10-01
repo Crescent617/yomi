@@ -7,5 +7,6 @@ yomi 的扩展全部走文件系统约定：目录即注册表，执行位即开
 | hook | `$YOMI_DATA_DIR/hooks/<事件>/` | 内核事件（pre_tool_use、turn 与 daemon 生命周期） | `yomi doc hooks` |
 | 外挂 tool | `$YOMI_DATA_DIR/tools/<名>/` | 模型工具调用 | `yomi doc tools` |
 | 飞书卡片触发器 | `$YOMI_DATA_DIR/channels/feishu_card_triggers/` | 卡片按钮点击 | `yomi doc card-triggers` |
+| ext 路由 | 无目录，`yomi rpc route_session` | 外部系统按键路由会话（与渠道会话同一映射收口） | `yomi doc sessions` |
 
 skill 是另一类扩展（知识包而非可执行脚本），见 `yomi doc skills`。

@@ -320,6 +320,13 @@ pub enum ReqMethod {
     /// source 路由：pseudo-channel + key → session（复用 channel
     /// mapping store；无渠道存储时回退内存表）。Result: `{session_id,
     /// created}`。
+    RouteSession {
+        source: String,
+        key: String,
+    },
+    /// `route_session` 的旧名，语义不变，保留兼容；schemars 跳过，
+    /// `yomi rpc --help` 不再广告它。新代码用 `route_session`。
+    #[schemars(skip)]
     ExtRoute {
         source: String,
         key: String,

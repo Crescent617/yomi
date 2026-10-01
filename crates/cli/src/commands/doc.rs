@@ -27,7 +27,7 @@ const TOPICS: &[Topic] = &[
     },
     Topic {
         name: "sessions",
-        summary: "会话：检索/查看/驱动（cat/search/send/wait/mailbox/cancel）、运行态、规则文件",
+        summary: "会话：检索/查看/驱动（cat/search/send/wait/mailbox/cancel）、运行态、规则文件、route_session 外部路由",
         content: include_str!("../../docs/sessions.md"),
     },
     Topic {

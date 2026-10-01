@@ -23,8 +23,8 @@ impl KernelServer {
     ) -> RespBody {
         match method {
             // ── Extension（source 路由）──────────────────────────────
-            ReqMethod::ExtRoute { source, key } => {
-                rpc_body("ext_route_failed", self.kernel.ext_route(&source, &key).await.map(
+            ReqMethod::RouteSession { source, key } | ReqMethod::ExtRoute { source, key } => {
+                rpc_body("route_session_failed", self.kernel.ext_route(&source, &key).await.map(
                     |(sid, created)| {
                         serde_json::json!({ "session_id": sid.0.to_string(), "created": created })
                     },
