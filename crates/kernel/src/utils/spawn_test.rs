@@ -64,12 +64,14 @@ async fn stdin_roundtrip() {
 #[tokio::test]
 async fn timeout_kills_process_group() {
     let dir = tempfile::TempDir::new().unwrap();
-    let marker = dir.path().join("survivor");
-    // 后裔脱离直接子进程：只有按组杀才收得到。
+    let pidfile = dir.path().join("descendant.pid");
+    // 后裔脱离直接子进程：只有按组杀才收得到。立刻记下 PID 供轮询
+    // ——不用"sleep N 后 touch 标记"的墙钟竞态（满负载下 timeout 的
+    // 组杀可能晚于 touch 落地，与杀没杀到无关，just ci 实证假败）。
     let script = sh_script(
         &dir,
         "hang",
-        &format!("sleep 0.2 && touch {} & sleep 60\n", marker.display()),
+        &format!("sleep 60 & echo $! > {}\nsleep 60\n", pidfile.display()),
     );
     let mut cmd = tokio::process::Command::new(&script);
     let c = spawn_captured(&mut cmd, None, Duration::from_millis(500), None)
@@ -77,9 +79,28 @@ async fn timeout_kills_process_group() {
         .unwrap();
     assert!(c.timed_out);
     assert_eq!(c.exit_code, None);
-    // 后裔若活着会在 0.2s 后创建 marker；等 1s 仍未出现 = 组杀生效。
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    assert!(!marker.exists(), "descendant survived group kill");
+    // 组杀生效 ⇒ 后裔随 kill 信号退出；轮询至多 10s（对负载无限宽容，
+    // 真没杀掉则等到超时，断言才红）。
+    let pid = std::fs::read_to_string(&pidfile)
+        .expect("descendant pid recorded")
+        .trim()
+        .to_string();
+    let alive = |pid: &str| {
+        std::process::Command::new("kill")
+            .args(["-0", pid])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    };
+    for _ in 0..100 {
+        if !alive(&pid) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("descendant survived group kill (pid {pid})");
 }
 
 #[tokio::test]
