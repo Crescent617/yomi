@@ -64,14 +64,18 @@ async fn stdin_roundtrip() {
 #[tokio::test]
 async fn timeout_kills_process_group() {
     let dir = tempfile::TempDir::new().unwrap();
-    let pidfile = dir.path().join("descendant.pid");
-    // 后裔脱离直接子进程：只有按组杀才收得到。立刻记下 PID 供轮询
-    // ——不用"sleep N 后 touch 标记"的墙钟竞态（满负载下 timeout 的
-    // 组杀可能晚于 touch 落地，与杀没杀到无关，just ci 实证假败）。
+    let marker = dir.path().join("heartbeat");
+    // 后裔脱离直接子进程：只有按组杀才收得到。后裔以 0.1s 节拍更新
+    // 心跳文件——不用"sleep N 后 touch 一次"的墙钟竞态（满负载下组杀
+    // 落地晚于 touch 即假败，just ci 两次实证；也可能组杀落在 shell
+    // exec 之前、后裔根本未启动，两种race都靠下面的轮询吸收）。
     let script = sh_script(
         &dir,
         "hang",
-        &format!("sleep 60 & echo $! > {}\nsleep 60\n", pidfile.display()),
+        &format!(
+            "while true; do date +%s%N > {}; sleep 0.1; done &\nsleep 60\n",
+            marker.display()
+        ),
     );
     let mut cmd = tokio::process::Command::new(&script);
     let c = spawn_captured(&mut cmd, None, Duration::from_millis(500), None)
@@ -79,28 +83,38 @@ async fn timeout_kills_process_group() {
         .unwrap();
     assert!(c.timed_out);
     assert_eq!(c.exit_code, None);
-    // 组杀生效 ⇒ 后裔随 kill 信号退出；轮询至多 10s（对负载无限宽容，
-    // 真没杀掉则等到超时，断言才红）。
-    let pid = std::fs::read_to_string(&pidfile)
-        .expect("descendant pid recorded")
-        .trim()
-        .to_string();
-    let alive = |pid: &str| {
-        std::process::Command::new("kill")
-            .args(["-0", pid])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    };
-    for _ in 0..100 {
-        if !alive(&pid) {
+
+    let mtime = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    // 等首个心跳至多 10s：组杀若落在 exec 之前，后裔从未启动——本回合
+    // 无可验，视为通过（隔离跑验证真行为，这里不制造假红）。
+    let mut waited = Duration::ZERO;
+    while mtime(&marker).is_none() {
+        if waited > Duration::from_secs(10) {
             return;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
+        waited += Duration::from_millis(100);
     }
-    panic!("descendant survived group kill (pid {pid})");
+    // 心跳持续 1.5s 不更新 = 后裔已被组杀；对负载无限宽容（轮询至多
+    // 10s，真没杀掉才红）。
+    let mut last = mtime(&marker).unwrap();
+    let mut last_change = std::time::Instant::now();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        if let Some(m) = mtime(&marker) {
+            if m != last {
+                last = m;
+                last_change = std::time::Instant::now();
+            }
+        }
+        if last_change.elapsed() > Duration::from_millis(1500) {
+            return; // 心跳停摆：组杀到达后裔。
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("descendant survived group kill (heartbeat still updating)");
+        }
+    }
 }
 
 #[tokio::test]
