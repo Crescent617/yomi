@@ -56,6 +56,13 @@ impl KernelServer {
                             .map_err(|e| crate::types::KernelError::serde(e.to_string()))
                     }),
             ),
+            ReqMethod::PreviewSystemPrompt {
+                working_dir,
+                session_id,
+            } => rpc_body(
+                "preview_system_prompt_failed",
+                self.kernel.preview_system_prompt(working_dir, session_id).await,
+            ),
 
             // ── Config ───────────────────────────────────────────────────
             ReqMethod::GetConfig => {

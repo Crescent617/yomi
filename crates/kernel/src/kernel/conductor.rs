@@ -881,6 +881,46 @@ impl Conductor {
         }
     }
 
+    /// 组装一份"若现在 spawn 主会话会得到"的完整 system prompt——
+    /// `preview_system_prompt` RPC 的实现，供调试与装扩展后验收。
+    /// 与 spawn 同路径：compose 基础段（无 channel/watch/模板——预览
+    /// 未路由主会话的默认形态）→ SystemPromptBuilder 拼项目 memory +
+    /// skills 表 + 扩展 snippets。working_dir 缺省 daemon 默认
+    /// workspace；session_id 仅影响 rules 段与 builder 的会话槽位。
+    pub async fn preview_system_prompt(
+        &self,
+        working_dir: Option<std::path::PathBuf>,
+        session_id: Option<&str>,
+    ) -> String {
+        let cwd = crate::utils::path::session_workspace_dir(&self.data_dir, working_dir);
+        let workspace_skill_dir = crate::skill::workspace_skill_dir(&cwd).await;
+        let skill_folders = crate::skill::session_skill_folders(
+            &self.agent_shared.skill_folders,
+            workspace_skill_dir,
+        );
+        let skills = self.agent_shared.skill_loader.load(skill_folders).await;
+        let composed = crate::prompt::compose_system_prompt(crate::prompt::SystemPromptParts {
+            base_prompt: self.base_prompt.clone(),
+            template_body: None,
+            is_sub_agent: false,
+            enable_attachments: self.agent_config.enable_attachments,
+            channel_routed: false,
+            watch: None,
+            rules_chat: None,
+            rules_session: session_id,
+            data_dir: &self.data_dir,
+        })
+        .await;
+        crate::prompt::SystemPromptBuilder::new()
+            .base_prompt(&composed)
+            .with_skills(&skills)
+            .with_working_dir(&cwd)
+            .with_session_id(session_id.unwrap_or("preview"))
+            .with_data_dir(&self.data_dir)
+            .build()
+            .await
+    }
+
     /// 应答一条旁问（`AgentInput::Btw` 的唯一归宿）：只读公共源冻结
     /// 快照，spawn 单 step 旁路补全。每条会话同时只跑一条（新旁问
     /// `Replaced` 旧的）；与 agent 生命周期完全无关——不起 agent，

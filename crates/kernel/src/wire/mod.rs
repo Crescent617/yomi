@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 /// 到未知变体的请求帧按 InvalidData 断连接（不是拒单帧），新客户端须
 /// 在 Hello 处快速失败拿到干净的 WireProtocolMismatch，而不是含糊的
 /// connection lost。
-pub const WIRE_PROTOCOL_VERSION: u32 = 32;
+/// 33: `ReqMethod` 新增 preview_system_prompt——同上，Hello 处快速失败。
+pub const WIRE_PROTOCOL_VERSION: u32 = 33;
 
 /// All operations a client can request from the daemon.
 ///
@@ -348,6 +349,14 @@ pub enum ReqMethod {
     /// 删记录。Result: `RemoveReport`。
     ExtensionRemove {
         name: String,
+    },
+    /// 预览指定工作目录（缺省 daemon 默认 workspace）下新会话将获得
+    /// 的完整 system prompt——与 spawn 同一装配路径（compose 基础段 +
+    /// 项目 memory + skills 表 + 扩展 snippets），供调试与装扩展后
+    /// 验收。Result: `{"prompt": String}`。
+    PreviewSystemPrompt {
+        working_dir: Option<String>,
+        session_id: Option<String>,
     },
 
     // ── Model ────────────────────────────────────────────────────────

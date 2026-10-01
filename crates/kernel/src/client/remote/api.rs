@@ -754,6 +754,18 @@ impl KernelApi for RemoteKernel {
         self.call_json(ReqMethod::ExtensionRemove { name }).await
     }
 
+    async fn preview_system_prompt(
+        &self,
+        working_dir: Option<String>,
+        session_id: Option<String>,
+    ) -> Result<String> {
+        self.call_json(ReqMethod::PreviewSystemPrompt {
+            working_dir,
+            session_id,
+        })
+        .await
+    }
+
     async fn channel_new_thread(
         &self,
         channel: Option<String>,

@@ -2338,6 +2338,23 @@ impl Kernel {
         }
         Ok(report)
     }
+
+    /// 调试/验收：预览某工作目录（缺省 daemon 默认 workspace）下新
+    /// 会话将获得的完整 system prompt，与 spawn 同一装配路径
+    /// （`yomi rpc preview_system_prompt [--dir <dir>]`）。
+    pub async fn preview_system_prompt(
+        &self,
+        working_dir: Option<String>,
+        session_id: Option<String>,
+    ) -> Result<String> {
+        Ok(self
+            .conductor
+            .preview_system_prompt(
+                working_dir.map(std::path::PathBuf::from),
+                session_id.as_deref(),
+            )
+            .await)
+    }
 }
 
 #[async_trait::async_trait]
