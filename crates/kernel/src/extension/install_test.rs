@@ -596,3 +596,33 @@ async fn git_metadata_dir_is_not_packaged() {
         meta.content_hash
     );
 }
+
+#[tokio::test]
+async fn remove_leaves_repointed_symlink_slot() {
+    let pkg = write_pkg();
+    let data = tempfile::tempdir().unwrap();
+    let store = test_cron_store().await;
+    install(
+        data.path(),
+        pkg.path(),
+        &store,
+        crate::permission::Level::Caution,
+        &manifest_of(&pkg),
+        false,
+        &provenance(),
+    )
+    .await
+    .unwrap();
+
+    // 用户把 bin 槽位换成指向别处的 symlink（不是实体文件）。
+    std::fs::remove_file(data.path().join("bin/recall")).unwrap();
+    std::os::unix::fs::symlink("/tmp/somewhere-else", data.path().join("bin/recall")).unwrap();
+
+    let report = remove(data.path(), "demo", &store, None).await.unwrap();
+    assert_eq!(report.mounts_left, vec!["bin/recall"]);
+    // 指向判定保护：symlink 仍指用户目标。
+    assert_eq!(
+        std::fs::read_link(data.path().join("bin/recall")).unwrap(),
+        std::path::Path::new("/tmp/somewhere-else")
+    );
+}

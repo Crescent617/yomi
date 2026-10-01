@@ -10,7 +10,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use super::{PkgError, MANIFEST_FILE};
+use super::{ExtError, MANIFEST_FILE};
 
 /// ext.toml 顶层结构。
 #[derive(Debug, Clone, Deserialize)]
@@ -52,14 +52,14 @@ pub struct CronEntry {
 }
 
 /// 解析并校验包根目录下的 ext.toml。
-pub fn parse_manifest(pkg_dir: &Path) -> Result<ExtManifest, PkgError> {
+pub fn parse_manifest(pkg_dir: &Path) -> Result<ExtManifest, ExtError> {
     let path = pkg_dir.join(MANIFEST_FILE);
     // 只读常规文件：FIFO/设备文件会让 daemon 的 RPC 路径无限阻塞。
     require_regular_file(&path)?;
     let raw = std::fs::read_to_string(&path)
-        .map_err(|e| PkgError::Invalid(format!("read {}: {e}", path.display())))?;
+        .map_err(|e| ExtError::Invalid(format!("read {}: {e}", path.display())))?;
     let manifest: ExtManifest =
-        toml::from_str(&raw).map_err(|e| PkgError::Invalid(format!("parse ext.toml: {e}")))?;
+        toml::from_str(&raw).map_err(|e| ExtError::Invalid(format!("parse ext.toml: {e}")))?;
     manifest.validate(pkg_dir)?;
     Ok(manifest)
 }
@@ -67,11 +67,11 @@ pub fn parse_manifest(pkg_dir: &Path) -> Result<ExtManifest, PkgError> {
 /// 路径必须是常规文件（跟随 symlink 后的目标也算）。FIFO/设备文件的
 /// open 会无限阻塞——install 跑在 daemon 的 RPC 路径上，一个恶意包能
 /// 挂死整个 daemon。
-fn require_regular_file(path: &Path) -> Result<(), PkgError> {
+fn require_regular_file(path: &Path) -> Result<(), ExtError> {
     let md = std::fs::metadata(path)
-        .map_err(|e| PkgError::Invalid(format!("stat {}: {e}", path.display())))?;
+        .map_err(|e| ExtError::Invalid(format!("stat {}: {e}", path.display())))?;
     if !md.is_file() {
-        return Err(PkgError::Invalid(format!(
+        return Err(ExtError::Invalid(format!(
             "{} is not a regular file",
             path.display()
         )));
@@ -90,35 +90,35 @@ pub const VERSION_MAX_CHARS: usize = 64;
 pub const CRON_ENTRIES_MAX: usize = 256;
 
 impl ExtManifest {
-    fn validate(&self, pkg_dir: &Path) -> Result<(), PkgError> {
+    fn validate(&self, pkg_dir: &Path) -> Result<(), ExtError> {
         if !valid_ext_name(&self.ext.name) {
-            return Err(PkgError::Invalid(format!(
+            return Err(ExtError::Invalid(format!(
                 "ext.name '{}' invalid: letter first, [a-z0-9-] only, ≤32 chars",
                 self.ext.name
             )));
         }
         if self.ext.version.trim().is_empty() {
-            return Err(PkgError::Invalid(
+            return Err(ExtError::Invalid(
                 "ext.version must not be empty".to_string(),
             ));
         }
         if self.ext.version.chars().count() > VERSION_MAX_CHARS {
-            return Err(PkgError::Invalid(format!(
+            return Err(ExtError::Invalid(format!(
                 "ext.version too long (>{VERSION_MAX_CHARS} chars)"
             )));
         }
         if self.ext.description.trim().is_empty() {
-            return Err(PkgError::Invalid(
+            return Err(ExtError::Invalid(
                 "ext.description must not be empty".to_string(),
             ));
         }
         if self.ext.description.chars().count() > DESCRIPTION_MAX_CHARS {
-            return Err(PkgError::Invalid(format!(
+            return Err(ExtError::Invalid(format!(
                 "ext.description too long (>{DESCRIPTION_MAX_CHARS} chars)"
             )));
         }
         if self.cron.len() > CRON_ENTRIES_MAX {
-            return Err(PkgError::Invalid(format!(
+            return Err(ExtError::Invalid(format!(
                 "too many cron entries ({} > {CRON_ENTRIES_MAX})",
                 self.cron.len()
             )));
@@ -131,7 +131,7 @@ impl ExtManifest {
         let mut names = std::collections::BTreeSet::new();
         for entry in &self.cron {
             if !names.insert(&entry.name) {
-                return Err(PkgError::Invalid(format!(
+                return Err(ExtError::Invalid(format!(
                     "duplicate cron entry name '{}'",
                     entry.name
                 )));
@@ -142,22 +142,22 @@ impl ExtManifest {
 }
 
 impl CronEntry {
-    fn validate(&self, pkg_dir: &Path) -> Result<(), PkgError> {
+    fn validate(&self, pkg_dir: &Path) -> Result<(), ExtError> {
         if !valid_entry_name(&self.name) {
-            return Err(PkgError::Invalid(format!(
+            return Err(ExtError::Invalid(format!(
                 "cron entry name '{}' invalid: letter first, [a-zA-Z0-9_-] only, ≤48 chars",
                 self.name
             )));
         }
         match (&self.message, &self.message_file) {
             (Some(_), Some(_)) => {
-                return Err(PkgError::Invalid(format!(
+                return Err(ExtError::Invalid(format!(
                     "cron entry '{}' sets both message and message_file (exactly one required)",
                     self.name
                 )));
             }
             (None, None) => {
-                return Err(PkgError::Invalid(format!(
+                return Err(ExtError::Invalid(format!(
                     "cron entry '{}' sets neither message nor message_file (exactly one required)",
                     self.name
                 )));
@@ -168,33 +168,33 @@ impl CronEntry {
             // 越界拒绝：join 后必须仍在包根之下（防 ../../ 读任意文件）。
             let abs = pkg_dir.join(rel);
             let canonical = abs.canonicalize().map_err(|e| {
-                PkgError::Invalid(format!(
+                ExtError::Invalid(format!(
                     "cron entry '{}': message_file '{rel}': {e}",
                     self.name
                 ))
             })?;
             let root = pkg_dir
                 .canonicalize()
-                .map_err(|e| PkgError::Invalid(format!("canonicalize package dir: {e}")))?;
+                .map_err(|e| ExtError::Invalid(format!("canonicalize package dir: {e}")))?;
             if !canonical.starts_with(&root) {
-                return Err(PkgError::Invalid(format!(
+                return Err(ExtError::Invalid(format!(
                     "cron entry '{}': message_file '{rel}' escapes the package",
                     self.name
                 )));
             }
             // 常规文件 + 大小上限：FIFO 会挂死 daemon 的 RPC 路径；无界
             // 文件会全量进内存与 cron 表。
-            require_regular_file(&canonical).map_err(|_| {
-                PkgError::Invalid(format!(
-                    "cron entry '{}': message_file '{rel}' is not a regular file",
+            require_regular_file(&canonical).map_err(|e| {
+                ExtError::Invalid(format!(
+                    "cron entry '{}': message_file '{rel}': {e}",
                     self.name
                 ))
             })?;
             let size = std::fs::metadata(&canonical)
-                .map_err(|e| PkgError::Invalid(format!("stat message_file: {e}")))?
+                .map_err(|e| ExtError::Invalid(format!("stat message_file: {e}")))?
                 .len();
             if size > MESSAGE_MAX_BYTES as u64 {
-                return Err(PkgError::Invalid(format!(
+                return Err(ExtError::Invalid(format!(
                     "cron entry '{}': message_file '{rel}' too large ({size} > {MESSAGE_MAX_BYTES} bytes)",
                     self.name
                 )));
@@ -202,7 +202,7 @@ impl CronEntry {
         }
         if let Some(text) = &self.message {
             if text.len() > MESSAGE_MAX_BYTES {
-                return Err(PkgError::Invalid(format!(
+                return Err(ExtError::Invalid(format!(
                     "cron entry '{}': message too long ({} > {MESSAGE_MAX_BYTES} bytes)",
                     self.name,
                     text.len()
@@ -212,12 +212,12 @@ impl CronEntry {
         // schedule 必须有未来触发点（与 cron 子系统 create 路径同一校验，
         // 在 install 时早失败，而不是收养到一半才报错）。
         crate::cron::next_run_from_schedule(&self.schedule)
-            .map_err(|e| PkgError::Invalid(format!("cron entry '{}': schedule: {e}", self.name)))?;
+            .map_err(|e| ExtError::Invalid(format!("cron entry '{}': schedule: {e}", self.name)))?;
         Ok(())
     }
 
     /// 解析消息文本（内联或包内文件），install/展示用。
-    pub fn resolve_message(&self, pkg_dir: &Path) -> Result<String, PkgError> {
+    pub fn resolve_message(&self, pkg_dir: &Path) -> Result<String, ExtError> {
         match (&self.message, &self.message_file) {
             (Some(text), _) => Ok(text.clone()),
             (None, Some(rel)) => {
@@ -231,18 +231,18 @@ impl CronEntry {
                 file.by_ref()
                     .take(MESSAGE_MAX_BYTES as u64 + 1)
                     .read_to_end(&mut buf)
-                    .map_err(|e| PkgError::Invalid(format!("read {}: {e}", path.display())))?;
+                    .map_err(|e| ExtError::Invalid(format!("read {}: {e}", path.display())))?;
                 if buf.len() > MESSAGE_MAX_BYTES {
-                    return Err(PkgError::Invalid(format!(
+                    return Err(ExtError::Invalid(format!(
                         "cron entry '{}': message_file grew beyond {MESSAGE_MAX_BYTES} bytes",
                         self.name
                     )));
                 }
                 String::from_utf8(buf).map_err(|e| {
-                    PkgError::Invalid(format!("message_file {} not UTF-8: {e}", path.display()))
+                    ExtError::Invalid(format!("message_file {} not UTF-8: {e}", path.display()))
                 })
             }
-            (None, None) => Err(PkgError::Invalid(format!(
+            (None, None) => Err(ExtError::Invalid(format!(
                 "cron entry '{}': no message",
                 self.name
             ))),

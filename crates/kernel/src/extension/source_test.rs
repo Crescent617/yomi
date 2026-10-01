@@ -1,18 +1,18 @@
 //! source 解析测试（取货走真网，单测只覆盖解析）。
 
-use super::{fetch_source, parse_source, PkgSource};
+use super::{fetch_source, parse_source, ExtSource};
 
 #[test]
 fn local_dir_wins() {
     let dir = tempfile::tempdir().unwrap();
     let src = parse_source(dir.path().to_str().unwrap()).unwrap();
     match src {
-        PkgSource::Local(p) => assert_eq!(p, dir.path().canonicalize().unwrap()),
-        other @ PkgSource::Git { .. } => panic!("expected Local, got {other:?}"),
+        ExtSource::Local(p) => assert_eq!(p, dir.path().canonicalize().unwrap()),
+        other @ ExtSource::Git { .. } => panic!("expected Local, got {other:?}"),
     }
     // 相对路径存在的目录也算 Local（测试 cwd 是 crate 根，src/ 必在）。
     let src = parse_source("src").unwrap();
-    assert!(matches!(src, PkgSource::Local(_)));
+    assert!(matches!(src, ExtSource::Local(_)));
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn github_shorthand() {
     for (input, url, subdir, ref_) in cases {
         let src = parse_source(input).unwrap();
         match src {
-            PkgSource::Git {
+            ExtSource::Git {
                 url: u,
                 subdir: d,
                 ref_: r,
@@ -67,7 +67,7 @@ fn github_shorthand() {
                 assert_eq!(d.as_deref(), subdir, "{input}");
                 assert_eq!(r.as_deref(), ref_, "{input}");
             }
-            other @ PkgSource::Local(_) => panic!("{input}: expected Git, got {other:?}"),
+            other @ ExtSource::Local(_) => panic!("{input}: expected Git, got {other:?}"),
         }
     }
 }
@@ -95,4 +95,26 @@ async fn local_source_fetches_without_temp() {
     assert!(tmp.is_none());
     assert!(rev.is_none());
     assert_eq!(root, dir.path().canonicalize().unwrap());
+}
+
+#[test]
+fn ref_with_slash_is_a_branch_name() {
+    // feature/x、hotfix/y 这类带斜杠分支是 git 常态，@ 后全部作 ref。
+    let src = parse_source("owner/repo@feature/x").unwrap();
+    match src {
+        ExtSource::Git { subdir, ref_, .. } => {
+            assert_eq!(subdir, None);
+            assert_eq!(ref_.as_deref(), Some("feature/x"));
+        }
+        other @ ExtSource::Local(_) => panic!("expected Git, got {other:?}"),
+    }
+    // 带子目录 + 斜杠分支的组合。
+    let src = parse_source("owner/repo/ext/demo@hotfix/y-2").unwrap();
+    match src {
+        ExtSource::Git { subdir, ref_, .. } => {
+            assert_eq!(subdir.as_deref(), Some("ext/demo"));
+            assert_eq!(ref_.as_deref(), Some("hotfix/y-2"));
+        }
+        other @ ExtSource::Local(_) => panic!("expected Git, got {other:?}"),
+    }
 }

@@ -2222,11 +2222,8 @@ impl Kernel {
             .as_ref()
             .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
         let data_dir = self.data_dir().await;
-        let src = crate::extension::parse_source(&source)
-            .map_err(|e| crate::types::KernelError::storage(e.to_string()))?;
-        let (_tmp, root, rev) = crate::extension::fetch_source(&src)
-            .await
-            .map_err(|e| crate::types::KernelError::storage(e.to_string()))?;
+        let src = crate::extension::parse_source(&source)?;
+        let (_tmp, root, rev) = crate::extension::fetch_source(&src).await?;
         // 只 parse 一次：name/已装查询/物化共用同一 manifest（TOCTOU）。
         let manifest = crate::extension::parse_manifest(&root)?;
         // 已装目录（带 ext.lock）决定可否原位刷新；
@@ -2257,7 +2254,7 @@ impl Kernel {
                 // cron 收养可能已部分完成：让 scheduler 立即回查 store，
                 // 并给用户可行动的提示（重跑 install 收敛）。
                 self.notify_cron_scheduler();
-                return Err(crate::types::KernelError::storage(format!(
+                return Err(crate::types::KernelError::Extension(format!(
                     "{e} (partial install possible: re-run `yomi extension install` to converge)"
                 )));
             }
@@ -2281,6 +2278,9 @@ impl Kernel {
                 Some(meta) => match crate::extension::package_hash(&installed.dir) {
                     Ok(h) if h == meta.content_hash => "ok",
                     Ok(_) => "modified",
+                    // 区分"读不了"与"内容超限"：用户往包里丢了个大文件，
+                    // 该看到 oversized 而不是像权限/损坏一样的 unreadable。
+                    Err(e) if e.to_string().contains("exceeds") => "oversized",
                     Err(_) => "unreadable",
                 },
             };

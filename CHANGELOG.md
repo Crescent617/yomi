@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `yomi rpc preview_system_prompt`：预览指定工作目录（缺省 daemon 默认 workspace）下新会话将获得的完整 system prompt——装扩展后验收 snippet 拼装不必开新会话问模型。注意 wire 协议升至 33，旧版本 CLI 连新 daemon 会在握手处报版本不匹配。
+
 ## [0.10.55] - 2026-10-01
 
 ### Added

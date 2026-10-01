@@ -108,6 +108,7 @@ cron 按 `ext:<名>:` 前缀清扫 → 摘 hooks/bin 挂载（**仅当** symlink
 | `modified` | lock 在但 hash 对不上（本地手改过包内容） |
 | `foreign` | 目录在但没有 ext.lock（用户手放，不归包系统管） |
 | `unreadable` | ext.toml 读不了/解析失败 |
+| `oversized` | 包内出现超过 1MB 的文件（hash 拒绝计算；多半是误放大文件进包目录） |
 
 ## snippet 拼装
 
@@ -135,8 +136,12 @@ cron 按 `ext:<名>:` 前缀清扫 → 摘 hooks/bin 挂载（**仅当** symlink
 | `mount conflict: ...` | 槽位被用户文件或其他扩展占用。挪走冲突项后重跑 install（幂等）。 |
 | install 报槽位 occupied | `extensions/<名>` 有目录但无 ext.lock（用户手放或上次装失败残留）。确认无用后手动删目录，或换个包名。 |
 | `extension list` 显示 `modified` | 装完手改过包内容。属预期则忽略；想回到安装态 remove + install。 |
+| `extension list` 显示 `foreign` | 目录没有 ext.lock：用户手放或上次装失败残留。确认无用后手动删目录，或换包名。 |
+| `extension list` 显示 `unreadable` | ext.toml 解析失败。按报错修；修不好 remove 后重装。 |
+| `extension list` 显示 `oversized` | 包目录混入了超 1MB 的文件。移走它，或 remove + install 重建 hash 基准。 |
 | install 成功但 cron 报 `exists, untouched` | ensure 语义：同名 job 已存在，未覆盖。要改内容用 `yomi cron update`，或 remove + install。 |
 | `invalid package: ...` | ext.toml 校验失败（名字规则、message 二选一、`../` 逃逸、schedule 无未来触发点、同名条目重复）。按报错逐条修。 |
+| 想看 snippet 拼装结果 | `yomi rpc preview_system_prompt`（可传 working_dir）返回将拼进新会话的完整 SP，grep `Extension: <名>` 即见本扩展的段。 |
 | snippet 改了没生效 | 扫描有 60s 缓存（同 skills）：等约一分钟、或新开会话 spawn 时生效。 |
 | bin 命令 not found | 确认文件有执行位（install 时无执行位会 warn 但仍挂载）；已开会话的下一条命令即可解析——PATH 每次 spawn 子进程时注入。 |
 | remove 报槽位留下 | 槽位内容被换过（指向判定保护用户数据），手动检查后再决定。 |

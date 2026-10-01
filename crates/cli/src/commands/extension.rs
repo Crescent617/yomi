@@ -80,16 +80,27 @@ pub async fn list(_global: &GlobalArgs) -> Result<()> {
                 )
             })
             .unwrap_or_default();
+        let desc = truncate_chars(row["description"].as_str().unwrap_or(""), 24);
         table.add_row(vec![
             row["name"].as_str().unwrap_or("?"),
             row["version"].as_str().unwrap_or("?"),
             row["health"].as_str().unwrap_or("?"),
+            &desc,
             row["source"].as_str().unwrap_or("?"),
             &resources,
         ]);
     }
     println!("{table}");
     Ok(())
+}
+
+/// 按字符截断（列表列宽控制；截断加 … 标记）。
+fn truncate_chars(s: &str, max: usize) -> String {
+    let mut out: String = s.chars().take(max).collect();
+    if s.chars().count() > max {
+        out.push('…');
+    }
+    out
 }
 
 /// 卸载：cron 前缀清扫 + 摘挂载（指向判定）+ 删包 + 删记录。
@@ -100,14 +111,26 @@ pub async fn remove(_global: &GlobalArgs, name: String) -> Result<()> {
         .await
         .context("Failed to remove extension")?;
     // 全空且记录本就不在 = 从未装过/名字拼错——说清，不给假成功。
+    // mounts_left 单独非空也算"动过"：那是保护用户数据的现场报告，
+    // 不能吞进 "not installed"（槽位被换过但扩展没装过 = 不可能，
+    // 能走到这一定是装过又卸了一半的现场）。
     let nothing_done = report.cron_removed.is_empty()
         && report.mounts_removed.is_empty()
+        && report.mounts_left.is_empty()
         && !report.ext_dir_removed;
     if nothing_done {
         println!("Extension {name} is not installed (nothing to remove)");
         return Ok(());
     }
-    println!("Removed extension {name}");
+    let partial = !report.ext_dir_removed;
+    println!(
+        "Removed extension {name}{}",
+        if partial {
+            " (partial: see left items)"
+        } else {
+            ""
+        }
+    );
     for c in &report.cron_removed {
         println!("  cron {c} deleted");
     }

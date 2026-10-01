@@ -335,8 +335,9 @@ impl<'a> SystemPromptBuilder<'a> {
 
         // Extension package snippets: installed conventions (e.g. the
         // memory system's rules) injected verbatim, extension name as the
-        // section title. Positioned after project memory, before the
-        // skills index — conventions precede the capability list.
+        // section title. Positioned after project memory — conventions
+        // precede the capability list (skills index comes later, after
+        // the # Memory pointer section).
         // Zero cost when no extension ships snippets (existence gated).
         if let Some(dir) = self.data_dir {
             // TTL 缓存 + 并发单飞（对齐 skills 的 SkillLoader）；TTL 即

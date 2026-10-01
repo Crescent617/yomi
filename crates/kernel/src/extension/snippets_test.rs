@@ -63,3 +63,24 @@ async fn oversize_snippet_truncated() {
     assert!(got[0].content.ends_with("(truncated)"));
     assert!(got[0].content.len() < 20 * 1024);
 }
+
+#[test]
+fn truncate_utf8_splits_at_char_boundary() {
+    // 多字节字符恰跨截断点：回退到 char 边界，不产出非法 UTF-8。
+    // 每个「界」3 字节：max=4 → 截在第 2 个字（界=字节 3..6）内部，
+    // 应回退到第 1 个字之后。
+    let s = "界界界界";
+    let out = super::truncate_utf8(s.as_bytes(), 4);
+    assert!(out.starts_with('界'), "{out}");
+    assert!(out.contains("(truncated)"), "{out}");
+    assert!(std::str::from_utf8(out.as_bytes()).is_ok());
+    // max 恰好落在 lead byte 上：整个字被排除，不悬空。
+    let out2 = super::truncate_utf8(s.as_bytes(), 3);
+    assert_eq!(out2.chars().next().unwrap(), '界');
+    assert_eq!(out2.chars().count(), 2 + 13); // 2 字 + "\n\n(truncated)"（13 字符）
+}
+
+#[test]
+fn truncate_utf8_ascii_fast_path() {
+    assert_eq!(super::truncate_utf8(b"short", 16), "short");
+}

@@ -183,32 +183,27 @@ pub async fn run(global: &GlobalArgs) -> Result<()> {
         // 恰是"装一次不再看"的包——doctor 替用户盯。
         match client.extension_list().await {
             Ok(exts) => {
-                let broken: Vec<&str> = exts
+                let unhealthy: Vec<String> = exts
                     .iter()
                     .filter(|e| e["health"].as_str() != Some("ok"))
-                    .filter_map(|e| e["name"].as_str())
+                    .filter_map(|e| match (e["name"].as_str(), e["health"].as_str()) {
+                        (Some(n), Some(h)) => Some(format!("{n} ({h})")),
+                        _ => None,
+                    })
                     .collect();
-                if broken.is_empty() {
+                if unhealthy.is_empty() {
                     checks.push(check(
                         Level::Ok,
                         "extensions",
                         format!("{} installed", exts.len()),
                     ));
                 } else {
-                    let detail: Vec<String> = exts
-                        .iter()
-                        .filter(|e| e["health"].as_str() != Some("ok"))
-                        .filter_map(|e| match (e["name"].as_str(), e["health"].as_str()) {
-                            (Some(n), Some(h)) => Some(format!("{n} ({h})")),
-                            _ => None,
-                        })
-                        .collect();
                     checks.push(check(
                         Level::Warn,
                         "extensions",
                         format!(
                             "unhealthy: {} (see `yomi doc extension` 排障表)",
-                            detail.join(", ")
+                            unhealthy.join(", ")
                         ),
                     ));
                 }

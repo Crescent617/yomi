@@ -27,7 +27,7 @@
 | `storage` | `src/storage/` | 统一存储层：`StorageSet` 初始化所有后端；SQLite（session/usage/cron/project/channel）+ JSONL（message/todo/file_state/checkpoint） |
 | `comms` | `src/comms/` | `PubSub` 事件总线（支持按 key 过滤订阅）、`InputBus`/`Mailbox` 输入通道、`EventSink` 事件接收器 |
 | `event` | `src/event.rs` | 核心事件枚举：`Event`（`User`/`Agent`/`Model`/`Tool`/`System`/`Internal`）及 `ControlCommand` |
-| `wire` | `src/wire.rs` | IPC 序列化协议（JSON），定义 `RequestMethod`/`ResponseBody`/`WireMsg`，当前协议版本 `WIRE_PROTOCOL_VERSION = 6` |
+| `wire` | `src/wire.rs` | IPC 序列化协议（JSON），定义 `RequestMethod`/`ResponseBody`/`WireMsg`，当前协议版本 `WIRE_PROTOCOL_VERSION = 33`（版本号以 `crates/kernel/src/wire/mod.rs` 常量为准，本表不随版本维护） |
 | `server` | `src/server/mod.rs` | Daemon 服务端：`KernelServer` 通过 Unix socket 监听客户端连接，管理 cron 调度器和 channel 生命周期 |
 | `client` | `src/client/mod.rs` | 客户端：`KernelApi` trait + 基于 socket 的 IPC 实现，含心跳、重连、RPC 超时（30s） |
 | `app` | `src/app/` | `Kernel`（会话/项目管理的对外 API）和 `Conductor`（Agent 生命周期唯一管理者） |

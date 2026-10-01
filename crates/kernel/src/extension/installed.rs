@@ -143,6 +143,9 @@ pub async fn list_installed(data_dir: &Path) -> Vec<InstalledExt> {
             continue;
         }
         if tokio::fs::metadata(entry.path()).await.is_err() {
+            // 破损 symlink（如手工挪走源）：跳过但留痕——doctor 的
+            // 健康检查至少能在日志里追到这个目录。
+            tracing::warn!(dir = %entry.path().display(), "installed extension unreadable (broken symlink?); skipped");
             continue;
         }
         dirs.push(entry.path());

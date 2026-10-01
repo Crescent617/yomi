@@ -43,7 +43,10 @@ export YOMI_DATA_DIR="$DATA"
 export YOMI_SOCKET="unix://$SOCK"
 
 nohup "$YOMI" daemon start >"$E2E/daemon.log" 2>&1 &
-for _ in $(seq 1 30); do
+# 等待上限放宽到 120s：macOS 对全新 debug 二进制逐个做安全评估
+# （syspolicyd，实测每文件数百毫秒且系统级串行），刚 cargo build 完
+# 的首跑可能远超旧的 30s 上限（2026-10-01 实测偶发失败、重跑即过）。
+for _ in $(seq 1 120); do
   YOMI_SOCKET="unix://$SOCK" "$YOMI" daemon status >/dev/null 2>&1 && break
   sleep 1
 done

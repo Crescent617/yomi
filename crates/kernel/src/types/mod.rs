@@ -894,6 +894,10 @@ pub enum KernelError {
     #[error("Skill error: {0}")]
     Skill(String),
 
+    /// 扩展包错误（消息已自描述，透明透传不加重前缀）。
+    #[error("{0}")]
+    Extension(String),
+
     /// Cancellation error
     #[error("Cancelled: {0}")]
     Cancelled(String),

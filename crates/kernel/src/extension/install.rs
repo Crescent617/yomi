@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::installed::{InstalledExt, Resources};
-use super::{cron_name, PkgError, BIN_DIR, DIR_NAME, HOOKS_DIR, LOCK_FILE, SNIPPETS_DIR};
+use super::{cron_name, ExtError, BIN_DIR, DIR_NAME, HOOKS_DIR, LOCK_FILE, SNIPPETS_DIR};
 use crate::cron::{CronAction, CronSessionTemplate, CronStore};
 use crate::permission::Level;
 
@@ -84,12 +84,12 @@ pub async fn install(
     allow_replace: bool,
     // 来源溯源：写进已装目录的 ext.lock。
     provenance: &super::Provenance,
-) -> Result<InstallReport, PkgError> {
+) -> Result<InstallReport, ExtError> {
     let source = source
         .canonicalize()
-        .map_err(|e| PkgError::Invalid(format!("package dir {}: {e}", source.display())))?;
+        .map_err(|e| ExtError::Invalid(format!("package dir {}: {e}", source.display())))?;
     if !source.is_dir() {
-        return Err(PkgError::Invalid(format!(
+        return Err(ExtError::Invalid(format!(
             "package dir {} is not a directory",
             source.display()
         )));
@@ -152,11 +152,11 @@ pub async fn install(
         });
         let partial = resources_from_report(&[], &hooks, &bins, &[]);
         if let Err(e) = super::write_install_meta(&ext_dir, &partial_hash, provenance, &partial)
-            .map_err(PkgError::Invalid)
+            .map_err(ExtError::Invalid)
         {
             tracing::warn!(ext = %name, "failed to record partial install: {e}");
         }
-        return Err(PkgError::Conflict(conflicts.join("; ")));
+        return Err(ExtError::Conflict(conflicts.join("; ")));
     }
 
     // cron 收养（ensure：缺才建，已存在不动）。
@@ -194,7 +194,7 @@ pub async fn install(
     // ext.lock（hash 之后写：lock 是我们的、每次重装重写，hash 跳过它）。
     let resources = resources_from_report(&cron, &hooks, &bins, &snippets);
     super::write_install_meta(&ext_dir, &content_hash, provenance, &resources)
-        .map_err(PkgError::Invalid)?;
+        .map_err(ExtError::Invalid)?;
 
     Ok(InstallReport {
         name,
@@ -214,11 +214,11 @@ const HASH_FILE_MAX_BYTES: u64 = 1024 * 1024;
 
 /// 包内容 hash（blake3）：install 落指纹与 list/doctor 的本地改动侦测
 /// 共用同一算法。
-pub fn package_hash(dir: &Path) -> Result<String, PkgError> {
+pub fn package_hash(dir: &Path) -> Result<String, ExtError> {
     hash_package(dir)
 }
 
-fn hash_package(dir: &Path) -> Result<String, PkgError> {
+fn hash_package(dir: &Path) -> Result<String, ExtError> {
     let mut hasher = blake3::Hasher::new();
     let mut files: Vec<PathBuf> = Vec::new();
     collect_files(dir, &mut files)?;
@@ -240,7 +240,7 @@ fn hash_package(dir: &Path) -> Result<String, PkgError> {
         hasher.update(&[0]);
         let mut buf = read_bounded(&file, rel)?;
         if buf.len() as u64 > HASH_FILE_MAX_BYTES {
-            return Err(PkgError::Invalid(format!(
+            return Err(ExtError::Invalid(format!(
                 "package file {} exceeds {HASH_FILE_MAX_BYTES} bytes",
                 rel.display()
             )));
@@ -255,10 +255,10 @@ fn hash_package(dir: &Path) -> Result<String, PkgError> {
 /// 元数据检查与读之间有竞态窗（装到一半文件被换成超大文件），take
 /// 保证内存占用有界。单文件上限 1MB——包是"约定 + 小脚本"的载体，
 /// 藏超大文件按恶意/损坏处理，install 直接拒。
-fn read_bounded(file: &Path, rel: &Path) -> Result<Vec<u8>, PkgError> {
+fn read_bounded(file: &Path, rel: &Path) -> Result<Vec<u8>, ExtError> {
     let f = std::fs::File::open(file)?;
     if f.metadata()?.len() > HASH_FILE_MAX_BYTES {
-        return Err(PkgError::Invalid(format!(
+        return Err(ExtError::Invalid(format!(
             "package file {} exceeds {HASH_FILE_MAX_BYTES} bytes",
             rel.display()
         )));
@@ -267,7 +267,7 @@ fn read_bounded(file: &Path, rel: &Path) -> Result<Vec<u8>, PkgError> {
     let mut raw = Vec::new();
     std::io::Read::read_to_end(&mut capped, &mut raw)?;
     if raw.len() as u64 > HASH_FILE_MAX_BYTES {
-        return Err(PkgError::Invalid(format!(
+        return Err(ExtError::Invalid(format!(
             "package file {} exceeds {HASH_FILE_MAX_BYTES} bytes",
             rel.display()
         )));
@@ -275,7 +275,7 @@ fn read_bounded(file: &Path, rel: &Path) -> Result<Vec<u8>, PkgError> {
     Ok(raw)
 }
 
-fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), PkgError> {
+fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), ExtError> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -313,11 +313,11 @@ pub async fn remove(
     name: &str,
     cron_store: &Arc<dyn CronStore>,
     installed: Option<&InstalledExt>,
-) -> Result<RemoveReport, PkgError> {
+) -> Result<RemoveReport, ExtError> {
     // 名字与 install 同一规则校验：`../` 之类的穿越在此被硬拒（否则
     // join 后 remove_dir_all 会删到数据目录外）。
     if !super::manifest::valid_ext_name(name) {
-        return Err(PkgError::Invalid(format!(
+        return Err(ExtError::Invalid(format!(
             "extension name '{name}' invalid: letter first, [a-z0-9-] only, ≤32 chars"
         )));
     }
@@ -333,7 +333,7 @@ async fn remove_inner(
     name: &str,
     cron_store: &Arc<dyn CronStore>,
     installed: Option<&InstalledExt>,
-) -> Result<RemoveReport, PkgError> {
+) -> Result<RemoveReport, ExtError> {
     let ext_dir = data_dir.join(DIR_NAME).join(name);
 
     // cron：按前缀清扫（记录里的名单是提示，前缀才是真相——防止记录
@@ -380,12 +380,12 @@ async fn remove_inner(
                     tokio::fs::remove_file(&link).await?;
                     mounts_removed.push(rel);
                 } else {
-                    tracing::warn!(link = %link.display(), target = %cur.display(), "mount slot repointed; leaving it");
+                    tracing::warn!(ext = %name, link = %link.display(), target = %cur.display(), "mount slot repointed; leaving it");
                     mounts_left.push(rel);
                 }
             }
             Ok(_) => {
-                tracing::warn!(link = %link.display(), "mount slot replaced with a non-symlink; leaving it");
+                tracing::warn!(ext = %name, link = %link.display(), "mount slot replaced with a non-symlink; leaving it");
                 mounts_left.push(rel);
             }
         }
@@ -426,7 +426,7 @@ async fn place_or_refresh(
     ext_dir: &Path,
     source: &Path,
     allow_replace: bool,
-) -> Result<(), PkgError> {
+) -> Result<(), ExtError> {
     match tokio::fs::symlink_metadata(ext_dir).await {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             if let Some(parent) = ext_dir.parent() {
@@ -436,7 +436,7 @@ async fn place_or_refresh(
         }
         Err(e) => Err(e.into()),
         Ok(_) if allow_replace => copy_refresh(source, ext_dir).await,
-        Ok(_) => Err(PkgError::Conflict(format!(
+        Ok(_) => Err(ExtError::Conflict(format!(
             "extensions slot {} is occupied by something that is not this install (remove it first)",
             ext_dir.display()
         ))),
@@ -448,7 +448,7 @@ async fn place_or_refresh(
 /// 临时目录名以 `.` 开头——hook/tool 扫描器跳过隐藏项，不会被半成品
 /// 内容看见。swap 本身的微小缺失窗由扫描器对 broken symlink 的
 /// 跳过语义兜住（fail-open）。
-async fn copy_refresh(source: &Path, ext_dir: &Path) -> Result<(), PkgError> {
+async fn copy_refresh(source: &Path, ext_dir: &Path) -> Result<(), ExtError> {
     let tmp = ext_dir.parent().unwrap_or(ext_dir).join(format!(
         ".{}.tmp",
         ext_dir.file_name().unwrap_or_default().to_string_lossy()
@@ -491,7 +491,7 @@ async fn mount(
     target: &Path,
     is_dir: bool,
     conflicts: &mut Vec<String>,
-) -> Result<MountStatus, PkgError> {
+) -> Result<MountStatus, ExtError> {
     if let Some(parent) = link.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
@@ -520,7 +520,7 @@ async fn evaluate_existing(
     link: &Path,
     target: &Path,
     conflicts: &mut Vec<String>,
-) -> Result<MountStatus, PkgError> {
+) -> Result<MountStatus, ExtError> {
     match tokio::fs::symlink_metadata(link).await {
         Ok(md) if md.file_type().is_symlink() => {
             let cur = tokio::fs::read_link(link).await?;
@@ -611,7 +611,7 @@ async fn try_scan_bin_rels(pkg_dir: &Path) -> std::io::Result<Vec<String>> {
             continue;
         }
         if !entry.file_type().await?.is_file() {
-            tracing::warn!(bin = %name, "bin entry is not a flat file; skipped (multi-file tools are a tools/ resource)");
+            tracing::warn!(ext = %pkg_dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), bin = %name, "bin entry is not a flat file; skipped (multi-file tools are a tools/ resource)");
             continue;
         }
         out.push(format!("{BIN_DIR}/{name}"));
@@ -669,7 +669,7 @@ async fn os_symlink(target: &Path, link: &Path, is_dir: bool) -> std::io::Result
 }
 
 /// 实体复制包目录：保留执行位。
-async fn copy_dir(src: &Path, dst: &Path) -> Result<(), PkgError> {
+async fn copy_dir(src: &Path, dst: &Path) -> Result<(), ExtError> {
     tokio::fs::create_dir_all(dst).await?;
     let mut entries = tokio::fs::read_dir(src).await?;
     while let Some(entry) = entries.next_entry().await? {

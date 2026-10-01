@@ -31,7 +31,7 @@ pub use installed::{
 };
 pub use manifest::{parse_manifest, CronEntry, ExtManifest, ExtMeta};
 pub use snippets::{load_snippets, Snippet, SnippetLoader};
-pub use source::{fetch_source, parse_source, PkgSource};
+pub use source::{fetch_source, parse_source, ExtSource};
 
 /// 包内 manifest 文件名（作者手写，install 后原封不动）。
 pub const MANIFEST_FILE: &str = "ext.toml";
@@ -55,26 +55,33 @@ pub fn cron_name(ext: &str, entry: &str) -> String {
 
 /// 扩展包错误。
 #[derive(Debug, thiserror::Error)]
-pub enum PkgError {
+pub enum ExtError {
     /// manifest 非法（字段缺失/名字非法/message 二选一违规/路径越界/schedule 永不触发）。
     #[error("invalid package: {0}")]
     Invalid(String),
+    /// 取货失败（clone 超时/非零退出/spawn 失败/tempdir）。与 manifest
+    /// 非法区分：用户看到 fetch failed 去查网络与源仓，而不是改 ext.toml。
+    #[error("fetch failed: {0}")]
+    Fetch(String),
     /// I/O 失败（读包、建/摘 symlink、目录操作）。
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     /// cron 收养失败。
     #[error("cron: {0}")]
     Cron(#[from] crate::cron::CronError),
-    /// 安装记录读写失败（sqlite）。
-    #[error("storage: {0}")]
-    Storage(String),
     /// 挂载槽位被占（用户文件或其他扩展）。报全文，不静默跳过。
     #[error("mount conflict: {0}")]
     Conflict(String),
 }
 
-impl From<PkgError> for crate::types::KernelError {
-    fn from(e: PkgError) -> Self {
-        crate::types::KernelError::Storage(e.to_string())
+impl From<ExtError> for crate::types::KernelError {
+    fn from(e: ExtError) -> Self {
+        match e {
+            ExtError::Io(io) => crate::types::KernelError::Io(io.to_string()),
+            ExtError::Cron(c) => c.into(),
+            // 消息自身已可行动（"invalid package: …"/"fetch failed: …"/
+            // "mount conflict: …"），透明透传，不加误导前缀。
+            other => crate::types::KernelError::Extension(other.to_string()),
+        }
     }
 }
