@@ -240,7 +240,7 @@ fn hash_package(dir: &Path) -> Result<String, ExtError> {
         hasher.update(&[0]);
         let mut buf = read_bounded(&file, rel)?;
         if buf.len() as u64 > HASH_FILE_MAX_BYTES {
-            return Err(ExtError::Invalid(format!(
+            return Err(ExtError::Oversized(format!(
                 "package file {} exceeds {HASH_FILE_MAX_BYTES} bytes",
                 rel.display()
             )));
@@ -258,7 +258,7 @@ fn hash_package(dir: &Path) -> Result<String, ExtError> {
 fn read_bounded(file: &Path, rel: &Path) -> Result<Vec<u8>, ExtError> {
     let f = std::fs::File::open(file)?;
     if f.metadata()?.len() > HASH_FILE_MAX_BYTES {
-        return Err(ExtError::Invalid(format!(
+        return Err(ExtError::Oversized(format!(
             "package file {} exceeds {HASH_FILE_MAX_BYTES} bytes",
             rel.display()
         )));
@@ -267,7 +267,7 @@ fn read_bounded(file: &Path, rel: &Path) -> Result<Vec<u8>, ExtError> {
     let mut raw = Vec::new();
     std::io::Read::read_to_end(&mut capped, &mut raw)?;
     if raw.len() as u64 > HASH_FILE_MAX_BYTES {
-        return Err(ExtError::Invalid(format!(
+        return Err(ExtError::Oversized(format!(
             "package file {} exceeds {HASH_FILE_MAX_BYTES} bytes",
             rel.display()
         )));

@@ -2280,7 +2280,7 @@ impl Kernel {
                     Ok(_) => "modified",
                     // 区分"读不了"与"内容超限"：用户往包里丢了个大文件，
                     // 该看到 oversized 而不是像权限/损坏一样的 unreadable。
-                    Err(e) if e.to_string().contains("exceeds") => "oversized",
+                    Err(crate::extension::ExtError::Oversized(_)) => "oversized",
                     Err(_) => "unreadable",
                 },
             };

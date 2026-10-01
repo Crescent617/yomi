@@ -63,6 +63,10 @@ pub enum ExtError {
     /// 非法区分：用户看到 fetch failed 去查网络与源仓，而不是改 ext.toml。
     #[error("fetch failed: {0}")]
     Fetch(String),
+    /// 包内单文件超过 1MB 上限（hash 拒绝计算；list 据此报 oversized
+    /// 而非 unreadable）。结构化判别，不靠 Display 文本嗅探。
+    #[error("{0}")]
+    Oversized(String),
     /// I/O 失败（读包、建/摘 symlink、目录操作）。
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
