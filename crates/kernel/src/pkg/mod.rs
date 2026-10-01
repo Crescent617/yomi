@@ -17,15 +17,21 @@
 //!   与 list 展示；remove 记录缺失时退化到"扫包目录 + cron 前缀"。
 
 mod install;
+mod installed;
 mod manifest;
 mod snippets;
-mod store;
+mod source;
 
-pub(crate) use install::resources_from_report;
-pub use install::{install, remove, InstallReport, MountReport, MountStatus, RemoveReport};
+pub use install::{
+    install, package_hash, remove, InstallReport, MountReport, MountStatus, RemoveReport,
+};
+pub use installed::{
+    list_installed, read_installed, write_install_meta, InstallMeta, InstalledExt, Provenance,
+    Resources,
+};
 pub use manifest::{parse_manifest, CronEntry, ExtManifest, ExtMeta};
 pub use snippets::{load_snippets, Snippet, SnippetLoader};
-pub use store::{ExtInstall, ExtInstallStore, Resources, SqliteExtInstallStore};
+pub use source::{fetch_source, parse_source, PkgSource};
 
 /// 包内 manifest 文件名。
 pub const MANIFEST_FILE: &str = "ext.toml";

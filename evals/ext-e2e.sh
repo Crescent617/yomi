@@ -4,7 +4,9 @@
 # 隔离方式：独立 data_dir（独立 config）+ YOMI_SOCKET 指向独立 socket，
 # 与日常 daemon 完全并存。装一个带全资源（cron/hooks/bin/snippets）的
 # demo 包，逐项断言 install/list/remove 全链（CLI→wire→kernel→fs/sqlite），
-# 并用 cron shell job 验证 PATH 注入（不依赖模型调用）。
+# 并用 cron shell job 验证 PATH 注入（不依赖模型调用）。注册表是
+# extensions/<名>/ext.toml 的 [install] 段（npm package.json 玩法，
+# 不再有 sqlite ext_installs 表）。
 #
 # 用法：evals/ext-e2e.sh    （需 target/debug/yomi；约 1 分钟，无模型调用）
 
@@ -76,15 +78,19 @@ echo "e2e convention: always pass" > "$PKG/snippets/convention.md"
 # ── 2. install：报告 + 文件系统 + sqlite 三面对账 ──
 out=$("$YOMI" extension install "$PKG" 2>&1) || { echo "install failed: $out"; exit 2; }
 echo "$out" | grep -q "Installed extension e2e-demo" && ok "install report" || bad "install report" "$out"
-[ -L "$DATA/extensions/e2e-demo" ] && ok "extensions symlink" || bad "extensions symlink" "not a symlink"
+[ -d "$DATA/extensions/e2e-demo" ] && [ ! -L "$DATA/extensions/e2e-demo" ] && ok "extensions copy" || bad "extensions copy" "not a real dir"
+[ -f "$DATA/extensions/e2e-demo/bin/e2e-recall" ] && ok "bin copied into ext dir" || bad "bin copied into ext dir" "missing"
 [ -L "$DATA/hooks/pre_tool_use/90-e2e-guard" ] && ok "hook mounted" || bad "hook mounted" "missing"
 [ -L "$DATA/bin/e2e-recall" ] && ok "bin mounted" || bad "bin mounted" "missing"
 rows=$(sqlite3 "$DB" "SELECT COUNT(*) FROM cron_jobs WHERE name LIKE 'ext:e2e-demo:%'")
 check "cron adopted (2 jobs)" "2" "$rows"
 content=$(sqlite3 "$DB" "SELECT action FROM cron_jobs WHERE name='ext:e2e-demo:tick'")
 echo "$content" | grep -q "tick via file" && ok "cron message from file" || bad "cron message from file" "$content"
-rec=$(sqlite3 "$DB" "SELECT COUNT(*) FROM ext_installs WHERE name='e2e-demo' AND mode='symlink'")
-check "install record written" "1" "$rec"
+# [install] 段：来源、hash、资源清单都落盘（注册表即文件系统）。
+inst="$DATA/extensions/e2e-demo/ext.toml"
+grep -q '^\[install\]' "$inst" && ok "install section present" || bad "install section present" "missing"
+grep -q "^source = " "$inst" && ok "provenance recorded" || bad "provenance recorded" "missing"
+grep -q '^content_hash = "[0-9a-f]\{64\}"' "$inst" && ok "content hash recorded" || bad "content hash recorded" "missing"
 
 # 幂等重跑
 out=$("$YOMI" extension install "$PKG" 2>&1)
@@ -92,9 +98,10 @@ echo "$out" | grep -q "exists, untouched" && ok "reinstall idempotent" || bad "r
 rows=$(sqlite3 "$DB" "SELECT COUNT(*) FROM cron_jobs WHERE name LIKE 'ext:e2e-demo:%'")
 check "reinstall no duplicate cron" "2" "$rows"
 
-# ── 3. list：记录 + health ──
+# ── 3. list：health 必须是 ok（hash 比对真正生效，不是子串误配）──
 out=$("$YOMI" extension list)
-echo "$out" | grep -q "e2e-demo" && echo "$out" | grep -q "ok" && ok "extension list" || bad "extension list" "$out"
+health=$(echo "$out" | awk '$1 == "e2e-demo" {print $3}')
+check "extension list health ok" "ok" "$health"
 
 # ── 4. PATH 注入：cron shell job 触发，子进程找 bin 命令 ──
 "$YOMI" cron create --name e2e-pathprobe --schedule "0 0 1 1 *" --command "e2e-recall > $E2E/path-probe.txt" >/dev/null
@@ -113,8 +120,7 @@ echo "$out" | grep -q "Removed extension e2e-demo" && ok "remove report" || bad 
 [ ! -e "$DATA/extensions/e2e-demo" ] && ok "extensions dir removed" || bad "extensions dir removed" "still there"
 rows=$(sqlite3 "$DB" "SELECT COUNT(*) FROM cron_jobs WHERE name LIKE 'ext:e2e-demo:%'")
 check "cron swept" "0" "$rows"
-rec=$(sqlite3 "$DB" "SELECT COUNT(*) FROM ext_installs WHERE name='e2e-demo'")
-check "record deleted" "0" "$rec"
+[ ! -f "$inst" ] && ok "install section gone with dir" || bad "install section gone with dir" "still there"
 
 # 槽位保护：用户文件占 bin 槽位时 install 拒绝且不覆盖
 mkdir -p "$DATA/bin"

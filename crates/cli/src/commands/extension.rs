@@ -12,14 +12,20 @@ async fn connect() -> Result<kernel::client::RemoteKernel> {
     crate::daemon::connect_strict().await
 }
 
-/// 安装：收编 + 挂载 + cron 收养，逐项报告 created/linked/already。
-pub async fn install(_global: &GlobalArgs, path: String, copy: bool) -> Result<()> {
+/// 安装：取货（clone/本地）+ 复制 + 挂载 + cron 收养，逐项报告。
+/// `source` 是 GitHub 简写/URL 或本地目录。
+pub async fn install(_global: &GlobalArgs, source: String) -> Result<()> {
     let kernel = connect().await?;
     let report: kernel::pkg::InstallReport = kernel
-        .extension_install(path, copy)
+        .extension_install(source)
         .await
         .context("Failed to install extension")?;
-    println!("Installed extension {} v{}", report.name, report.version);
+    println!(
+        "Installed extension {} v{} (hash {})",
+        report.name,
+        report.version,
+        &report.content_hash[..8.min(report.content_hash.len())]
+    );
     for c in &report.cron {
         println!(
             "  cron {} ({})",
@@ -96,8 +102,7 @@ pub async fn remove(_global: &GlobalArgs, name: String) -> Result<()> {
     // 全空且记录本就不在 = 从未装过/名字拼错——说清，不给假成功。
     let nothing_done = report.cron_removed.is_empty()
         && report.mounts_removed.is_empty()
-        && !report.ext_dir_removed
-        && !report.record_deleted;
+        && !report.ext_dir_removed;
     if nothing_done {
         println!("Extension {name} is not installed (nothing to remove)");
         return Ok(());

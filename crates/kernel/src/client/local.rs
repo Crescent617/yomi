@@ -415,12 +415,8 @@ impl KernelApi for Kernel {
         Self::trigger_cron_job(self, id).await
     }
 
-    async fn extension_install(
-        &self,
-        path: String,
-        copy: bool,
-    ) -> Result<crate::pkg::InstallReport> {
-        Self::extension_install(self, path, copy).await
+    async fn extension_install(&self, source: String) -> Result<crate::pkg::InstallReport> {
+        Self::extension_install(self, source).await
     }
 
     async fn extension_list(&self) -> Result<Vec<serde_json::Value>> {

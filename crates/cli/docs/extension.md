@@ -6,6 +6,11 @@ snippets）作为**一个东西**安装与卸载。设计全文见
 撤离方式，落地后各资源受各自契约管辖（执行位开关、cron ensure、
 snippet 快照拼装）。
 
+安装源默认是 GitHub（同 nvim 插件 / npx skills 的玩法）：
+`owner/repo[/子目录][@ref]` 或 `https://github.com/...`；本地目录只
+用于开发。install 一律实体复制进 `extensions/<名>`——源仓之后怎么
+变都不影响已装内容，重装才是更新。
+
 **快速体验**（仓库自带示例包）：
 
 ```bash
@@ -51,48 +56,65 @@ manifest 内相对路径不得越出包根（`../` 逃逸在 install 时拒绝�
 ## 命令
 
 ```bash
-yomi extension install <包根目录>   # 幂等；--copy 实体复制（默认 symlink）
-yomi extension list                # name/version/health/source/资源计数
-yomi extension remove <名>         # cron 前缀清扫 + 挂载指向判定回滚
+yomi extension install <来源>   # GitHub 简写/URL（默认玩法）或本地目录
+yomi extension list            # name/version/health/source/资源计数
+yomi extension remove <名>     # cron 前缀清扫 + 挂载指向判定回滚
 ```
 
 全部经 daemon（需 daemon 在跑），与 `yomi cron` 同轨道。
 
-## install 语义（幂等，可重放）
+## install 语义（取货 + 复制，重装即更新）
 
 `name` 与 install 同规则校验（字母开头 `[a-z0-9-]` ≤32）；remove 入口
 同样校验，`../` 穿越硬拒。
 
-1. 收编 `extensions/<名>`：空 → symlink 到源（`--copy` 实体复制）；
-   已指向同一源 → 通过；其他 → **拒绝**。
-2. 挂载 hooks/bin：逐槽位——空则建 symlink；已指向本包则跳过；
+1. 取货：GitHub 源 `git clone --depth 1`（`@ref` 为 40 位 sha 时全量
+   clone + checkout）到临时目录，支持 `owner/repo[/子目录][@ref]`；
+   本地目录直接用。clone 超时 180s，网络失败不脏任何槽位。
+2. 复制进 `extensions/<名>`：空槽位 → 实体复制；槽位已有且是上次
+   本包安装的（`ext.toml` 带 `[install]` 段证明）→ **原位刷新**；
+   其他（用户目录、无归属证明的残留）→ **拒绝**。
+3. 挂载 hooks/bin：逐槽位——空则建 symlink；已指向本包则跳过；
    被用户或其他扩展占用则**整体拒绝并列出占用**（已建部分不回滚，
    重跑 install 收敛）。
-3. 收养 cron：ensure-by-name（缺才建、已存在不动，防覆盖手改；
+4. 收养 cron：ensure-by-name（缺才建、已存在不动，防覆盖手改；
    更新内容请用 `yomi cron update`，清扫只在 remove）。
-4. 写安装记录（sqlite，审计用）。
+5. 写 `[install]` 段进复制后的 `ext.toml`：来源（source/rev）、内容
+   hash（blake3）、资源清单、安装时间。这是唯一注册表——没有
+   sqlite 表，目录本身就是索引。
 
 bin 内的可执行文件装完即在 PATH 上（`<data_dir>/bin` 由内核注入所有
 子进程）：snippet/文档只写命令名，不写路径。
 
-注意：cron 消息文本在 install 时读进 cron 表——源仓 `git pull` 后
-hooks/bin/snippets 即时更新，**cron 消息不更新**（ensure 不覆盖原则）。
-改 cron 用 `yomi cron update`，或 remove + install 全量刷新。
+注意：cron 消息文本在 install 时读进 cron 表——重装前 hooks/bin/
+snippets 改动源仓不影响已装内容，**cron 消息也不更新**（ensure 不
+覆盖原则）。改 cron 用 `yomi cron update`，或 remove + install 全量
+刷新。
 
 ## remove 语义
 
 cron 按 `ext:<名>:` 前缀清扫 → 摘 hooks/bin 挂载（**仅当** symlink
-文本目标仍指向本包；被换掉的留下并 warn）→ 删 `extensions/<名>` →
-删安装记录。安装记录缺失时退化为扫包目录 + 前缀清扫（正确性不依赖
-记录）。
+文本目标仍指向本包；被换掉的留下并 warn）→ 删 `extensions/<名>`
+（仅当 `[install]` 段证明是本包装的内容；用户目录留下并 warn）。
+卸载不需要 `[install]` 段在场也能精确回滚 cron 与挂载（前缀 + 指向
+判定），段只是让目录删除有归属证明。
+
+## health（`extension list` / `doctor`）
+
+| 值 | 含义 |
+|---|---|
+| `ok` | `[install]` 段在且内容 hash 与当前目录一致 |
+| `modified` | 段在但 hash 对不上（本地手改过包内容） |
+| `foreign` | 目录在但没有 `[install]` 段（用户手放，不归包系统管） |
+| `unreadable` | ext.toml 读不了/解析失败 |
 
 ## snippet 拼装
 
 `extensions/*/snippets/*.md` 在会话 spawn 时按（扩展名字典序 →
 文件名序）拼进 system prompt，位于项目 memory 之后、skills 索引
 之前，标题为 `# Extension: <名>`。无 snippet 的扩展零 prompt 成本；
-源破损的扩展跳过（`extension list` 的 health 列暴露 broken source）。
-单文件 16KB 上限，超出截断带标记。
+源破损的扩展跳过（health 列暴露）。单文件 16KB 上限，超出截断带
+标记。
 
 ## 边界
 
@@ -100,24 +122,24 @@ cron 按 `ext:<名>:` 前缀清扫 → 摘 hooks/bin 挂载（**仅当** symlink
   工具走外挂 tools/（`yomi doc tools`）。
 - snippet 单文件 16KB 上限，超出截断带标记；同一扩展多个 snippet 各
   自带 `# Extension:` 标题。
-- `--copy` 模式：重装需安装记录仍在（原位刷新）；记录丢失时先
-  remove 再 install。symlink 装过再 `--copy` 会自动把槽位换成实体
-  复制（反向同理不支持：copy 装过再默认 symlink 装会保持 copy 槽位，
-  内容仍跟随源——要切回 symlink 先 remove）。
-- remove 时 `extensions/<名>` 是实体目录：仅记录证明为 copy 模式才删；
-  否则留下并 warn（不删用户数据）。
+- 单文件 1MB 上限：包是"约定 + 小脚本"的载体，藏超大文件按恶意/
+  损坏处理，install 直接拒绝。
+- 子目录源（`owner/repo/ext/foo`）：整仓 clone 后只复制子目录；
+  仓里多个扩展包互不干扰。
 
 ## 排障
 
 | 现象 | 原因与处置 |
 |---|---|
 | `mount conflict: ...` | 槽位被用户文件或其他扩展占用。挪走冲突项后重跑 install（幂等）。 |
-| `extension list` 显示 `broken source` | 源目录被删/挪（symlink 模式）。修复源路径后重跑 install；或 remove 清掉。 |
+| install 报槽位 occupied | `extensions/<名>` 有目录但无 `[install]` 段（用户手放或上次装失败残留）。确认无用后手动删目录，或换个包名。 |
+| `extension list` 显示 `modified` | 装完手改过包内容。属预期则忽略；想回到安装态 remove + install。 |
 | install 成功但 cron 报 `exists, untouched` | ensure 语义：同名 job 已存在，未覆盖。要改内容用 `yomi cron update`，或 remove + install。 |
 | `invalid package: ...` | ext.toml 校验失败（名字规则、message 二选一、`../` 逃逸、schedule 无未来触发点、同名条目重复）。按报错逐条修。 |
 | snippet 改了没生效 | 扫描有 60s 缓存（同 skills）：等约一分钟、或新开会话 spawn 时生效。 |
 | bin 命令 not found | 确认文件有执行位（install 时无执行位会 warn 但仍挂载）；已开会话的下一条命令即可解析——PATH 每次 spawn 子进程时注入。 |
 | remove 报槽位留下 | 槽位内容被换过（指向判定保护用户数据），手动检查后再决定。 |
+| `git clone failed` | 源仓不存在/无权限/ref 名错。核对 `owner/repo[/子目录][@ref]` 拼写。 |
 
 ## 写一个扩展包
 
@@ -127,5 +149,6 @@ cron 按 `ext:<名>:` 前缀清扫 → 摘 hooks/bin 挂载（**仅当** symlink
 yomi-extensions 这类资产仓。
 - 扩展的 hook 与用户 hook 按条目名字典序混排：扩展条目约定 `50-`
   起的名字自定位。
-- 信任边界 = 能写 `<data_dir>` 的主体：包内脚本以 daemon 子进程全权
-  执行，bin 命令可遮蔽系统同名命令（PATH prepend）。
+- 信任边界 = 能写 `<data_dir>` 的主体 + 源仓写者：包内脚本以 daemon
+  子进程全权执行，bin 命令可遮蔽系统同名命令（PATH prepend）；装
+  GitHub 源等于信任该仓的写者（其后续 commit 会在你重装时进入）。

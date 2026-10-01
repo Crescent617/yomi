@@ -2208,35 +2208,42 @@ impl Kernel {
 
     // ── Extension packages（安装/卸载/清单；设计 docs/design/ext-packages.md）──
 
-    /// 收编扩展包：校验 manifest → 收编 extensions/<名> → 挂载
-    /// hooks/bin → 收养 cron（ensure）→ 写安装记录。幂等可重跑。
-    pub async fn extension_install(
-        &self,
-        path: String,
-        copy: bool,
-    ) -> Result<crate::pkg::InstallReport> {
+    /// 安装扩展包：解析来源（GitHub URL / 本地目录）→ 取货（git clone
+    /// 到临时目录）→ 校验 manifest → 复制进 extensions/<名>（已装目录
+    /// 的 ext.toml 追加 [install] 段：来源/版本/hash/资源清单）→ 挂载
+    /// hooks/bin → 收养 cron。统一 copy；重装 = 重新取货 + 原位替换
+    /// （更新语义）。幂等可重放。
+    pub async fn extension_install(&self, source: String) -> Result<crate::pkg::InstallReport> {
         let cron_store = self
             .cron_store
             .as_ref()
             .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
         let data_dir = self.data_dir().await;
-        // 只 parse 一次：name/记录查询/install 物化共用同一 manifest——
-        // 两次 parse 之间源目录的 ext.toml 被换掉会导致 copy 刷新拿着
-        // A 的记录删 B 槽位（TOCTOU）。
-        let manifest = crate::pkg::parse_manifest(std::path::Path::new(&path))?;
-        let record = self
-            .storage
-            .ext_install_store()
-            .get(&manifest.ext.name)
-            .await?;
+        let src = crate::pkg::parse_source(&source)
+            .map_err(|e| crate::types::KernelError::storage(e.to_string()))?;
+        let (_tmp, root, rev) = crate::pkg::fetch_source(&src)
+            .await
+            .map_err(|e| crate::types::KernelError::storage(e.to_string()))?;
+        // 只 parse 一次：name/已装查询/物化共用同一 manifest（TOCTOU）。
+        let manifest = crate::pkg::parse_manifest(&root)?;
+        // 已装目录（带 [install] 段的 ext.toml）决定可否原位刷新；
+        // 读不到 = 槽位空或 foreign（用户手放），按不可刷新处理。
+        let record = crate::pkg::read_installed(
+            &data_dir.join(crate::pkg::DIR_NAME).join(&manifest.ext.name),
+        )
+        .ok();
+        let allow_replace = record.as_ref().is_some_and(|i| i.meta.is_some());
         let result = crate::pkg::install(
             &data_dir,
-            std::path::Path::new(&path),
-            copy,
+            &root,
             cron_store,
             self.agent_shared.config_auto_approve,
             &manifest,
-            record.as_ref().map(|r| r.mode.as_str()),
+            allow_replace,
+            &crate::pkg::Provenance {
+                source: source.clone(),
+                rev: rev.clone(),
+            },
         )
         .await;
         let report = match result {
@@ -2250,62 +2257,65 @@ impl Kernel {
                 )));
             }
         };
-        // 记录最后写：存在 ⇒ 资源大概率在（list 不撒谎）。
-        self.storage
-            .ext_install_store()
-            .upsert(&crate::pkg::ExtInstall {
-                name: report.name.clone(),
-                source: std::fs::canonicalize(&path)
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or(path),
-                mode: if copy { "copy" } else { "symlink" }.to_string(),
-                version: report.version.clone(),
-                resources: crate::pkg::resources_from_report(&report),
-                installed_at: chrono::Utc::now(),
-            })
-            .await?;
         if report.cron.iter().any(|c| c.created) {
             self.notify_cron_scheduler();
         }
         Ok(report)
     }
 
-    /// 已安装扩展清单（审计记录 + 源存活健康状态）。
+    /// 已安装扩展清单：extensions/ 目录本身就是注册表（每个已装目录的
+    /// ext.toml 带 [install] 段）。health：foreign = 目录在手但没有
+    /// [install] 段（用户手放）；modified = 内容与安装时不一致（本地
+    /// 改动）；ok = 一致。
     pub async fn extension_list(&self) -> Result<Vec<serde_json::Value>> {
-        let records = self.storage.ext_install_store().list().await?;
         let data_dir = self.data_dir().await;
         let mut out = Vec::new();
-        for r in records {
-            let mut v = serde_json::to_value(&r)
-                .map_err(|e| crate::types::KernelError::serde(e.to_string()))?;
-            // 源存活 = extensions/<名> 可 metadata（跟随 symlink）；破损
-            // 不影响 list 本身，只在健康列暴露。
-            let health = if tokio::fs::metadata(data_dir.join(crate::pkg::DIR_NAME).join(&r.name))
-                .await
-                .is_ok()
-            {
-                "ok"
-            } else {
-                "broken source"
+        for installed in crate::pkg::list_installed(&data_dir).await {
+            let health = match &installed.meta {
+                None => "foreign",
+                Some(meta) => match crate::pkg::package_hash(&installed.dir) {
+                    Ok(h) if h == meta.content_hash => "ok",
+                    Ok(_) => "modified",
+                    Err(_) => "unreadable",
+                },
             };
-            v["health"] = serde_json::Value::String(health.to_string());
+            let mut v = serde_json::json!({
+                "name": installed.manifest.ext.name,
+                "version": installed.manifest.ext.version,
+                "description": installed.manifest.ext.description,
+                "dir": installed.dir,
+                "health": health,
+            });
+            if let Some(meta) = &installed.meta {
+                v["source"] = serde_json::Value::String(meta.source.clone());
+                v["rev"] = meta
+                    .rev
+                    .clone()
+                    .map_or(serde_json::Value::Null, serde_json::Value::String);
+                v["content_hash"] = serde_json::Value::String(meta.content_hash.clone());
+                v["installed_at"] = serde_json::Value::String(meta.installed_at.to_rfc3339());
+                v["resources"] =
+                    serde_json::to_value(&meta.resources).unwrap_or(serde_json::Value::Null);
+            }
             out.push(v);
         }
         Ok(out)
     }
 
-    /// 卸载：cron 前缀清扫 → 摘挂载（指向判定）→ 删 extensions/<名> →
-    /// 删记录。记录缺失退化为扫包目录 + 前缀（正确性不依赖记录）。
+    /// 卸载：cron 前缀清扫 → 摘挂载（指向判定）→ 删 extensions/<名>。
+    /// 已装清单缺失退化为扫包目录 + 前缀（正确性不依赖清单）。
     pub async fn extension_remove(&self, name: String) -> Result<crate::pkg::RemoveReport> {
         let cron_store = self
             .cron_store
             .as_ref()
             .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
-        let store = self.storage.ext_install_store();
-        let record = store.get(&name).await?;
         let data_dir = self.data_dir().await;
-        let result = crate::pkg::remove(&data_dir, &name, cron_store, record.as_ref()).await;
-        let mut report = match result {
+        // 已装清单（[install] 段）驱动回滚；读不到 = 未安装，pkg::remove
+        // 产出全空报告，CLI 报 "not installed"。
+        let installed =
+            crate::pkg::read_installed(&data_dir.join(crate::pkg::DIR_NAME).join(&name)).ok();
+        let result = crate::pkg::remove(&data_dir, &name, cron_store, installed.as_ref()).await;
+        let report = match result {
             Ok(report) => report,
             Err(e) => {
                 // cron 可能已部分清扫：让 scheduler 立即回查 store。
@@ -2315,7 +2325,6 @@ impl Kernel {
                 )));
             }
         };
-        report.record_deleted = store.delete(&name).await?;
         if !report.cron_removed.is_empty() {
             self.notify_cron_scheduler();
         }

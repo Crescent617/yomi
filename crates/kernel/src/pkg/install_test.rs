@@ -1,5 +1,5 @@
 //! install/remove 生命周期测试：tempdir 建包、内存 cron store。
-//! symlink 语义 unix-only（windows CI 无开发者模式时 symlink 需特权）。
+//! symlink 挂载语义 unix-only（windows CI 无开发者模式时 symlink 需特权）。
 
 #![cfg(unix)]
 
@@ -48,6 +48,13 @@ fn manifest_of(pkg: &tempfile::TempDir) -> super::super::ExtManifest {
     super::super::parse_manifest(pkg.path()).unwrap()
 }
 
+fn provenance() -> super::super::Provenance {
+    super::super::Provenance {
+        source: "test/pkg".to_string(),
+        rev: None,
+    }
+}
+
 async fn test_cron_store() -> Arc<dyn crate::cron::CronStore> {
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
@@ -79,36 +86,48 @@ async fn install_creates_everything() {
     let report = install(
         data.path(),
         pkg.path(),
-        false,
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
+        false,
+        &provenance(),
     )
     .await
     .unwrap();
 
     assert_eq!(report.name, "demo");
     assert_eq!(report.snippets, vec!["memory.md"]);
+    assert!(!report.content_hash.is_empty());
     assert!(report.cron[0].created);
     assert_eq!(report.hooks[0].status, MountStatus::Linked);
     assert_eq!(report.bins[0].status, MountStatus::Linked);
 
-    // extensions/<名> symlink → 源。
-    let ext_link = data.path().join("extensions/demo");
-    assert_eq!(
-        std::fs::read_link(&ext_link).unwrap(),
-        pkg.path().canonicalize().unwrap()
-    );
-    // hook 与 bin 挂载：文本目标指向 extensions/<名>/...（两级链）。
+    // extensions/<名> 实体复制（统一 copy，不再是 symlink 槽位）。
+    let ext_dir = data.path().join("extensions/demo");
+    assert!(ext_dir.is_dir());
+    assert!(!ext_dir.symlink_metadata().unwrap().file_type().is_symlink());
+    assert!(ext_dir.join("bin/recall").is_file());
+    // hook 与 bin 挂载：symlink 文本目标指向 extensions/<名>/...。
     let hook_link = data.path().join("hooks/pre_tool_use/50-guard");
     assert_eq!(
         std::fs::read_link(&hook_link).unwrap(),
-        ext_link.join("hooks/pre_tool_use/50-guard")
+        ext_dir.join("hooks/pre_tool_use/50-guard")
     );
-    assert!(hook_link.is_file()); // 跟随两级 symlink 解析到源文件
-    let bin_link = data.path().join("bin/recall");
-    assert!(bin_link.is_file());
+    assert!(hook_link.is_file());
+    assert!(data.path().join("bin/recall").is_file());
+
+    // [install] 段落盘：source 记录 + hash 与包内容一致。
+    let installed = super::super::read_installed(&ext_dir).unwrap();
+    let meta = installed.meta.expect("[install] written");
+    assert_eq!(meta.source, "test/pkg");
+    assert_eq!(meta.content_hash, report.content_hash);
+    // list 侧健康判定的不变量：装完立刻重算必须仍是同一 hash（段已写入
+    // 也能比对——hash 算法剔除了 [install] 表）。
+    let now = super::super::package_hash(&ext_dir).unwrap();
+    assert_eq!(
+        now, meta.content_hash,
+        "health must be ok right after install"
+    );
 
     // cron 收养：全名 + 内容来自 message_file。
     let jobs = crate::cron::CronStore::list(&*store, None, 10)
@@ -131,22 +150,23 @@ async fn install_is_idempotent() {
     install(
         data.path(),
         pkg.path(),
-        false,
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
+        false,
+        &provenance(),
     )
     .await
     .unwrap();
+    // 第二次：槽位已有实体目录 + 安装记录 → allow_replace 原位刷新。
     let second = install(
         data.path(),
         pkg.path(),
-        false,
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
+        true,
+        &provenance(),
     )
     .await
     .unwrap();
@@ -170,11 +190,11 @@ async fn install_refuses_occupied_slot() {
     let err = install(
         data.path(),
         pkg.path(),
-        false,
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
+        false,
+        &provenance(),
     )
     .await
     .unwrap_err();
@@ -192,6 +212,27 @@ async fn install_refuses_occupied_slot() {
         .symlink_metadata()
         .is_ok());
     assert!(cron_job_names(&store).await.is_empty());
+    // 部分安装落了 [install] 段（资源=已建挂载）：挪走冲突项后重跑
+    // 拿 allow_replace 原位刷新收敛，remove 也能精确回滚已建部分。
+    let ext_dir = data.path().join("extensions/demo");
+    let installed = super::super::read_installed(&ext_dir).unwrap();
+    let meta = installed.meta.expect("partial install recorded");
+    assert_eq!(meta.resources.hooks, vec!["pre_tool_use/50-guard"]);
+    assert_eq!(meta.resources.bins, vec!["recall"]);
+    std::fs::remove_file(data.path().join("bin/recall")).unwrap();
+    let report = install(
+        data.path(),
+        pkg.path(),
+        &store,
+        crate::permission::Level::Caution,
+        &manifest_of(&pkg),
+        true,
+        &provenance(),
+    )
+    .await
+    .unwrap();
+    assert!(report.cron[0].created, "re-run converges: cron adopted");
+    assert!(data.path().join("bin/recall").is_file());
 }
 
 #[tokio::test]
@@ -200,36 +241,112 @@ async fn install_recovers_after_partial_mounts() {
     let data = tempfile::tempdir().unwrap();
     let store = test_cron_store().await;
 
-    // 模拟上一次安装挂在挂载阶段：hook 已建，bin/cron 还没做。
-    std::fs::create_dir_all(data.path().join("extensions")).unwrap();
-    std::os::unix::fs::symlink(
-        pkg.path().canonicalize().unwrap(),
-        data.path().join("extensions/demo"),
+    // 完整装一次，然后模拟"挂载阶段被中断"的现场：hook/bin symlink
+    // 与 cron job 都消失，只剩实体目录 + [install] 段。
+    install(
+        data.path(),
+        pkg.path(),
+        &store,
+        crate::permission::Level::Caution,
+        &manifest_of(&pkg),
+        false,
+        &provenance(),
     )
+    .await
     .unwrap();
-    std::fs::create_dir_all(data.path().join("hooks/pre_tool_use")).unwrap();
-    std::os::unix::fs::symlink(
-        data.path()
-            .join("extensions/demo/hooks/pre_tool_use/50-guard"),
-        data.path().join("hooks/pre_tool_use/50-guard"),
-    )
-    .unwrap();
+    std::fs::remove_file(data.path().join("hooks/pre_tool_use/50-guard")).unwrap();
+    std::fs::remove_file(data.path().join("bin/recall")).unwrap();
+    let jobs = crate::cron::CronStore::list(&*store, None, 10)
+        .await
+        .unwrap();
+    for job in jobs {
+        store.delete(&job.id).await.unwrap();
+    }
 
     // 重跑收敛：已建的部分 Already，缺的补齐。
     let report = install(
         data.path(),
         pkg.path(),
-        false,
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
+        true,
+        &provenance(),
     )
     .await
     .unwrap();
-    assert_eq!(report.hooks[0].status, MountStatus::Already);
+    assert_eq!(report.hooks[0].status, MountStatus::Linked);
     assert_eq!(report.bins[0].status, MountStatus::Linked);
     assert!(report.cron[0].created);
+}
+
+#[tokio::test]
+async fn reinstall_refreshes_content() {
+    let pkg = write_pkg();
+    let data = tempfile::tempdir().unwrap();
+    let store = test_cron_store().await;
+
+    install(
+        data.path(),
+        pkg.path(),
+        &store,
+        crate::permission::Level::Caution,
+        &manifest_of(&pkg),
+        false,
+        &provenance(),
+    )
+    .await
+    .unwrap();
+
+    // 源内容更新后重装（有记录 → allow_replace）：原位替换，内容跟新。
+    std::fs::write(pkg.path().join("snippets/memory.md"), "updated rules").unwrap();
+    install(
+        data.path(),
+        pkg.path(),
+        &store,
+        crate::permission::Level::Caution,
+        &manifest_of(&pkg),
+        true,
+        &provenance(),
+    )
+    .await
+    .unwrap();
+    let content =
+        std::fs::read_to_string(data.path().join("extensions/demo/snippets/memory.md")).unwrap();
+    assert_eq!(content, "updated rules");
+}
+
+#[tokio::test]
+async fn reinstall_refuses_without_ownership() {
+    let pkg = write_pkg();
+    let data = tempfile::tempdir().unwrap();
+    let store = test_cron_store().await;
+
+    install(
+        data.path(),
+        pkg.path(),
+        &store,
+        crate::permission::Level::Caution,
+        &manifest_of(&pkg),
+        false,
+        &provenance(),
+    )
+    .await
+    .unwrap();
+
+    // 无 allow_replace（调用方未确认是本包装的记录）：拒绝刷新。
+    let err = install(
+        data.path(),
+        pkg.path(),
+        &store,
+        crate::permission::Level::Caution,
+        &manifest_of(&pkg),
+        false,
+        &provenance(),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains("conflict"), "{err}");
 }
 
 #[tokio::test]
@@ -240,25 +357,32 @@ async fn remove_rolls_back_everything() {
     install(
         data.path(),
         pkg.path(),
-        false,
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
+        false,
+        &provenance(),
     )
     .await
     .unwrap();
 
-    // remove 的正确性不依赖记录——传 None 走退化路径（扫包目录 + cron
-    // 前缀），正是设计要验证的。
+    // 退化路径（installed=None）：正确性不依赖记录——cron 前缀清扫 +
+    // 挂载指向判定照样精确回滚；实体目录没有归属证明则留下不删。
     let report = remove(data.path(), "demo", &store, None).await.unwrap();
-
     assert_eq!(report.cron_removed, vec!["ext:demo:dream"]);
-    assert!(report.ext_dir_removed);
+    assert!(!report.ext_dir_removed);
     assert!(!data.path().join("hooks/pre_tool_use/50-guard").exists());
     assert!(!data.path().join("bin/recall").exists());
-    assert!(!data.path().join("extensions/demo").exists());
     assert!(cron_job_names(&store).await.is_empty());
+
+    // 带上 read_installed 的结果（含 [install] 段）：目录也删掉。
+    let ext_dir = data.path().join("extensions/demo");
+    let installed = super::super::read_installed(&ext_dir).ok();
+    let report = remove(data.path(), "demo", &store, installed.as_ref())
+        .await
+        .unwrap();
+    assert!(report.ext_dir_removed);
+    assert!(!ext_dir.exists());
 }
 
 #[tokio::test]
@@ -269,11 +393,11 @@ async fn remove_leaves_repointed_slot() {
     install(
         data.path(),
         pkg.path(),
-        false,
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
+        false,
+        &provenance(),
     )
     .await
     .unwrap();
@@ -291,33 +415,6 @@ async fn remove_leaves_repointed_slot() {
 }
 
 #[tokio::test]
-async fn copy_mode_installs_real_dir() {
-    let pkg = write_pkg();
-    let data = tempfile::tempdir().unwrap();
-    let store = test_cron_store().await;
-
-    let report = install(
-        data.path(),
-        pkg.path(),
-        true,
-        &store,
-        crate::permission::Level::Caution,
-        &manifest_of(&pkg),
-        None,
-    )
-    .await
-    .unwrap();
-    assert_eq!(report.name, "demo");
-
-    let ext_dir = data.path().join("extensions/demo");
-    assert!(!ext_dir.symlink_metadata().unwrap().file_type().is_symlink());
-    assert!(ext_dir.join("bin/recall").is_file());
-    // 源删掉后 copy 模式仍然完整（与 symlink 模式的对照语义）。
-    let recall_target = std::fs::read_link(data.path().join("bin/recall")).unwrap();
-    assert!(recall_target.starts_with(&ext_dir));
-}
-
-#[tokio::test]
 async fn remove_rejects_traversal_names() {
     let data = tempfile::tempdir().unwrap();
     let store = test_cron_store().await;
@@ -330,181 +427,137 @@ async fn remove_rejects_traversal_names() {
 }
 
 #[tokio::test]
-async fn remove_leaves_user_placed_real_dir() {
-    let pkg = write_pkg();
+async fn remove_leaves_foreign_dir() {
     let data = tempfile::tempdir().unwrap();
     let store = test_cron_store().await;
-    install(
-        data.path(),
-        pkg.path(),
-        false,
-        &store,
-        crate::permission::Level::Caution,
-        &manifest_of(&pkg),
-        None,
-    )
-    .await
-    .unwrap();
 
-    // 用户把 extensions/demo 换成自己的实体目录。
-    std::fs::remove_file(data.path().join("extensions/demo")).unwrap();
-    std::fs::create_dir_all(data.path().join("extensions/demo/my-notes")).unwrap();
+    // 用户把自己的目录放进槽位（无 [install] 段 = foreign）：不删。
+    let ext_dir = data.path().join("extensions/demo");
+    std::fs::create_dir_all(ext_dir.join("my-notes")).unwrap();
+    std::fs::write(ext_dir.join("my-notes/keep.txt"), "precious").unwrap();
     std::fs::write(
-        data.path().join("extensions/demo/my-notes/keep.txt"),
-        "precious",
+        ext_dir.join("ext.toml"),
+        "[ext]\nname = \"demo\"\nversion = \"0\"\ndescription = \"mine\"\n",
     )
     .unwrap();
 
-    // 无记录（symlink 模式）：不删实体目录，用户数据保留。
-    let report = remove(data.path(), "demo", &store, None).await.unwrap();
-    assert!(!report.ext_dir_removed);
-    assert!(data
-        .path()
-        .join("extensions/demo/my-notes/keep.txt")
-        .exists());
-
-    // 有记录但 mode=symlink：同样不删。
-    let record = super::super::ExtInstall {
-        name: "demo".to_string(),
-        source: pkg.path().to_string_lossy().into_owned(),
-        mode: "symlink".to_string(),
-        version: "0.1.0".to_string(),
-        resources: Default::default(),
-        installed_at: chrono::Utc::now(),
-    };
-    let report = remove(data.path(), "demo", &store, Some(&record))
+    let installed = super::super::read_installed(&ext_dir).ok();
+    let report = remove(data.path(), "demo", &store, installed.as_ref())
         .await
         .unwrap();
     assert!(!report.ext_dir_removed);
-    assert!(data
-        .path()
-        .join("extensions/demo/my-notes/keep.txt")
-        .exists());
+    assert!(ext_dir.join("my-notes/keep.txt").exists());
 }
 
 #[tokio::test]
-async fn remove_deletes_copy_mode_dir_with_record() {
+async fn remove_deletes_installed_dir_with_meta() {
     let pkg = write_pkg();
     let data = tempfile::tempdir().unwrap();
     let store = test_cron_store().await;
     install(
         data.path(),
         pkg.path(),
-        true,
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
+        false,
+        &provenance(),
     )
     .await
     .unwrap();
 
-    let record = super::super::ExtInstall {
-        name: "demo".to_string(),
-        source: pkg.path().to_string_lossy().into_owned(),
-        mode: "copy".to_string(),
-        version: "0.1.0".to_string(),
-        resources: Default::default(),
-        installed_at: chrono::Utc::now(),
-    };
-    let report = remove(data.path(), "demo", &store, Some(&record))
+    let ext_dir = data.path().join("extensions/demo");
+    let installed = super::super::read_installed(&ext_dir).ok();
+    assert!(installed.as_ref().is_some_and(|i| i.meta.is_some()));
+    let report = remove(data.path(), "demo", &store, installed.as_ref())
         .await
         .unwrap();
     assert!(report.ext_dir_removed);
-    assert!(!data.path().join("extensions/demo").exists());
+    assert!(!ext_dir.exists());
 }
 
 #[tokio::test]
-async fn copy_reinstall_refreshes_with_record() {
+async fn package_supplied_install_section_is_stripped() {
+    // 包内自带 [install] 表 = 伪造归属证明：装时被剥掉，hash 覆盖剥后
+    // 内容；之后 remove 走正常归属判定，用户数据不误删。
     let pkg = write_pkg();
+    std::fs::write(
+        pkg.path().join("ext.toml"),
+        format!("{MANIFEST}\n[install]\nsource = \"fake\"\ncontent_hash = \"x\"\n"),
+    )
+    .unwrap();
     let data = tempfile::tempdir().unwrap();
     let store = test_cron_store().await;
 
     install(
         data.path(),
         pkg.path(),
-        true,
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
+        false,
+        &provenance(),
     )
     .await
     .unwrap();
-    // 无记录时 copy 重装拒绝（保守）。
+
+    let ext_dir = data.path().join("extensions/demo");
+    let raw = std::fs::read_to_string(ext_dir.join("ext.toml")).unwrap();
+    let table: toml::Table = raw.parse().unwrap();
+    let install_section = table.get("install").expect("our [install] written");
+    // 只剩我们写的段（source 是 provenance 的，不是包内伪造的）。
+    assert_eq!(
+        install_section.get("source").and_then(|v| v.as_str()),
+        Some("test/pkg")
+    );
+    // hash 与剥后内容一致：list 侧重算必须是 ok。
+    let installed = super::super::read_installed(&ext_dir).unwrap();
+    let meta = installed.meta.unwrap();
+    assert_eq!(
+        super::super::package_hash(&ext_dir).unwrap(),
+        meta.content_hash
+    );
+}
+
+#[tokio::test]
+async fn oversized_file_rejected_before_touching_slots() {
+    let pkg = write_pkg();
+    // 2MB > 1MB 上限。
+    std::fs::write(
+        pkg.path().join("snippets/blob.md"),
+        vec![b'x'; 2 * 1024 * 1024],
+    )
+    .unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let store = test_cron_store().await;
+
     let err = install(
         data.path(),
         pkg.path(),
-        true,
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
+        false,
+        &provenance(),
     )
     .await
     .unwrap_err();
-    assert!(err.to_string().contains("conflict"), "{err}");
-    // 有记录（mode=copy）时原位刷新。
-    let report = install(
-        data.path(),
-        pkg.path(),
-        true,
-        &store,
-        crate::permission::Level::Caution,
-        &manifest_of(&pkg),
-        Some("copy"),
-    )
-    .await
-    .unwrap();
-    assert_eq!(report.name, "demo");
-    assert!(data.path().join("extensions/demo/bin/recall").is_file());
-}
-
-#[tokio::test]
-async fn copy_install_converts_symlink_slot() {
-    let pkg = write_pkg();
-    let data = tempfile::tempdir().unwrap();
-    let store = test_cron_store().await;
-
-    // 先 symlink 装。
+    assert!(err.to_string().contains("exceeds"), "{err}");
+    // 拒绝发生在复制/挂载/cron 之前：任何槽位都没被碰，可以直接修好
+    // 重跑（不会撞 occupied Conflict）。
+    assert!(!data.path().join("extensions/demo").exists());
+    assert!(!data.path().join("hooks/pre_tool_use/50-guard").exists());
+    assert!(cron_job_names(&store).await.is_empty());
+    std::fs::write(pkg.path().join("snippets/blob.md"), "small now").unwrap();
     install(
         data.path(),
         pkg.path(),
+        &store,
+        crate::permission::Level::Caution,
+        &manifest_of(&pkg),
         false,
-        &store,
-        crate::permission::Level::Caution,
-        &manifest_of(&pkg),
-        None,
+        &provenance(),
     )
     .await
     .unwrap();
-    assert!(data
-        .path()
-        .join("extensions/demo")
-        .symlink_metadata()
-        .unwrap()
-        .file_type()
-        .is_symlink());
-
-    // 再 --copy 装：槽位换成实体目录，bin 链路指向 copy。
-    let report = install(
-        data.path(),
-        pkg.path(),
-        true,
-        &store,
-        crate::permission::Level::Caution,
-        &manifest_of(&pkg),
-        Some("symlink"),
-    )
-    .await
-    .unwrap();
-    assert_eq!(report.name, "demo");
-    let ext_dir = data.path().join("extensions/demo");
-    assert!(!ext_dir.symlink_metadata().unwrap().file_type().is_symlink());
-    assert!(ext_dir.join("bin/recall").is_file());
-    let target = std::fs::read_link(data.path().join("bin/recall")).unwrap();
-    assert!(
-        target.starts_with(&ext_dir),
-        "bin links into the copy: {target:?}"
-    );
 }

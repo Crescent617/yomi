@@ -196,14 +196,11 @@ struct ExtensionArgs {
 
 #[derive(Subcommand)]
 enum ExtensionCommands {
-    /// Install an extension package (idempotent; re-run converges)
+    /// Install an extension package from a GitHub URL (owner/repo[/subdir][@ref])
+    /// or a local directory (re-run = update)
     Install {
-        /// Package root directory (contains ext.toml)
-        path: String,
-        /// Copy the package into extensions/ instead of symlinking
-        /// (updates require re-install; default follows the source repo)
-        #[arg(long)]
-        copy: bool,
+        /// Source: owner/repo[/subdir][@ref], https URL, or local dir
+        source: String,
     },
     /// List installed extensions
     List,
@@ -551,8 +548,8 @@ async fn run_usage(args: UsageArgs) -> Result<()> {
 
 async fn run_extension(args: ExtensionArgs) -> Result<()> {
     match args.command {
-        ExtensionCommands::Install { path, copy } => {
-            commands::extension::install(&args.global, path, copy).await
+        ExtensionCommands::Install { source } => {
+            commands::extension::install(&args.global, source).await
         }
         ExtensionCommands::List => commands::extension::list(&args.global).await,
         ExtensionCommands::Remove { name } => commands::extension::remove(&args.global, name).await,

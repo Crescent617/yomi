@@ -4,11 +4,11 @@
 //! 所有权 = symlink 文本目标相等；cron 全名 `ext:<名>:` 前缀；
 //! install 纯 additive；remove 只删能证明属于自己的东西。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::store::ExtInstall;
-use super::{cron_name, PkgError, BIN_DIR, DIR_NAME, HOOKS_DIR, SNIPPETS_DIR};
+use super::installed::{InstalledExt, Resources};
+use super::{cron_name, PkgError, BIN_DIR, DIR_NAME, HOOKS_DIR, MANIFEST_FILE, SNIPPETS_DIR};
 use crate::cron::{CronAction, CronSessionTemplate, CronStore};
 use crate::permission::Level;
 
@@ -18,6 +18,9 @@ use crate::permission::Level;
 pub struct InstallReport {
     pub name: String,
     pub version: String,
+    /// 安装内容的内容 hash（blake3，十六进制；不含 [install] 段）：
+    /// list/doctor 的本地改动侦测基准。
+    pub content_hash: String,
     /// cron 收养结果：`created=false` = 已存在未动（ensure 语义）。
     pub cron: Vec<CronAdoptReport>,
     pub hooks: Vec<MountReport>,
@@ -59,29 +62,28 @@ pub struct RemoveReport {
     /// 指向不符被留下的挂载（用户换过槽位内容）。
     pub mounts_left: Vec<String>,
     pub mounts_removed: Vec<String>,
-    /// `extensions/<名>` 是否已删除（records-missing 路径下包目录可能已不在）。
+    /// `extensions/<名>` 是否已删除（清单缺失/foreign 时留下不删）。
     pub ext_dir_removed: bool,
-    /// 安装记录是否已删除（Kernel 侧 store 成功才为 true）。
-    pub record_deleted: bool,
 }
 
-/// 收编 + 挂载 + 收养 cron。幂等：重复调用收敛到同一终态。
+/// 收编 + 挂载 + 收养 cron。统一 copy：把 `source`（取货后的包根目录，
+/// 调用方持有临时目录句柄）实体复制进 extensions/<名>，重装即重新
+/// 取货 + 原位替换（更新语义）。幂等可重放。
 ///
-/// `source` 是包根目录（含 ext.toml）；`copy` 为 true 时实体复制进
-/// extensions/（默认 symlink，源仓 git pull 即更新）。
+/// `allow_replace`：槽位已有实体目录且调用方确认是我们上次装的
+/// （有安装记录）才允许原位刷新；否则拒绝（绝不覆盖用户目录）。
 pub async fn install(
     data_dir: &Path,
     source: &Path,
-    copy: bool,
     cron_store: &Arc<dyn CronStore>,
     config_auto_approve: Level,
-    // 调用方预先解析校验好的 manifest。**name 以它为准**——调用方查
+    // 调用方预先解析校验好的 manifest。**name 以它准**——调用方查
     // 安装记录用的必须是同一个 manifest，否则两次 parse 之间文件被
-    // 换名会导致 copy 刷新拿着 A 的记录删 B 槽位的目录（TOCTOU）。
+    // 换名会导致刷新拿着 A 的记录删 B 槽位的目录（TOCTOU）。
     manifest: &super::ExtManifest,
-    // 已安装记录的 mode（`Some("copy")` 时 copy 重装可原位刷新；None =
-    // 无记录，实体槽位一律拒绝）。
-    record_mode: Option<&str>,
+    allow_replace: bool,
+    // 来源溯源：写进已装目录 ext.toml 的 [install] 段。
+    provenance: &super::Provenance,
 ) -> Result<InstallReport, PkgError> {
     let source = source
         .canonicalize()
@@ -93,9 +95,22 @@ pub async fn install(
         )));
     }
     let name = manifest.ext.name.clone();
+    // 同名包串行：并发的两次 install/remove 会在 copy_refresh 的临时
+    // 目录、ext.toml 重写上互踩（各自的"原子"操作叠加起来不原子）。
+    let _lock = pkg_lock(&name);
+    let _guard = _lock.lock().await;
     let ext_dir = data_dir.join(DIR_NAME).join(&name);
 
-    adopt(&ext_dir, &source, copy, copy && record_mode == Some("copy")).await?;
+    // 先对源做完整 walk（含 1MB 上限与 ext.toml 可解析性）：超限在此
+    // 拒绝，不碰任何槽位——此前把这一步放在复制/挂载/cron 之后，拒
+    // 绝时留下的无段目录会被重跑当成 occupied 撞 Conflict。
+    hash_package(&source)?;
+
+    place_or_refresh(&ext_dir, &source, allow_replace).await?;
+    // 包内自带的 [install] 表在复制后剥掉：它要么是伪装的归属证明
+    // （remove 会因此误删用户目录），要么与随后写入的真段撞重复表、
+    // 整篇 TOML 解析失败。剥离后 ext.toml 内容进 hash，两侧规则一致。
+    strip_install_section(&ext_dir)?;
 
     // 挂载 hooks 与 bin：先全部走完收集冲突，有冲突整体报错——
     // 已建部分不用回滚，所有权规则保证重跑 install 收敛。
@@ -128,6 +143,23 @@ pub async fn install(
         bins.push(MountReport { path: rel, status });
     }
     if !conflicts.is_empty() {
+        // 挂载冲突整体拒绝，但目录与已建挂载已是事实。落一份部分资源
+        // 的 [install] 段（best-effort）：重跑 install 据此拿到
+        // allow_replace 原位刷新收敛，remove 也能精确回滚已建部分——
+        // 否则无段目录会把重跑挡成 occupied Conflict，"re-run to
+        // converge" 成空话。
+        let partial_hash = hash_package(&ext_dir).unwrap_or_else(|e| {
+            // 仅 IO 竞态可触发；空串 hash 让 health 保持 modified 直到
+            // 重跑收敛，warn 留痕。
+            tracing::warn!(ext = %name, "partial install hash failed: {e}");
+            String::new()
+        });
+        let partial = resources_from_report(&[], &hooks, &bins, &[]);
+        if let Err(e) = super::write_install_meta(&ext_dir, &partial_hash, provenance, &partial)
+            .map_err(PkgError::Invalid)
+        {
+            tracing::warn!(ext = %name, "failed to record partial install: {e}");
+        }
         return Err(PkgError::Conflict(conflicts.join("; ")));
     }
 
@@ -161,15 +193,126 @@ pub async fn install(
     }
 
     let snippets = list_snippets(&ext_dir).await;
+    let content_hash = hash_package(&ext_dir)?;
+
+    // [install] 段（hash 之后写：段是我们的、每次重装重写，不入 hash）。
+    let resources = resources_from_report(&cron, &hooks, &bins, &snippets);
+    super::write_install_meta(&ext_dir, &content_hash, provenance, &resources)
+        .map_err(PkgError::Invalid)?;
 
     Ok(InstallReport {
         name,
         version: manifest.ext.version.clone(),
+        content_hash,
         cron,
         hooks,
         bins,
         snippets,
     })
+}
+
+/// 包内容 hash：blake3，按相对路径排序后逐文件喂（路径+内容），对
+/// 复制时刻的包内容做指纹。单文件上限 1MB——包是"约定 + 小脚本"的
+/// 载体，藏超大文件按恶意/损坏处理，install 直接拒。
+const HASH_FILE_MAX_BYTES: u64 = 1024 * 1024;
+
+/// 包内容 hash（blake3）：install 落指纹与 list/doctor 的本地改动侦测
+/// 共用同一算法。
+pub fn package_hash(dir: &Path) -> Result<String, PkgError> {
+    hash_package(dir)
+}
+
+fn hash_package(dir: &Path) -> Result<String, PkgError> {
+    let mut hasher = blake3::Hasher::new();
+    let mut files: Vec<PathBuf> = Vec::new();
+    collect_files(dir, &mut files)?;
+    files.sort();
+    for file in files {
+        let rel = file.strip_prefix(dir).unwrap_or(&file);
+        hasher.update(rel.to_string_lossy().as_bytes());
+        hasher.update(&[0]);
+        let mut buf = read_hash_input(dir, &file)?;
+        if buf.len() as u64 > HASH_FILE_MAX_BYTES {
+            return Err(PkgError::Invalid(format!(
+                "package file {} exceeds {HASH_FILE_MAX_BYTES} bytes",
+                rel.display()
+            )));
+        }
+        hasher.update(&std::mem::take(&mut buf));
+        hasher.update(&[0xFF]);
+    }
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// 读取一个待 hash 文件的内容。根 ext.toml 特殊处理：剥掉 `[install]`
+/// 表再序列化后 hash——该段是我们的、每次重装重写（见
+/// `write_install_meta`），两边用同一规则才能比对出本地改动。其余
+/// 文件原样读。单文件上限 1MB——包是"约定 + 小脚本"的载体，藏超大
+/// 文件按恶意/损坏处理，install 直接拒。
+fn read_hash_input(dir: &Path, file: &Path) -> Result<Vec<u8>, PkgError> {
+    let rel = file.strip_prefix(dir).unwrap_or(file);
+    let f = std::fs::File::open(file)?;
+    // fstat 先看尺寸；读取用 take 封顶——元数据检查与读之间有竞态窗
+    // （装到一半文件被换成超大文件），take 保证内存占用有界。
+    if f.metadata()?.len() > HASH_FILE_MAX_BYTES {
+        return Err(PkgError::Invalid(format!(
+            "package file {} exceeds {HASH_FILE_MAX_BYTES} bytes",
+            rel.display()
+        )));
+    }
+    let mut capped = std::io::Read::take(f, HASH_FILE_MAX_BYTES + 1);
+    let mut raw = Vec::new();
+    std::io::Read::read_to_end(&mut capped, &mut raw)?;
+    if raw.len() as u64 > HASH_FILE_MAX_BYTES {
+        return Err(PkgError::Invalid(format!(
+            "package file {} exceeds {HASH_FILE_MAX_BYTES} bytes",
+            rel.display()
+        )));
+    }
+    // 大小写不敏感比较文件名：macOS/Windows 文件系统对大小写不敏感，
+    // 仓里叫 EXT.TOML 的包 parse_manifest 能读进，hash 侧也必须剥段，
+    // 否则装完即永久 modified。实现按文件名匹配（不限根目录）——比
+    // 磁盘剥段（只剥根）宽，但两侧 hash 同一函数，比对仍一致。
+    if rel
+        .file_name()
+        .is_some_and(|n| n.eq_ignore_ascii_case("ext.toml"))
+    {
+        if let Ok(text) = std::str::from_utf8(&raw) {
+            if let Ok(mut table) = text.parse::<toml::Table>() {
+                table.remove("install");
+                if let Ok(text) = toml::to_string_pretty(&table) {
+                    return Ok(text.into_bytes());
+                }
+            }
+        }
+        // 非 UTF-8 / 解析失败：回落原样 hash（parse_manifest 在 install
+        // 路径已门禁，list 重算走不到这）。
+    }
+    Ok(raw)
+}
+
+fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), PkgError> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let ft = entry.file_type()?;
+        if ft.is_dir() {
+            collect_files(&path, out)?;
+        } else if ft.is_file() {
+            out.push(path);
+        } else if ft.is_symlink() {
+            // symlink：跟随——解析到常规文件则按其内容 hash（源侧 bin
+            // 常以 symlink 进仓，copy_dir 会把内容物化，两侧必须一致；
+            // 也堵住"装后把文件换成 symlink 逃过改动侦测"的口子）。破损
+            // 或指向非常规文件：跳过（copy_dir 同样丢弃，行为一致）。
+            if let Ok(md) = std::fs::metadata(&path) {
+                if md.is_file() {
+                    out.push(path);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 卸载：cron 前缀清扫 → 摘挂载（指向判定）→ 删 extensions/<名>。
@@ -178,7 +321,7 @@ pub async fn remove(
     data_dir: &Path,
     name: &str,
     cron_store: &Arc<dyn CronStore>,
-    record: Option<&ExtInstall>,
+    installed: Option<&InstalledExt>,
 ) -> Result<RemoveReport, PkgError> {
     // 名字与 install 同一规则校验：`../` 之类的穿越在此被硬拒（否则
     // join 后 remove_dir_all 会删到数据目录外）。
@@ -187,6 +330,19 @@ pub async fn remove(
             "extension name '{name}' invalid: letter first, [a-z0-9-] only, ≤32 chars"
         )));
     }
+    // 与 install 同一把按名锁：remove 与并发 install 互踩（安装写段时
+    // 卸载删目录）比两个 install 互踩更容易发生。
+    let _lock = pkg_lock(name);
+    let _guard = _lock.lock().await;
+    remove_inner(data_dir, name, cron_store, installed).await
+}
+
+async fn remove_inner(
+    data_dir: &Path,
+    name: &str,
+    cron_store: &Arc<dyn CronStore>,
+    installed: Option<&InstalledExt>,
+) -> Result<RemoveReport, PkgError> {
     let ext_dir = data_dir.join(DIR_NAME).join(name);
 
     // cron：按前缀清扫（记录里的名单是提示，前缀才是真相——防止记录
@@ -200,9 +356,9 @@ pub async fn remove(
         }
     }
 
-    // 挂载名单：记录优先；包目录还在则并集（记录缺失的退化路径）。
-    // scan 可能因源被删而失败——静默用记录名单即可。
-    let mut mount_rels: Vec<String> = record.map(|r| r.mount_paths()).unwrap_or_default();
+    // 挂载名单：已装清单（[install] 段）优先；包目录还在则并集（清单
+    // 缺失的退化路径）。scan 失败静默用名单即可。
+    let mut mount_rels: Vec<String> = installed.map(|i| i.mount_paths()).unwrap_or_default();
     if let Ok(list) = try_scan_hook_rels(&ext_dir).await {
         for rel in list {
             if !mount_rels.contains(&rel) {
@@ -252,9 +408,9 @@ pub async fn remove(
             tokio::fs::remove_file(&ext_dir).await?;
             true
         }
-        // 实体目录：只有记录证明是我们 copy 的才删；用户把自己的目录
-        // 放进槽位时留下并 warn（设计：全程只动能证明属于自己的东西）。
-        Ok(_) if record.is_some_and(|r| r.mode == "copy") => {
+        // 实体目录：只有 [install] 段证明是我们装的才删；用户把自己的
+        // 目录放进槽位时留下并 warn（设计：全程只动能证明属于自己的东西）。
+        Ok(_) if installed.is_some_and(|i| i.meta.is_some()) => {
             tokio::fs::remove_dir_all(&ext_dir).await?;
             true
         }
@@ -270,17 +426,14 @@ pub async fn remove(
         mounts_left,
         mounts_removed,
         ext_dir_removed,
-        record_deleted: false, // Kernel 侧 store 删除成功后置位
     })
 }
 
-/// `extensions/<名>` 槽位收编：空则 symlink/copy；已指向同一源则幂等；
-/// 实体目录仅当 `allow_replace`（copy 重装、记录证明是我们复制的）才
-/// 原位刷新；其他一律拒绝（绝不覆盖用户目录）。
-async fn adopt(
+/// `extensions/<名>` 槽位收编：空 → 实体复制；实体目录 + `allow_replace`
+/// → 原位刷新（`copy_refresh` 原子替换）；其他一律拒绝（绝不覆盖）。
+async fn place_or_refresh(
     ext_dir: &Path,
     source: &Path,
-    copy: bool,
     allow_replace: bool,
 ) -> Result<(), PkgError> {
     match tokio::fs::symlink_metadata(ext_dir).await {
@@ -288,43 +441,14 @@ async fn adopt(
             if let Some(parent) = ext_dir.parent() {
                 tokio::fs::create_dir_all(parent).await?;
             }
-            if copy {
-                copy_dir(source, ext_dir).await
-            } else {
-                os_symlink(source, ext_dir, true).await?;
-                Ok(())
-            }
+            copy_dir(source, ext_dir).await
         }
         Err(e) => Err(e.into()),
-        Ok(md) if md.file_type().is_symlink() => {
-            let cur = tokio::fs::read_link(ext_dir).await?;
-            if cur != source {
-                return Err(PkgError::Conflict(format!(
-                    "extensions slot {} already points to {} (remove it first)",
-                    ext_dir.display(),
-                    cur.display()
-                )));
-            }
-            if copy {
-                // 模式切换（symlink → copy）：换掉 symlink、实体复制。
-                // 删 symlink 不碰用户数据（内容本就等于源），记录与
-                // 磁盘状态保持一致。
-                tokio::fs::remove_file(ext_dir).await?;
-                copy_dir(source, ext_dir).await
-            } else {
-                Ok(())
-            }
-        }
-        Ok(_) => {
-            if allow_replace {
-                copy_refresh(source, ext_dir).await
-            } else {
-                Err(PkgError::Conflict(format!(
-                    "extensions slot {} is occupied by a non-symlink (remove it first)",
-                    ext_dir.display()
-                )))
-            }
-        }
+        Ok(_) if allow_replace => copy_refresh(source, ext_dir).await,
+        Ok(_) => Err(PkgError::Conflict(format!(
+            "extensions slot {} is occupied by something that is not this install (remove it first)",
+            ext_dir.display()
+        ))),
     }
 }
 
@@ -349,6 +473,40 @@ async fn copy_refresh(source: &Path, ext_dir: &Path) -> Result<(), PkgError> {
         let _ = copy_dir(source, ext_dir).await;
         tokio::fs::remove_dir_all(&tmp).await.ok();
         return Err(e.into());
+    }
+    Ok(())
+}
+
+/// 按扩展名取进程内串行锁。并发的 install/remove 各自的原子操作
+/// （`copy_refresh` 的临时目录 + swap、ext.toml 重写、目录删除）叠加
+/// 起来不原子，同名包必须排队。锁表常驻（名字有界=装过的包数）。
+fn pkg_lock(name: &str) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    > = std::sync::OnceLock::new();
+    LOCKS
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .expect("pkg lock map poisoned")
+        .entry(name.to_string())
+        .or_default()
+        .clone()
+}
+
+/// 剥掉已装目录 ext.toml 里包内自带的 `[install]` 表（复制后、hash
+/// 前调用）：防伪造归属证明（remove 据此误删用户目录）与重复表损坏
+/// TOML。ext.toml 已在 manifest 校验阶段验证可解析，这里失败只可能是
+/// IO 竞态——升级为 Err 让 install 拒绝（不留状态分叉）。
+fn strip_install_section(ext_dir: &Path) -> Result<(), PkgError> {
+    let path = ext_dir.join(MANIFEST_FILE);
+    let raw = std::fs::read_to_string(&path)?;
+    let mut table = raw
+        .parse::<toml::Table>()
+        .map_err(|e| PkgError::Invalid(format!("re-parse {}: {e}", path.display())))?;
+    if table.remove("install").is_some() {
+        let text = toml::to_string_pretty(&table)
+            .map_err(|e| PkgError::Invalid(format!("re-serialize {}: {e}", path.display())))?;
+        std::fs::write(&path, text)?;
     }
     Ok(())
 }
@@ -537,7 +695,7 @@ async fn os_symlink(target: &Path, link: &Path, is_dir: bool) -> std::io::Result
     }
 }
 
-/// 实体复制包目录（`--copy` 模式）：保留执行位。
+/// 实体复制包目录：保留执行位。
 async fn copy_dir(src: &Path, dst: &Path) -> Result<(), PkgError> {
     tokio::fs::create_dir_all(dst).await?;
     let mut entries = tokio::fs::read_dir(src).await?;
@@ -566,26 +724,16 @@ async fn copy_dir(src: &Path, dst: &Path) -> Result<(), PkgError> {
     Ok(())
 }
 
-/// 从安装记录重建本次安装挂载的相对路径集合（供 remove 与审计）。
-impl ExtInstall {
-    pub(crate) fn mount_paths(&self) -> Vec<String> {
-        let mut out: Vec<String> = self
-            .resources
-            .hooks
-            .iter()
-            .map(|s| format!("{HOOKS_DIR}/{s}"))
-            .collect();
-        out.extend(self.resources.bins.iter().map(|s| format!("{BIN_DIR}/{s}")));
-        out
-    }
-}
-
-/// 安装报告中资源清单 → 记录结构。
-pub(crate) fn resources_from_report(report: &InstallReport) -> super::store::Resources {
-    super::store::Resources {
-        cron: report.cron.iter().map(|c| c.name.clone()).collect(),
-        hooks: report
-            .hooks
+/// 资源清单组装（写入 [install] 段；remove 按它精确回滚）。
+fn resources_from_report(
+    cron: &[CronAdoptReport],
+    hooks: &[MountReport],
+    bins: &[MountReport],
+    snippets: &[String],
+) -> Resources {
+    Resources {
+        cron: cron.iter().map(|c| c.name.clone()).collect(),
+        hooks: hooks
             .iter()
             .map(|m| {
                 m.path
@@ -593,8 +741,7 @@ pub(crate) fn resources_from_report(report: &InstallReport) -> super::store::Res
                     .to_string()
             })
             .collect(),
-        bins: report
-            .bins
+        bins: bins
             .iter()
             .map(|m| {
                 m.path
@@ -602,7 +749,7 @@ pub(crate) fn resources_from_report(report: &InstallReport) -> super::store::Res
                     .to_string()
             })
             .collect(),
-        snippets: report.snippets.clone(),
+        snippets: snippets.to_vec(),
     }
 }
 

@@ -179,7 +179,7 @@ pub async fn run(global: &GlobalArgs) -> Result<()> {
             Err(e) => checks.push(check(Level::Warn, "cron", format!("query failed: {e}"))),
         }
 
-        // 扩展健康：broken source（源被删/挪）只在 list 里可见，而装的
+        // 扩展健康：modified/foreign/unreadable 只在 list 里可见，而装的
         // 恰是"装一次不再看"的包——doctor 替用户盯。
         match client.extension_list().await {
             Ok(exts) => {
@@ -195,12 +195,20 @@ pub async fn run(global: &GlobalArgs) -> Result<()> {
                         format!("{} installed", exts.len()),
                     ));
                 } else {
+                    let detail: Vec<String> = exts
+                        .iter()
+                        .filter(|e| e["health"].as_str() != Some("ok"))
+                        .filter_map(|e| match (e["name"].as_str(), e["health"].as_str()) {
+                            (Some(n), Some(h)) => Some(format!("{n} ({h})")),
+                            _ => None,
+                        })
+                        .collect();
                     checks.push(check(
                         Level::Warn,
                         "extensions",
                         format!(
-                            "broken source: {} (see `yomi doc extension` 排障表)",
-                            broken.join(", ")
+                            "unhealthy: {} (see `yomi doc extension` 排障表)",
+                            detail.join(", ")
                         ),
                     ));
                 }

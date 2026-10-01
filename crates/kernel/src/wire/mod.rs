@@ -340,11 +340,8 @@ pub enum ReqMethod {
     /// 收编扩展包（校验 manifest → 收编 → 挂载 hooks/bin → 收养 cron →
     /// 写安装记录）。幂等可重跑。Result: `InstallReport`。
     ExtensionInstall {
-        /// 包根目录（含 ext.toml）。
-        path: String,
-        /// true = 实体复制进 extensions/（默认 symlink，源仓 pull 即更新）。
-        #[serde(default)]
-        copy: bool,
+        /// 安装来源：GitHub URL（owner/repo[/subdir][@ref]）或本地目录。
+        source: String,
     },
     ExtensionList,
     /// 卸载：cron 前缀清扫 → 摘挂载（指向判定）→ 删 extensions/<名> →

@@ -46,6 +46,32 @@
    所有子进程（shell/cron/hook/tool）同时获得解析能力。
 9. **v1 资源范围 = cron + hooks + snippets + bin**（2026-10-01 hrli
    拍板）；tools/skill 挂载二期。包格式和所有权规则为此留好了位置。
+10. **统一 copy，安装源默认 GitHub URL**（2026-10-01 hrli 拍板，
+    nvim 插件 / npx skills 玩法）：`owner/repo[/子目录][@ref]` 或
+    `https://github.com/...`，本地目录仅作开发形态。install 一律
+    `git clone --depth 1`（sha 全量 + checkout）到临时目录后实体
+    复制进 `extensions/<名>`；重装 = 重新取货 + 原位刷新（更新语义）。
+    不再有 symlink/copy 双模式——没有 broken source、模式切换、记录
+    与磁盘分叉这些状态面；代价是源仓后续 commit 不会自动生效，要
+    更新就重装。
+11. **注册表 = 文件系统，不是 sqlite**：install 复制完往包内
+    `ext.toml` 追加 `[install]` 段（来源/版本/hash/资源清单/安装
+    时间），`extensions/` 目录本身就是索引——npm package.json 玩法。
+    这是对 AGENTS.md「extension state lives in sqlite/config — never
+    private」的**有意偏离**：该条的精神是"状态必须可被外部工具读写
+    审计"，而 TOML 段比 sqlite 表更外部（cat 即读），且消除了两份
+    真相的漂移面（hooks/tools/skills 的注册表真相都是目录）。不设
+    extensions/ 级 lock/index 文件：包间无跨包事务，那会再造第二
+    真相源。正确性仍不依赖元数据（决策 2 不变：前缀清扫 + 指向
+    判定兜底）。
+12. **provenance 与内容 hash 落盘**：`[install]` 段记录用户给的原始
+    来源字符串与 git resolved commit sha（rev），以及安装时刻的包
+    内容 hash（blake3，按相对路径排序喂 路径+内容，单文件 1MB 上限，
+    超出按恶意/损坏拒绝 install；symlink 跟随到文件按其内容算）。
+    hash 算法剔除根 ext.toml 的 `[install]` 表（段是我们的、每次重装
+    重写），装完即比对必须一致（health=ok 的不变量）；list/doctor
+    用同算法重算比对 → `modified` 健康态暴露本地手改。包内自带
+    `[install]` 表在复制后剥离——防伪造归属证明与重复表损坏 TOML。
 
 ## 包格式
 
@@ -104,46 +130,61 @@ hook 执行序注意：扩展条目与用户条目混排按字典序，包作者
 
 顺序与每步规则：
 
-1. **收编** `extensions/<name>`：空 → symlink 到源（默认）或 `--copy`
-   实体复制；已指向同一源 → 幂等通过；指向别的源 → 拒绝；实体目录
-   → 仅当安装记录证明是上次 `--copy` 复制的才原位刷新（先拷到隐藏
-   临时目录再 swap，不留"删完没拷上"的窗口），否则拒绝（提示先
-   remove）。
-2. **挂载** hooks/bin：逐槽位三种情况——空则建 symlink（创建撞
+1. **取货**：GitHub 源 `git clone --depth 1`（`@ref` 为 40 位 sha 时
+   全量 clone + checkout）到临时目录，`owner/repo[/子目录][@ref]`；
+   本地目录直接用。clone 超时 3 分钟；网络失败不脏任何槽位。取货后
+   记录 `git rev-parse HEAD` 为 rev（本地源为 None）。
+2. **收编** `extensions/<name>`：空 → 实体复制；已有且带 `[install]`
+   段（上次本包安装的归属证明）→ 原位刷新（先拷到隐藏临时目录再
+   swap，不留"删完没拷上"的窗口）；其他（用户目录、无归属证明的
+   残留）→ 拒绝（提示先 remove）。调用方以已装目录的 `[install]` 段
+   决定 allow_replace，并用同一个预解析 manifest 查记录（防两次
+   parse 之间文件被换名的 TOCTOU）。
+3. **挂载** hooks/bin：逐槽位三种情况——空则建 symlink（创建撞
    AlreadyExists = 并发竞争，退到重判定）；已指向本包则跳过；其他
    （用户文件/他扩展/破损 link）→ 整体拒绝并报占用清单（先建后查，
    撞了不自动回滚已建部分，重跑 install 即收敛——所有权规则保证
    重跑安全）。
-3. **收养 cron**：逐条 `create_cron_job`（ensure：同名即返回不动，
+4. **收养 cron**：逐条 `create_cron_job`（ensure：同名即返回不动，
    缺才建）。输出区分 `created` / `exists (untouched)`。
-4. **写记录**：sqlite upsert（放最后：记录存在 ⇒ 资源大概率在）。
+5. **写 `[install]` 段**：包内容 hash 先算（段不入 hash），然后追加
+   进复制后 `ext.toml` 的 `[install]` 段：source、rev、content_hash、
+   资源清单、installed_at。放最后：段存在 ⇒ 资源大概率在。
 
-冲突时的原子性：不做跨 sqlite/fs 事务（做不了），靠"所有权可重入"
-保证部分失败后重跑收敛到同一终态。sqlite 侧撞名有唯一索引兜底并发。
+冲突时的原子性：不做跨 fs/sqlite 事务（做不了）；同一扩展名的
+install/remove 由进程内按名锁串行，跨扩展的残余竞争靠"所有权可重入"
+保证部分失败后重跑收敛到同一终态。包内容在碰槽位前先完整 walk
+（含单文件 1MB 上限），超限即拒、不留半成品目录。
 
 ## remove 语义（精确回滚）
 
 `name` 参数与 install 同一名字规则校验（字母开头 `[a-z0-9-]` ≤32），
-`../` 穿越在入口硬拒。读安装记录（记录损坏/缺失则退化：cron 按
-`ext:<名>:` 前缀扫、挂载按指向判定）→ 删 cron（store 层前缀查询，
-无分页漏删窗口）→ 摘挂载（**仅当** symlink 确认指向本包；被用户换掉
-的留下并 warn）→ 删 `extensions/<名>` → 删记录。全程只动能证明属于
-自己的东西。处置细则：
+`../` 穿越在入口硬拒。读已装目录（`[install]` 段损坏/缺失则退化：
+cron 按 `ext:<名>:` 前缀扫、挂载按指向判定 + 扫包目录）→ 删 cron
+（store 层前缀查询，无分页漏删窗口）→ 摘挂载（**仅当** symlink 确认
+指向本包；被用户换掉的留下并 warn）→ 删 `extensions/<名>`（仅当
+`[install]` 段证明是本包装的内容）→ 目录随删除消失，注册表零残留。
+全程只动能证明属于自己的东西。处置细则：
 
 - 挂载槽位被用户换成别的 symlink 或实体文件 → 留下，warn。
-- `extensions/<名>` 槽位是实体目录时：仅当记录证明是我们 `--copy`
-  复制的才 `remove_dir_all`；无记录或 symlink 模式 → 留下，warn
-  （用户把自己的目录放进槽位，绝不删用户数据）。
+- `extensions/<名>` 槽位是实体目录时：仅当 `[install]` 段在场才
+  `remove_dir_all`；无段（foreign，用户把自己的目录放进槽位）→ 留下，
+  warn（绝不删用户数据）。
 - 用户手动改过的 cron job（仍在 `ext:<名>:` 命名空间）→ 随前缀
   清扫删除：它属于扩展命名空间，改动随包走。
 
 ## list 语义
 
-`yomi extension list`：每扩展一行——name、version、source、
-installed_at、资源计数（cron/hooks/tools/snippets/skill）、健康状态
-（源 symlink 是否存活 = `ok` / `broken source`）。不加漂移检测的
-list 先上线；ensure 语义下"manifest 改了但 job 没更新"是设计内行为，
-v1 靠 remove+install 全量刷新。
+`yomi extension list`：每扩展一行——name、version、source、rev、
+installed_at、资源计数（cron/hooks/bins/snippets）、健康状态：
+
+- `ok`：`[install]` 段在且内容 hash 与目录现状一致。
+- `modified`：段在但 hash 对不上（装完本地手改过包内容）。
+- `foreign`：目录在但没有 `[install]` 段（用户手放，不归包系统管）。
+- `unreadable`：ext.toml 读不了/解析失败。
+
+ensure 语义下"manifest 改了但 job 没更新"是设计内行为，v1 靠
+remove+install（或重装同源）全量刷新。
 
 ## snippet 拼装
 
@@ -188,37 +229,43 @@ cron 的 session 模板：不绑定固定 session（per-run 新会话），工�
 等级由 kernel 按 config 重算、下限 caution——与 cron 子系统对所有
 调用方的归一化完全一致，不信任包内声明。
 
-**物化注意**：cron 消息文本在 install 时读进 cron 表——源仓
-`git pull` 后 hooks/bin/snippets 即时更新，**cron 消息不更新**
-（ensure 不覆盖纪律）。改 cron 用 `yomi cron update`，或 remove +
-install 全量刷新。
+**物化注意**：cron 消息文本在 install 时读进 cron 表——源仓后续改动
+不影响已装内容（统一 copy，决策 10），**cron 消息也不更新**（ensure
+不覆盖纪律）。改 cron 用 `yomi cron update`，或重装全量刷新。
 
 ## wire 方法
 
 | 方法 | 参数 | 说明 |
 |---|---|---|
-| `extension_install` | `{path, copy: bool}` | 返回 name + 每项资源 created/exists/skipped 报告 |
-| `extension_list` | `{}` | 安装记录 + 健康状态 |
+| `extension_install` | `{source}` | source = GitHub 简写/URL 或本地目录；返回 name + hash + 每项资源 created/exists/skipped 报告 |
+| `extension_list` | `{}` | extensions/ 扫描 + 健康状态 |
 | `extension_remove` | `{name}` | 返回回滚清单 |
 
 dispatcher / KernelApi / RemoteKernel 三处同加。CLI `yomi extension
 install|list|remove` 全走 KernelApi（requires daemon，与 cron 一致）。
 
-## 安装记录 schema（yomi.db，migrations 追加）
+## 安装元数据：`ext.toml` 的 `[install]` 段（决策 11）
 
-```sql
-CREATE TABLE ext_installs (
-    name         TEXT PRIMARY KEY,
-    source       TEXT NOT NULL,          -- 安装时的源路径（绝对）
-    mode         TEXT NOT NULL,          -- 'symlink' | 'copy'
-    version      TEXT NOT NULL,
-    resources    TEXT NOT NULL,          -- JSON：{cron:[], hooks:[], bins:[], snippets:[]}
-    installed_at TEXT NOT NULL           -- RFC 3339
-);
+install 复制完、hash 计算之后，往 `extensions/<名>/ext.toml` 追加：
+
+```toml
+[install]
+source = "owner/repo/ext/demo@main"     # 用户给的原始来源字符串
+rev = "1a2b3c..."                        # git resolved commit sha（本地源无此行）
+content_hash = "..."                     # blake3 十六进制；不含本段
+installed_at = "2026-10-01T08:00:00Z"
+
+[install.resources]
+cron = ["ext:demo:tick"]                 # cron 全名
+hooks = ["pre_tool_use/50-guard"]        # 相对 hooks/ 的路径
+bins = ["recall"]                        # 文件名
+snippets = ["memory.md"]
 ```
 
-**正确性不依赖此表**（决策 2）：它回答"装了什么、从哪来"，不回答
-"能不能删"——后者由指向判定与前缀清扫回答。
+`extensions/` 目录本身就是注册表与索引，没有 sqlite 表、没有
+extensions/ 级 lock 文件。段是审计与展示数据，不参与正确性（决策 2
+不变）——它唯一参与判定的地方是"目录删除的归属证明"（remove 只删
+带段的实体目录）与"原位刷新的许可"（install 见段才 allow_replace）。
 
 ## 安全与信任边界
 
@@ -236,8 +283,9 @@ CREATE TABLE ext_installs (
   可读而调用方不可读的文件（经 message_file 收进 cron 表）——一个
   文件读取原语。这与 cron create 的既有能力同档，不降低门槛；ws
   暴露时务必配 socket_auth（transport 层已有警告）。
-- symlink 模式下，能持续写扩展源仓的主体持续持有 bin/hook 执行权
-  （pull 即生效）——信任边界同手写 hooks，不止是"安装那一刻"。
+- symlink 模式已废（决策 10）：源仓写者的持续影响力收窄到"你重装
+  该扩展那一次"——不重装，已装内容与其后续 commit 无关。这仍是
+  信任边界的一部分：装 GitHub 源 = 信任该仓当前内容，文档写明。
 
 ## 分期落地
 
@@ -256,8 +304,8 @@ CREATE TABLE ext_installs (
 
 - 不做扩展运行时的统一事件/总线：运行时仍是五个独立注册表。
 - 不做依赖解析与扩展间依赖：包互相独立，组合靠约定（与 skill 同哲学）。
-- 不做远程 registry / 版本求解：install 吃本地路径；git 更新是源仓库
-  自己的事（symlink 模式天然拿到 pull 后的新内容）。
+- 不做远程 registry / 版本求解：install 吃 GitHub URL（指定 ref 即
+  版本）或本地目录；没有依赖图与版本区间，git ref 就是全部版本语言。
 - 不做 install 的事务性回滚：靠所有权可重入收敛，不重跑事务。
 - 不做卸载时的用户改动保留合并：remove 只删自己装的，用户改过的
   cron job 若在原位则被删（它属于扩展命名空间）——改动随包走。

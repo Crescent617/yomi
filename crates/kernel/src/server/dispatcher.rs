@@ -32,10 +32,10 @@ impl KernelServer {
             }
 
             // ── Extension packages（扩展包）────────────────────────────
-            ReqMethod::ExtensionInstall { path, copy } => rpc_body(
+            ReqMethod::ExtensionInstall { source } => rpc_body(
                 "extension_install_failed",
                 self.kernel
-                    .extension_install(path, copy)
+                    .extension_install(source)
                     .await
                     .and_then(|report| {
                         serde_json::to_value(report)

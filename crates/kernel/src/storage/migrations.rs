@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 26;
+pub const CURRENT_SCHEMA_VERSION: i64 = 25;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -319,21 +319,6 @@ const MIGRATIONS: &[Migration] = &[
         name: "add_session_settings",
         sqls: &[r"ALTER TABLE sessions ADD COLUMN settings TEXT;"],
     },
-    Migration {
-        version: 26,
-        // 扩展包安装记录（docs/design/ext-packages.md）：审计与
-        // `extension list` 展示。**正确性不依赖此表**——remove 回滚
-        // 由 symlink 指向判定 + cron 前缀清扫完成（state is cache）。
-        name: "add_ext_installs",
-        sqls: &[r"CREATE TABLE ext_installs (
-                name TEXT PRIMARY KEY,
-                source TEXT NOT NULL,
-                mode TEXT NOT NULL,
-                version TEXT NOT NULL,
-                resources TEXT NOT NULL,
-                installed_at TEXT NOT NULL
-            );"],
-    },
 ];
 
 /// Initialize migrations table and run pending migrations
@@ -357,6 +342,16 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     .execute(&mut *tx)
     .await
     .map_err(|e| KernelError::storage(format!("Failed to create _schema_migrations table: {e}")))?;
+
+    // 未发布版本曾建过 ext_installs 表（扩展包注册表后来改为文件系统，
+    // 见 docs/design/ext-packages.md 决策 11）。幂等清理：当时的开发库
+    // 可能留着这张空表，DROP 掉避免被误读成还有 sqlite 注册表；新库
+    // no-op。刻意不进版本化迁移——老库的 _schema_migrations 里已有
+    // 高于此处的版本号，版本化迁移不会重跑。
+    sqlx::query("DROP TABLE IF EXISTS ext_installs")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| KernelError::storage(format!("Failed to drop legacy ext_installs: {e}")))?;
 
     // Get current version
     let current_version: i64 =
