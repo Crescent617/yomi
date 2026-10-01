@@ -1,0 +1,9 @@
+[ext]
+name = "demo"
+version = "0.1.0"
+description = "示例扩展包：一个 cron、一个 bin 命令、一个 SP snippet、一个通知型 hook"
+
+[[cron]]
+name = "hello"
+schedule = "0 9 * * *"
+message_file = "prompts/hello.txt"

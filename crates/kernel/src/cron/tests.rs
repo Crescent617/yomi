@@ -421,6 +421,13 @@ mod tests {
 
     #[async_trait::async_trait]
     impl super::super::CronStore for RaceStore {
+        async fn list_by_prefix(
+            &self,
+            _prefix: &str,
+            _limit: usize,
+        ) -> Result<Vec<crate::cron::CronJob>, crate::cron::CronError> {
+            Ok(Vec::new())
+        }
         async fn create(&self, job: &CronJob) -> Result<(), CronError> {
             use std::sync::atomic::Ordering;
             if !self.fired.swap(true, Ordering::SeqCst) {

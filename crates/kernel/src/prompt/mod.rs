@@ -11,6 +11,8 @@ pub struct SystemPromptBuilder<'a> {
     skills: &'a [Arc<Skill>],
     working_dir: Option<&'a std::path::Path>,
     session_id: Option<&'a str>,
+    /// 扩展包 snippet 来源（`extensions/*/snippets/*.md`）；`None` = 不拼。
+    data_dir: Option<&'a std::path::Path>,
 }
 
 const SKILL_SECTION_HEADER: &str = "# Skills\nIMPORTANT: before replying, you must scan available skills and load skill content with `read` tool when task hits its description.\n\n";
@@ -305,6 +307,13 @@ impl<'a> SystemPromptBuilder<'a> {
         self
     }
 
+    /// 拼接已安装扩展包的 snippets（`extensions/*/snippets/*.md`）。
+    #[must_use]
+    pub const fn with_data_dir(mut self, dir: &'a std::path::Path) -> Self {
+        self.data_dir = Some(dir);
+        self
+    }
+
     /// Build system prompt, loading project memory from `working_dir` if set
     pub async fn build(self) -> String {
         let base = self
@@ -321,6 +330,23 @@ impl<'a> SystemPromptBuilder<'a> {
                     prompt.push_str("\n\n");
                     prompt.push_str(file.content.trim());
                 }
+            }
+        }
+
+        // Extension package snippets: installed conventions (e.g. the
+        // memory system's rules) injected verbatim, extension name as the
+        // section title. Positioned after project memory, before the
+        // skills index — conventions precede the capability list.
+        // Zero cost when no extension ships snippets (existence gated).
+        if let Some(dir) = self.data_dir {
+            // TTL 缓存 + 并发单飞（对齐 skills 的 SkillLoader）；TTL 即
+            // snippet 改动的生效延迟上限。
+            let snippets = crate::pkg::SnippetLoader::global().load(dir).await;
+            for snippet in snippets.iter() {
+                prompt.push_str("\n\n# Extension: ");
+                prompt.push_str(&snippet.ext);
+                prompt.push('\n');
+                prompt.push_str(snippet.content.trim());
             }
         }
 

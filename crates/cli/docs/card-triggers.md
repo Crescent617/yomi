@@ -33,6 +33,7 @@ cron_`；无前缀归审批）。名字约束：字母开头、仅 `[a-zA-Z0-9_-
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
+| `v` | number | spawn 契约版本（当前 1；只增不改承诺的协商通道） |
 | `event` | string | 恒 `"card_trigger"` |
 | `name` | string | 触发器名（`ext_` 已剥离） |
 | `channel` | string | channel 名（多 channel 时分辨来源） |

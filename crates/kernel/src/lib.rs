@@ -31,6 +31,7 @@ pub mod kv_cache;
 pub mod memory;
 pub mod notification;
 pub mod permission;
+pub mod pkg;
 pub mod prompt;
 pub mod provider;
 pub mod server;

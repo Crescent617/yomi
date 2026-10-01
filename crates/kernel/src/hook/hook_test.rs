@@ -653,6 +653,7 @@ async fn session_point_runs_in_order_and_delivers_contract() {
     write_script(&dir, "30-off", "exit 0\n", false); // 无执行位：跳过
 
     let payload = serde_json::to_vec(&TurnStartInput {
+        v: crate::utils::env::SPAWN_CONTRACT_VERSION,
         session_id: "sess_t1".to_string(),
         cwd: work.path().to_string_lossy().into_owned(),
         hook_event_name: POINT_TURN_START,
@@ -752,6 +753,7 @@ async fn session_point_timeout_kills_and_continues() {
 #[test]
 fn turn_end_payload_omits_error_unless_failed() {
     let mk = |stop_reason: &str, error: Option<String>| TurnEndInput {
+        v: crate::utils::env::SPAWN_CONTRACT_VERSION,
         session_id: "s".to_string(),
         cwd: "w".to_string(),
         hook_event_name: POINT_TURN_END,

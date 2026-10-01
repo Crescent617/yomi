@@ -140,6 +140,7 @@ impl Agent {
             .with_skills(&args.skills)
             .with_working_dir(&args.working_dir)
             .with_session_id(&args.session_id)
+            .with_data_dir(&shared.data_dir)
             .build()
             .await;
 
@@ -606,6 +607,7 @@ impl Agent {
         error: Option<String>,
     ) {
         let payload = crate::hook::TurnEndInput {
+            v: crate::utils::env::SPAWN_CONTRACT_VERSION,
             session_id: self.session_id.0.to_string(),
             cwd: self.working_dir.to_string_lossy().into_owned(),
             hook_event_name: crate::hook::POINT_TURN_END,
@@ -819,6 +821,7 @@ impl Agent {
         // 落盘，此刻 `session cat` 可能还读不到它——preview 必须随
         // payload 自带。
         let payload = crate::hook::TurnStartInput {
+            v: crate::utils::env::SPAWN_CONTRACT_VERSION,
             session_id: self.session_id.0.to_string(),
             cwd: self.working_dir.to_string_lossy().into_owned(),
             hook_event_name: crate::hook::POINT_TURN_START,

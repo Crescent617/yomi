@@ -464,3 +464,37 @@ fn strip_end_turn_marker_cases() {
     assert_eq!(strip("普通收尾  \n"), "普通收尾  \n");
     assert_eq!(strip("收尾 __YOMI_END_TU"), "收尾 __YOMI_END_TU");
 }
+
+#[tokio::test]
+async fn builder_appends_extension_snippets_after_memory() {
+    let data = tempfile::tempdir().unwrap();
+    let ext = data.path().join("extensions/demo/snippets");
+    std::fs::create_dir_all(&ext).unwrap();
+    std::fs::write(ext.join("rules.md"), "remember the rules").unwrap();
+
+    let cwd = tempfile::tempdir().unwrap();
+    std::fs::write(cwd.path().join("AGENTS.md"), "project conventions").unwrap();
+
+    let prompt = super::SystemPromptBuilder::new()
+        .base_prompt("BASE")
+        .with_working_dir(cwd.path())
+        .with_data_dir(data.path())
+        .build()
+        .await;
+
+    let mem_pos = prompt.find("project conventions").unwrap();
+    let snip_pos = prompt.find("# Extension: demo").unwrap();
+    let skills_pos = prompt.find("# Skills").unwrap();
+    assert!(
+        mem_pos < snip_pos && snip_pos < skills_pos,
+        "order: memory < snippets < skills\n{prompt}"
+    );
+    assert!(prompt[snip_pos..].contains("remember the rules"));
+
+    // 无 data_dir（如未接线调用方）：零 snippet 成本。
+    let prompt = super::SystemPromptBuilder::new()
+        .base_prompt("BASE")
+        .build()
+        .await;
+    assert!(!prompt.contains("# Extension:"));
+}

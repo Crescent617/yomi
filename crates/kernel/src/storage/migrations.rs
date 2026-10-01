@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 25;
+pub const CURRENT_SCHEMA_VERSION: i64 = 26;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -318,6 +318,21 @@ const MIGRATIONS: &[Migration] = &[
         // 旋钮一列。更新走 json_set/json_remove 原子按键写。
         name: "add_session_settings",
         sqls: &[r"ALTER TABLE sessions ADD COLUMN settings TEXT;"],
+    },
+    Migration {
+        version: 26,
+        // 扩展包安装记录（docs/design/ext-packages.md）：审计与
+        // `extension list` 展示。**正确性不依赖此表**——remove 回滚
+        // 由 symlink 指向判定 + cron 前缀清扫完成（state is cache）。
+        name: "add_ext_installs",
+        sqls: &[r"CREATE TABLE ext_installs (
+                name TEXT PRIMARY KEY,
+                source TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                version TEXT NOT NULL,
+                resources TEXT NOT NULL,
+                installed_at TEXT NOT NULL
+            );"],
     },
 ];
 

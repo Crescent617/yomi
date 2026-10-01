@@ -231,3 +231,31 @@ async fn precheck_update_whitespace_only_clears() {
         );
     }
 }
+
+#[tokio::test]
+async fn list_by_prefix_filters_and_escapes() {
+    let store = test_store().await;
+    for name in [
+        "ext:demo:dream",
+        "ext:demo:janitor",
+        "ext:demolition:x",
+        "user:job",
+    ] {
+        CronStore::create(&store, &shell_job(name)).await.unwrap();
+    }
+
+    let got = CronStore::list_by_prefix(&store, "ext:demo:", 10)
+        .await
+        .unwrap();
+    let mut names: Vec<String> = got.into_iter().map(|j| j.name).collect();
+    names.sort();
+    // "ext:demolition:x" 不匹配（前缀边界在冒号）；LIKE 通配符被 ESCAPE。
+    assert_eq!(names, vec!["ext:demo:dream", "ext:demo:janitor"]);
+
+    // LIKE 特殊字符（名字规则其实不允许，ESCAPE 兜底防御）：
+    // 注入 % 不会变成"匹配一切"。
+    assert!(CronStore::list_by_prefix(&store, "ext:%:", 10)
+        .await
+        .unwrap()
+        .is_empty());
+}

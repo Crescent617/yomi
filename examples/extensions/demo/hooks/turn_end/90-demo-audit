@@ -1,0 +1,4 @@
+#!/bin/sh
+# 通知型 hook 示例：每个 turn 结束留一行痕（exit 码无所谓）。
+echo "turn ended" >> "$YOMI_STATE_DIR/turns.log"
+exit 0

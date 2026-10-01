@@ -2205,6 +2205,122 @@ impl Kernel {
             .map(|_| ())
             .map_err(|e| crate::types::KernelError::storage(e.to_string()))
     }
+
+    // ── Extension packages（安装/卸载/清单；设计 docs/design/ext-packages.md）──
+
+    /// 收编扩展包：校验 manifest → 收编 extensions/<名> → 挂载
+    /// hooks/bin → 收养 cron（ensure）→ 写安装记录。幂等可重跑。
+    pub async fn extension_install(
+        &self,
+        path: String,
+        copy: bool,
+    ) -> Result<crate::pkg::InstallReport> {
+        let cron_store = self
+            .cron_store
+            .as_ref()
+            .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
+        let data_dir = self.data_dir().await;
+        // 只 parse 一次：name/记录查询/install 物化共用同一 manifest——
+        // 两次 parse 之间源目录的 ext.toml 被换掉会导致 copy 刷新拿着
+        // A 的记录删 B 槽位（TOCTOU）。
+        let manifest = crate::pkg::parse_manifest(std::path::Path::new(&path))?;
+        let record = self
+            .storage
+            .ext_install_store()
+            .get(&manifest.ext.name)
+            .await?;
+        let result = crate::pkg::install(
+            &data_dir,
+            std::path::Path::new(&path),
+            copy,
+            cron_store,
+            self.agent_shared.config_auto_approve,
+            &manifest,
+            record.as_ref().map(|r| r.mode.as_str()),
+        )
+        .await;
+        let report = match result {
+            Ok(report) => report,
+            Err(e) => {
+                // cron 收养可能已部分完成：让 scheduler 立即回查 store，
+                // 并给用户可行动的提示（重跑 install 收敛）。
+                self.notify_cron_scheduler();
+                return Err(crate::types::KernelError::storage(format!(
+                    "{e} (partial install possible: re-run `yomi extension install` to converge)"
+                )));
+            }
+        };
+        // 记录最后写：存在 ⇒ 资源大概率在（list 不撒谎）。
+        self.storage
+            .ext_install_store()
+            .upsert(&crate::pkg::ExtInstall {
+                name: report.name.clone(),
+                source: std::fs::canonicalize(&path)
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or(path),
+                mode: if copy { "copy" } else { "symlink" }.to_string(),
+                version: report.version.clone(),
+                resources: crate::pkg::resources_from_report(&report),
+                installed_at: chrono::Utc::now(),
+            })
+            .await?;
+        if report.cron.iter().any(|c| c.created) {
+            self.notify_cron_scheduler();
+        }
+        Ok(report)
+    }
+
+    /// 已安装扩展清单（审计记录 + 源存活健康状态）。
+    pub async fn extension_list(&self) -> Result<Vec<serde_json::Value>> {
+        let records = self.storage.ext_install_store().list().await?;
+        let data_dir = self.data_dir().await;
+        let mut out = Vec::new();
+        for r in records {
+            let mut v = serde_json::to_value(&r)
+                .map_err(|e| crate::types::KernelError::serde(e.to_string()))?;
+            // 源存活 = extensions/<名> 可 metadata（跟随 symlink）；破损
+            // 不影响 list 本身，只在健康列暴露。
+            let health = if tokio::fs::metadata(data_dir.join(crate::pkg::DIR_NAME).join(&r.name))
+                .await
+                .is_ok()
+            {
+                "ok"
+            } else {
+                "broken source"
+            };
+            v["health"] = serde_json::Value::String(health.to_string());
+            out.push(v);
+        }
+        Ok(out)
+    }
+
+    /// 卸载：cron 前缀清扫 → 摘挂载（指向判定）→ 删 extensions/<名> →
+    /// 删记录。记录缺失退化为扫包目录 + 前缀（正确性不依赖记录）。
+    pub async fn extension_remove(&self, name: String) -> Result<crate::pkg::RemoveReport> {
+        let cron_store = self
+            .cron_store
+            .as_ref()
+            .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
+        let store = self.storage.ext_install_store();
+        let record = store.get(&name).await?;
+        let data_dir = self.data_dir().await;
+        let result = crate::pkg::remove(&data_dir, &name, cron_store, record.as_ref()).await;
+        let mut report = match result {
+            Ok(report) => report,
+            Err(e) => {
+                // cron 可能已部分清扫：让 scheduler 立即回查 store。
+                self.notify_cron_scheduler();
+                return Err(crate::types::KernelError::storage(format!(
+                    "{e} (partial remove possible: re-run `yomi extension remove` to converge)"
+                )));
+            }
+        };
+        report.record_deleted = store.delete(&name).await?;
+        if !report.cron_removed.is_empty() {
+            self.notify_cron_scheduler();
+        }
+        Ok(report)
+    }
 }
 
 #[async_trait::async_trait]

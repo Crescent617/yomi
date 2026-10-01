@@ -31,6 +31,32 @@ impl KernelServer {
                 ))
             }
 
+            // ── Extension packages（扩展包）────────────────────────────
+            ReqMethod::ExtensionInstall { path, copy } => rpc_body(
+                "extension_install_failed",
+                self.kernel
+                    .extension_install(path, copy)
+                    .await
+                    .and_then(|report| {
+                        serde_json::to_value(report)
+                            .map_err(|e| crate::types::KernelError::serde(e.to_string()))
+                    }),
+            ),
+            ReqMethod::ExtensionList => rpc_body(
+                "extension_list_failed",
+                self.kernel.extension_list().await,
+            ),
+            ReqMethod::ExtensionRemove { name } => rpc_body(
+                "extension_remove_failed",
+                self.kernel
+                    .extension_remove(name)
+                    .await
+                    .and_then(|report| {
+                        serde_json::to_value(report)
+                            .map_err(|e| crate::types::KernelError::serde(e.to_string()))
+                    }),
+            ),
+
             // ── Config ───────────────────────────────────────────────────
             ReqMethod::GetConfig => {
                 let path = self

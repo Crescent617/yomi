@@ -742,6 +742,23 @@ impl KernelApi for RemoteKernel {
         .await
     }
 
+    async fn extension_install(
+        &self,
+        path: String,
+        copy: bool,
+    ) -> Result<crate::pkg::InstallReport> {
+        self.call_json(ReqMethod::ExtensionInstall { path, copy })
+            .await
+    }
+
+    async fn extension_list(&self) -> Result<Vec<serde_json::Value>> {
+        self.call_json(ReqMethod::ExtensionList).await
+    }
+
+    async fn extension_remove(&self, name: String) -> Result<crate::pkg::RemoveReport> {
+        self.call_json(ReqMethod::ExtensionRemove { name }).await
+    }
+
     async fn channel_new_thread(
         &self,
         channel: Option<String>,

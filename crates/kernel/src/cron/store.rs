@@ -24,6 +24,8 @@ pub trait CronStore: Send + Sync {
     async fn update(&self, id: &CronJobId, input: &UpdateCronJobInput) -> Result<bool, CronError>;
     /// 删除任务
     async fn delete(&self, id: &CronJobId) -> Result<bool, CronError>;
+    /// 按 name 前缀列出（扩展包 remove 的前缀清扫用）。
+    async fn list_by_prefix(&self, prefix: &str, limit: usize) -> Result<Vec<CronJob>, CronError>;
     /// 获取所有 active 任务（供 scheduler 加载）
     async fn list_active(&self) -> Result<Vec<CronJob>, CronError>;
     /// 原子更新执行记录（`run_count`++, `last_run_at`, `last_error`）
@@ -173,6 +175,22 @@ impl CronStore for SqliteCronStore {
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected() > 0)
+    }
+
+    async fn list_by_prefix(&self, prefix: &str, limit: usize) -> Result<Vec<CronJob>, CronError> {
+        // substr 前缀比较：避开 LIKE 通配符/ESCAPE 方言差异，语义直白
+        //（cron 表量级小，无需索引优化）。注意 substr 按字符计、
+        // length(?) 绑定按字节计——调用方须保证前缀 ASCII（扩展包
+        // remove 的前缀来自名字规则校验过的 [a-z0-9-] 名，天然满足）。
+        let rows = sqlx::query_as::<_, CronJobRow>(
+            "SELECT * FROM cron_jobs WHERE substr(name, 1, ?) = ? ORDER BY created_at DESC LIMIT ?",
+        )
+        .bind(prefix.len() as i64)
+        .bind(prefix)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| r.into()).collect())
     }
 
     async fn list_active(&self) -> Result<Vec<CronJob>, CronError> {

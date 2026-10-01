@@ -13,6 +13,10 @@ pub const YOMI_STATE_DIR: &str = crate::env_name!("STATE_DIR");
 /// 外挂子进程注入的事件标识（值：hook=hook point 名，tool="tool"）。
 pub const YOMI_EVENT: &str = crate::env_name!("EVENT");
 
+/// spawn 型外挂（hook / 外挂 tool / 卡片触发器）stdin JSON 契约版本。
+/// 承诺"只增不改"；真到破环变更那天，协商通道就是这个字段。
+pub const SPAWN_CONTRACT_VERSION: u32 = 1;
+
 /// Agent 命令执行的 shell 解释器覆盖（`utils::shell::detect` 的显式
 /// 指定入口；不设则按平台回退链探测）。
 pub const YOMI_SHELL: &str = crate::env_name!("SHELL");
@@ -32,6 +36,16 @@ pub fn inject_child_env<'a>(
     match data_dir {
         Some(dir) => {
             cmd.env(YOMI_DATA_DIR, dir);
+            // `<data_dir>/bin` 是用户与扩展的命令层（扩展包 bin/ 资源
+            // 挂载点，见 crate::pkg）：prepend 进 PATH，所有 yomi 子进程
+            // （shell 工具、cron、hook、外挂 tool）同一入口获得解析。
+            // 与 `path::prepend_exe_dir_to_path`（sidecar CLI 同版保证）
+            // 同哲学：exe 目录归内核自带，bin 目录归用户与扩展。目录
+            // 不存在也加——PATH 里的空目录无害，省一次存在性探测。
+            let bin = dir.join("bin");
+            if let Ok(path) = std::env::var("PATH") {
+                cmd.env("PATH", crate::utils::path::prepend_path_dir(&path, &bin));
+            }
         }
         None => {
             cmd.env_remove(YOMI_DATA_DIR);

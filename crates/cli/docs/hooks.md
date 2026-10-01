@@ -22,6 +22,7 @@ $YOMI_DATA_DIR/hooks/pre_tool_use/   # gate 点（另有 turn_start/turn_end 与
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
+| `v` | number | spawn 契约版本（当前 1；只增不改承诺的协商通道） |
 | `session_id` | string | 会话 id；要对话历史用 `yomi session cat "$YOMI_SESSION_ID"` |
 | `cwd` | string | session working_dir（脚本进程 cwd 同此） |
 | `hook_event_name` | string | 恒 `"pre_tool_use"` |

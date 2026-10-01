@@ -166,6 +166,7 @@ async fn run_feeds_contract_and_sanitizes_env() {
     assert_eq!(
         stdin,
         serde_json::json!({
+            "v": 1,
             "event": "card_trigger",
             "name": "publish",
             "channel": "feishu",

@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- 扩展包：`yomi extension install|list|remove`——一个目录 + `ext.toml` 把 cron/hooks/bin/snippets 作为一个东西安装与卸载（幂等可重跑，remove 精确回滚；包格式与语义见 `yomi doc extension`，示例包在 `examples/extensions/demo`）。
+- `<data_dir>/bin` 进入所有 yomi 子进程 PATH 最前：扩展包的 bin 命令与手工放入该目录的脚本可直接按名调用。
+- system prompt 新增扩展 snippet 层：已安装扩展的 `snippets/*.md` 拼装在项目约定之后、skills 索引之前（`yomi doc extension`）。
+- hook / 外挂 tool / 飞书卡片触发器的 stdin JSON 新增 `v` 契约版本字段（当前 1）。
+- `yomi doctor` 新增扩展健康检查：装了的扩展源目录破损（broken source）时告警并指向排障文档。
+
 ## [0.10.54] - 2026-09-30
 
 ### Changed

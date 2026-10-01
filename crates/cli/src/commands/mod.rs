@@ -6,6 +6,7 @@ pub mod daemon;
 pub mod doc;
 pub mod doctor;
 pub mod events;
+pub mod extension;
 pub mod gc;
 pub mod rpc;
 pub mod run;

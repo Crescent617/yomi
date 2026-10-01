@@ -179,6 +179,39 @@ pub async fn run(global: &GlobalArgs) -> Result<()> {
             Err(e) => checks.push(check(Level::Warn, "cron", format!("query failed: {e}"))),
         }
 
+        // 扩展健康：broken source（源被删/挪）只在 list 里可见，而装的
+        // 恰是"装一次不再看"的包——doctor 替用户盯。
+        match client.extension_list().await {
+            Ok(exts) => {
+                let broken: Vec<&str> = exts
+                    .iter()
+                    .filter(|e| e["health"].as_str() != Some("ok"))
+                    .filter_map(|e| e["name"].as_str())
+                    .collect();
+                if broken.is_empty() {
+                    checks.push(check(
+                        Level::Ok,
+                        "extensions",
+                        format!("{} installed", exts.len()),
+                    ));
+                } else {
+                    checks.push(check(
+                        Level::Warn,
+                        "extensions",
+                        format!(
+                            "broken source: {} (see `yomi doc extension` 排障表)",
+                            broken.join(", ")
+                        ),
+                    ));
+                }
+            }
+            Err(e) => checks.push(check(
+                Level::Warn,
+                "extensions",
+                format!("query failed: {e}"),
+            )),
+        }
+
         match client.list_running_sessions().await {
             Ok(running) => {
                 checks.push(check(

@@ -17,6 +17,13 @@ struct MockStore {
 
 #[async_trait::async_trait]
 impl CronStore for MockStore {
+    async fn list_by_prefix(
+        &self,
+        _prefix: &str,
+        _limit: usize,
+    ) -> Result<Vec<crate::cron::CronJob>, crate::cron::CronError> {
+        Ok(Vec::new())
+    }
     async fn create(&self, job: &CronJob) -> Result<(), CronError> {
         self.jobs
             .lock()

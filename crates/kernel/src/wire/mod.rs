@@ -11,7 +11,11 @@ use serde::{Deserialize, Serialize};
 /// 31: `Event::Btw` 是新枚举变体——旧客户端反序列化事件帧会直接失败
 /// （连接被读端当致命错误掐断），属破坏性变更，必须让旧端在 Hello 处
 /// 快速失败而不是在事件流上反复重连暴毙。
-pub const WIRE_PROTOCOL_VERSION: u32 = 31;
+/// 32: `ReqMethod` 新增 extension_install/list/remove——老 daemon 收
+/// 到未知变体的请求帧按 InvalidData 断连接（不是拒单帧），新客户端须
+/// 在 Hello 处快速失败拿到干净的 WireProtocolMismatch，而不是含糊的
+/// connection lost。
+pub const WIRE_PROTOCOL_VERSION: u32 = 32;
 
 /// All operations a client can request from the daemon.
 ///
@@ -330,6 +334,23 @@ pub enum ReqMethod {
     ExtRoute {
         source: String,
         key: String,
+    },
+
+    // ── Extension packages（扩展包；设计 docs/design/ext-packages.md）──
+    /// 收编扩展包（校验 manifest → 收编 → 挂载 hooks/bin → 收养 cron →
+    /// 写安装记录）。幂等可重跑。Result: `InstallReport`。
+    ExtensionInstall {
+        /// 包根目录（含 ext.toml）。
+        path: String,
+        /// true = 实体复制进 extensions/（默认 symlink，源仓 pull 即更新）。
+        #[serde(default)]
+        copy: bool,
+    },
+    ExtensionList,
+    /// 卸载：cron 前缀清扫 → 摘挂载（指向判定）→ 删 extensions/<名> →
+    /// 删记录。Result: `RemoveReport`。
+    ExtensionRemove {
+        name: String,
     },
 
     // ── Model ────────────────────────────────────────────────────────

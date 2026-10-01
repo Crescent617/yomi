@@ -166,3 +166,33 @@ fn test_parse_number_with_unit() {
     assert_eq!(parse_number_with_unit("invalid"), None);
     assert_eq!(parse_number_with_unit(""), None);
 }
+
+#[test]
+fn inject_child_env_prepends_data_dir_bin_to_path() {
+    let get = |cmd: &tokio::process::Command, key: &str| {
+        cmd.as_std()
+            .get_envs()
+            .find(|(k, _)| *k == std::ffi::OsStr::new(key))
+            .and_then(|(_, v)| v)
+            .map(|v| v.to_string_lossy().into_owned())
+    };
+
+    let old_path = std::env::var("PATH").unwrap_or_default();
+    let mut cmd = tokio::process::Command::new("true");
+    inject_child_env(
+        &mut cmd,
+        Some(std::path::Path::new("/data")),
+        Some("sess_1"),
+    );
+    let path = get(&cmd, "PATH").expect("PATH injected");
+    assert!(
+        path.starts_with(&format!("{}/bin:", std::path::Path::new("/data").display())),
+        "data_dir/bin prepended: {path}"
+    );
+    assert!(path.contains(&old_path), "original PATH preserved");
+
+    // data_dir = None：不动 PATH。
+    let mut cmd = tokio::process::Command::new("true");
+    inject_child_env(&mut cmd, None, Some("sess_1"));
+    assert_eq!(get(&cmd, "PATH"), None);
+}

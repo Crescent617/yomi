@@ -30,6 +30,13 @@ impl MockStore {
 
 #[async_trait]
 impl CronStore for MockStore {
+    async fn list_by_prefix(
+        &self,
+        _prefix: &str,
+        _limit: usize,
+    ) -> Result<Vec<crate::cron::CronJob>, crate::cron::CronError> {
+        Ok(Vec::new())
+    }
     async fn create(&self, _job: &CronJob) -> Result<(), CronError> {
         Ok(())
     }

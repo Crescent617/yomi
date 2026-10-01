@@ -42,8 +42,13 @@ const TOPICS: &[Topic] = &[
     },
     Topic {
         name: "extensions",
-        summary: "扩展点总览：hook/外挂 tool/飞书卡片触发器的注册约定",
+        summary: "扩展点总览：hook/外挂 tool/飞书卡片触发器/扩展包的注册约定",
         content: include_str!("../../docs/extensions.md"),
+    },
+    Topic {
+        name: "extension",
+        summary: "扩展包契约：ext.toml 格式、install/list/remove 幂等语义、snippet 拼装、bin/PATH",
+        content: include_str!("../../docs/extension.md"),
     },
     Topic {
         name: "hooks",

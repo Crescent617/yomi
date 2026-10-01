@@ -917,6 +917,7 @@ impl Conductor {
                 .with_skills(&ctx.skills)
                 .with_working_dir(&ctx.cwd)
                 .with_session_id(&sid.0)
+                .with_data_dir(&self.data_dir)
                 .build()
                 .await;
             // 快照 = system + 历史 + 事件流半截 + 包裹问题。

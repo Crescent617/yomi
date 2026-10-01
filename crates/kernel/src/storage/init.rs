@@ -38,6 +38,9 @@ pub struct StorageSet {
     favorite_store: Arc<dyn super::FavoriteStore>,
     /// Cron job store
     cron_store: Arc<dyn crate::cron::CronStore>,
+    /// Extension package install records (audit only; correctness never
+    /// depends on it — see `crate::pkg`).
+    ext_install_store: Arc<dyn crate::pkg::ExtInstallStore>,
     /// Channel session mapping store
     channel_store: Arc<dyn crate::channels::ChannelStore>,
     /// Disposable persistent KV cache (`cache.db`; `None` when it failed
@@ -59,6 +62,7 @@ impl std::fmt::Debug for StorageSet {
             .field("pinned_session_store", &"<dyn PinnedSessionStore>")
             .field("favorite_store", &"<dyn FavoriteStore>")
             .field("cron_store", &"<dyn CronStore>")
+            .field("ext_install_store", &"<dyn ExtInstallStore>")
             .field("channel_store", &"<dyn ChannelStore>")
             .field("kv_cache", &self.kv_cache.is_some())
             .finish()
@@ -150,6 +154,8 @@ impl StorageSet {
             Arc::new(super::SqliteFavoriteStore::new(pool.clone()));
         let cron_store: Arc<dyn crate::cron::CronStore> =
             Arc::new(SqliteCronStore::new(pool.clone()));
+        let ext_install_store: Arc<dyn crate::pkg::ExtInstallStore> =
+            Arc::new(crate::pkg::SqliteExtInstallStore::new(pool.clone()));
         let channel_store: Arc<dyn crate::channels::ChannelStore> = Arc::new(
             crate::channels::store::SqliteChannelStore::new(pool.clone()),
         );
@@ -198,6 +204,7 @@ impl StorageSet {
             pinned_session_store,
             favorite_store,
             cron_store,
+            ext_install_store,
             channel_store,
             kv_cache,
         })
@@ -272,6 +279,10 @@ impl StorageSet {
     /// Get the cron store
     pub fn cron_store(&self) -> Arc<dyn crate::cron::CronStore> {
         self.cron_store.clone()
+    }
+
+    pub fn ext_install_store(&self) -> Arc<dyn crate::pkg::ExtInstallStore> {
+        self.ext_install_store.clone()
     }
 
     /// Get the channel store

@@ -128,6 +128,7 @@ fn is_executable(md: &std::fs::Metadata) -> bool {
 /// stdin 负载（契约见模块 doc；Option 字段缺省序列化为 null）。
 #[derive(serde::Serialize)]
 struct TriggerInput<'a> {
+    v: u32,
     event: &'static str,
     name: &'a str,
     channel: &'a str,
@@ -144,6 +145,7 @@ struct TriggerInput<'a> {
 /// 显式移除防残留；state 目录惰性创建。
 async fn run(data_dir: &Path, channel: &str, name: &str, path: &Path, action: &CardAction) {
     let payload = TriggerInput {
+        v: crate::utils::env::SPAWN_CONTRACT_VERSION,
         event: EVENT_NAME,
         name,
         channel,

@@ -15,7 +15,7 @@ use commands::tui;
 #[command(name = "yomi")]
 #[command(
     about = "Yomi agent kernel CLI — manage sessions, cron, skills, config, channels and the daemon",
-    long_about = "Yomi is an agent kernel: a daemon hosts sessions (TUI, headless runs, channel sessions, cron-triggered runs). This CLI is its control surface, used by humans and by the agent itself for self-management.\n\nTask map:\n  do work now       run (headless) | tui | session send (running session)\n  inspect sessions  session list | cat | search | mailbox | wait\n  schedule work     cron create | list | trigger\n  configure         config show | get | set | schema\n  built-in manual   doc (e.g. `yomi doc skills`)",
+    long_about = "Yomi is an agent kernel: a daemon hosts sessions (TUI, headless runs, channel sessions, cron-triggered runs). This CLI is its control surface, used by humans and by the agent itself for self-management.\n\nTask map:\n  do work now       run (headless) | tui | session send (running session)\n  inspect sessions  session list | cat | search | mailbox | wait\n  schedule work     cron create | list | trigger\n  configure         config show | get | set | schema\n  extend            extension install | list | remove\n  built-in manual   doc (e.g. `yomi doc skills`)",
     version
 )]
 struct Args {
@@ -50,6 +50,8 @@ enum Commands {
     Rpc(RpcArgs),
     /// Manage cron jobs
     Cron(CronArgs),
+    /// Install, list and remove extension packages (see `yomi doc extension`)
+    Extension(ExtensionArgs),
     /// Drive platform channels (open a thread with a fresh session)
     Channel(commands::channel::ChannelArgs),
     /// Health-check the daemon, channels, cron, storage and config
@@ -181,6 +183,35 @@ struct SkillArgs {
 enum SkillsCommands {
     /// List all available skills
     List,
+}
+
+#[derive(Parser)]
+struct ExtensionArgs {
+    #[command(flatten)]
+    global: GlobalArgs,
+
+    #[command(subcommand)]
+    command: ExtensionCommands,
+}
+
+#[derive(Subcommand)]
+enum ExtensionCommands {
+    /// Install an extension package (idempotent; re-run converges)
+    Install {
+        /// Package root directory (contains ext.toml)
+        path: String,
+        /// Copy the package into extensions/ instead of symlinking
+        /// (updates require re-install; default follows the source repo)
+        #[arg(long)]
+        copy: bool,
+    },
+    /// List installed extensions
+    List,
+    /// Remove an extension (cron by prefix, mounts by ownership)
+    Remove {
+        /// Extension name
+        name: String,
+    },
 }
 
 #[derive(Parser)]
@@ -427,6 +458,7 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Rpc(args)) => commands::rpc::run(args).await,
         Some(Commands::Cron(args)) => run_cron(args).await,
+        Some(Commands::Extension(args)) => run_extension(args).await,
         Some(Commands::Channel(args)) => commands::channel::run(args).await,
         Some(Commands::Doctor(global)) => commands::doctor::run(&global).await,
         Some(Commands::Doc(args)) => commands::doc::run(args.topic.as_deref()),
@@ -515,6 +547,16 @@ async fn run_usage(args: UsageArgs) -> Result<()> {
         })
     };
     commands::usage::show(args.global, args.days, filter).await
+}
+
+async fn run_extension(args: ExtensionArgs) -> Result<()> {
+    match args.command {
+        ExtensionCommands::Install { path, copy } => {
+            commands::extension::install(&args.global, path, copy).await
+        }
+        ExtensionCommands::List => commands::extension::list(&args.global).await,
+        ExtensionCommands::Remove { name } => commands::extension::remove(&args.global, name).await,
+    }
 }
 
 async fn run_cron(args: CronArgs) -> Result<()> {

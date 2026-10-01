@@ -88,6 +88,7 @@ impl Tool for SpawnTool {
         // 自行 mkdir。
         crate::utils::env::ensure_state_dir("tool", &self.name, &self.state_dir).await;
         let payload = match serde_json::to_vec(&serde_json::json!({
+            "v": crate::utils::env::SPAWN_CONTRACT_VERSION,
             "event": "tool",
             "session_id": ctx.session_id,
             "cwd": ctx.working_dir.to_string_lossy(),

@@ -97,8 +97,11 @@ const HOOK_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_REASON_CHARS: usize = 2000;
 
 /// stdin 负载（见模块 doc；`hook_event_name` 恒为 hook point 目录名）。
+/// `v` = spawn 契约版本（`utils::env::SPAWN_CONTRACT_VERSION`，只增不改
+/// 承诺的协商通道；v1 起存在）。
 #[derive(Debug, serde::Serialize)]
 pub struct PreToolUseInput {
+    pub v: u32,
     pub session_id: String,
     pub cwd: String,
     pub hook_event_name: &'static str,
@@ -110,6 +113,7 @@ pub struct PreToolUseInput {
 /// 异步落盘，hook 触发瞬间 `session cat` 可能还读不到这条新消息。
 #[derive(Debug, serde::Serialize)]
 pub struct TurnStartInput {
+    pub v: u32,
     pub session_id: String,
     pub cwd: String,
     pub hook_event_name: &'static str,
@@ -124,6 +128,7 @@ pub struct TurnStartInput {
 /// `turn_end` stdin 负载。`error` 仅 `stop_reason == "failed"` 时存在。
 #[derive(Debug, serde::Serialize)]
 pub struct TurnEndInput {
+    pub v: u32,
     pub session_id: String,
     pub cwd: String,
     pub hook_event_name: &'static str,
@@ -261,6 +266,7 @@ pub async fn run_pre_tool_use(
     let mut outcome = PreToolUseOutcome::default();
     'calls: for (i, call) in calls.iter().enumerate() {
         let payload = PreToolUseInput {
+            v: crate::utils::env::SPAWN_CONTRACT_VERSION,
             session_id: session_id.to_string(),
             cwd: working_dir.to_string_lossy().into_owned(),
             hook_event_name: POINT_PRE_TOOL_USE,
@@ -401,6 +407,7 @@ pub async fn run_daemon_point(data_dir: &Path, point: &str) {
         return;
     }
     let payload = serde_json::json!({
+        "v": crate::utils::env::SPAWN_CONTRACT_VERSION,
         "event": point,
         "cwd": data_dir.to_string_lossy(),
     });
