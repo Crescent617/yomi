@@ -52,6 +52,8 @@ evals/harness-e2e.sh
 just ci
 ```
 
+e2e/调试起 daemon 必须三重隔离：`YOMI_DATA_DIR`（数据）、`YOMI_SOCKET`（socket/pid）、`YOMI_CONFIG`（**config 也必须隔离**——只隔离前两个的话，daemon 按默认发现读 `~/.yomi/config.toml`，以真 bot 身份连渠道 ws，测试实例与生产同号在线抢消息）。`evals/ext-e2e.sh` 已内置空 config 范例。
+
 ## Architecture Overview
 
 ### Crate Structure
