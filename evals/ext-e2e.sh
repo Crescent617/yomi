@@ -102,6 +102,20 @@ echo "$out" | grep -q "exists, untouched" && ok "reinstall idempotent" || bad "r
 rows=$(sqlite3 "$DB" "SELECT COUNT(*) FROM cron_jobs WHERE name LIKE 'ext:e2e-demo:%'")
 check "reinstall no duplicate cron" "2" "$rows"
 
+# 升级：包内容变化后重装 = 原位更新——ext.lock 换 content_hash、
+# 安装目录内容刷新、ext.toml 仍逐字、cron 不重复。
+old_hash=$(grep '^content_hash = ' "$lock")
+sed -i '' 's/^version = "0.1.0"$/version = "0.2.0"/' "$PKG/ext.toml"
+echo "e2e convention: always pass, now v2" > "$PKG/snippets/convention.md"
+out=$("$YOMI" extension install "$PKG" 2>&1)
+echo "$out" | grep -q "Installed extension e2e-demo v0.2.0" && ok "upgrade report" || bad "upgrade report" "$out"
+new_hash=$(grep '^content_hash = ' "$lock")
+[ "$old_hash" != "$new_hash" ] && ok "upgrade bumps content hash" || bad "upgrade bumps content hash" "$lock"
+grep -q "now v2" "$DATA/extensions/e2e-demo/snippets/convention.md" && ok "upgrade refreshes content" || bad "upgrade refreshes content" "stale"
+cmp -s "$PKG/ext.toml" "$DATA/extensions/e2e-demo/ext.toml" && ok "upgrade ext.toml verbatim" || bad "upgrade ext.toml verbatim" "changed"
+rows=$(sqlite3 "$DB" "SELECT COUNT(*) FROM cron_jobs WHERE name LIKE 'ext:e2e-demo:%'")
+check "upgrade no duplicate cron" "2" "$rows"
+
 # ── 3. list：health 必须是 ok（hash 比对真正生效，不是子串误配）──
 out=$("$YOMI" extension list)
 health=$(echo "$out" | awk '$1 == "e2e-demo" {print $3}')
