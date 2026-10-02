@@ -261,6 +261,15 @@ fn init_path_validation() {
     let err = parse_manifest(dir.path()).unwrap_err();
     assert!(err.to_string().contains("only [a-zA-Z0-9._/-]"), "{err}");
 
+    // 无斜杠：shell 走 PATH 查找会命中 <data_dir>/bin 里别的扩展的
+    // 同名 bin，拒。
+    let dir = write_pkg(&[
+        ("ext.toml", &format!("{BASE}init = \"init.sh\"\n")),
+        ("init.sh", "#!/bin/sh\n"),
+    ]);
+    let err = parse_manifest(dir.path()).unwrap_err();
+    assert!(err.to_string().contains("subdirectory path"), "{err}");
+
     // 绝对路径：join 会被整体替换、装到目标位置后必 127，拒。
     let dir = write_pkg(&[("ext.toml", &format!("{BASE}init = \"/tmp/evil.sh\"\n"))]);
     let err = parse_manifest(dir.path()).unwrap_err();

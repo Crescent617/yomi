@@ -167,6 +167,14 @@ impl ExtManifest {
                     "ext.init '{rel}': only [a-zA-Z0-9._/-] allowed in script path"
                 )));
             }
+            // 必须含斜杠：无斜杠的名字在 shell 里走 PATH 查找——
+            // PATH 已含 <data_dir>/bin，会执行到别的扩展的同名 bin
+            // （或 127），与"从已装目录执行"的约定不符。
+            if !rel.contains('/') {
+                return Err(ExtError::Invalid(format!(
+                    "ext.init '{rel}': use a subdirectory path like scripts/{rel}"
+                )));
+            }
             let size = std::fs::metadata(&canonical)
                 .map_err(|e| ExtError::Invalid(format!("stat ext.init: {e}")))?
                 .len();
