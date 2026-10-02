@@ -15,8 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.58] - 2026-10-02
+
 ### Added
-- 扩展包新增 `ext.init` 安装钩子：声明了就在装完/刷新后从已装目录执行（每次安装都跑，幂等是作者约定），执行环境注入 `YOMI_DATA_DIR`、PATH 含已挂 bin 命令。初始化脚本放包内 `scripts/`，不需要进 `bin/`。
+- 扩展包 manifest 新增 `ext.init` 安装钩子：声明了就在装完/刷新后从已装目录执行包内脚本（每次安装都跑，幂等是作者约定）。执行环境注入 `YOMI_DATA_DIR`、PATH 含已挂 bin 命令；超时 120 秒或退出非零则安装报错。初始化脚本约定放 `scripts/`（不进 PATH），`bin/` 只放日常命令。详见 `yomi doc extension`。
 
 ## [0.10.57] - 2026-10-02
 
