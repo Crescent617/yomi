@@ -103,40 +103,6 @@ fn in_dir_lock_is_inert_author_file() {
     );
 }
 
-#[test]
-fn legacy_in_dir_lock_adopted_in_memory_only() {
-    // 0.10.55/56 的存量安装：注册表无条目、包目录里有旧版 in-dir
-    // lock——读取时内存采用（health/可见性正常），但不写注册表：
-    // 持久化是 install/remove（持注册表全局锁）的持锁收养职责，
-    // 读路径无锁整表重写会与并发 install 的 upsert 互踩。
-    let (data, ext) = pkg();
-    std::fs::write(
-        ext.join("ext.lock"),
-        r#"source = "old/pkg"
-rev = "cafe"
-content_hash = "legacyhash"
-installed_at = "2026-10-01T22:00:00Z"
-
-[resources]
-cron = ["ext:demo:tick"]
-hooks = ["pre_tool_use/50-guard"]
-bins = ["recall"]
-snippets = ["memory.md"]
-"#,
-    )
-    .unwrap();
-
-    let installed = read_installed(data.path(), &ext).unwrap();
-    let meta = installed.meta.expect("legacy entry adopted in memory");
-    assert_eq!(meta.source, "old/pkg");
-    assert_eq!(meta.rev.as_deref(), Some("cafe"));
-    assert_eq!(meta.content_hash, "legacyhash");
-    assert_eq!(meta.resources.bins, vec!["recall"]);
-
-    // 读路径不持久化：注册表仍无该条目。
-    assert!(read_lockfile(data.path()).get("demo").is_none());
-}
-
 #[tokio::test]
 async fn list_installed_sorts_and_marks_foreign() {
     let data = tempfile::tempdir().unwrap();

@@ -15,10 +15,6 @@
 //! 文件系统，与 hooks/tools/skills 的"目录即注册表"一致）。正确性
 //! 仍不依赖元数据——remove 的兜底（cron 前缀清扫 + 挂载指向判定）
 //! 不变，lock 只是让回滚更精确、目录删除有归属证明。
-//!
-//! hash 口径：包内容 hash 计算**跳过包目录内的 ext.lock**——
-//! 0.10.55/56 的存量安装指纹是跳过它算的；包内同名文件（作者自带
-//! 或旧版工具写的）只是普通内容，照复制、不解析、不入指纹。
 
 use std::path::{Path, PathBuf};
 
@@ -106,19 +102,6 @@ pub struct Provenance {
     pub rev: Option<String>,
 }
 
-/// 0.10.55/56 的旧版单包 meta（包目录内 ext.lock 的格式）——仅迁移用。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-struct LegacyInstallMeta {
-    source: String,
-    rev: Option<String>,
-    content_hash: String,
-    resources: Resources,
-    /// 个别手写/截断的 legacy lock 可能缺时间：容错为迁移时刻。
-    #[serde(default = "chrono::Utc::now")]
-    installed_at: chrono::DateTime<chrono::Utc>,
-}
-
 /// 注册表路径：`extensions/ext.lock`。
 pub fn lockfile_path(data_dir: &Path) -> PathBuf {
     data_dir.join(DIR_NAME).join(LOCK_FILE)
@@ -171,26 +154,8 @@ pub fn write_lockfile(data_dir: &Path, lf: &ExtLockfile) -> Result<(), String> {
     std::fs::rename(&tmp, &path).map_err(|e| format!("rename {}: {e}", tmp.display()))
 }
 
-/// 从旧版包目录内 ext.lock 解析一条记录（0.10.55/56 的存量安装）。
-/// 纯读取、不落盘——持久化是 install/remove（持注册表全局锁）的
-/// 职责；读路径（list/health）只内存采用，避免无锁整表重写与并发
-/// install 的 upsert 互踩。
-pub fn legacy_entry(ext_dir: &Path, name: &str) -> Option<LockEntry> {
-    let raw = std::fs::read_to_string(ext_dir.join(LOCK_FILE)).ok()?;
-    let meta = toml::from_str::<LegacyInstallMeta>(&raw).ok()?;
-    Some(LockEntry {
-        name: name.to_string(),
-        source: meta.source,
-        rev: meta.rev,
-        content_hash: meta.content_hash,
-        resources: meta.resources,
-        installed_at: meta.installed_at,
-    })
-}
-
 /// 一个已装扩展 = 其 manifest + 注册表里的条目（可缺：用户手放的
-/// 目录——list 展示为 foreign，remove 拒绝）。legacy（0.10.55/56 的
-/// in-dir lock）在读取时内存采用，不写注册表。
+/// 目录——list 展示为 foreign，remove 拒绝）。
 #[derive(Debug, Clone)]
 pub struct InstalledExt {
     pub manifest: ExtManifest,
@@ -225,13 +190,8 @@ impl InstalledExt {
 pub fn read_installed(data_dir: &Path, ext_dir: &Path) -> Result<InstalledExt, String> {
     let manifest = parse_manifest(ext_dir).map_err(|e| e.to_string())?;
     let name = manifest.ext.name.clone();
-    // 注册表条目；存量（0.10.55/56）in-dir lock 读取时内存采用，
-    // 持久化留给 install/remove 的持锁收养——读路径不做无锁整表重写
-    // （会与并发 install 的 upsert 互踩）。
-    let meta = read_lockfile(data_dir)
-        .get(&name)
-        .cloned()
-        .or_else(|| legacy_entry(ext_dir, &name));
+    // 条目只在包外注册表里——包内 ext.lock 是普通内容，永不解析。
+    let meta = read_lockfile(data_dir).get(&name).cloned();
     Ok(InstalledExt {
         manifest,
         meta,

@@ -104,18 +104,8 @@ pub async fn install(
     // 会把其他扩展的条目一起抹掉），各阶段改条目后原子重写。
     let mut lockfile = super::read_lockfile_strict(data_dir).map_err(ExtError::Invalid)?;
     // previous 一律锁内从注册表取（调用方在锁外预读的可能是陈旧
-    // 快照，不可取）；锁内无条目再收养存量（0.10.55/56）in-dir
-    // lock——同样在这把锁底下持久化（读路径只做内存采用，无锁整表
-    // 重写会与并发的 upsert 互踩）。
-    let mut previous = lockfile.get(&name).cloned();
-    if previous.is_none() {
-        if let Some(entry) = super::legacy_entry(&ext_dir, &name) {
-            if let Err(e) = persist_entry(data_dir, &mut lockfile, entry.clone()) {
-                tracing::warn!(ext = %name, error = %e, "legacy adoption persist failed");
-            }
-            previous = Some(entry);
-        }
-    }
+    // 快照，不可取）；无条目 = 槽位空或 foreign（用户手放）。
+    let previous = lockfile.get(&name).cloned();
     // 清掉上次刷新崩溃遗留的隐藏临时目录（copy_refresh 的 .<名>.tmp，
     // 点开头扫描器不可见，不清就成永久泄漏）。
     let stray_tmp = data_dir.join(DIR_NAME).join(format!(".{name}.tmp"));
@@ -282,16 +272,6 @@ fn hash_package(dir: &Path) -> Result<String, ExtError> {
     let mut total: u64 = 0;
     for file in files {
         let rel = file.strip_prefix(dir).unwrap_or(&file);
-        // 包内 ext.lock 跳过：0.10.55/56 的存量安装其 content_hash 是
-        // 跳过包内 lock 算的，恢复跳过才能与原指纹比对（否则全部误报
-        // modified）。安全面不受影响——所有权判定只看包外注册表，
-        // 包内 lock 只是普通文件、不被解析；新旧口径一致即可。
-        if rel
-            .file_name()
-            .is_some_and(|n| n.eq_ignore_ascii_case(super::LOCK_FILE))
-        {
-            continue;
-        }
         hasher.update(rel.to_string_lossy().as_bytes());
         hasher.update(&[0]);
         let mut buf = read_bounded(&file, rel)?;
