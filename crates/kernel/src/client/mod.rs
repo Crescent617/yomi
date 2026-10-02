@@ -347,7 +347,9 @@ pub trait KernelApi: Send + Sync {
     // ── Model ──────────────────────────────────────────────────────────────
     async fn list_models(&self) -> Result<Vec<crate::kernel::ModelInfo>>;
     async fn get_session_model(&self, session_id: &SessionId) -> Result<String>;
-    async fn set_session_model(&self, session_id: &SessionId, key: &str) -> Result<()>;
+    /// 设成配置默认模型时不是钉选而是清钉选——返回持久化钉选
+    /// （`None` = 已清/未钉），调用方据此刷新本地缓存，避免幻影钉选。
+    async fn set_session_model(&self, session_id: &SessionId, key: &str) -> Result<Option<String>>;
     async fn get_session_context_window(
         &self,
         session_id: &SessionId,

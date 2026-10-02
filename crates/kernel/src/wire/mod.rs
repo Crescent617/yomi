@@ -353,7 +353,7 @@ pub enum ReqMethod {
     /// 预览指定工作目录（缺省 daemon 默认 workspace）下新会话将获得
     /// 的完整 system prompt——与 spawn 同一装配路径（compose 基础段 +
     /// 项目 memory + skills 表 + 扩展 snippets），供调试与装扩展后
-    /// 验收。Result: `{"prompt": String}`。
+    /// 验收。Result: 完整 system prompt（裸 String）。
     PreviewSystemPrompt {
         working_dir: Option<String>,
         session_id: Option<String>,

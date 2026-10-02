@@ -305,7 +305,7 @@ pub async fn set_session_model(
     state: State<'_, AppState>,
     session_id: String,
     key: String,
-) -> Result<(), GuiError> {
+) -> Result<Option<String>, GuiError> {
     let sid = kernel::SessionId::from(session_id);
     state
         .kernel_snapshot()

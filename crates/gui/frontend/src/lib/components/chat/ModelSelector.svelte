@@ -80,9 +80,11 @@
     const sid = session_id;
     loading = true;
     try {
-      await setSessionModel(sid, key);
+      const pin = await setSessionModel(sid, key);
       const session = getSession(sid);
-      if (session) session.model_key = key;
+      // 返回值是服务端持久化钉选：选默认模型时已被清钉（null），
+      // 本地缓存必须跟着清，否则幻影钉选会继承给新建会话。
+      if (session) session.model_key = pin ?? undefined;
       if (session_id === sid) {
         activeModel = key;
         error = null;

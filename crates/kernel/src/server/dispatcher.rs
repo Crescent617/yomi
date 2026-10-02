@@ -782,10 +782,7 @@ impl KernelServer {
                 let sid = SessionId::from(session_id);
                 rpc_body(
                     "set_session_model_failed",
-                    self.kernel
-                        .set_session_model(&sid, &key)
-                        .await
-                        .map(|()| serde_json::Value::Null),
+                    self.kernel.set_session_model(&sid, &key).await,
                 )
             }
             ReqMethod::GetSessionContextWindow { session_id } => {

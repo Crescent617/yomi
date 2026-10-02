@@ -903,16 +903,22 @@ impl Kernel {
         self.agent_config.default_model.clone()
     }
 
-    /// Set the model for a session (persisted to database).
+    /// Set the model for a session (persisted to database), returning the
+    /// persisted pin (`None` = unpinned).
     ///
     /// 设成配置默认模型时不是钉选而是清钉选——会话回到跟随
     /// `default_model`（含以后的默认变更）；钉选只承载非默认选择。
-    pub async fn set_session_model(&self, session_id: &SessionId, key: &str) -> Result<()> {
+    pub async fn set_session_model(
+        &self,
+        session_id: &SessionId,
+        key: &str,
+    ) -> Result<Option<String>> {
         if !self.models.contains_key(key) {
             return Err(SessionError::Other(format!("Model '{key}' not found in config")).into());
         }
+        let default = key == self.agent_config.default_model;
         let store = self.session_store().await;
-        let rows_affected = if key == self.agent_config.default_model {
+        let rows_affected = if default {
             store.clear_model_key(session_id).await?
         } else {
             store.update_model_key(session_id, key).await?
@@ -923,7 +929,7 @@ impl Kernel {
             }
             .into());
         }
-        Ok(())
+        Ok((!default).then(|| key.to_string()))
     }
 
     /// Clear the session's model override — it follows the configured
@@ -1060,7 +1066,11 @@ impl Kernel {
                 project_id: input.project_id.clone(),
                 working_dir,
                 auto_approve_level: Some(auto_approve_level.as_str().to_string()),
-                model_key: input.model_key.clone(),
+                // 钉选只承载非默认选择：创建时传配置默认视同未指定
+                // （与 set_session_model 的清钉选语义一致）。
+                model_key: input
+                    .model_key
+                    .filter(|k| k != &self.agent_config.default_model),
                 settings: input.context_window.filter(|&cw| cw > 0).map(|cw| {
                     crate::storage::SessionOverrides {
                         context_window: Some(cw),
@@ -2351,12 +2361,16 @@ impl Kernel {
         working_dir: Option<String>,
         session_id: Option<String>,
     ) -> Result<String> {
+        // 与 create_session 同款 canonicalize（create 时定型存储，预览
+        // 必须走同一解析，否则 /var→/private/var 之类会让预览与真实
+        // spawn 的 skills 路径段分叉）。
+        let working_dir = match working_dir.map(std::path::PathBuf::from) {
+            Some(p) => Some(tokio::fs::canonicalize(&p).await.unwrap_or(p)),
+            None => None,
+        };
         Ok(self
             .conductor
-            .preview_system_prompt(
-                working_dir.map(std::path::PathBuf::from),
-                session_id.as_deref(),
-            )
+            .preview_system_prompt(working_dir, session_id.as_deref())
             .await)
     }
 }

@@ -15,8 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.56] - 2026-10-02
+
 ### Added
-- `yomi rpc preview_system_prompt`：预览指定工作目录（缺省 daemon 默认 workspace）下新会话将获得的完整 system prompt——装扩展后验收 snippet 拼装不必开新会话问模型。注意 wire 协议升至 33，旧版本 CLI 连新 daemon 会在握手处报版本不匹配。
+- `yomi rpc preview_system_prompt`：预览指定工作目录（缺省 daemon 默认 workspace）下新会话将获得的完整 system prompt——装扩展后验收 snippet 拼装不必开新会话问模型；裸调用即可，不必手写空参数。注意 wire 协议升至 33，旧版本 CLI 连新 daemon 会在握手处报版本不匹配。
+
+### Changed
+- 会话模型钉选语义统一：把会话模型设成配置默认 = 清除钉选，会话从此跟随默认（以后换默认自动跟上）；钉选只承载非默认选择。GUI 切换模型后界面指示与存储一致，选默认不再留下假钉选。
+
+### Fixed
+- `yomi extension list` 表头与数据列错位（描述列无表头，后续列整体错位一列）。
+- `yomi rpc preview_system_prompt` 的预览与真实新会话的 system prompt 不完全一致：路径含符号链接（如 macOS 的 /var → /private/var）时 skills 段路径分叉，现已逐字一致。
 
 ## [0.10.55] - 2026-10-01
 

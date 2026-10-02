@@ -1058,7 +1058,7 @@ export async function getSessionModel(session_id: string): Promise<string> {
 export async function setSessionModel(
   session_id: string,
   key: string,
-): Promise<void> {
+): Promise<string | null> {
   return invokeCmd("set_session_model", { session_id, key });
 }
 

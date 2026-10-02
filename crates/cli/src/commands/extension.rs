@@ -64,7 +64,14 @@ pub async fn list(_global: &GlobalArgs) -> Result<()> {
     let mut table = Table::new();
     table
         .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(vec!["NAME", "VERSION", "HEALTH", "SOURCE", "RESOURCES"]);
+        .set_header(vec![
+            "NAME",
+            "VERSION",
+            "HEALTH",
+            "DESC",
+            "SOURCE",
+            "RESOURCES",
+        ]);
     table.load_preset(comfy_table::presets::NOTHING);
     for row in &rows {
         let resources = row["resources"]

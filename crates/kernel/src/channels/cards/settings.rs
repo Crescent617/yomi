@@ -712,7 +712,9 @@ async fn write_model(
     if dirty {
         let sid = materialize_scope_session(channel_name, store, kernel, scope).await?;
         match key {
-            Some(k) => kernel.set_session_model(&sid, k).await?,
+            Some(k) => {
+                kernel.set_session_model(&sid, k).await?;
+            }
             None => kernel.clear_session_model(&sid).await?,
         }
     }

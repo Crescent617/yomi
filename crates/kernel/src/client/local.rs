@@ -491,7 +491,7 @@ impl KernelApi for Kernel {
         Ok(Self::get_session_model(self, session_id).await)
     }
 
-    async fn set_session_model(&self, session_id: &SessionId, key: &str) -> Result<()> {
+    async fn set_session_model(&self, session_id: &SessionId, key: &str) -> Result<Option<String>> {
         Self::set_session_model(self, session_id, key).await
     }
 

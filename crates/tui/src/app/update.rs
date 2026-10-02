@@ -681,7 +681,7 @@ impl Model {
                     tokio::spawn(async move {
                         let sid = kernel::types::SessionId::from(session_id);
                         match coord.set_session_model(&sid, &key).await {
-                            Ok(()) => {
+                            Ok(_pin) => {
                                 // Resolve display info from local config; fall back
                                 // gracefully if the key is unknown locally (e.g.
                                 // remote daemon with a different config).

@@ -218,7 +218,8 @@ async function hydrateSession(sessionId: string, session: SessionState) {
   session.parent_session_id = info.parent_id ?? undefined;
   session.permission_level =
     info.auto_approve_level ?? session.permission_level;
-  session.model_key = info.model_key ?? session.model_key;
+  // 服务端返回 null = 未钉（跟随默认），必须清掉本地值而不是保留旧钉。
+  session.model_key = info.model_key ?? undefined;
   session.updated_at = info.updated_at;
   session.todos = todos.todos;
   syncSessionStatus(sessionId, info, phaseRevisionAtRequest);
@@ -337,7 +338,7 @@ export function refreshSessions() {
           current.updated_at = s.created_at ?? current.updated_at;
           current.permission_level =
             s.auto_approve_level ?? current.permission_level;
-          current.model_key = s.model_key ?? current.model_key;
+          current.model_key = s.model_key ?? undefined;
           current.todos ??= [];
         }
       }

@@ -811,8 +811,8 @@ impl KernelApi for RemoteKernel {
         .await
     }
 
-    async fn set_session_model(&self, session_id: &SessionId, key: &str) -> Result<()> {
-        self.call_unit(ReqMethod::SetSessionModel {
+    async fn set_session_model(&self, session_id: &SessionId, key: &str) -> Result<Option<String>> {
+        self.call_json(ReqMethod::SetSessionModel {
             session_id: session_id.0.to_string(),
             key: key.to_string(),
         })

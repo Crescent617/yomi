@@ -185,6 +185,9 @@ installed_at、资源计数（cron/hooks/bins/snippets）、健康状态：
 - `modified`：lock 在但 hash 对不上（装完本地手改过包内容）。
 - `foreign`：目录在但没有 ext.lock（用户手放，不归包系统管）。
 - `unreadable`：ext.toml 读不了/解析失败。
+- `oversized`：目录里出现超过单文件上限（1 MiB）的文件——用户往
+  包里丢了大文件；与权限/损坏问题的 `unreadable` 分开，给出可行动
+  的诊断（移走大文件或重装）。
 
 ensure 语义下"manifest 改了但 job 没更新"是设计内行为，v1 靠
 remove+install（或重装同源）全量刷新。
@@ -243,6 +246,7 @@ cron 的 session 模板：不绑定固定 session（per-run 新会话），工�
 | `extension_install` | `{source}` | source = GitHub 简写/URL 或本地目录；返回 name + hash + 每项资源 created/exists/skipped 报告 |
 | `extension_list` | `{}` | extensions/ 扫描 + 健康状态 |
 | `extension_remove` | `{name}` | 返回回滚清单 |
+| `preview_system_prompt` | `{working_dir?, session_id?}` | 预览新会话完整 system prompt（与 spawn 同装配路径，逐字一致）；wire 33 新增 |
 
 dispatcher / KernelApi / RemoteKernel 三处同加。CLI `yomi extension
 install|list|remove` 全走 KernelApi（requires daemon，与 cron 一致）。
@@ -294,8 +298,10 @@ lock 才 allow_replace）。
 
 ## 分期落地
 
-- **一期**：install/list/remove + snippet 拼装 + **bin/PATH 层** +
-  wire 三方法 + `yomi extension` CLI + memory-system 包
+- **一期**：install/list/remove（health 含 ok/modified/foreign/
+  unreadable/oversized 五态）+ snippet 拼装 + **bin/PATH 层** +
+  wire 四方法（含 `preview_system_prompt`）+ `yomi extension` CLI +
+  memory-system 包
   （yomi-extensions 仓，memory-system-setup skill 退休）。hooks 挂载
   同版做；**tools/skill 挂载不做**（2026-10-01 hrli 拍板，二期）。
 - **二期（不占版，等真实需求）**：`extension update`（manifest 对比 +

@@ -1399,7 +1399,9 @@ pub(crate) async fn set_chat_model(
     )
     .await?;
     match key {
-        Some(k) => kernel.set_session_model(&chat_sid, k).await?,
+        Some(k) => {
+            kernel.set_session_model(&chat_sid, k).await?;
+        }
         None => kernel.clear_session_model(&chat_sid).await?,
     }
     for (mk, sid) in store.list_mappings(channel_name).await? {
@@ -1411,7 +1413,7 @@ pub(crate) async fn set_chat_model(
                 // 个别 session 失败（并发删除/陈旧 mapping）不中断扇出——
                 // 写得进去的写，失败仅告警。
                 let r = match key {
-                    Some(k) => kernel.set_session_model(&sid, k).await,
+                    Some(k) => kernel.set_session_model(&sid, k).await.map(|_| ()),
                     None => kernel.clear_session_model(&sid).await,
                 };
                 if let Err(e) = r {

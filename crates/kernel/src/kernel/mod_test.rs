@@ -649,6 +649,195 @@ async fn set_session_model_default_clears_pin() {
     let missing = crate::types::SessionId::new();
     assert!(kernel.set_session_model(&missing, "m2").await.is_err());
 
+    // 创建时传配置默认视同未指定（存储 NULL，不钉）。
+    let created = kernel
+        .create_session(crate::kernel::CreateSessionInput {
+            project_id: None,
+            working_dir: None,
+            auto_approve_level: None,
+            tool_blocklist: vec![],
+            model_key: Some("m1".to_string()),
+            context_window: None,
+        })
+        .await
+        .unwrap();
+    let info = kernel
+        .session_store()
+        .await
+        .get(&created)
+        .await
+        .unwrap()
+        .expect("session exists");
+    assert_eq!(info.model_key, None, "create with default = no pin");
+
+    kernel.stop().await;
+}
+
+/// `preview_system_prompt` 与真实 spawn 同一装配路径的回归锁：mock LLM
+/// 记录请求体里的 system 段，spawn 一轮后必须与 RPC 预览逐字一致
+/// （同 cwd / 同 session，含 workspace skill 段）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn preview_system_prompt_matches_spawn() {
+    use crate::provider::ModelConfig;
+    use std::sync::{Arc, Mutex};
+
+    let bodies: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    {
+        let bodies = Arc::clone(&bodies);
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let bodies = Arc::clone(&bodies);
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = Vec::new();
+                    let mut chunk = [0u8; 8192];
+                    let header_end = loop {
+                        let n = sock.read(&mut chunk).await.unwrap_or(0);
+                        if n == 0 {
+                            return;
+                        }
+                        buf.extend_from_slice(&chunk[..n]);
+                        if let Some(pos) =
+                            buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
+                        {
+                            break pos;
+                        }
+                    };
+                    let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
+                    let content_length: usize = headers
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .and_then(|v| v.trim().parse().ok())
+                        })
+                        .unwrap_or(0);
+                    while buf.len() - header_end < content_length {
+                        let n = sock.read(&mut chunk).await.unwrap_or(0);
+                        if n == 0 {
+                            break;
+                        }
+                        buf.extend_from_slice(&chunk[..n]);
+                    }
+                    bodies
+                        .lock()
+                        .unwrap()
+                        .push(String::from_utf8_lossy(&buf[header_end..]).to_string());
+                    let body = "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"stub\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"stub\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n{body}"
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                });
+            }
+        });
+    }
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    // workspace skill：锁 skills 表段同样被装配。
+    let skill_dir = tmp.path().join(".agents/skills/parity-skill");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: parity-skill\ndescription: parity lock fixture\n---\nfixture body\n",
+    )
+    .unwrap();
+
+    let mut config = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    config.models.clear();
+    config.models.push(ModelConfig {
+        name: "stub".to_string(),
+        model_id: "stub".to_string(),
+        endpoint: format!("http://{addr}"),
+        api_key: "stub".to_string(),
+        context_window: 128_000,
+        ..ModelConfig::default()
+    });
+    config.agent.default_model = "stub".to_string();
+    config.finalize();
+
+    let kernel = crate::build_kernel(&config, false).await.unwrap();
+    kernel.start();
+    let sid = kernel
+        .create_session(super::CreateSessionInput {
+            project_id: None,
+            working_dir: Some(tmp.path().to_path_buf()),
+            auto_approve_level: None,
+            tool_blocklist: Vec::new(),
+            model_key: None,
+            context_window: None,
+        })
+        .await
+        .unwrap();
+
+    kernel
+        .send_message_inner(
+            &sid,
+            vec![crate::types::ContentBlock::Text {
+                text: "hi".to_string(),
+            }],
+            false,
+        )
+        .await
+        .unwrap();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while bodies.lock().unwrap().is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "mock LLM never received a request"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    // 等 run 停完（finish 已回），再取 prompt 对比。
+    while kernel.conductor.is_running(&sid) {
+        assert!(std::time::Instant::now() < deadline, "run never finished");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    let body: serde_json::Value =
+        serde_json::from_str(&bodies.lock().unwrap()[0]).expect("request body is JSON");
+    let spawn_system = {
+        let sys = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "system")
+            .expect("request carries a system message");
+        match sys["content"].as_str() {
+            Some(s) => s.to_string(),
+            // OpenAIContent::Blocks：文本块数组，拼接还原。
+            None => sys["content"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|b| b["text"].as_str())
+                .collect::<Vec<_>>()
+                .join(""),
+        }
+    };
+
+    let preview = kernel
+        .preview_system_prompt(
+            Some(tmp.path().to_string_lossy().to_string()),
+            Some(sid.0.to_string()),
+        )
+        .await
+        .expect("preview ok");
+    assert!(
+        preview.contains("parity-skill"),
+        "preview must assemble the skills table"
+    );
+    assert_eq!(
+        spawn_system, preview,
+        "preview_system_prompt 必须与真实 spawn 的 system prompt 逐字一致"
+    );
+
     kernel.stop().await;
 }
 
