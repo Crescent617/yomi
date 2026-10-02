@@ -154,16 +154,17 @@ impl ExtManifest {
                 )));
             }
             // 常规文件 + 上限：FIFO 会挂死 daemon 的 RPC 路径（install
-            // 同步等脚本退出）。空白字符硬拒：init 经 shell 命令文本
-            // 执行（复用 wrap_command），断词会跑成不可预期的命令。
+            // 同步等脚本退出）。
             require_regular_file(&canonical)
                 .map_err(|e| ExtError::Invalid(format!("ext.init '{rel}': {e}")))?;
-            if rel
+            // 字符集白名单（字母数字 . _ / -）：init 经 shell 命令文本
+            // 执行，白名单外字符不是元字符注入面就是断词隐患，一律拒。
+            if !rel
                 .chars()
-                .any(|c| c.is_whitespace() || c == '"' || c == '\'')
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'))
             {
                 return Err(ExtError::Invalid(format!(
-                    "ext.init '{rel}': whitespace and quotes not allowed in script path"
+                    "ext.init '{rel}': only [a-zA-Z0-9._/-] allowed in script path"
                 )));
             }
             let size = std::fs::metadata(&canonical)

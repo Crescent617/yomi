@@ -209,7 +209,9 @@ pub async fn install(
     // 见 run_init）。幂等是作者约定，与 cron ensure 同哲学——每次
     // install/refresh 都跑。失败整体报错：provisional 条目已保证
     // 重跑原位收敛。注意本步在注册表互斥锁内最长 120s——期间其他
-    // install/remove 排队（非死锁：init 不反向取注册表锁）。
+    // install/remove 排队（非死锁：init 不反向取注册表锁；init 经
+    // PATH 里的 yomi CLI 发 extension install/remove RPC 会自锁，由
+    // 超时解开，有界停顿 120s）。
     let init = run_init(data_dir, &ext_dir, manifest).await?;
 
     // cron 收养（ensure：缺才建，已存在不动）。消息从**已装目录**取
@@ -302,58 +304,31 @@ async fn run_init(
         }
     }
     let shell = crate::utils::shell::detect();
-    // manifest 校验已拒空白/引号，命令文本可直接注入。
+    // manifest 校验已限字符集（字母数字 ._/-），命令文本无注入面。
     let wrapped = shell.wrap_command(rel);
     let mut cmd = tokio::process::Command::new(&shell.path);
     cmd.args(shell.leading_args())
         .arg(wrapped.as_ref())
         .current_dir(ext_dir)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
         .env("GIT_PAGER", "cat")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .kill_on_drop(true);
+        .env("GIT_TERMINAL_PROMPT", "0");
     crate::utils::env::inject_child_env(&mut cmd, Some(data_dir), None);
-    let (mut child, tree) = crate::utils::process::spawn_in_new_tree(&mut cmd)
-        .map_err(|e| ExtError::Init(format!("spawn '{rel}': {e}")))?;
-    // 并发读管道再 wait：脚本输出超过管道缓冲会 deadlock 在 wait 上
-    // （wait_with_output 同款姿势；拆开的理由是超时要拿到 child 收树）。
-    let mut stdout_pipe = child
-        .stdout
-        .take()
-        .ok_or_else(|| ExtError::Init(format!("'{rel}': stdout not piped")))?;
-    let mut stderr_pipe = child
-        .stderr
-        .take()
-        .ok_or_else(|| ExtError::Init(format!("'{rel}': stderr not piped")))?;
-    let mut out = Vec::new();
-    let mut err = Vec::new();
-    let waited = tokio::time::timeout(INIT_TIMEOUT, async {
-        let (status, _, _) = tokio::join!(
-            child.wait(),
-            tokio::io::copy(&mut stdout_pipe, &mut out),
-            tokio::io::copy(&mut stderr_pipe, &mut err)
-        );
-        status.map_err(|e| ExtError::Init(format!("wait '{rel}': {e}")))
-    })
-    .await;
-    let status = match waited {
-        Ok(res) => res?,
-        Err(_) => {
-            let _ = crate::utils::process::kill_tree(&mut child, &tree).await;
-            return Err(ExtError::Init(format!(
-                "'{rel}' timed out after {}s",
-                INIT_TIMEOUT.as_secs()
-            )));
-        }
-    };
-    let tail = tail_bytes(&out, &err, INIT_OUTPUT_KEEP);
-    if !status.success() {
+    // 执行引擎复用 spawn_captured（hooks/tools 同款）：stdio 接管、
+    // 双管并发排空（≤64KB cap，chatty 脚本不会吃内存）、超时按树强杀。
+    let cap = crate::utils::spawn::spawn_captured(&mut cmd, None, INIT_TIMEOUT, None)
+        .await
+        .map_err(|e| ExtError::Init(format!("run '{rel}': {e}")))?;
+    if cap.timed_out {
+        return Err(ExtError::Init(format!(
+            "'{rel}' timed out after {}s",
+            INIT_TIMEOUT.as_secs()
+        )));
+    }
+    let tail = tail_bytes(&cap.stdout, &cap.stderr, INIT_OUTPUT_KEEP);
+    if cap.exit_code != Some(0) {
         return Err(ExtError::Init(format!(
             "'{rel}' exited {}: {tail}",
-            status
-                .code()
+            cap.exit_code
                 .map_or("by signal".to_string(), |c| c.to_string())
         )));
     }

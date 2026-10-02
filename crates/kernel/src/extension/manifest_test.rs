@@ -248,7 +248,18 @@ fn init_path_validation() {
         ("scripts/my init.sh", "#!/bin/sh\n"),
     ]);
     let err = parse_manifest(dir.path()).unwrap_err();
-    assert!(err.to_string().contains("whitespace"), "{err}");
+    assert!(err.to_string().contains("only [a-zA-Z0-9._/-]"), "{err}");
+
+    // shell 元字符（注入面）：拒，文件真实存在也拒。
+    let dir = write_pkg(&[
+        (
+            "ext.toml",
+            &format!("{BASE}init = \"scripts/$(evil).sh\"\n"),
+        ),
+        ("scripts/$(evil).sh", "#!/bin/sh\n"),
+    ]);
+    let err = parse_manifest(dir.path()).unwrap_err();
+    assert!(err.to_string().contains("only [a-zA-Z0-9._/-]"), "{err}");
 
     // 绝对路径：join 会被整体替换、装到目标位置后必 127，拒。
     let dir = write_pkg(&[("ext.toml", &format!("{BASE}init = \"/tmp/evil.sh\"\n"))]);

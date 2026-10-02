@@ -174,7 +174,8 @@ hook 执行序注意：扩展条目与用户条目混排按字典序，包作者
    spawn_in_new_tree，管道并发读防 deadlock，120s 超时连树收掉。
    幂等 ensure（每次 install/refresh 都跑）；退出非零/超时 → 类型化
    `ExtError::Init` 上抛，install 整体报错。输出尾部（4KB）进报告
-   与错误文本。manifest 校验：路径不出包根、不含空白/引号、常规
+   与错误文本。manifest 校验：路径不出包根、字符集白名单
+   （[a-zA-Z0-9._/-]，元字符注入面与断词隐患一并拒）、常规
    文件 ≤1MB。
 7. **写注册表 `ext.lock`**：包内容 hash 先算（lock 是包目录外单
    文件、天然不入各包 hash），然后 upsert `extensions/ext.lock` 里

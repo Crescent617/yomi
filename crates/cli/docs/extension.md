@@ -54,7 +54,7 @@ message_file = "prompts/dream.txt"   # 与 message 二选一
 ```
 
 manifest 内相对路径不得越出包根（`../` 逃逸在 install 时拒绝）。
-`init` 额外要求：路径不含空白、目标 ≤1MB。
+`init` 额外要求：路径字符集限 `[a-zA-Z0-9._/-]`、目标 ≤1MB。
 
 ### init 安装钩子
 
