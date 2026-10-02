@@ -407,6 +407,9 @@ async fn refresh_cron_content(
                 .and_then(|t| t.working_dir.clone());
             old_content == content && old_dir == new_dir && existing.precheck == new_precheck
         }
+        // input.action 由 install 恒为 SendMessage；落在 `_` = 用户用
+        // yomi cron update 把扩展 job 改成 shell——按"命名空间归扩展
+        // 所有"刷回包内值，与 remove 前缀清扫口径一致，不是漏判。
         _ => false,
     };
     if same {
