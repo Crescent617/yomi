@@ -592,6 +592,66 @@ async fn session_context_window_override_roundtrip() {
     kernel.stop().await;
 }
 
+/// `set_session_model`：设非默认 → 钉选持久化；设回配置默认 → 清钉选
+///（跟随默认，含以后换默认）；未知 key / 未知 session 报错。
+#[tokio::test]
+async fn set_session_model_default_clears_pin() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    config.models = vec![
+        crate::provider::ModelConfig {
+            name: "m1".to_string(),
+            ..Default::default()
+        },
+        crate::provider::ModelConfig {
+            name: "m2".to_string(),
+            ..Default::default()
+        },
+    ];
+    config.agent.default_model = "m1".to_string();
+    config.finalize();
+    let kernel = crate::build_kernel(&config, false).await.unwrap();
+
+    let sid = kernel
+        .create_session(crate::kernel::CreateSessionInput {
+            project_id: None,
+            working_dir: None,
+            auto_approve_level: None,
+            tool_blocklist: vec![],
+            model_key: None,
+            context_window: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(kernel.get_session_model(&sid).await, "m1");
+
+    // 非默认：钉选。
+    kernel.set_session_model(&sid, "m2").await.unwrap();
+    assert_eq!(kernel.get_session_model(&sid).await, "m2");
+
+    // 设回默认：清钉选（存储层 model_key 回到 NULL，不再跟随钉住的名字）。
+    kernel.set_session_model(&sid, "m1").await.unwrap();
+    assert_eq!(kernel.get_session_model(&sid).await, "m1");
+    let info = kernel
+        .session_store()
+        .await
+        .get(&sid)
+        .await
+        .unwrap()
+        .expect("session exists");
+    assert_eq!(info.model_key, None, "pin cleared when set to default");
+
+    // 未知 key / 未知 session。
+    assert!(kernel.set_session_model(&sid, "nope").await.is_err());
+    let missing = crate::types::SessionId::new();
+    assert!(kernel.set_session_model(&missing, "m2").await.is_err());
+
+    kernel.stop().await;
+}
+
 // ── 关停前置：stop_active_runs ─────────────────────────────────────
 
 /// 挂起 mock LLM：SSE 回首个 chunk 后保持连接不再写——agent 停在

@@ -903,16 +903,20 @@ impl Kernel {
         self.agent_config.default_model.clone()
     }
 
-    /// Set the model for a session (persisted to database)
+    /// Set the model for a session (persisted to database).
+    ///
+    /// 设成配置默认模型时不是钉选而是清钉选——会话回到跟随
+    /// `default_model`（含以后的默认变更）；钉选只承载非默认选择。
     pub async fn set_session_model(&self, session_id: &SessionId, key: &str) -> Result<()> {
         if !self.models.contains_key(key) {
             return Err(SessionError::Other(format!("Model '{key}' not found in config")).into());
         }
-        let rows_affected = self
-            .session_store()
-            .await
-            .update_model_key(session_id, key)
-            .await?;
+        let store = self.session_store().await;
+        let rows_affected = if key == self.agent_config.default_model {
+            store.clear_model_key(session_id).await?
+        } else {
+            store.update_model_key(session_id, key).await?
+        };
         if rows_affected == 0 {
             return Err(SessionError::NotFound {
                 session_id: session_id.0.to_string(),
