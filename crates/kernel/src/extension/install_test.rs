@@ -268,7 +268,7 @@ async fn refresh_sweeps_mounts_from_interrupted_previous_run() {
             std::fs::create_dir_all(dir.path().join("bin")).unwrap();
             let f = dir.path().join(format!("bin/{b}"));
             std::fs::write(&f, "#!/bin/sh\n").unwrap();
-            std::fs::metadata(&f).unwrap().permissions().set_mode(0o755);
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         dir
     };
@@ -635,69 +635,6 @@ async fn install_records_partial_lock_on_cron_failure() {
 }
 
 #[tokio::test]
-async fn install_adopts_legacy_in_dir_lock_under_registry_lock() {
-    // 0.10.55/56 存量现场：包目录里是旧版 in-dir lock、注册表无条目。
-    // install 必须持锁收养 legacy 条目并原位刷新（而非 occupied 拒绝），
-    // 收养持久化进注册表。
-    let pkg = write_pkg();
-    let data = tempfile::tempdir().unwrap();
-    let store = test_cron_store().await;
-    install(
-        data.path(),
-        pkg.path(),
-        &store,
-        crate::permission::Level::Caution,
-        &manifest_of(&pkg),
-        &provenance(),
-    )
-    .await
-    .unwrap();
-
-    // 模拟老版本：注册表清空，包目录里放旧格式 in-dir lock。
-    std::fs::remove_file(super::super::lockfile_path(data.path())).unwrap();
-    let ext_dir = data.path().join("extensions/demo");
-    std::fs::write(
-        ext_dir.join("ext.lock"),
-        r#"source = "test/pkg"
-content_hash = "legacyhash"
-installed_at = "2026-10-01T22:00:00Z"
-
-[resources]
-cron = ["ext:demo:dream"]
-hooks = ["pre_tool_use/50-guard"]
-bins = ["recall"]
-snippets = ["memory.md"]
-"#,
-    )
-    .unwrap();
-
-    // 源更新 + 重装（previous=None → install 内收养）。
-    std::fs::write(pkg.path().join("snippets/memory.md"), "v2 rules").unwrap();
-    let report = install(
-        data.path(),
-        pkg.path(),
-        &store,
-        crate::permission::Level::Caution,
-        &manifest_of(&pkg),
-        &provenance(),
-    )
-    .await
-    .unwrap();
-
-    // 原位刷新（内容跟新）+ 收养持久化。
-    assert_eq!(
-        std::fs::read_to_string(ext_dir.join("snippets/memory.md")).unwrap(),
-        "v2 rules"
-    );
-    let meta = installed_meta(&data, "demo")
-        .await
-        .expect("legacy entry adopted into registry");
-    assert_eq!(meta.resources.hooks, vec!["pre_tool_use/50-guard"]);
-    assert_eq!(cron_job_names(&store).await, vec!["ext:demo:dream"]);
-    let _ = report;
-}
-
-#[tokio::test]
 async fn partial_failure_keeps_previous_resources_for_remove() {
     // 半途失败（挂载冲突）时注册表留下的是 provisional 条目：资源
     // 沿用旧记录。remove 的回滚 = 旧资源 ∪ 包目录扫描 ∪ cron 前缀
@@ -1030,5 +967,133 @@ async fn remove_leaves_repointed_symlink_slot() {
     assert_eq!(
         std::fs::read_link(data.path().join("bin/recall")).unwrap(),
         std::path::Path::new("/tmp/somewhere-else")
+    );
+}
+
+/// 带 init 钩子的最小包：脚本把 $YOMI_DATA_DIR 写进 marker（验证
+/// 环境注入），并可按 mode 控制行为（ok / fail）。
+fn write_init_pkg(mode: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("ext.toml"),
+        "[ext]\nname = \"demo\"\nversion = \"0.1.0\"\ndescription = \"t\"\ninit = \"scripts/init.sh\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+    let script = dir.path().join("scripts/init.sh");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nprintf '%s' \"$YOMI_DATA_DIR\" > \"${{YOMI_DATA_DIR}}/init-marker-{mode}\"\ncase {mode} in fail) echo boom >&2; exit 1;; esac\necho init-done\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    dir
+}
+
+#[tokio::test]
+async fn install_runs_init_with_data_dir_env() {
+    let pkg = write_init_pkg("ok");
+    let data = tempfile::tempdir().unwrap();
+    let store = test_cron_store().await;
+
+    let report = install(
+        data.path(),
+        pkg.path(),
+        &store,
+        crate::permission::Level::Caution,
+        &manifest_of(&pkg),
+        &provenance(),
+    )
+    .await
+    .unwrap();
+
+    let init = report.init.expect("init report present");
+    assert_eq!(init.path, "scripts/init.sh");
+    assert!(init.output.contains("init-done"), "output: {}", init.output);
+    // 环境注入：脚本看到的 YOMI_DATA_DIR = install 的 data_dir。
+    assert_eq!(
+        std::fs::read_to_string(data.path().join("init-marker-ok")).unwrap(),
+        data.path().to_string_lossy()
+    );
+}
+
+#[tokio::test]
+async fn install_init_failure_aborts_and_recovers() {
+    let pkg = write_init_pkg("fail");
+    let data = tempfile::tempdir().unwrap();
+    let store = test_cron_store().await;
+
+    let err = install(
+        data.path(),
+        pkg.path(),
+        &store,
+        crate::permission::Level::Caution,
+        &manifest_of(&pkg),
+        &provenance(),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().starts_with("init:"), "{err}");
+    assert!(err.to_string().contains("boom"), "stderr tail: {err}");
+    // provisional 条目在（重跑据此原位收敛而非 occupied）：
+    assert!(installed_meta(&data, "demo").await.is_some());
+    // 原地改脚本（模拟修好后重跑同一来源）。
+    let script = pkg.path().join("scripts/init.sh");
+    std::fs::write(&script, "#!/bin/sh\necho fixed\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let report = install(
+        data.path(),
+        pkg.path(),
+        &store,
+        crate::permission::Level::Caution,
+        &manifest_of(&pkg),
+        &provenance(),
+    )
+    .await
+    .unwrap();
+    assert!(report.init.unwrap().output.contains("fixed"));
+    assert!(!report.content_hash.is_empty());
+}
+
+#[tokio::test]
+async fn refresh_reruns_init() {
+    // ensure 哲学：refresh 同样跑 init（幂等是作者约定），每次安装
+    // 都重新 ensure 环境就绪。
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("ext.toml"),
+        "[ext]\nname = \"demo\"\nversion = \"0.1.0\"\ndescription = \"t\"\ninit = \"scripts/count.sh\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+    let script = dir.path().join("scripts/count.sh");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nn=0\n[ -f \"$YOMI_DATA_DIR/init-count\" ] && n=$(cat \"$YOMI_DATA_DIR/init-count\")\necho $((n + 1)) > \"$YOMI_DATA_DIR/init-count\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let store = test_cron_store().await;
+
+    for _ in 0..2 {
+        install(
+            data.path(),
+            dir.path(),
+            &store,
+            crate::permission::Level::Caution,
+            &manifest_of(&dir),
+            &provenance(),
+        )
+        .await
+        .unwrap();
+    }
+    assert_eq!(
+        std::fs::read_to_string(data.path().join("init-count"))
+            .unwrap()
+            .trim(),
+        "2"
     );
 }

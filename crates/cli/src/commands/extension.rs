@@ -44,6 +44,19 @@ pub async fn install(_global: &GlobalArgs, source: String) -> Result<()> {
         };
         println!("  {} ({status})", m.path);
     }
+    if let Some(init) = &report.init {
+        let output = init.output.trim();
+        let one_line: String = output.chars().take(120).collect();
+        println!(
+            "  init {} ran{}",
+            init.path,
+            if one_line.is_empty() {
+                String::new()
+            } else {
+                format!(": {one_line}")
+            }
+        );
+    }
     for s in &report.snippets {
         println!("  snippet {s} (assembled into system prompt)");
     }

@@ -25,6 +25,9 @@ pub struct InstallReport {
     pub cron: Vec<CronAdoptReport>,
     pub hooks: Vec<MountReport>,
     pub bins: Vec<MountReport>,
+    /// init 钩子执行结果；未声明 init 的扩展为 None。
+    #[serde(default)]
+    pub init: Option<InitReport>,
     /// 包内 snippet 文件名（约定式资源，不物化）。
     pub snippets: Vec<String>,
 }
@@ -34,6 +37,16 @@ pub struct InstallReport {
 pub struct CronAdoptReport {
     pub name: String,
     pub created: bool,
+}
+
+/// init 钩子执行结果。init 是幂等 ensure（非资源），不参与回滚清单。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct InitReport {
+    /// 包内脚本相对路径（manifest `ext.init`）。
+    pub path: String,
+    /// 截断的输出尾（成功也留，便于"装完到底干了什么"的审计）。
+    pub output: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -191,6 +204,14 @@ pub async fn install(
         return Err(ExtError::Conflict(conflicts.join("; ")));
     }
 
+    // init 钩子（manifest ext.init 声明才跑）：从已装目录执行，
+    // 标准 yomi 子进程环境（注入 YOMI_DATA_DIR、PATH 含 <data_dir>/bin，
+    // 见 run_init）。幂等是作者约定，与 cron ensure 同哲学——每次
+    // install/refresh 都跑。失败整体报错：provisional 条目已保证
+    // 重跑原位收敛。注意本步在注册表互斥锁内最长 120s——期间其他
+    // install/remove 排队（非死锁：init 不反向取注册表锁）。
+    let init = run_init(data_dir, &ext_dir, manifest).await?;
+
     // cron 收养（ensure：缺才建，已存在不动）。消息从**已装目录**取
     // （单一事实源 = 已装内容，与 hash/copy 同源；取货临时目录此处
     // 可能已被清理）。
@@ -245,8 +266,119 @@ pub async fn install(
         cron,
         hooks,
         bins,
+        init,
         snippets,
     })
+}
+
+/// init 安装钩子上限：初始化脚本约定是秒级；超时说明脚本挂了或
+/// 在等交互，连后裔一起收树后判失败（install 报错、可重跑）。
+const INIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// init 输出保留字节数（报告与错误信息共用，看尾不看头）。
+const INIT_OUTPUT_KEEP: usize = 4096;
+
+/// 执行 manifest 声明的 init 钩子（未声明返回 None）。经统一 shell
+/// 探测执行（bash 优先，Windows Git Bash→pwsh→powershell→cmd，命令
+/// 文本走 wrap_command），进程树由 spawn_in_new_tree 建立（超时连
+/// 后裔一起收）；标准环境注入复用 inject_child_env——脚本拿到的
+/// YOMI_DATA_DIR/PATH 与任何 yomi 子进程一致。
+async fn run_init(
+    data_dir: &Path,
+    ext_dir: &Path,
+    manifest: &super::ExtManifest,
+) -> Result<Option<InitReport>, ExtError> {
+    let Some(rel) = &manifest.ext.init else {
+        return Ok(None);
+    };
+    let script = ext_dir.join(rel);
+    #[cfg(unix)]
+    if let Ok(md) = tokio::fs::metadata(&script).await {
+        use std::os::unix::fs::PermissionsExt as _;
+        if md.permissions().mode() & 0o111 == 0 {
+            // bash 对含斜杠的词直接 execve：无执行位 = exit 126 安装
+            // 失败，不是"还能跑"。
+            tracing::warn!(ext = %manifest.ext.name, init = %rel, "init script lacks exec bit; install will fail with Permission denied (chmod +x)");
+        }
+    }
+    let shell = crate::utils::shell::detect();
+    // manifest 校验已拒空白/引号，命令文本可直接注入。
+    let wrapped = shell.wrap_command(rel);
+    let mut cmd = tokio::process::Command::new(&shell.path);
+    cmd.args(shell.leading_args())
+        .arg(wrapped.as_ref())
+        .current_dir(ext_dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .env("GIT_PAGER", "cat")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .kill_on_drop(true);
+    crate::utils::env::inject_child_env(&mut cmd, Some(data_dir), None);
+    let (mut child, tree) = crate::utils::process::spawn_in_new_tree(&mut cmd)
+        .map_err(|e| ExtError::Init(format!("spawn '{rel}': {e}")))?;
+    // 并发读管道再 wait：脚本输出超过管道缓冲会 deadlock 在 wait 上
+    // （wait_with_output 同款姿势；拆开的理由是超时要拿到 child 收树）。
+    let mut stdout_pipe = child
+        .stdout
+        .take()
+        .ok_or_else(|| ExtError::Init(format!("'{rel}': stdout not piped")))?;
+    let mut stderr_pipe = child
+        .stderr
+        .take()
+        .ok_or_else(|| ExtError::Init(format!("'{rel}': stderr not piped")))?;
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let waited = tokio::time::timeout(INIT_TIMEOUT, async {
+        let (status, _, _) = tokio::join!(
+            child.wait(),
+            tokio::io::copy(&mut stdout_pipe, &mut out),
+            tokio::io::copy(&mut stderr_pipe, &mut err)
+        );
+        status.map_err(|e| ExtError::Init(format!("wait '{rel}': {e}")))
+    })
+    .await;
+    let status = match waited {
+        Ok(res) => res?,
+        Err(_) => {
+            let _ = crate::utils::process::kill_tree(&mut child, &tree).await;
+            return Err(ExtError::Init(format!(
+                "'{rel}' timed out after {}s",
+                INIT_TIMEOUT.as_secs()
+            )));
+        }
+    };
+    let tail = tail_bytes(&out, &err, INIT_OUTPUT_KEEP);
+    if !status.success() {
+        return Err(ExtError::Init(format!(
+            "'{rel}' exited {}: {tail}",
+            status
+                .code()
+                .map_or("by signal".to_string(), |c| c.to_string())
+        )));
+    }
+    tracing::info!(ext = %manifest.ext.name, init = %rel, "init hook ran");
+    Ok(Some(InitReport {
+        path: rel.clone(),
+        output: tail,
+    }))
+}
+
+/// stdout/stderr 合并取末尾 keep 字节；切在多字节字符中间会前进到
+/// 下一个合法边界，避免报告里出现替换符。
+fn tail_bytes(stdout: &[u8], stderr: &[u8], keep: usize) -> String {
+    let mut buf = stdout.to_vec();
+    if !stderr.is_empty() {
+        if !buf.is_empty() {
+            buf.push(b'\n');
+        }
+        buf.extend_from_slice(stderr);
+    }
+    let mut start = buf.len().saturating_sub(keep);
+    while start < buf.len() && (buf[start] & 0xC0) == 0x80 {
+        start += 1;
+    }
+    String::from_utf8_lossy(&buf[start..]).into_owned()
 }
 
 /// 包内容 hash：blake3，按相对路径排序后逐文件喂（路径+内容），对

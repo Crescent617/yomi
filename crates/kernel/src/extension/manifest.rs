@@ -31,6 +31,13 @@ pub struct ExtMeta {
     pub version: String,
     /// `extension list` 展示用。
     pub description: String,
+    /// 可选：安装钩子——装完/刷新后从**已装目录**执行的包内脚本
+    /// （相对包根路径）。执行环境是标准 yomi 子进程环境（注入
+    /// `YOMI_DATA_DIR`，PATH 含 `<data_dir>/bin`，cwd = 包目录）。
+    /// 每次 install/refresh 都跑（ensure 哲学，幂等是作者约定）；
+    /// 声明了就必须存在、不出包根、不含空白字符（shell 命令文本
+    /// 注入，空白会断词）。
+    pub init: Option<String>,
 }
 
 /// `[[cron]]` 条目：收养为 ensure-by-name 的 `send_message` job。
@@ -88,6 +95,8 @@ pub const VERSION_MAX_CHARS: usize = 64;
 /// `[[cron]]` 条目数上限：remove 的前缀清扫一次取有限批，条目无界会让
 /// 清扫漏尾（remove 不完整且无告警）。256 条远超真实扩展的用量。
 pub const CRON_ENTRIES_MAX: usize = 256;
+/// `ext.init` 脚本大小上限（约定是初始化钩子，不是程序载体）。
+pub const INIT_MAX_BYTES: usize = 1024 * 1024;
 
 impl ExtManifest {
     fn validate(&self, pkg_dir: &Path) -> Result<(), ExtError> {
@@ -122,6 +131,49 @@ impl ExtManifest {
                 "too many cron entries ({} > {CRON_ENTRIES_MAX})",
                 self.cron.len()
             )));
+        }
+        if let Some(rel) = &self.ext.init {
+            // 绝对路径硬拒：join 会被整体替换，装到目标位置后必 127。
+            if std::path::Path::new(rel).is_absolute() {
+                return Err(ExtError::Invalid(format!(
+                    "ext.init '{rel}' must be a package-relative path"
+                )));
+            }
+            // 越界拒绝：join 后必须仍在包根之下（同 message_file 口径；
+            // 脚本以 daemon 身份执行，能读包外 = 能读一切）。
+            let abs = pkg_dir.join(rel);
+            let canonical = abs
+                .canonicalize()
+                .map_err(|e| ExtError::Invalid(format!("ext.init '{rel}': {e}")))?;
+            let root = pkg_dir
+                .canonicalize()
+                .map_err(|e| ExtError::Invalid(format!("canonicalize package dir: {e}")))?;
+            if !canonical.starts_with(&root) {
+                return Err(ExtError::Invalid(format!(
+                    "ext.init '{rel}' escapes the package"
+                )));
+            }
+            // 常规文件 + 上限：FIFO 会挂死 daemon 的 RPC 路径（install
+            // 同步等脚本退出）。空白字符硬拒：init 经 shell 命令文本
+            // 执行（复用 wrap_command），断词会跑成不可预期的命令。
+            require_regular_file(&canonical)
+                .map_err(|e| ExtError::Invalid(format!("ext.init '{rel}': {e}")))?;
+            if rel
+                .chars()
+                .any(|c| c.is_whitespace() || c == '"' || c == '\'')
+            {
+                return Err(ExtError::Invalid(format!(
+                    "ext.init '{rel}': whitespace and quotes not allowed in script path"
+                )));
+            }
+            let size = std::fs::metadata(&canonical)
+                .map_err(|e| ExtError::Invalid(format!("stat ext.init: {e}")))?
+                .len();
+            if size > INIT_MAX_BYTES as u64 {
+                return Err(ExtError::Invalid(format!(
+                    "ext.init '{rel}' too large (>{INIT_MAX_BYTES} bytes)"
+                )));
+            }
         }
         for entry in &self.cron {
             entry.validate(pkg_dir)?;

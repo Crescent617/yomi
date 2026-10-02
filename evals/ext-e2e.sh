@@ -68,6 +68,7 @@ cat > "$PKG/ext.toml" <<'TOML'
 name = "e2e-demo"
 version = "0.1.0"
 description = "e2e test package"
+init = "scripts/init.sh"
 
 [[cron]]
 name = "tick"
@@ -85,6 +86,9 @@ chmod +x "$PKG/hooks/pre_tool_use/90-e2e-guard"
 printf '#!/bin/sh\necho e2e-recall-ok\n' > "$PKG/bin/e2e-recall"
 chmod +x "$PKG/bin/e2e-recall"
 echo "e2e convention: always pass" > "$PKG/snippets/convention.md"
+mkdir -p "$PKG/scripts"
+printf '#!/bin/sh\necho "init ran, data_dir=$YOMI_DATA_DIR"\n' > "$PKG/scripts/init.sh"
+chmod +x "$PKG/scripts/init.sh"
 # 作者随包自带 ext.lock：必须被当普通包文件复制（不构成所有权证明，
 # 真正的注册表是包外的单文件 ext.lock）。
 echo "author's own lock, not ownership proof" > "$PKG/ext.lock"
@@ -92,6 +96,8 @@ echo "author's own lock, not ownership proof" > "$PKG/ext.lock"
 # ── 2. install：报告 + 文件系统 + sqlite 三面对账 ──
 out=$("$YOMI" extension install "$PKG" 2>&1) || { echo "install failed: $out"; exit 2; }
 echo "$out" | grep -q "Installed extension e2e-demo" && ok "install report" || bad "install report" "$out"
+echo "$out" | grep -q "init scripts/init.sh ran" && ok "init ran" || bad "init ran" "$out"
+echo "$out" | grep -q "data_dir=$DATA" && ok "init env has data_dir" || bad "init env has data_dir" "$out"
 [ -d "$DATA/extensions/e2e-demo" ] && [ ! -L "$DATA/extensions/e2e-demo" ] && ok "extensions copy" || bad "extensions copy" "not a real dir"
 [ -f "$DATA/extensions/e2e-demo/bin/e2e-recall" ] && ok "bin copied into ext dir" || bad "bin copied into ext dir" "missing"
 [ -L "$DATA/hooks/pre_tool_use/90-e2e-guard" ] && ok "hook mounted" || bad "hook mounted" "missing"
@@ -127,6 +133,7 @@ echo "e2e convention: always pass, now v2" > "$PKG/snippets/convention.md"
 rm -f "$PKG/hooks/pre_tool_use/90-e2e-guard"
 out=$("$YOMI" extension install "$PKG" 2>&1)
 echo "$out" | grep -q "Installed extension e2e-demo v0.2.0" && ok "upgrade report" || bad "upgrade report" "$out"
+echo "$out" | grep -q "init scripts/init.sh ran" && ok "upgrade reruns init" || bad "upgrade reruns init" "$out"
 new_hash=$(grep '^content_hash = ' "$lock")
 [ "$old_hash" != "$new_hash" ] && ok "upgrade bumps content hash" || bad "upgrade bumps content hash" "$lock"
 grep -q "now v2" "$DATA/extensions/e2e-demo/snippets/convention.md" && ok "upgrade refreshes content" || bad "upgrade refreshes content" "stale"

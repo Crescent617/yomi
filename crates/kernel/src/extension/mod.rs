@@ -82,6 +82,10 @@ pub enum ExtError {
     /// 挂载槽位被占（用户文件或其他扩展）。报全文，不静默跳过。
     #[error("mount conflict: {0}")]
     Conflict(String),
+    /// init 安装钩子执行失败（非零退出/超时/spawn 失败）。输出尾随
+    /// 错误文本，用户可直接定位脚本问题。
+    #[error("init: {0}")]
+    Init(String),
 }
 
 impl From<ExtError> for crate::types::KernelError {

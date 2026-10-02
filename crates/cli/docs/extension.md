@@ -31,6 +31,7 @@ yomi extension remove demo
 ├── snippets/*.md              # 可选：SP 片段（约定式，文件名排序）
 ├── prompts/*.txt              # 可选：cron message_file 引用的素材
 ├── bin/<可执行文件>            # 可选：挂进 <data_dir>/bin（已在 PATH 上）
+├── scripts/*.sh               # 可选：init 钩子等一次性脚本（不上 PATH）
 └── hooks/<point>/<entry>      # 可选：hook 条目（裸文件或 <名>/run 目录）
 ```
 
@@ -41,6 +42,7 @@ yomi extension remove demo
 name = "memory-system"        # 必填：字母开头 [a-z0-9-]，≤32
 version = "0.1.0"             # 必填
 description = "..."           # 必填
+init = "scripts/init.sh"      # 可选：安装钩子，见下
 
 [[cron]]
 name = "dream"                # 条目名 ≤48；cron 全名 = ext:<扩展名>:<条目名>
@@ -52,6 +54,15 @@ message_file = "prompts/dream.txt"   # 与 message 二选一
 ```
 
 manifest 内相对路径不得越出包根（`../` 逃逸在 install 时拒绝）。
+`init` 额外要求：路径不含空白、目标 ≤1MB。
+
+### init 安装钩子
+
+装完/刷新后从已装目录执行（每次 install/refresh 都跑，幂等是作者约定）。
+环境与普通 yomi 子进程一致：注入 `YOMI_DATA_DIR`，PATH 含已挂 bin 命令。
+约定是初始化，不是常驻程序：超时 120 秒或退出非零 → install 报错（修
+好后重跑收敛）。初始化脚本放 `scripts/`，别放 `bin/`——bin 会进所有
+子进程 PATH，只放日常命令。
 
 ## 命令
 
@@ -86,10 +97,12 @@ yomi extension remove <名>     # cron 前缀清扫 + 挂载指向判定回滚
 4. 挂载 hooks/bin：逐槽位——空则建 symlink；已指向本包则跳过；
    被用户或其他扩展占用则**整体拒绝并列出占用**（已建部分不回滚，
    重跑 install 收敛）。
-5. 收养 cron：ensure-by-name（缺才建、已存在不动，防覆盖手改；
+5. init 钩子（声明了才跑）：从已装目录执行，环境见上文「init 安装
+   钩子」。失败同整体拒绝。
+6. 收养 cron：ensure-by-name（缺才建、已存在不动，防覆盖手改；
    更新内容请用 `yomi cron update`，清扫只在 remove）。消息文本从
    已装目录读取。
-6. 写注册表 `extensions/ext.lock`（单文件，Cargo.lock 式
+7. 写注册表 `extensions/ext.lock`（单文件，Cargo.lock 式
    `[[extensions]]` 条目）：来源（source/rev）、内容 hash
    （blake3）、资源清单、安装时间，原子整表重写。`ext.toml` 是作者
    的 manifest，**原封不动**。这是唯一注册表：没有 sqlite 表，目录
@@ -162,7 +175,7 @@ cron 按 `ext:<名>:` 前缀清扫 → 摘 hooks/bin 挂载（**仅当** symlink
 | `extension list` 显示 `unreadable` | 包文件权限/损坏致 hash 读不了。修权限或 remove + install 重建。 |
 | `extension list` 显示 `oversized` | 包目录混入了超 1MB 的文件（或总量/数量超限）。移走它，或 remove + install。 |
 | install 成功但 cron 报 `exists, untouched` | ensure 语义：同名 job 已存在，未覆盖。要改内容用 `yomi cron update`，或 remove + install。 |
-| `invalid package: ...` | ext.toml 校验失败（名字规则、message 二选一、`../` 逃逸、schedule 无未来触发点、同名条目重复）。按报错逐条修。 |
+| `invalid package: ...` | ext.toml 校验失败（名字规则、message 二选一、`../` 逃逸、schedule 无未来触发点、同名条目重复、init 路径非法）。按报错逐条修。 |
 | 想看 snippet 拼装结果 | `yomi rpc preview_system_prompt`（可传 working_dir）返回将拼进新会话的完整 SP，grep `Extension: <名>` 即见本扩展的段。 |
 | snippet 改了没生效 | 扫描有 60s 缓存（同 skills）：等约一分钟、或新开会话 spawn 时生效。 |
 | bin 命令 not found | 确认文件有执行位（install 时无执行位会 warn 但仍挂载）；已开会话的下一条命令即可解析——PATH 每次 spawn 子进程时注入。 |

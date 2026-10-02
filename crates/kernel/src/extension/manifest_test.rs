@@ -202,3 +202,60 @@ fn too_many_cron_entries_rejected() {
     let err = parse_manifest(dir.path()).unwrap_err();
     assert!(err.to_string().contains("too many"), "{err}");
 }
+
+#[test]
+fn init_path_validation() {
+    const BASE: &str = "[ext]\nname = \"demo\"\nversion = \"0.1.0\"\ndescription = \"t\"\n";
+
+    // 正常：声明存在且常规。
+    let dir = write_pkg(&[
+        ("ext.toml", &format!("{BASE}init = \"scripts/init.sh\"\n")),
+        ("scripts/init.sh", "#!/bin/sh\n"),
+    ]);
+    let m = parse_manifest(dir.path()).unwrap();
+    assert_eq!(m.ext.init.as_deref(), Some("scripts/init.sh"));
+
+    // 越界：指向包外真实存在的文件，拒。canonicalize 要求目标存在，
+    // 所以在逃逸路径上真实落一个文件。
+    let dir = write_pkg(&[("ext.toml", &format!("{BASE}init = \"../../evil.sh\"\n"))]);
+    let escaped = dir.path().join("../../evil.sh");
+    std::fs::create_dir_all(escaped.parent().unwrap()).unwrap();
+    std::fs::write(&escaped, "#!/bin/sh\n").unwrap();
+    let err = parse_manifest(dir.path()).unwrap_err();
+    assert!(err.to_string().contains("escapes the package"), "{err}");
+    std::fs::remove_file(&escaped).ok();
+
+    // 声明了但文件不存在：拒（防手误）。
+    let dir = write_pkg(&[("ext.toml", &format!("{BASE}init = \"scripts/nope.sh\"\n"))]);
+    let err = parse_manifest(dir.path()).unwrap_err();
+    assert!(err.to_string().contains("scripts/nope.sh"), "{err}");
+
+    // 指向目录（非常规文件）：拒。
+    let dir = write_pkg(&[
+        ("ext.toml", &format!("{BASE}init = \"scripts\"\n")),
+        ("scripts/.keep", ""),
+    ]);
+    std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+    let err = parse_manifest(dir.path()).unwrap_err();
+    assert!(err.to_string().contains("regular file"), "{err}");
+
+    // 空白字符断词：拒。
+    let dir = write_pkg(&[
+        (
+            "ext.toml",
+            &format!("{BASE}init = \"scripts/my init.sh\"\n"),
+        ),
+        ("scripts/my init.sh", "#!/bin/sh\n"),
+    ]);
+    let err = parse_manifest(dir.path()).unwrap_err();
+    assert!(err.to_string().contains("whitespace"), "{err}");
+
+    // 绝对路径：join 会被整体替换、装到目标位置后必 127，拒。
+    let dir = write_pkg(&[("ext.toml", &format!("{BASE}init = \"/tmp/evil.sh\"\n"))]);
+    let err = parse_manifest(dir.path()).unwrap_err();
+    assert!(err.to_string().contains("package-relative"), "{err}");
+
+    // 未声明：None，不报错。
+    let dir = write_pkg(&[("ext.toml", BASE)]);
+    assert!(parse_manifest(dir.path()).unwrap().ext.init.is_none());
+}

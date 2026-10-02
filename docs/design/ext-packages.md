@@ -40,8 +40,13 @@
    哲学：约定在文件里，kernel 只负责拼。
 6. **snippet 对所有会话生效**（含 sub-agent），与 skills 同口径；后续
    若观测到 prompt 成本问题再按会话类型收敛。
-7. **v1 无 install 脚本**：纯声明式。memory-system 作为零脚本验证案例；
-   脚本钩子（install/uninstall）等真实需求出现再加（加法是兼容的）。
+7. **install 脚本钩子（init）按需声明，不默认执行**：`ext.init = "scripts/init.sh"`
+   声明了才在装完/刷新后从已装目录执行（每次 install/refresh 都跑，
+   ensure 哲学，幂等是作者约定）；未声明的扩展零脚本。执行环境 =
+   普通 yomi 子进程（注入 `YOMI_DATA_DIR`，PATH 含 `<data_dir>/bin`），
+   统一 shell 探测 + 进程树 + 120s 超时。失败即 install 报错。权限不
+   设新门槛：bins/hooks 本就执行作者代码，init 只是装时自动跑一次。
+   初始化类脚本约定放 `scripts/`，不上 PATH；bin 只收日常命令。
 8. **bin 走 `<data_dir>/bin` + PATH prepend，不告诉模型路径**：命令名
    即接口，snippet 只提名字。kernel 改动收在 `inject_child_env` 一处，
    所有子进程（shell/cron/hook/tool）同时获得解析能力。
@@ -163,7 +168,15 @@ hook 执行序注意：扩展条目与用户条目混排按字典序，包作者
    重跑安全）。
 5. **收养 cron**：逐条 `create_cron_job`（ensure：同名即返回不动，
    缺才建）。输出区分 `created` / `exists (untouched)`。
-6. **写注册表 `ext.lock`**：包内容 hash 先算（lock 是包目录外单
+6. **init 钩子**（manifest `ext.init` 声明才跑）：从已装目录执行，
+   环境 = 标准 yomi 子进程（`YOMI_DATA_DIR` 注入、PATH 含
+   `<data_dir>/bin`、cwd = 包目录），统一 shell 探测 + wrap_command +
+   spawn_in_new_tree，管道并发读防 deadlock，120s 超时连树收掉。
+   幂等 ensure（每次 install/refresh 都跑）；退出非零/超时 → 类型化
+   `ExtError::Init` 上抛，install 整体报错。输出尾部（4KB）进报告
+   与错误文本。manifest 校验：路径不出包根、不含空白/引号、常规
+   文件 ≤1MB。
+7. **写注册表 `ext.lock`**：包内容 hash 先算（lock 是包目录外单
    文件、天然不入各包 hash），然后 upsert `extensions/ext.lock` 里
    该扩展的条目并原子整表重写：source、rev、content_hash、资源清单、
    installed_at。单文件 = Cargo.lock 同款心智模型；并发由 install/
