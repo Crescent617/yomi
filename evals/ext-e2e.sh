@@ -121,6 +121,34 @@ out=$("$YOMI" extension list)
 health=$(echo "$out" | awk '$1 == "e2e-demo" {print $3}')
 check "extension list health ok" "ok" "$health"
 
+# health 异常态逐一诱发 → 断言 → 恢复（modified/oversized/unreadable/foreign）
+echo "tampered" >> "$DATA/extensions/e2e-demo/snippets/convention.md"
+health=$("$YOMI" extension list | awk '$1 == "e2e-demo" {print $3}')
+check "health modified" "modified" "$health"
+printf 'e2e convention: always pass, now v2\n' > "$DATA/extensions/e2e-demo/snippets/convention.md"
+health=$("$YOMI" extension list | awk '$1 == "e2e-demo" {print $3}')
+check "health back to ok (modified)" "ok" "$health"
+
+head -c 2097152 /dev/zero > "$DATA/extensions/e2e-demo/big.bin"
+health=$("$YOMI" extension list | awk '$1 == "e2e-demo" {print $3}')
+check "health oversized" "oversized" "$health"
+rm -f "$DATA/extensions/e2e-demo/big.bin"
+health=$("$YOMI" extension list | awk '$1 == "e2e-demo" {print $3}')
+check "health back to ok (oversized)" "ok" "$health"
+
+chmod 000 "$DATA/extensions/e2e-demo/bin/e2e-recall"
+health=$("$YOMI" extension list | awk '$1 == "e2e-demo" {print $3}')
+check "health unreadable" "unreadable" "$health"
+chmod 755 "$DATA/extensions/e2e-demo/bin/e2e-recall"
+health=$("$YOMI" extension list | awk '$1 == "e2e-demo" {print $3}')
+check "health back to ok (unreadable)" "ok" "$health"
+
+mkdir -p "$DATA/extensions/hand-drop"
+printf '[ext]\nname = "hand-drop"\nversion = "0"\ndescription = "user dropped"\n' > "$DATA/extensions/hand-drop/ext.toml"
+health=$("$YOMI" extension list | awk '$1 == "hand-drop" {print $3}')
+check "health foreign" "foreign" "$health"
+rm -rf "$DATA/extensions/hand-drop"
+
 # ── 4. PATH 注入：cron shell job 触发，子进程找 bin 命令 ──
 "$YOMI" cron create --name e2e-pathprobe --schedule "0 0 1 1 *" --command "e2e-recall > $E2E/path-probe.txt" >/dev/null
 jid=$(sqlite3 "$DB" "SELECT id FROM cron_jobs WHERE name='e2e-pathprobe'")
