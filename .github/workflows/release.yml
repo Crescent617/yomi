@@ -212,8 +212,11 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${YOMI_SIGN_P12:-}" ]]; then
-            echo "YOMI_SIGN_P12 secret not set; DMG will be ad-hoc signed"
-            exit 0
+            # 失败 closed：ad-hoc 签名会被 codesign --verify 放行，但每个
+            # 用户升级后 TCC 授权全部失效（aaa62d48 修过的回归）——宁可
+            # 发版红牌也不能静默发"换签名身份"的包。
+            echo "YOMI_SIGN_P12 secret not set; refusing to ship an ad-hoc signed DMG"
+            exit 1
           fi
           echo "$YOMI_SIGN_P12" | base64 -d > /tmp/yomi-sign.p12
           cd /tmp
