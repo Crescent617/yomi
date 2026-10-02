@@ -35,12 +35,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# ── 0. 隔离环境：data_dir + 独立 socket ──
+# ── 0. 隔离环境：data_dir + 独立 socket + 独立 config ──
 # 注意：从 yomi 会话里跑本脚本时，进程环境自带 YOMI_DATA_DIR（agent 子
 # 进程注入）——必须显式改指临时目录，否则 env override 盖过 config。
 # pid 文件/socket 也随之隔离。
+# config 同样必须隔离（YOMI_CONFIG 指到临时文件）：否则 daemon 按默认
+# 发现顺序读 ~/.yomi/config.toml，以真 bot 身份连飞书 ws——测试 daemon
+# 与生产 daemon 同号在线，消息可能被测试实例吃掉（2026-10-02 实测，
+# 两只僵尸 debug daemon 占着真账号连接）。空 config = 不连任何渠道，
+# 本 e2e 只验证 shell cron 与文件系统，不需要模型与渠道。
 mkdir -p "$DATA"
+printf '# e2e isolated config: no channels, no real accounts.\n' > "$E2E/config.toml"
 export YOMI_DATA_DIR="$DATA"
+export YOMI_CONFIG="$E2E/config.toml"
 export YOMI_SOCKET="unix://$SOCK"
 
 nohup "$YOMI" daemon start >"$E2E/daemon.log" 2>&1 &
