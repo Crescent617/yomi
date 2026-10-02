@@ -48,6 +48,26 @@ fn missing_required_params_is_rejected() {
 }
 
 #[test]
+fn bare_struct_method_defaults_to_empty_params() {
+    // `preview_system_prompt` 的参数全可选：裸名调用不必手写 `'{}'`。
+    let m = build_method("preview_system_prompt", None).unwrap();
+    assert_eq!(
+        m,
+        ReqMethod::PreviewSystemPrompt {
+            working_dir: None,
+            session_id: None,
+        }
+    );
+}
+
+#[test]
+fn bare_struct_method_missing_required_still_fails() {
+    // 空对象填不进去必填字段，报错信息会列出缺哪个。
+    let err = build_method("get_session", None).unwrap_err();
+    assert!(err.to_string().contains("Unknown or malformed"));
+}
+
+#[test]
 fn non_object_params_are_rejected() {
     let err = build_method("get_config", Some("[1, 2]")).unwrap_err();
     assert!(err.to_string().contains("must be a JSON object"));

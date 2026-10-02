@@ -33,7 +33,13 @@ fn build_method(method: &str, params: Option<&str>) -> Result<ReqMethod> {
     }
 
     let value = match params {
-        None => serde_json::Value::String(method.to_string()),
+        // Bare name, no params: unit variants accept the string form; struct
+        // variants default to an empty params object (their optional fields),
+        // so `yomi rpc preview_system_prompt` works without typing `'{}'`.
+        None => match resolved_method_schema(method) {
+            Some(serde_json::Value::Null) | None => serde_json::Value::String(method.to_string()),
+            Some(_) => serde_json::json!({ method: {} }),
+        },
         Some(raw) => {
             let params: serde_json::Value =
                 serde_json::from_str(raw).context("Invalid PARAMS JSON")?;
