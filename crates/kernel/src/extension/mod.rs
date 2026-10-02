@@ -98,6 +98,9 @@ impl From<ExtError> for crate::types::KernelError {
         match e {
             ExtError::Io(io) => crate::types::KernelError::Io(io.to_string()),
             ExtError::Cron(c) => c.into(),
+            // 不带前缀：KernelError::Storage 的 Display 自带 "Storage error: "，
+            // 避免 "Storage error: storage: …" 双前缀。
+            ExtError::Storage(s) => crate::types::KernelError::Storage(s),
             // 消息自身已可行动（"invalid package: …"/"fetch failed: …"/
             // "mount conflict: …"），透明透传，不加误导前缀。
             other => crate::types::KernelError::Extension(other.to_string()),

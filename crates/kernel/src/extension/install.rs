@@ -418,8 +418,15 @@ async fn refresh_cron_content(
         crate::cron::CronAction::SendMessage {
             session_id: None,
             content,
-            session_template: Some(mut tpl),
+            session_template,
         } => {
+            // 模板物化对齐 create_cron_job 路径：无 work_dir 也落
+            // Some(默认模板 + 重算等级)，不让 store 形状在刷新后退化。
+            let mut tpl = session_template.unwrap_or(crate::cron::CronSessionTemplate {
+                working_dir: None,
+                project_id: None,
+                auto_approve_level: None,
+            });
             tpl.auto_approve_level = Some(
                 config_auto_approve
                     .max(crate::permission::Level::Caution)
