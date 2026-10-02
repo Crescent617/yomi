@@ -34,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `<data_dir>/bin` 进入所有 yomi 子进程 PATH 最前：扩展包的 bin 命令与手工放入该目录的脚本可直接按名调用。
 - system prompt 新增扩展 snippet 层：已安装扩展的 `snippets/*.md` 拼装在项目约定之后、skills 索引之前（`yomi doc extension`）。
 - hook / 外挂 tool / 飞书卡片触发器的 stdin JSON 新增 `v` 契约版本字段（当前 1）。
-- `yomi doctor` 新增扩展健康检查：扩展内容被本地改动（hash 对不上）、目录 foreign 或不可读时告警并指向排障文档。
+- `yomi doctor` 新增扩展健康检查：扩展内容被本地改动（hash 对不上）、目录 foreign 或不可读时告警并指向排障文档。注意 wire 协议升至 32，旧版本 CLI 连新 daemon 会在握手处报版本不匹配。
 
 ### Changed
 - RPC `ext_route` 更名 `route_session`（动词开头，与 create_session/fork_session 同款）；`ext_route` 保留为兼容别名。
@@ -51,6 +51,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - GUI 设置页（Application → Startup）新增「Launch at login」开关，控制登录时自动启动 Yomi；macOS 走系统登录项（系统设置 → 通用 → 登录项中可见可删），Windows 写当前用户注册表启动项，Linux 写 XDG autostart 桌面项。
+
+## [0.10.52] - 2026-09-29
+
+### Added
+- 飞书文件附件自动下载：会话收到文件时按占位符解析并自动拉取内容进上下文，单文件 100MB 上限。
+
+## [0.10.51] - 2026-09-28
+
+### Changed
+- 私聊（DM）的 `reply_in_thread` 行为也跟随渠道配置（默认关，此前仅群聊生效）。
+
+## [0.10.50] - 2026-09-27
+
+### Added
+- 渠道欢迎卡片：新会话首次触发时可发欢迎语，由 `<data_dir>/channels/welcome.json` 配置。
+
+## [0.10.49] - 2026-09-27
+
+### Changed
+- `/btw` 旁问卡片去掉底部提示条，卡片更干净。
+
+## [0.10.48] - 2026-09-27
+
+### Added
+- IM 渠道支持 `/btw` 旁问：不打断主会话，侧边提问拿简短回答。
+
+### Changed
+- Windows 安装包只发 msi（移除 nsis）：PATH 写入与静默部署 msi 都覆盖，nsis 是模板默认遗留。
+
+## [0.10.47] - 2026-09-26
+
+### Fixed
+- Windows msi 安装包构建修复（wix 过 ICE18 校验），此前 light 静默失败、job 假绿。
+
+## [0.10.46] - 2026-09-26
+
+### Fixed
+- Windows msi 安装包构建修复（wix fragment 的 Win64 属性未定义致 candle 报错）。
+
+## [0.10.45] - 2026-09-26
+
+### Added
+- GUI 安装时 CLI 一并进 PATH：Windows msi 写系统 PATH，macOS cask 直链 sidecar 进 `/opt/homebrew/bin`，daemon 启动时自动归位。
 
 ## [0.10.44] - 2026-09-25
 
