@@ -54,6 +54,20 @@ fn github_shorthand() {
             None,
             None,
         ),
+        (
+            // .git 后缀与 @ref 组合：.git 属于仓库名，剥在 ref 切分后——
+            // 否则 repo 解析成 yomi-extensions.git，clone URL 拼双后缀。
+            "https://github.com/Crescent617/yomi-extensions.git@main",
+            "https://github.com/Crescent617/yomi-extensions.git",
+            None,
+            Some("main"),
+        ),
+        (
+            "Crescent617/yomi-extensions.git@feature/x",
+            "https://github.com/Crescent617/yomi-extensions.git",
+            None,
+            Some("feature/x"),
+        ),
     ];
     for (input, url, subdir, ref_) in cases {
         let src = parse_source(input).unwrap();

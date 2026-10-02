@@ -5,8 +5,9 @@
 # 与日常 daemon 完全并存。装一个带全资源（cron/hooks/bin/snippets）的
 # demo 包，逐项断言 install/list/remove 全链（CLI→wire→kernel→fs/sqlite），
 # 并用 cron shell job 验证 PATH 注入（不依赖模型调用）。注册表是
-# extensions/<名>/ext.lock（等价 Cargo.lock；ext.toml 归作者原封
-# 不动，不再有 sqlite ext_installs 表）。
+# extensions/ext.lock 单文件注册表（Cargo.lock 式 [[extensions]]；
+# ext.toml 归作者原封不动，不再有 sqlite ext_installs 表）。lock 在
+# 包目录外：作者随包自带 ext.lock 伪造不了所有权。
 #
 # 用法：evals/ext-e2e.sh    （需 target/debug/yomi；约 1 分钟，无模型调用）
 
@@ -77,6 +78,9 @@ chmod +x "$PKG/hooks/pre_tool_use/90-e2e-guard"
 printf '#!/bin/sh\necho e2e-recall-ok\n' > "$PKG/bin/e2e-recall"
 chmod +x "$PKG/bin/e2e-recall"
 echo "e2e convention: always pass" > "$PKG/snippets/convention.md"
+# 作者随包自带 ext.lock：必须被当普通包文件复制（不构成所有权证明，
+# 真正的注册表是包外的单文件 ext.lock）。
+echo "author's own lock, not ownership proof" > "$PKG/ext.lock"
 
 # ── 2. install：报告 + 文件系统 + sqlite 三面对账 ──
 out=$("$YOMI" extension install "$PKG" 2>&1) || { echo "install failed: $out"; exit 2; }
@@ -89,12 +93,16 @@ rows=$(sqlite3 "$DB" "SELECT COUNT(*) FROM cron_jobs WHERE name LIKE 'ext:e2e-de
 check "cron adopted (2 jobs)" "2" "$rows"
 content=$(sqlite3 "$DB" "SELECT action FROM cron_jobs WHERE name='ext:e2e-demo:tick'")
 echo "$content" | grep -q "tick via file" && ok "cron message from file" || bad "cron message from file" "$content"
-# ext.lock：来源、hash、资源清单都落盘（注册表即文件系统）；
-# ext.toml 是作者的 manifest，必须原封不动。
-lock="$DATA/extensions/e2e-demo/ext.lock"
-grep -q '^source = ' "$lock" && ok "provenance in ext.lock" || bad "provenance in ext.lock" "missing"
-grep -q '^content_hash = "[0-9a-f]\{64\}"' "$lock" && ok "content hash in ext.lock" || bad "content hash in ext.lock" "missing"
+# 单文件注册表 ext.lock：来源、hash、资源清单都落盘；ext.toml 是
+# 作者的 manifest，必须原封不动。
+lock="$DATA/extensions/ext.lock"
+grep -q 'name = "e2e-demo"' "$lock" && ok "registry entry present" || bad "registry entry present" "missing"
+grep -q '^source = ' "$lock" && ok "provenance in registry" || bad "provenance in registry" "missing"
+grep -q '^content_hash = "[0-9a-f]\{64\}"' "$lock" && ok "content hash in registry" || bad "content hash in registry" "missing"
 cmp -s "$PKG/ext.toml" "$DATA/extensions/e2e-demo/ext.toml" && ok "ext.toml verbatim" || bad "ext.toml verbatim" "changed"
+# 作者随包自带的 ext.lock 只是普通包文件：随复制进目录、不构成所有权。
+[ -f "$DATA/extensions/e2e-demo/ext.lock" ] && ok "authored lock copied as plain file" || bad "authored lock copied as plain file" "missing"
+[ -f "$lock" ] && ok "registry lock outside package dir" || bad "registry lock outside package dir" "missing"
 
 # 幂等重跑
 out=$("$YOMI" extension install "$PKG" 2>&1)
@@ -107,11 +115,15 @@ check "reinstall no duplicate cron" "2" "$rows"
 old_hash=$(grep '^content_hash = ' "$lock")
 sed -i '' 's/^version = "0.1.0"$/version = "0.2.0"/' "$PKG/ext.toml"
 echo "e2e convention: always pass, now v2" > "$PKG/snippets/convention.md"
+# v2 同时撤掉 hook：原位替换后旧版本的 hook 挂载必然悬空——必须被
+# 清扫（否则 phantom-block 别的扩展装同名槽位，health 还看不见）。
+rm -f "$PKG/hooks/pre_tool_use/90-e2e-guard"
 out=$("$YOMI" extension install "$PKG" 2>&1)
 echo "$out" | grep -q "Installed extension e2e-demo v0.2.0" && ok "upgrade report" || bad "upgrade report" "$out"
 new_hash=$(grep '^content_hash = ' "$lock")
 [ "$old_hash" != "$new_hash" ] && ok "upgrade bumps content hash" || bad "upgrade bumps content hash" "$lock"
 grep -q "now v2" "$DATA/extensions/e2e-demo/snippets/convention.md" && ok "upgrade refreshes content" || bad "upgrade refreshes content" "stale"
+[ ! -e "$DATA/hooks/pre_tool_use/90-e2e-guard" ] && ok "upgrade sweeps stale mount" || bad "upgrade sweeps stale mount" "dangling hook symlink"
 cmp -s "$PKG/ext.toml" "$DATA/extensions/e2e-demo/ext.toml" && ok "upgrade ext.toml verbatim" || bad "upgrade ext.toml verbatim" "changed"
 rows=$(sqlite3 "$DB" "SELECT COUNT(*) FROM cron_jobs WHERE name LIKE 'ext:e2e-demo:%'")
 check "upgrade no duplicate cron" "2" "$rows"
@@ -166,7 +178,7 @@ echo "$out" | grep -q "Removed extension e2e-demo" && ok "remove report" || bad 
 [ ! -e "$DATA/extensions/e2e-demo" ] && ok "extensions dir removed" || bad "extensions dir removed" "still there"
 rows=$(sqlite3 "$DB" "SELECT COUNT(*) FROM cron_jobs WHERE name LIKE 'ext:e2e-demo:%'")
 check "cron swept" "0" "$rows"
-[ ! -f "$lock" ] && ok "ext.lock gone with dir" || bad "ext.lock gone with dir" "still there"
+! grep -q 'e2e-demo' "$lock" && ok "registry entry removed with remove" || bad "registry entry removed with remove" "still there"
 
 # 槽位保护：用户文件占 bin 槽位时 install 拒绝且不覆盖
 mkdir -p "$DATA/bin"

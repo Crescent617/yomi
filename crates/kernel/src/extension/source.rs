@@ -51,14 +51,16 @@ pub fn parse_source(s: &str) -> Result<ExtSource, ExtError> {
 fn parse_git(s: &str) -> Result<ExtSource, ExtError> {
     let mut rest = s.strip_prefix("https://github.com/").unwrap_or(s);
     rest = rest.strip_prefix("github.com/").unwrap_or(rest);
-    rest = rest.trim_end_matches('/').trim_end_matches(".git");
+    rest = rest.trim_end_matches('/');
     // @ref 取最后一个 @ 之后的全部（分支名常带 /：feature/x、hotfix/y）；
-    // 路径段本身不允许 @，无歧义。
+    // 路径段本身不允许 @，无歧义。先切 ref 再剥 .git 后缀——
+    // `owner/repo.git@main` 的 .git 属于 repo 名，剥在 ref 切分之后才
+    // 不会把 r.git 当仓库名（clone URL 拼成 r.git.git 必然失败）。
     let (rest, ref_) = match rest.rsplit_once('@') {
         Some((head, tail)) if !tail.is_empty() && !head.is_empty() => {
-            (head, Some(tail.to_string()))
+            (head.trim_end_matches(".git"), Some(tail.to_string()))
         }
-        _ => (rest, None),
+        _ => (rest.trim_end_matches(".git"), None),
     };
     let segments: Vec<&str> = rest.split('/').filter(|seg| !seg.is_empty()).collect();
     if segments.len() < 2 {
@@ -110,6 +112,10 @@ pub async fn fetch_source(
                 .map_err(|e| ExtError::Fetch(format!("create temp dir: {e}")))?;
             let dest = tmp.path().join("repo");
             clone(url, ref_.as_deref(), &dest).await?;
+            // clone 落盘的总量闸：hash 那道闸只看包内容（还跳过 .git），
+            // 挡不住"仓里塞 10GB pack"把临时盘灌满——metadata 级 walk
+            // 把 .git 也算上，超限即弃（TempDir 随 Err 清理）。
+            clone_size_guard(&dest)?;
             let rev = resolve_head(&dest).await?;
             let root = match subdir {
                 Some(sub) => {
@@ -126,6 +132,42 @@ pub async fn fetch_source(
             Ok((Some(tmp), root, rev))
         }
     }
+}
+
+/// clone 落盘总量上限：包的持久化内容由 install 的逐文件/总量闸管，
+/// 这里只管临时 clone（含 .git）别把盘灌满。
+const CLONE_TOTAL_MAX_BYTES: u64 = 512 * 1024 * 1024;
+const CLONE_FILE_MAX: usize = 50_000;
+
+/// metadata 级递归统计：总字节与文件数任一超限即拒。不读内容，
+/// 对 .git pack 也生效。
+fn clone_size_guard(dir: &Path) -> Result<(), ExtError> {
+    fn walk(dir: &Path, total: &mut u64, count: &mut usize) -> Result<(), ExtError> {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let ft = entry.file_type()?;
+            if ft.is_dir() {
+                walk(&entry.path(), total, count)?;
+            } else if ft.is_file() {
+                *count += 1;
+                *total += entry.metadata()?.len();
+                if *total > CLONE_TOTAL_MAX_BYTES {
+                    return Err(ExtError::Fetch(format!(
+                        "cloned repo exceeds {CLONE_TOTAL_MAX_BYTES} bytes"
+                    )));
+                }
+                if *count > CLONE_FILE_MAX {
+                    return Err(ExtError::Fetch(format!(
+                        "cloned repo exceeds {CLONE_FILE_MAX} files"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+    let mut total = 0u64;
+    let mut count = 0usize;
+    walk(dir, &mut total, &mut count)
 }
 
 /// clone 后的 HEAD sha（安装的精确版本，进安装记录）。

@@ -2223,8 +2223,8 @@ impl Kernel {
     // ── Extension packages（安装/卸载/清单；设计 docs/design/ext-packages.md）──
 
     /// 安装扩展包：解析来源（GitHub URL / 本地目录）→ 取货（git clone
-    /// 到临时目录）→ 校验 manifest → 复制进 extensions/<名>（已装目录
-    /// 的 ext.lock：来源/版本/hash/资源清单）→ 挂载
+    /// 到临时目录）→ 校验 manifest → 复制进 extensions/<名>（包外的
+    /// 注册表 ext.lock：来源/版本/hash/资源清单）→ 挂载
     /// hooks/bin → 收养 cron。统一 copy；重装 = 重新取货 + 原位替换
     /// （更新语义）。幂等可重放。
     pub async fn extension_install(
@@ -2236,26 +2236,29 @@ impl Kernel {
             .as_ref()
             .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
         let data_dir = self.data_dir().await;
+        // 变更前失败（来源解析/取货/manifest 解析）直接透传类型化错误：
+        // 此时没碰任何槽位，"partial install" 提示只适用于变更后的失败。
         let src = crate::extension::parse_source(&source)?;
         let (_tmp, root, rev) = crate::extension::fetch_source(&src).await?;
         // 只 parse 一次：name/已装查询/物化共用同一 manifest（TOCTOU）。
         let manifest = crate::extension::parse_manifest(&root)?;
-        // 已装目录（带 ext.lock）决定可否原位刷新；
-        // 读不到 = 槽位空或 foreign（用户手放），按不可刷新处理。
+        // 注册表条目决定可否原位刷新；读不到 = 槽位空或 foreign
+        // （用户手放），按不可刷新处理。
         let record = crate::extension::read_installed(
+            &data_dir,
             &data_dir
                 .join(crate::extension::DIR_NAME)
                 .join(&manifest.ext.name),
         )
         .ok();
-        let allow_replace = record.as_ref().is_some_and(|i| i.meta.is_some());
+        let previous = record.as_ref().and_then(|i| i.meta.as_ref());
         let result = crate::extension::install(
             &data_dir,
             &root,
             cron_store,
             self.agent_shared.config_auto_approve,
             &manifest,
-            allow_replace,
+            previous,
             &crate::extension::Provenance {
                 source: source.clone(),
                 rev: rev.clone(),
@@ -2265,8 +2268,9 @@ impl Kernel {
         let report = match result {
             Ok(report) => report,
             Err(e) => {
-                // cron 收养可能已部分完成：让 scheduler 立即回查 store，
-                // 并给用户可行动的提示（重跑 install 收敛）。
+                // 复制/挂载/cron 收养可能已部分完成（install 内部已落
+                // 部分 lock）：让 scheduler 立即回查 store，并给用户可
+                // 行动的提示（重跑 install 收敛）。
                 self.notify_cron_scheduler();
                 return Err(crate::types::KernelError::Extension(format!(
                     "{e} (partial install possible: re-run `yomi extension install` to converge)"
@@ -2279,10 +2283,10 @@ impl Kernel {
         Ok(report)
     }
 
-    /// 已安装扩展清单：extensions/ 目录本身就是注册表（每个已装目录的
-    /// ext.toml 旁有 ext.lock）。health：foreign = 目录在手但没有
-    /// ext.lock（用户手放）；modified = 内容与安装时不一致（本地
-    /// 改动）；ok = 一致。
+    /// 已安装扩展清单：extensions/ 目录本身就是注册表（每个已装目录
+    /// 配注册表 ext.lock）。health：foreign = 目录在手但注册表
+    /// 无条目（用户手放，或 ext.toml 损坏）；modified = 内容与
+    /// 安装时不一致（本地改动）；ok = 一致。
     pub async fn extension_list(&self) -> Result<Vec<serde_json::Value>> {
         let data_dir = self.data_dir().await;
         let mut out = Vec::new();
@@ -2329,9 +2333,10 @@ impl Kernel {
             .as_ref()
             .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
         let data_dir = self.data_dir().await;
-        // 已装清单（ext.lock）驱动回滚；读不到 = 未安装，extension::remove
-        // 产出全空报告，CLI 报 "not installed"。
+        // 已装清单（注册表 ext.lock）驱动回滚；读不到 = 未安装，
+        // extension::remove 产出全空报告，CLI 报 "not installed"。
         let installed = crate::extension::read_installed(
+            &data_dir,
             &data_dir.join(crate::extension::DIR_NAME).join(&name),
         )
         .ok();
@@ -2342,9 +2347,9 @@ impl Kernel {
             Err(e) => {
                 // cron 可能已部分清扫：让 scheduler 立即回查 store。
                 self.notify_cron_scheduler();
-                return Err(crate::types::KernelError::storage(format!(
-                    "{e} (partial remove possible: re-run `yomi extension remove` to converge)"
-                )));
+                // 错误自身已可行动（invalid/conflict/io/cron 分类），
+                // 透明透传类型化映射——不再套误导性的 "Storage error" 前缀。
+                return Err(e.into());
             }
         };
         if !report.cron_removed.is_empty() {

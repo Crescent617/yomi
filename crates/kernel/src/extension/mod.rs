@@ -26,8 +26,8 @@ pub use install::{
     install, package_hash, remove, InstallReport, MountReport, MountStatus, RemoveReport,
 };
 pub use installed::{
-    list_installed, read_installed, write_install_meta, InstallMeta, InstalledExt, Provenance,
-    Resources,
+    legacy_entry, list_installed, lockfile_path, read_installed, read_lockfile, write_lockfile,
+    ExtLockfile, InstalledExt, LockEntry, Provenance, Resources,
 };
 pub use manifest::{parse_manifest, CronEntry, ExtManifest, ExtMeta};
 pub use snippets::{load_snippets, Snippet, SnippetLoader};
@@ -35,9 +35,15 @@ pub use source::{fetch_source, parse_source, ExtSource};
 
 /// 包内 manifest 文件名（作者手写，install 后原封不动）。
 pub const MANIFEST_FILE: &str = "ext.toml";
-/// 安装锁文件名：install 盖在已装目录里的溯源/资源清单（等价
-/// Cargo.lock 对 Cargo.toml——manifest 归作者，lock 归工具）。
-/// 存在与否 = 目录是不是 yomi 装的（foreign 判定）；hash 时整体跳过。
+/// 安装锁文件名：**单个**注册表 `extensions/ext.lock`（Cargo.lock 式
+/// `[[extensions]]` 条目，按名字一字一条）。等价 Cargo.lock 对
+/// Cargo.toml——manifest 归作者，lock 归工具。
+///
+/// 为什么不在各包目录里：包内容完全来自作者——lock 放包目录里，作者
+/// 随包自带 ext.lock 即可伪造"yomi 装的"所有权证明（原位刷新误删
+/// 用户目录）。包外单文件作者无法随包投递，存在与否才构成可信的
+/// 所有权判定（foreign = 注册表无条目，含包内 ext.toml 损坏/解析
+/// 失败的情形）；单文件也是 Cargo.lock 同款心智模型。
 pub const LOCK_FILE: &str = "ext.lock";
 /// 已安装扩展的库目录名（相对 `data_dir`）。
 pub const DIR_NAME: &str = "extensions";

@@ -56,7 +56,9 @@
     与磁盘分叉这些状态面；代价是源仓后续 commit 不会自动生效，要
     更新就重装。
 11. **注册表 = 文件系统，不是 sqlite**：install 复制完在包目录里
-    盖 `ext.lock`（来源/版本/hash/资源清单/安装时间），`extensions/`
+    盖单文件注册表 `extensions/ext.lock`（Cargo.lock 式
+    `[[extensions]]`：来源/版本/hash/资源清单/安装时间），
+    `extensions/`
     目录本身就是索引。`ext.toml` 是作者的 manifest，**原封不动**——
     等价 Cargo.toml 对 Cargo.lock 的关系。
     这是对 AGENTS.md「extension state lives in sqlite/config — never
@@ -66,15 +68,17 @@
     extensions/ 级 lock/index 文件：包间无跨包事务，那会再造第二
     真相源。正确性仍不依赖元数据（决策 2 不变：前缀清扫 + 指向
     判定兜底）。
-12. **provenance 与内容 hash 落盘**：`ext.lock` 记录用户给的原始
+12. **provenance 与内容 hash 落盘**：单文件 `extensions/ext.lock` 记录用户给的原始
     来源字符串与 git resolved commit sha（rev），以及安装时刻的包
     内容 hash（blake3，按相对路径排序喂 路径+内容，单文件 1MB 上限，
     超出按恶意/损坏拒绝 install；symlink 跟随到文件按其内容算）。
-    hash 算法跳过 `ext.lock`（lock 是我们的、每次重装重写），装完
+    lock 是包目录外的单文件、天然不入各包 hash（lock 是我们的、每次
+    重装重写），装完
     即比对必须一致（health=ok 的不变量）；list/doctor 用同算法重算
     比对 → `modified` 健康态暴露本地手改。作者 manifest 里的任何
     内容（哪怕自己写了 `[install]` 表）原样进 hash——不归我们管，
-    也伪造不了归属（归属只看 ext.lock）。
+    也伪造不了归属（归属只看包外注册表——作者随包自带 ext.lock
+    只是普通包文件，照 hash 照复制、不解析）。
 
 ## 包格式
 
@@ -137,10 +141,10 @@ hook 执行序注意：扩展条目与用户条目混排按字典序，包作者
    全量 clone + checkout）到临时目录，`owner/repo[/子目录][@ref]`；
    本地目录直接用。clone 超时 3 分钟；网络失败不脏任何槽位。取货后
    记录 `git rev-parse HEAD` 为 rev（本地源为 None）。
-2. **收编** `extensions/<name>`：空 → 实体复制；已有且带 ext.lock
+2. **收编** `extensions/<name>`：空 → 实体复制；已有且注册表有条目
    （上次本包安装的归属证明）→ 原位刷新（先拷到隐藏临时目录再
    swap，不留"删完没拷上"的窗口）；其他（用户目录、无归属证明的
-   残留）→ 拒绝（提示先 remove）。调用方以已装目录的 ext.lock
+   残留）→ 拒绝（提示先 remove）。调用方以注册表条目
    决定 allow_replace，并用同一个预解析 manifest 查记录（防两次
    parse 之间文件被换名的 TOCTOU）。
 3. **挂载** hooks/bin：逐槽位三种情况——空则建 symlink（创建撞
@@ -150,8 +154,11 @@ hook 执行序注意：扩展条目与用户条目混排按字典序，包作者
    重跑安全）。
 4. **收养 cron**：逐条 `create_cron_job`（ensure：同名即返回不动，
    缺才建）。输出区分 `created` / `exists (untouched)`。
-5. **写 `ext.lock`**：包内容 hash 先算（lock 不入 hash），然后落
-   `ext.lock`：source、rev、content_hash、资源清单、installed_at。
+5. **写注册表 `ext.lock`**：包内容 hash 先算（lock 是包目录外单
+   文件、天然不入各包 hash），然后 upsert `extensions/ext.lock` 里
+   该扩展的条目并原子整表重写：source、rev、content_hash、资源清单、
+   installed_at。单文件 = Cargo.lock 同款心智模型；并发由 install/
+   remove 的全局注册表锁串行。
    放最后：lock 存在 ⇒ 资源大概率在。
 
 冲突时的原子性：不做跨 fs/sqlite 事务（做不了）；同一扩展名的
@@ -166,11 +173,12 @@ install/remove 由进程内按名锁串行，跨扩展的残余竞争靠"所有�
 cron 按 `ext:<名>:` 前缀扫、挂载按指向判定 + 扫包目录）→ 删 cron
 （store 层前缀查询，无分页漏删窗口）→ 摘挂载（**仅当** symlink 确认
 指向本包；被用户换掉的留下并 warn）→ 删 `extensions/<名>`（仅当
-ext.lock 证明是本包装的内容）→ 目录随删除消失，注册表零残留。
+注册表条目证明是本包装的内容）→ 目录与注册表条目随删除消失，
+   注册表零残留（单文件，无 per-name 残留面）。
 全程只动能证明属于自己的东西。处置细则：
 
 - 挂载槽位被用户换成别的 symlink 或实体文件 → 留下，warn。
-- `extensions/<名>` 槽位是实体目录时：仅当 ext.lock 在场才
+- `extensions/<名>` 槽位是实体目录时：仅当注册表有条目才
   `remove_dir_all`；无 lock（foreign，用户把自己的目录放进槽位）→ 留下，
   warn（绝不删用户数据）。
 - 用户手动改过的 cron job（仍在 `ext:<名>:` 命名空间）→ 随前缀
@@ -181,10 +189,11 @@ ext.lock 证明是本包装的内容）→ 目录随删除消失，注册表零�
 `yomi extension list`：每扩展一行——name、version、source、rev、
 installed_at、资源计数（cron/hooks/bins/snippets）、健康状态：
 
-- `ok`：ext.lock 在且内容 hash 与目录现状一致。
+- `ok`：注册表有条目且内容 hash 与目录现状一致。
 - `modified`：lock 在但 hash 对不上（装完本地手改过包内容）。
-- `foreign`：目录在但没有 ext.lock（用户手放，不归包系统管）。
-- `unreadable`：ext.toml 读不了/解析失败。
+- `foreign`：目录在但注册表无条目——用户手放，或 ext.toml
+  损坏/解析失败（占位 manifest 可见，内容不可信）。
+- `unreadable`：hash 重算时包文件读不了（权限/损坏）。
 - `oversized`：目录里出现超过单文件上限（1 MiB）的文件——用户往
   包里丢了大文件；与权限/损坏问题的 `unreadable` 分开，给出可行动
   的诊断（移走大文件或重装）。
