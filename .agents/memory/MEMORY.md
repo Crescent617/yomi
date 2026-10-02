@@ -15,3 +15,4 @@
 - kernel 测试凡是碰进程 env / `INJECTED_ENV` 的必须用 `config_test.rs` 里的 `ENV_TEST_LOCK` 串行化——`clear_injected_env` 会抽干整个全局 map，并行 test 线程下互相 race（实测偶发失败）。
 - `[env]` 配置语义是**覆盖** host 同名变量且不可逆（host 原值不备份）；`INJECTED_ENV` 跟踪仅为 daemon 子进程 env_remove / GUI 重启清理已删条目，勿当死代码删。
 - flake.nix 已迁移 crane（2026-08）：依赖经 buildDepsOnly 独立缓存（yomi-deps derivation），改源码增量构建 ~3min；手动 hash 全部不需要；dockerImage 已删，镜像只走 docker/Dockerfile；scripts/update-nix-hashes.sh 是死脚本
+- 工具坑：`glob` 工具的 `<pattern>*/` 列不出目录（只匹配文件），列目录用 shell `ls -d path/*/`。
