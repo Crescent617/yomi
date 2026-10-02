@@ -27,15 +27,12 @@ pub async fn install(_global: &GlobalArgs, source: String) -> Result<()> {
         &report.content_hash[..8.min(report.content_hash.len())]
     );
     for c in &report.cron {
-        println!(
-            "  cron {} ({})",
-            c.name,
-            if c.created {
-                "created"
-            } else {
-                "exists, untouched"
-            }
-        );
+        let status = match c.status {
+            kernel::extension::CronAdoptStatus::Created => "created",
+            kernel::extension::CronAdoptStatus::Updated => "content updated",
+            kernel::extension::CronAdoptStatus::Untouched => "exists, identical",
+        };
+        println!("  cron {} ({status})", c.name);
     }
     for m in report.hooks.iter().chain(report.bins.iter()) {
         let status = match m.status {

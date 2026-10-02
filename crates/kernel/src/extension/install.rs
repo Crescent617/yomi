@@ -36,7 +36,18 @@ pub struct InstallReport {
 #[serde(rename_all = "snake_case")]
 pub struct CronAdoptReport {
     pub name: String,
-    pub created: bool,
+    pub status: CronAdoptStatus,
+}
+
+/// cron 收养三态：`Created` 缺才建；`Updated` 已存在但包内内容变了
+/// （消息/模板/precheck 刷新到包内值）；`Untouched` 已存在且一致。
+/// schedule/max_runs/expires_at 是用户部署时机，任何态都不动。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CronAdoptStatus {
+    Created,
+    Updated,
+    Untouched,
 }
 
 /// init 钩子执行结果。init 是幂等 ensure（非资源），不参与回滚清单。
@@ -115,7 +126,7 @@ pub async fn install(
     let ext_dir = data_dir.join(DIR_NAME).join(&name);
     // 注册表整表载入内存（严格模式：文件在但损坏 → 拒绝——整表重写
     // 会把其他扩展的条目一起抹掉），各阶段改条目后原子重写。
-    let mut lockfile = super::read_lockfile_strict(data_dir).map_err(ExtError::Invalid)?;
+    let mut lockfile = super::read_lockfile_strict(data_dir).map_err(ExtError::Storage)?;
     // previous 一律锁内从注册表取（调用方在锁外预读的可能是陈旧
     // 快照，不可取）；无条目 = 槽位空或 foreign（用户手放）。
     let previous = lockfile.get(&name).cloned();
@@ -214,9 +225,12 @@ pub async fn install(
     // 超时解开，有界停顿 120s）。
     let init = run_init(data_dir, &ext_dir, manifest).await?;
 
-    // cron 收养（ensure：缺才建，已存在不动）。消息从**已装目录**取
-    // （单一事实源 = 已装内容，与 hash/copy 同源；取货临时目录此处
-    // 可能已被清理）。
+    // cron 收养（refresh 语义：缺才建，已存在则**内容随包更新**——
+    // 消息/会话模板/precheck 刷新到包内值；schedule/max_runs/expires_at
+    // 是用户部署时机，不动）。与 remove 的前缀清扫口径一致：ext:<名>:
+    // 命名空间归扩展所有，装时不让改、卸时全删的"半保护"不再成立。
+    // 消息从**已装目录**取（单一事实源 = 已装内容，与 hash/copy 同源；
+    // 取货临时目录此处可能已被清理）。
     let mut cron = Vec::new();
     for entry in &manifest.cron {
         let full = cron_name(&name, &entry.name);
@@ -239,13 +253,20 @@ pub async fn install(
         };
         // 收养失败直接返回：provisional 条目已保证重跑原位收敛；已建
         // 的 cron job 由 remove 的前缀清扫兜底，无需部分落盘。
-        let outcome = crate::cron::create_cron_job(cron_store, None, input, config_auto_approve)
-            .await
-            .map_err(ExtError::Cron)?;
-        cron.push(CronAdoptReport {
-            name: full,
-            created: outcome.created,
-        });
+        let outcome =
+            crate::cron::create_cron_job(cron_store, None, input.clone(), config_auto_approve)
+                .await
+                .map_err(ExtError::Cron)?;
+        let status = if outcome.created {
+            CronAdoptStatus::Created
+        } else if refresh_cron_content(cron_store, &outcome.job, &input, config_auto_approve)
+            .await?
+        {
+            CronAdoptStatus::Updated
+        } else {
+            CronAdoptStatus::Untouched
+        };
+        cron.push(CronAdoptReport { name: full, status });
     }
 
     let snippets = list_snippets(&ext_dir).await;
@@ -259,7 +280,7 @@ pub async fn install(
         &mut lockfile,
         make_entry(&name, provenance, &content_hash, &resources),
     )
-    .map_err(|e| ExtError::Invalid(format!("persist ext.lock: {e}")))?;
+    .map_err(|e| ExtError::Storage(format!("persist ext.lock: {e}")))?;
 
     Ok(InstallReport {
         name,
@@ -354,6 +375,83 @@ fn tail_bytes(stdout: &[u8], stderr: &[u8], keep: usize) -> String {
         start += 1;
     }
     String::from_utf8_lossy(&buf[start..]).into_owned()
+}
+
+/// 已存在 ext cron job 的内容对账：包内派生字段（消息文本、会话
+/// 工作目录、precheck）不一致则 update 到包内值并返回 true；一致
+/// 不碰 store 返回 false。权限等级是机器派生值，不参与对账（更新
+/// 时按当前 config 重算，与 create_cron_job 创建路径同规则）。
+async fn refresh_cron_content(
+    store: &Arc<dyn CronStore>,
+    existing: &crate::cron::CronJob,
+    input: &crate::cron::CreateCronJobInput,
+    config_auto_approve: Level,
+) -> Result<bool, ExtError> {
+    let new_precheck = input.precheck.clone().filter(|s| !s.trim().is_empty());
+    let same = match (&existing.action, &input.action) {
+        (
+            crate::cron::CronAction::SendMessage {
+                content: old_content,
+                session_template: old_tpl,
+                ..
+            },
+            crate::cron::CronAction::SendMessage {
+                content,
+                session_template,
+                ..
+            },
+        ) => {
+            let old_dir = old_tpl.as_ref().and_then(|t| t.working_dir.clone());
+            let new_dir = session_template
+                .as_ref()
+                .and_then(|t| t.working_dir.clone());
+            old_content == content && old_dir == new_dir && existing.precheck == new_precheck
+        }
+        _ => false,
+    };
+    if same {
+        return Ok(false);
+    }
+    // precheck 的 update 语义：Some("") = 清除——作者删了闸门，刷新
+    // 跟着清。
+    let action = match input.action.clone() {
+        crate::cron::CronAction::SendMessage {
+            session_id: None,
+            content,
+            session_template: Some(mut tpl),
+        } => {
+            tpl.auto_approve_level = Some(
+                config_auto_approve
+                    .max(crate::permission::Level::Caution)
+                    .as_str()
+                    .to_string(),
+            );
+            crate::cron::CronAction::SendMessage {
+                session_id: None,
+                content,
+                session_template: Some(tpl),
+            }
+        }
+        other => other,
+    };
+    store
+        .update(
+            &existing.id,
+            &crate::cron::UpdateCronJobInput {
+                name: None,
+                schedule: None,
+                action: Some(action),
+                status: None,
+                max_runs: None,
+                expires_at: None,
+                precheck: Some(input.precheck.clone().unwrap_or_default()),
+                next_run_at: None,
+            },
+        )
+        .await
+        .map_err(ExtError::Cron)?;
+    tracing::info!(cron = %existing.name, "extension refresh updated cron content");
+    Ok(true)
 }
 
 /// 包内容 hash：blake3，按相对路径排序后逐文件喂（路径+内容），对

@@ -6,7 +6,7 @@
 use std::os::unix::fs::PermissionsExt as _;
 use std::sync::Arc;
 
-use super::{install, remove, MountStatus};
+use super::{install, remove, CronAdoptStatus, MountStatus};
 
 const MANIFEST: &str = r#"
 [ext]
@@ -162,7 +162,7 @@ async fn install_creates_everything() {
     assert_eq!(report.name, "demo");
     assert_eq!(report.snippets, vec!["memory.md"]);
     assert!(!report.content_hash.is_empty());
-    assert!(report.cron[0].created);
+    assert_eq!(report.cron[0].status, CronAdoptStatus::Created);
     assert_eq!(report.hooks[0].status, MountStatus::Linked);
     assert_eq!(report.bins[0].status, MountStatus::Linked);
 
@@ -238,7 +238,11 @@ async fn install_is_idempotent() {
 
     assert_eq!(second.hooks[0].status, MountStatus::Already);
     assert_eq!(second.bins[0].status, MountStatus::Already);
-    assert!(!second.cron[0].created, "ensure: existing job untouched");
+    assert_eq!(
+        second.cron[0].status,
+        CronAdoptStatus::Untouched,
+        "existing job untouched"
+    );
     assert_eq!(cron_job_names(&store).await.len(), 1, "no duplicate cron");
 }
 
@@ -392,7 +396,11 @@ async fn install_refuses_occupied_slot() {
     )
     .await
     .unwrap();
-    assert!(report.cron[0].created, "re-run converges: cron adopted");
+    assert_eq!(
+        report.cron[0].status,
+        CronAdoptStatus::Created,
+        "re-run converges: cron adopted"
+    );
     assert!(data.path().join("bin/recall").is_file());
 }
 
@@ -436,7 +444,7 @@ async fn install_recovers_after_partial_mounts() {
     .unwrap();
     assert_eq!(report.hooks[0].status, MountStatus::Linked);
     assert_eq!(report.bins[0].status, MountStatus::Linked);
-    assert!(report.cron[0].created);
+    assert_eq!(report.cron[0].status, CronAdoptStatus::Created);
 }
 
 #[tokio::test]
@@ -546,7 +554,11 @@ async fn reinstall_converges_from_registry_entry() {
     .unwrap();
     assert_eq!(report.hooks[0].status, MountStatus::Already);
     assert_eq!(report.bins[0].status, MountStatus::Already);
-    assert!(!report.cron[0].created, "ensure 语义：已收养的不重建");
+    assert_eq!(
+        report.cron[0].status,
+        CronAdoptStatus::Untouched,
+        "已收养且一致不动"
+    );
 }
 
 #[tokio::test]
@@ -631,7 +643,11 @@ async fn install_records_partial_lock_on_cron_failure() {
     )
     .await
     .unwrap();
-    assert!(report.cron[0].created, "re-run converges after cron fix");
+    assert_eq!(
+        report.cron[0].status,
+        CronAdoptStatus::Created,
+        "re-run converges after cron fix"
+    );
 }
 
 #[tokio::test]
@@ -1096,4 +1112,90 @@ async fn refresh_reruns_init() {
             .trim(),
         "2"
     );
+}
+
+#[tokio::test]
+async fn refresh_updates_cron_content_but_keeps_schedule() {
+    // 内容随包、时机随你：刷新把消息文本更新到包内值，用户改过的
+    // schedule 不被冲掉。
+    let pkg = write_pkg();
+    let data = tempfile::tempdir().unwrap();
+    let store = test_cron_store().await;
+    install(
+        data.path(),
+        pkg.path(),
+        &store,
+        crate::permission::Level::Caution,
+        &manifest_of(&pkg),
+        &provenance(),
+    )
+    .await
+    .unwrap();
+
+    // 用户用 cron update 口径改时刻。
+    let job = store.get_by_name("ext:demo:dream").await.unwrap().unwrap();
+    store
+        .update(
+            &job.id,
+            &crate::cron::UpdateCronJobInput {
+                schedule: Some("23 23 * * *".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    // 作者改消息文本后重装。
+    std::fs::write(pkg.path().join("prompts/dream.txt"), "new dream text").unwrap();
+    let report = install(
+        data.path(),
+        pkg.path(),
+        &store,
+        crate::permission::Level::Caution,
+        &manifest_of(&pkg),
+        &provenance(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.cron[0].status, CronAdoptStatus::Updated);
+
+    let job = store.get_by_name("ext:demo:dream").await.unwrap().unwrap();
+    assert_eq!(job.schedule, "23 23 * * *", "用户时刻不被冲掉");
+    match &job.action {
+        crate::cron::CronAction::SendMessage { content, .. } => {
+            assert!(content.contains("new dream text"), "{content}");
+        }
+        other => panic!("unexpected action: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn refresh_untouched_when_cron_identical() {
+    // 内容一致就不碰 store：重装报告 Untouched，updated_at 不动。
+    let pkg = write_pkg();
+    let data = tempfile::tempdir().unwrap();
+    let store = test_cron_store().await;
+    for _ in 0..2 {
+        install(
+            data.path(),
+            pkg.path(),
+            &store,
+            crate::permission::Level::Caution,
+            &manifest_of(&pkg),
+            &provenance(),
+        )
+        .await
+        .unwrap();
+    }
+    let report = install(
+        data.path(),
+        pkg.path(),
+        &store,
+        crate::permission::Level::Caution,
+        &manifest_of(&pkg),
+        &provenance(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.cron[0].status, CronAdoptStatus::Untouched);
 }

@@ -99,9 +99,10 @@ yomi extension remove <名>     # cron 前缀清扫 + 挂载指向判定回滚
    重跑 install 收敛）。
 5. init 钩子（声明了才跑）：从已装目录执行，环境见上文「init 安装
    钩子」。失败同整体拒绝。
-6. 收养 cron：ensure-by-name（缺才建、已存在不动，防覆盖手改；
-   更新内容请用 `yomi cron update`，清扫只在 remove）。消息文本从
-   已装目录读取。
+6. 收养 cron：缺才建；已存在则**内容随包更新**——消息文本、会话
+   模板、precheck 刷新到包内值（`ext:<名>:` 命名空间归扩展所有，
+   与 remove 前缀清扫口径一致）；schedule、max_runs、expires_at 是
+   你的部署时机，不被重装冲掉。消息文本从已装目录读取。
 7. 写注册表 `extensions/ext.lock`（单文件，Cargo.lock 式
    `[[extensions]]` 条目）：来源（source/rev）、内容 hash
    （blake3）、资源清单、安装时间，原子整表重写。`ext.toml` 是作者
@@ -117,10 +118,8 @@ yomi extension remove <名>     # cron 前缀清扫 + 挂载指向判定回滚
 bin 内的可执行文件装完即在 PATH 上（`<data_dir>/bin` 由内核注入所有
 子进程）：snippet/文档只写命令名，不写路径。
 
-注意：cron 消息文本在 install 时读进 cron 表——重装前 hooks/bin/
-snippets 改动源仓不影响已装内容，**cron 消息也不更新**（ensure 不
-覆盖原则）。改 cron 用 `yomi cron update`，或 remove + install 全量
-刷新。
+注意：改 cron 时刻/次数用 `yomi cron update`（部署时机是你的，
+扩展重装不会动）；作者改 cron 消息文本重装即生效（内容随包）。
 
 ## remove 语义
 
@@ -174,7 +173,7 @@ cron 按 `ext:<名>:` 前缀清扫 → 摘 hooks/bin 挂载（**仅当** symlink
 | `extension list` 显示 `foreign` | 注册表无条目：用户手放、ext.toml 损坏，或上次装失败残留。确认无用后手动删目录，或换包名。 |
 | `extension list` 显示 `unreadable` | 包文件权限/损坏致 hash 读不了。修权限或 remove + install 重建。 |
 | `extension list` 显示 `oversized` | 包目录混入了超 1MB 的文件（或总量/数量超限）。移走它，或 remove + install。 |
-| install 成功但 cron 报 `exists, untouched` | ensure 语义：同名 job 已存在，未覆盖。要改内容用 `yomi cron update`，或 remove + install。 |
+| install 报 cron `exists, identical` | 包内消息与现网一致，未动。正常现象。 |
 | `invalid package: ...` | ext.toml 校验失败（名字规则、message 二选一、`../` 逃逸、schedule 无未来触发点、同名条目重复、init 路径非法）。按报错逐条修。 |
 | 想看 snippet 拼装结果 | `yomi rpc preview_system_prompt`（可传 working_dir）返回将拼进新会话的完整 SP，grep `Extension: <名>` 即见本扩展的段。 |
 | snippet 改了没生效 | 扫描有 60s 缓存（同 skills）：等约一分钟、或新开会话 spawn 时生效。 |

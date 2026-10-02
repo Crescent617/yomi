@@ -2268,7 +2268,11 @@ impl Kernel {
                 )));
             }
         };
-        if report.cron.iter().any(|c| c.created) {
+        if report
+            .cron
+            .iter()
+            .any(|c| !matches!(c.status, crate::extension::CronAdoptStatus::Untouched))
+        {
             self.notify_cron_scheduler();
         }
         Ok(report)

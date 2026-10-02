@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 /// 在 Hello 处快速失败拿到干净的 WireProtocolMismatch，而不是含糊的
 /// connection lost。
 /// 33: `ReqMethod` 新增 preview_system_prompt——同上，Hello 处快速失败。
-pub const WIRE_PROTOCOL_VERSION: u32 = 33;
+pub const WIRE_PROTOCOL_VERSION: u32 = 34;
 
 /// All operations a client can request from the daemon.
 ///

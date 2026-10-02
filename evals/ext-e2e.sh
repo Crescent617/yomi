@@ -119,7 +119,7 @@ cmp -s "$PKG/ext.toml" "$DATA/extensions/e2e-demo/ext.toml" && ok "ext.toml verb
 
 # 幂等重跑
 out=$("$YOMI" extension install "$PKG" 2>&1)
-echo "$out" | grep -q "exists, untouched" && ok "reinstall idempotent" || bad "reinstall idempotent" "$out"
+echo "$out" | grep -q "exists, identical" && ok "reinstall idempotent" || bad "reinstall idempotent" "$out"
 rows=$(sqlite3 "$DB" "SELECT COUNT(*) FROM cron_jobs WHERE name LIKE 'ext:e2e-demo:%'")
 check "reinstall no duplicate cron" "2" "$rows"
 
@@ -128,6 +128,10 @@ check "reinstall no duplicate cron" "2" "$rows"
 old_hash=$(grep '^content_hash = ' "$lock")
 sed -i '' 's/^version = "0.1.0"$/version = "0.2.0"/' "$PKG/ext.toml"
 echo "e2e convention: always pass, now v2" > "$PKG/snippets/convention.md"
+# 作者同时改 cron 消息素材：刷新必须内容随包更新。
+echo "tick via file, now v2" > "$PKG/prompts/tick.txt"
+# 用户改过 ext cron 的时刻：刷新必须时机随用户不动。
+sqlite3 "$DB" "UPDATE cron_jobs SET schedule='23 23 * * *' WHERE name='ext:e2e-demo:tick'"
 # v2 同时撤掉 hook：原位替换后旧版本的 hook 挂载必然悬空——必须被
 # 清扫（否则 phantom-block 别的扩展装同名槽位，health 还看不见）。
 rm -f "$PKG/hooks/pre_tool_use/90-e2e-guard"
@@ -141,6 +145,11 @@ grep -q "now v2" "$DATA/extensions/e2e-demo/snippets/convention.md" && ok "upgra
 cmp -s "$PKG/ext.toml" "$DATA/extensions/e2e-demo/ext.toml" && ok "upgrade ext.toml verbatim" || bad "upgrade ext.toml verbatim" "changed"
 rows=$(sqlite3 "$DB" "SELECT COUNT(*) FROM cron_jobs WHERE name LIKE 'ext:e2e-demo:%'")
 check "upgrade no duplicate cron" "2" "$rows"
+content=$(sqlite3 "$DB" "SELECT action FROM cron_jobs WHERE name='ext:e2e-demo:tick'")
+echo "$content" | grep -q "tick via file, now v2" && ok "upgrade refreshes cron content" || bad "upgrade refreshes cron content" "$content"
+sched=$(sqlite3 "$DB" "SELECT schedule FROM cron_jobs WHERE name='ext:e2e-demo:tick'")
+check "upgrade keeps user schedule" "23 23 * * *" "$sched"
+echo "$out" | grep -q "content updated" && ok "upgrade reports cron updated" || bad "upgrade reports cron updated" "$out"
 
 # ── 3. list：health 必须是 ok（hash 比对真正生效，不是子串误配）──
 out=$("$YOMI" extension list)

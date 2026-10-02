@@ -29,10 +29,11 @@
 2. **所有权 = symlink 指向，不由数据库记录判定**。记录（source/version/
    资源清单）是审计与展示数据，不参与正确性。任何中断的安装可重跑
    收敛；记录丢失 remove 仍可回滚（state is cache）。
-3. **install 对 cron 纯 additive**：ensure 缺才建，已存在不动（不更新
-   不删除）——防覆盖用户用 `yomi cron` 手动改过的 job。清扫只在
-   remove 发生。manifest 删条目产生的孤儿 job 由 list 的漂移报告暴露，
-   不做隐式清理。
+3. **install 对 cron 半 additive（refresh）**：缺才建；已存在则内容
+   随包更新（消息/模板/precheck），部署时机字段（schedule/max_runs/
+   expires_at）不动——用户手改用 `yomi cron update`，扩展重装只刷新
+   作者内容。命名空间归扩展所有：remove 按前缀清扫照样删手改过的 job，
+   装时防手改没有意义。删条目产生的孤儿 job 由 list 漂移报告暴露。
 4. **挂载冲突即拒绝**（除非槽位已指向本包）：绝不覆盖用户文件或其他
    扩展的挂载。
 5. **snippet 是 manifest 外的约定式资源**：`snippets/*.md` 按文件名序
@@ -166,8 +167,11 @@ hook 执行序注意：扩展条目与用户条目混排按字典序，包作者
    （用户文件/他扩展/破损 link）→ 整体拒绝并报占用清单（先建后查，
    撞了不自动回滚已建部分，重跑 install 即收敛——所有权规则保证
    重跑安全）。
-5. **收养 cron**：逐条 `create_cron_job`（ensure：同名即返回不动，
-   缺才建）。输出区分 `created` / `exists (untouched)`。
+5. **收养 cron**（refresh 语义）：缺才建；已存在则**内容随包更新**
+   （消息/会话模板/precheck 刷新到包内值，命名空间归扩展所有，与
+   remove 前缀清扫口径一致——"装时不让改、卸时全删"的半保护不再成
+   立）；schedule/max_runs/expires_at 是部署时机，不动。输出三态：
+   `created` / `updated` / `untouched`（内容一致不碰 store）。
 6. **init 钩子**（manifest `ext.init` 声明才跑）：从已装目录执行，
    环境 = 标准 yomi 子进程（`YOMI_DATA_DIR` 注入、PATH 含
    `<data_dir>/bin`、cwd = 包目录），统一 shell 探测 + wrap_command +

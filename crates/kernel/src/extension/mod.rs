@@ -23,7 +23,8 @@ mod snippets;
 mod source;
 
 pub use install::{
-    install, package_hash, remove, InstallReport, MountReport, MountStatus, RemoveReport,
+    install, package_hash, remove, CronAdoptReport, CronAdoptStatus, InitReport, InstallReport,
+    MountReport, MountStatus, RemoveReport,
 };
 pub use installed::{
     list_installed, lockfile_path, read_installed, read_lockfile, read_lockfile_strict,
@@ -86,6 +87,10 @@ pub enum ExtError {
     /// 错误文本，用户可直接定位脚本问题。
     #[error("init: {0}")]
     Init(String),
+    /// 本机存储失败（注册表读写、注册表损坏）——不是包的问题，提示
+    /// 用户查磁盘/权限/手动修注册表文件。
+    #[error("storage: {0}")]
+    Storage(String),
 }
 
 impl From<ExtError> for crate::types::KernelError {
