@@ -67,7 +67,7 @@ async fn test_cron_store() -> Arc<dyn crate::cron::CronStore> {
     Arc::new(crate::cron::SqliteCronStore::new(pool))
 }
 
-/// 注册表条目（新签名 install 的 `previous` 参数来源）。
+/// 注册表里某扩展的当前条目（断言 provisional/终值语义用）。
 async fn installed_meta(data: &tempfile::TempDir, name: &str) -> Option<super::super::LockEntry> {
     super::super::read_lockfile(data.path()).get(name).cloned()
 }
@@ -154,7 +154,6 @@ async fn install_creates_everything() {
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await
@@ -221,20 +220,17 @@ async fn install_is_idempotent() {
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await
     .unwrap();
     // 第二次：槽位已有实体目录 + 安装记录 → 原位刷新。
-    let prev = installed_meta(&data, "demo").await;
     let second = install(
         data.path(),
         pkg.path(),
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        prev.as_ref(),
         &provenance(),
     )
     .await
@@ -244,6 +240,104 @@ async fn install_is_idempotent() {
     assert_eq!(second.bins[0].status, MountStatus::Already);
     assert!(!second.cron[0].created, "ensure: existing job untouched");
     assert_eq!(cron_job_names(&store).await.len(), 1, "no duplicate cron");
+}
+
+#[tokio::test]
+async fn refresh_sweeps_mounts_from_interrupted_previous_run() {
+    // 双中断刷新：run1（v1→v2）在挂载阶段后被拦下（bin 冲突），现场
+    // = 目录已是 v2、注册表是 provisional（资源沿用 v1 名单）、v2 的
+    // 新挂载（hook B）已建。run2（v2→v3）若按旧记录名单清扫，B 既不在
+    // v1 名单也不在 v3 目录里，会漏摘成永久悬空 symlink（phantom
+    // block + health 看不见）。清扫必须扫挂载树本身。
+    let hook_pkg = |hooks: &[&str], bins: &[&str]| {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("ext.toml"),
+            "[ext]\nname = \"demo\"\nversion = \"0.1.0\"\ndescription = \"t\"\n",
+        )
+        .unwrap();
+        for h in hooks {
+            std::fs::create_dir_all(dir.path().join("hooks/pre_tool_use")).unwrap();
+            std::fs::write(
+                dir.path().join(format!("hooks/pre_tool_use/{h}")),
+                "#!/bin/sh\n",
+            )
+            .unwrap();
+        }
+        for b in bins {
+            std::fs::create_dir_all(dir.path().join("bin")).unwrap();
+            let f = dir.path().join(format!("bin/{b}"));
+            std::fs::write(&f, "#!/bin/sh\n").unwrap();
+            std::fs::metadata(&f).unwrap().permissions().set_mode(0o755);
+        }
+        dir
+    };
+    let v1 = hook_pkg(&["50-guard"], &[]);
+    let v2 = hook_pkg(&["60-other"], &["recall"]);
+    let v3 = hook_pkg(&["70-third"], &[]);
+    let data = tempfile::tempdir().unwrap();
+    let store = test_cron_store().await;
+
+    // v1 正常装：hook A 挂载。
+    install(
+        data.path(),
+        v1.path(),
+        &store,
+        crate::permission::Level::Caution,
+        &manifest_of(&v1),
+        &provenance(),
+    )
+    .await
+    .unwrap();
+
+    // run1（v1→v2）：用户文件占 bin 槽位 → 挂载 hook B 后整体拒绝，
+    // 注册表留下 provisional（资源 = v1 名单）。
+    std::fs::create_dir_all(data.path().join("bin")).unwrap();
+    std::fs::write(data.path().join("bin/recall"), "user's own").unwrap();
+    let err = install(
+        data.path(),
+        v2.path(),
+        &store,
+        crate::permission::Level::Caution,
+        &manifest_of(&v2),
+        &provenance(),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains("conflict"), "{err}");
+    let meta = installed_meta(&data, "demo").await.unwrap();
+    assert_eq!(meta.resources.hooks, vec!["pre_tool_use/50-guard"]);
+    // 崩溃现场：v2 的 hook B 已挂载，目录已是 v2。
+    assert!(data
+        .path()
+        .join("hooks/pre_tool_use/60-other")
+        .symlink_metadata()
+        .is_ok());
+
+    // run2（v2→v3）：v3 不含 B。扫树清扫必须把 B 摘掉，只留 C。
+    let report = install(
+        data.path(),
+        v3.path(),
+        &store,
+        crate::permission::Level::Caution,
+        &manifest_of(&v3),
+        &provenance(),
+    )
+    .await
+    .unwrap();
+    assert!(!data
+        .path()
+        .join("hooks/pre_tool_use/60-other")
+        .symlink_metadata()
+        .is_ok());
+    assert!(data
+        .path()
+        .join("hooks/pre_tool_use/70-third")
+        .symlink_metadata()
+        .is_ok());
+    assert_eq!(report.hooks.len(), 1);
+    let meta = installed_meta(&data, "demo").await.unwrap();
+    assert_eq!(meta.resources.hooks, vec!["pre_tool_use/70-third"]);
 }
 
 #[tokio::test]
@@ -262,7 +356,6 @@ async fn install_refuses_occupied_slot() {
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await
@@ -281,13 +374,13 @@ async fn install_refuses_occupied_slot() {
         .symlink_metadata()
         .is_ok());
     assert!(cron_job_names(&store).await.is_empty());
-    // 部分安装落了注册表条目（资源=已建挂载）：挪走冲突项后重跑
-    // 原位刷新收敛，remove 也能精确回滚已建部分。
+    // provisional 条目已落注册表（fresh 安装资源为空表，remove 靠
+    // "旧资源 ∪ 包目录扫描 ∪ cron 前缀清扫"精确回滚）：挪走冲突项后
+    // 重跑原位刷新收敛。
     let meta = installed_meta(&data, "demo")
         .await
-        .expect("partial install recorded");
-    assert_eq!(meta.resources.hooks, vec!["pre_tool_use/50-guard"]);
-    assert_eq!(meta.resources.bins, vec!["recall"]);
+        .expect("provisional entry recorded");
+    assert!(meta.resources.hooks.is_empty());
     std::fs::remove_file(data.path().join("bin/recall")).unwrap();
     let report = install(
         data.path(),
@@ -295,7 +388,6 @@ async fn install_refuses_occupied_slot() {
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        Some(&meta),
         &provenance(),
     )
     .await
@@ -318,7 +410,6 @@ async fn install_recovers_after_partial_mounts() {
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await
@@ -333,14 +424,12 @@ async fn install_recovers_after_partial_mounts() {
     }
 
     // 重跑收敛：已建的部分 Already，缺的补齐。
-    let prev = installed_meta(&data, "demo").await;
     let report = install(
         data.path(),
         pkg.path(),
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        prev.as_ref(),
         &provenance(),
     )
     .await
@@ -362,7 +451,6 @@ async fn reinstall_refreshes_content() {
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await
@@ -370,14 +458,12 @@ async fn reinstall_refreshes_content() {
 
     // 源内容更新后重装（有记录 → 原位刷新），内容跟新。
     std::fs::write(pkg.path().join("snippets/memory.md"), "updated rules").unwrap();
-    let prev = installed_meta(&data, "demo").await;
     install(
         data.path(),
         pkg.path(),
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        prev.as_ref(),
         &provenance(),
     )
     .await
@@ -400,7 +486,6 @@ async fn reinstall_sweeps_stale_mounts() {
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await
@@ -409,14 +494,12 @@ async fn reinstall_sweeps_stale_mounts() {
     // v2：hook 与 bin 都没了。
     std::fs::remove_dir_all(pkg.path().join("hooks")).unwrap();
     std::fs::remove_dir_all(pkg.path().join("bin")).unwrap();
-    let prev = installed_meta(&data, "demo").await;
     install(
         data.path(),
         pkg.path(),
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        prev.as_ref(),
         &provenance(),
     )
     .await
@@ -433,7 +516,9 @@ async fn reinstall_sweeps_stale_mounts() {
 }
 
 #[tokio::test]
-async fn reinstall_refuses_without_ownership() {
+async fn reinstall_converges_from_registry_entry() {
+    // 注册表是唯一事实源：装过之后注册表必有条目，重装一律是
+    // 更新语义的原位刷新（幂等），不会因为调用方没预读记录而误拒。
     let pkg = write_pkg();
     let data = tempfile::tempdir().unwrap();
     let store = test_cron_store().await;
@@ -444,25 +529,24 @@ async fn reinstall_refuses_without_ownership() {
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await
     .unwrap();
 
-    // 无 previous（调用方未查到本包的 sidecar 记录）：拒绝刷新。
-    let err = install(
+    let report = install(
         data.path(),
         pkg.path(),
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await
-    .unwrap_err();
-    assert!(err.to_string().contains("conflict"), "{err}");
+    .unwrap();
+    assert_eq!(report.hooks[0].status, MountStatus::Already);
+    assert_eq!(report.bins[0].status, MountStatus::Already);
+    assert!(!report.cron[0].created, "ensure 语义：已收养的不重建");
 }
 
 #[tokio::test]
@@ -494,7 +578,6 @@ async fn install_refuses_foreign_dir_even_with_authored_lock() {
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await
@@ -510,9 +593,10 @@ async fn install_refuses_foreign_dir_even_with_authored_lock() {
 
 #[tokio::test]
 async fn install_records_partial_lock_on_cron_failure() {
-    // cron 收养失败：目录/挂载已是事实，sidecar lock 必须照样落盘
-    // （含已建 cron 名单为空），否则重跑被 occupied 挡住、"re-run
-    // to converge" 成空话。
+    // cron 收养失败：目录/挂载已是事实，provisional 条目必须在
+    // 注册表里（fresh 安装资源为空表——remove 靠目录扫描与 cron
+    // 前缀清扫兜底），否则重跑被 occupied 挡住、"re-run to
+    // converge" 成空话。
     let pkg = write_pkg();
     let data = tempfile::tempdir().unwrap();
     let inner = test_cron_store().await;
@@ -526,28 +610,23 @@ async fn install_records_partial_lock_on_cron_failure() {
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await
     .unwrap_err();
     assert!(err.to_string().contains("injected failure"), "{err}");
 
-    // 部分 lock 在：重跑（此时 create 已修好）能原位刷新收敛。
+    // provisional 条目在：重跑（此时 create 已修好）能原位刷新收敛。
     let meta = installed_meta(&data, "demo")
         .await
-        .expect("partial install recorded on cron failure");
-    assert!(meta
-        .resources
-        .hooks
-        .contains(&"pre_tool_use/50-guard".to_string()));
+        .expect("provisional entry recorded on cron failure");
+    assert!(meta.resources.hooks.is_empty());
     let report = install(
         data.path(),
         pkg.path(),
         &inner,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        Some(&meta),
         &provenance(),
     )
     .await
@@ -558,8 +637,8 @@ async fn install_records_partial_lock_on_cron_failure() {
 #[tokio::test]
 async fn install_adopts_legacy_in_dir_lock_under_registry_lock() {
     // 0.10.55/56 存量现场：包目录里是旧版 in-dir lock、注册表无条目。
-    // kernel 预读的 previous=None，install 必须持锁收养 legacy 条目并
-    // 原位刷新（而非 occupied 拒绝），收养持久化进注册表。
+    // install 必须持锁收养 legacy 条目并原位刷新（而非 occupied 拒绝），
+    // 收养持久化进注册表。
     let pkg = write_pkg();
     let data = tempfile::tempdir().unwrap();
     let store = test_cron_store().await;
@@ -569,7 +648,6 @@ async fn install_adopts_legacy_in_dir_lock_under_registry_lock() {
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await
@@ -601,7 +679,6 @@ snippets = ["memory.md"]
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await
@@ -622,9 +699,9 @@ snippets = ["memory.md"]
 
 #[tokio::test]
 async fn partial_failure_keeps_previous_resources_for_remove() {
-    // 半途失败（挂载冲突）时部分条目必须 = 旧记录 ∪ 本次已建——只增
-    // 不减：否则 remove 按记录回滚会漏摘旧挂载，悬空 symlink
-    // phantom-block 后续安装。
+    // 半途失败（挂载冲突）时注册表留下的是 provisional 条目：资源
+    // 沿用旧记录。remove 的回滚 = 旧资源 ∪ 包目录扫描 ∪ cron 前缀
+    // 清扫，所以照样精确、不留悬空挂载。
     let pkg = write_pkg();
     let data = tempfile::tempdir().unwrap();
     let store = test_cron_store().await;
@@ -634,7 +711,6 @@ async fn partial_failure_keeps_previous_resources_for_remove() {
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await
@@ -645,14 +721,12 @@ async fn partial_failure_keeps_previous_resources_for_remove() {
     std::fs::create_dir_all(data.path().join("bin")).unwrap();
     std::fs::write(data.path().join("bin/extra"), "user's own").unwrap();
 
-    let prev = installed_meta(&data, "demo").await;
     let err = install(
         data.path(),
         pkg.path(),
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        prev.as_ref(),
         &provenance(),
     )
     .await
@@ -697,7 +771,6 @@ async fn remove_rolls_back_everything() {
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await
@@ -738,7 +811,6 @@ async fn remove_leaves_repointed_slot() {
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await
@@ -802,7 +874,6 @@ async fn remove_deletes_installed_dir_with_meta() {
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await
@@ -835,7 +906,6 @@ async fn manifest_copied_verbatim() {
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await
@@ -873,7 +943,6 @@ async fn oversized_file_rejected_before_touching_slots() {
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await
@@ -891,7 +960,6 @@ async fn oversized_file_rejected_before_touching_slots() {
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await
@@ -920,7 +988,6 @@ async fn git_metadata_dir_is_not_packaged() {
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await
@@ -948,7 +1015,6 @@ async fn remove_leaves_repointed_symlink_slot() {
         &store,
         crate::permission::Level::Caution,
         &manifest_of(&pkg),
-        None,
         &provenance(),
     )
     .await

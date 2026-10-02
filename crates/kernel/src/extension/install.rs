@@ -70,10 +70,10 @@ pub struct RemoveReport {
 /// 调用方持有临时目录句柄）实体复制进 extensions/<名>，重装即重新
 /// 取货 + 原位替换（更新语义）。幂等可重放。
 ///
-/// `previous`：调用方已查到的注册表条目（`extensions/ext.lock`）。
-/// 有条目才允许原位刷新（更新语义）；None = 槽位空或 foreign，
-/// 一律拒绝覆盖。同时用于刷新后清扫旧版本遗留的失效挂载（v2 删了
-/// 的 hook/bin，目录已被替换，旧 symlink 悬空且 health 看不见）。
+/// 可否原位刷新由本函数持锁后从注册表判定：有条目 = 更新语义原位
+/// 替换；无条目 = fresh 安装（槽位必须为空，被占即拒绝）。旧条目
+/// 同时用于刷新后清扫旧版本遗留的失效挂载（v2 删了的 hook/bin，
+/// 目录已被替换，旧 symlink 悬空且 health 看不见）。
 pub async fn install(
     data_dir: &Path,
     source: &Path,
@@ -83,7 +83,6 @@ pub async fn install(
     // 安装记录用的必须是同一个 manifest，否则两次 parse 之间文件被
     // 换名会导致刷新拿着 A 的记录删 B 槽位的目录（TOCTOU）。
     manifest: &super::ExtManifest,
-    previous: Option<&super::LockEntry>,
     // 来源溯源：写进注册表 ext.lock。
     provenance: &super::Provenance,
 ) -> Result<InstallReport, ExtError> {
@@ -101,16 +100,28 @@ pub async fn install(
     // （各自的"原子"操作叠加起来不原子）。扩展数量级下串行无感。
     let _guard = registry_lock().lock().await;
     let ext_dir = data_dir.join(DIR_NAME).join(&name);
-    // 注册表整表载入内存，各阶段改条目后原子重写。
-    let mut lockfile = super::read_lockfile(data_dir);
-    // 存量（0.10.55/56）in-dir lock 的持锁收养：注册表无条目时采用
-    // 旧版包内 lock 作为 previous 并持久化（读路径只做内存采用，
-    // 持久化必须在这把锁底下做）。
-    let mut previous = previous.cloned();
+    // 注册表整表载入内存（严格模式：文件在但损坏 → 拒绝——整表重写
+    // 会把其他扩展的条目一起抹掉），各阶段改条目后原子重写。
+    let mut lockfile = super::read_lockfile_strict(data_dir).map_err(ExtError::Invalid)?;
+    // previous 一律锁内从注册表取（调用方在锁外预读的可能是陈旧
+    // 快照，不可取）；锁内无条目再收养存量（0.10.55/56）in-dir
+    // lock——同样在这把锁底下持久化（读路径只做内存采用，无锁整表
+    // 重写会与并发的 upsert 互踩）。
+    let mut previous = lockfile.get(&name).cloned();
     if previous.is_none() {
         if let Some(entry) = super::legacy_entry(&ext_dir, &name) {
-            persist_entry(data_dir, &mut lockfile, entry.clone());
+            if let Err(e) = persist_entry(data_dir, &mut lockfile, entry.clone()) {
+                tracing::warn!(ext = %name, error = %e, "legacy adoption persist failed");
+            }
             previous = Some(entry);
+        }
+    }
+    // 清掉上次刷新崩溃遗留的隐藏临时目录（copy_refresh 的 .<名>.tmp，
+    // 点开头扫描器不可见，不清就成永久泄漏）。
+    let stray_tmp = data_dir.join(DIR_NAME).join(format!(".{name}.tmp"));
+    if tokio::fs::symlink_metadata(&stray_tmp).await.is_ok() {
+        if tokio::fs::remove_dir_all(&stray_tmp).await.is_err() {
+            let _ = tokio::fs::remove_file(&stray_tmp).await;
         }
     }
 
@@ -121,13 +132,37 @@ pub async fn install(
 
     place_or_refresh(&ext_dir, &source, previous.is_some()).await?;
 
-    // 旧版本遗留挂载清扫：目录内容已被 v2 替换，不在新包里的
-    // hook/bin 挂载必然悬空——留着会挡别的扩展装同名槽位（phantom
-    // mount conflict），health 还看不见（hash 只扫包目录）。指向
-    // 本包才摘（所有权规则），指向不符留给 remove/warn。
-    if let Some(prev) = &previous {
-        sweep_stale_mounts(data_dir, &ext_dir, prev).await?;
+    // 目录已是事实而挂载/cron 还没走完：立刻落一条 provisional 条目
+    // （资源清单沿用旧记录——fresh 安装为空表）。崩溃/失败发生在
+    // 其后任一点：重跑拿到 previous 原位收敛；remove 精确回滚 =
+    // 本条目的旧资源 ∪ 包目录扫描（兜底已建挂载）∪ cron 前缀清扫
+    // （兜底已收养 job）。否则无记录目录把重跑挡成 occupied、remove
+    // 按 foreign 拒绝（"任何中断可重跑收敛"的缺口就在这个 cut point）。
+    let prov_resources = previous
+        .as_ref()
+        .map(|p| p.resources.clone())
+        .unwrap_or_default();
+    let prov_hash = hash_package(&ext_dir).unwrap_or_else(|e| {
+        tracing::warn!(ext = %name, "provisional install hash failed: {e}");
+        String::new()
+    });
+    if let Err(e) = persist_entry(
+        data_dir,
+        &mut lockfile,
+        make_entry(&name, provenance, &prov_hash, &prov_resources),
+    ) {
+        // best-effort：最终 persist 在末尾还有一次，那边失败会整体报错。
+        tracing::warn!(ext = %name, error = %e, "provisional persist failed");
     }
+
+    // 悬空挂载清扫：目录内容已被替换，凡 symlink 精确指向本包、而新
+    // 包没有声明的 hook/bin 挂载必然悬空——留着会挡别的扩展装同名
+    // 槽位（phantom mount conflict），health 还看不见（hash 只扫包
+    // 目录）。**扫全盘挂载树而不是旧记录名单**：两次连续中断的刷新
+    // 之间，上次崩溃前建的挂载既不在旧条目（provisional 资源沿用旧
+    // 记录）也不在新包目录里，按名单清扫会漏成永久悬空。指向不符
+    // （用户动过）留 warn 给 remove。
+    sweep_stale_mounts(data_dir, &ext_dir).await?;
 
     // 挂载 hooks 与 bin：先全部走完收集冲突，有冲突整体报错——
     // 已建部分不用回滚，所有权规则保证重跑 install 收敛。
@@ -160,25 +195,9 @@ pub async fn install(
         bins.push(MountReport { path: rel, status });
     }
     if !conflicts.is_empty() {
-        // 挂载冲突整体拒绝，但目录与已建挂载已是事实。落一份部分资源
-        // 的注册表条目（best-effort）：重跑 install 据此拿到原位刷新
-        // 收敛，remove 也能精确回滚已建部分——否则无 lock 目录会把重跑
-        // 挡成 occupied Conflict，"re-run to converge"成空话。
-        let partial_hash = hash_package(&ext_dir).unwrap_or_else(|e| {
-            // 仅 IO 竞态可触发；空串 hash 让 health 保持 modified 直到
-            // 重跑收敛，warn 留痕。
-            tracing::warn!(ext = %name, "partial install hash failed: {e}");
-            String::new()
-        });
-        let partial = union_partial(
-            previous.as_ref(),
-            resources_from_report(&[], &hooks, &bins, &[]),
-        );
-        persist_entry(
-            data_dir,
-            &mut lockfile,
-            make_entry(&name, provenance, &partial_hash, &partial),
-        );
+        // 挂载冲突整体拒绝。目录与已建挂载已是事实，但不必在这里落
+        // 部分记录：provisional 条目已保证重跑原位收敛，remove 靠
+        // "旧资源 ∪ 包目录扫描 ∪ cron 前缀清扫"精确回滚。
         return Err(ExtError::Conflict(conflicts.join("; ")));
     }
 
@@ -205,35 +224,11 @@ pub async fn install(
             expires_at: None,
             precheck: entry.precheck.clone(),
         };
-        // 收养失败同样把部分状态落进注册表（含已建的 cron 名单）再返回
-        // 错误：目录/挂载/部分 cron 已是事实，没有记录重跑会被 occupied
-        // 挡住、remove 也拒绝，"re-run to converge" 即成空话。
-        let outcome = match crate::cron::create_cron_job(
-            cron_store,
-            None,
-            input,
-            config_auto_approve,
-        )
-        .await
-        {
-            Ok(outcome) => outcome,
-            Err(e) => {
-                let partial_hash = hash_package(&ext_dir).unwrap_or_else(|e| {
-                    tracing::warn!(ext = %name, "partial install hash failed: {e}");
-                    String::new()
-                });
-                let partial = union_partial(
-                    previous.as_ref(),
-                    resources_from_report(&cron, &hooks, &bins, &[]),
-                );
-                persist_entry(
-                    data_dir,
-                    &mut lockfile,
-                    make_entry(&name, provenance, &partial_hash, &partial),
-                );
-                return Err(ExtError::Cron(e));
-            }
-        };
+        // 收养失败直接返回：provisional 条目已保证重跑原位收敛；已建
+        // 的 cron job 由 remove 的前缀清扫兜底，无需部分落盘。
+        let outcome = crate::cron::create_cron_job(cron_store, None, input, config_auto_approve)
+            .await
+            .map_err(ExtError::Cron)?;
         cron.push(CronAdoptReport {
             name: full,
             created: outcome.created,
@@ -243,13 +238,15 @@ pub async fn install(
     let snippets = list_snippets(&ext_dir).await;
     let content_hash = hash_package(&ext_dir)?;
 
-    // 注册表条目（hash 之后落盘：content_hash 是终值）。
+    // 注册表条目（hash 之后落盘：content_hash 是终值）。落盘失败
+    // 整体报错：报成功却没条目 = remove 按 foreign 拒绝的孤儿。
     let resources = resources_from_report(&cron, &hooks, &bins, &snippets);
     persist_entry(
         data_dir,
         &mut lockfile,
         make_entry(&name, provenance, &content_hash, &resources),
-    );
+    )
+    .map_err(|e| ExtError::Invalid(format!("persist ext.lock: {e}")))?;
 
     Ok(InstallReport {
         name,
@@ -475,6 +472,8 @@ async fn remove_inner(
     };
     if ext_dir_removed {
         // 注册表条目随删除移除（ghost 条目只会误导 list/health）。
+        // 宽松读即可：损坏 → 空表 → remove(name) 为 false 不写盘，
+        // 不存在抹掉其他条目的窗口。
         let mut lf = super::read_lockfile(data_dir);
         if lf.remove(name) {
             if let Err(e) = super::write_lockfile(data_dir, &lf) {
@@ -504,7 +503,10 @@ async fn place_or_refresh(
             if let Some(parent) = ext_dir.parent() {
                 tokio::fs::create_dir_all(parent).await?;
             }
-            copy_dir(source, ext_dir).await
+            // 与刷新同款 tmp+swap：kill -9 落在复制中途只留 .tmp 孤儿
+            // （install 起点清理），不留半个无记录的 ext_dir——直写
+            // 的话重跑撞 occupied、remove 按 foreign 拒绝，不可收敛。
+            copy_refresh(source, ext_dir).await
         }
         Err(e) => Err(e.into()),
         Ok(_) if allow_replace => copy_refresh(source, ext_dir).await,
@@ -530,7 +532,8 @@ async fn copy_refresh(source: &Path, ext_dir: &Path) -> Result<(), ExtError> {
         tokio::fs::remove_dir_all(&tmp).await.ok();
         return Err(e);
     }
-    tokio::fs::remove_dir_all(ext_dir).await?;
+    // fresh 路径目标本不存在；refresh 路径删旧目录。.ok() 两者兼容。
+    tokio::fs::remove_dir_all(ext_dir).await.ok();
     if let Err(e) = tokio::fs::rename(&tmp, ext_dir).await {
         // rename 失败（跨设备等）：旧目录已删，把新副本放回去尽力收敛。
         let _ = copy_dir(source, ext_dir).await;
@@ -544,36 +547,6 @@ async fn copy_refresh(source: &Path, ext_dir: &Path) -> Result<(), ExtError> {
 fn registry_lock() -> &'static tokio::sync::Mutex<()> {
     static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
-}
-
-/// 部分资源清单 = 上次记录 ∪ 本次已建（只增不减）。半途失败时旧版
-/// 本的挂载/cron 名单不能从记录里丢——remove 按记录回滚，丢了就漏
-/// 摘旧挂载：悬空 symlink phantom-block 后续安装，health 还看不见
-/// （sweep_stale_mounts 治的就是这个，别从记录路径再放进来）。
-fn union_partial(prev: Option<&super::LockEntry>, cur: Resources) -> Resources {
-    let Some(prev) = prev else {
-        return cur;
-    };
-    let mut out = prev.resources.clone();
-    let Resources {
-        cron,
-        hooks,
-        bins,
-        snippets,
-    } = cur;
-    for (dst, src) in [
-        (&mut out.cron, cron),
-        (&mut out.hooks, hooks),
-        (&mut out.bins, bins),
-        (&mut out.snippets, snippets),
-    ] {
-        for item in src {
-            if !dst.contains(&item) {
-                dst.push(item);
-            }
-        }
-    }
-    out
 }
 
 /// 组装一条注册表条目。
@@ -593,14 +566,17 @@ fn make_entry(
     }
 }
 
-/// 阶段性地把条目 upsert 进注册表并原子落盘。best-effort：落盘失败
-/// 仅 warn——目录/挂载已是事实，重跑 install 会再收敛（health 在该
-/// 期间报 modified，正确反映"记录与期望有出入"）。
-fn persist_entry(data_dir: &Path, lockfile: &mut super::ExtLockfile, entry: super::LockEntry) {
+/// 把条目 upsert 进注册表并原子落盘。调用方决定成败：provisional/
+/// 收养失败仅 warn（重跑/后续最终 persist 会再收敛）；最终 persist
+/// 失败必须让整个 install 报错——报成功却没条目，remove 会按
+/// foreign 拒绝，装了个不可收敛的孤儿。
+fn persist_entry(
+    data_dir: &Path,
+    lockfile: &mut super::ExtLockfile,
+    entry: super::LockEntry,
+) -> Result<(), String> {
     lockfile.upsert(entry);
-    if let Err(e) = super::write_lockfile(data_dir, lockfile) {
-        tracing::warn!(error = %e, "failed to persist ext.lock");
-    }
+    super::write_lockfile(data_dir, lockfile)
 }
 
 /// 挂载一条 symlink，返回本次动作。槽位被占记入 `conflicts`（不覆盖），
@@ -869,50 +845,49 @@ async fn copy_dir_limited(
     Ok(())
 }
 
-/// 原位刷新后清扫旧版本遗留挂载：上次安装记录在案、但新包里没有的
-/// hook/bin 挂载必然悬空（目录内容已被替换）。指向本包才摘（所有权
-/// 规则）；指向不符说明槽位被用户动过，留 warn 给 remove 处理。
-async fn sweep_stale_mounts(
-    data_dir: &Path,
-    ext_dir: &Path,
-    previous: &super::LockEntry,
-) -> Result<(), ExtError> {
-    // 上次记录的挂载（hooks/<point>/<entry> 与 bin/<file>，与
-    // InstalledExt::mount_paths 同口径）。
-    let mut old: Vec<String> = previous
-        .resources
-        .hooks
-        .iter()
-        .map(|s| format!("{HOOKS_DIR}/{s}"))
+/// 悬空挂载清扫（见 install 调用处注释：扫全盘挂载树，不信名单）。
+/// hooks/ 递归、bin/ 浅层，统一按目录走一遍：symlink 且文本目标
+/// 等于本包对应路径（所有权规则）、rel 又不在新包声明集合里 → 摘。
+async fn sweep_stale_mounts(data_dir: &Path, ext_dir: &Path) -> Result<(), ExtError> {
+    let mut keep: std::collections::HashSet<String> = try_scan_hook_rels(ext_dir)
+        .await
+        .unwrap_or_default()
+        .into_iter()
         .collect();
-    old.extend(
-        previous
-            .resources
-            .bins
-            .iter()
-            .map(|s| format!("{BIN_DIR}/{s}")),
-    );
-    let mut current: Vec<String> = try_scan_hook_rels(ext_dir).await.unwrap_or_default();
-    current.extend(try_scan_bin_rels(ext_dir).await.unwrap_or_default());
-    for rel in old {
-        if current.contains(&rel) {
-            continue;
-        }
-        let link = data_dir.join(&rel);
-        match tokio::fs::symlink_metadata(&link).await {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
-            Ok(md) if md.file_type().is_symlink() => {
-                let cur = tokio::fs::read_link(&link).await?;
-                if cur == ext_dir.join(&rel) {
-                    tokio::fs::remove_file(&link).await?;
-                    tracing::info!(ext = %previous.source, mount = %rel, "swept stale mount dropped by the new package version");
-                } else {
-                    tracing::warn!(mount = %link.display(), target = %cur.display(), "stale mount slot repointed; leaving it");
+    keep.extend(try_scan_bin_rels(ext_dir).await.unwrap_or_default());
+    for root in [data_dir.join(HOOKS_DIR), data_dir.join(BIN_DIR)] {
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            let mut rd = match tokio::fs::read_dir(&dir).await {
+                Ok(rd) => rd,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
+            };
+            while let Some(ent) = rd.next_entry().await? {
+                let path = ent.path();
+                let ft = ent.file_type().await?;
+                if ft.is_dir() {
+                    stack.push(path);
+                    continue;
                 }
-            }
-            Ok(_) => {
-                tracing::warn!(mount = %link.display(), "stale mount slot is not a symlink; leaving it");
+                if !ft.is_symlink() {
+                    continue;
+                }
+                let rel = path
+                    .strip_prefix(data_dir)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if keep.contains(&rel) {
+                    continue;
+                }
+                let cur = tokio::fs::read_link(&path).await?;
+                if cur == ext_dir.join(&rel) {
+                    tokio::fs::remove_file(&path).await?;
+                    tracing::info!(mount = %rel, "swept stale mount dropped by the new package version");
+                } else {
+                    tracing::warn!(mount = %path.display(), target = %cur.display(), "mount slot repointed; leaving it");
+                }
             }
         }
     }

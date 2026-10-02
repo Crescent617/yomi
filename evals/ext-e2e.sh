@@ -178,7 +178,7 @@ echo "$out" | grep -q "Removed extension e2e-demo" && ok "remove report" || bad 
 [ ! -e "$DATA/extensions/e2e-demo" ] && ok "extensions dir removed" || bad "extensions dir removed" "still there"
 rows=$(sqlite3 "$DB" "SELECT COUNT(*) FROM cron_jobs WHERE name LIKE 'ext:e2e-demo:%'")
 check "cron swept" "0" "$rows"
-! grep -q 'e2e-demo' "$lock" && ok "registry entry removed with remove" || bad "registry entry removed with remove" "still there"
+[ -f "$lock" ] && ! grep -q 'e2e-demo' "$lock" && ok "registry entry removed with remove" || bad "registry entry removed with remove" "still there or lock file missing"
 
 # 槽位保护：用户文件占 bin 槽位时 install 拒绝且不覆盖
 mkdir -p "$DATA/bin"

@@ -2242,23 +2242,14 @@ impl Kernel {
         let (_tmp, root, rev) = crate::extension::fetch_source(&src).await?;
         // 只 parse 一次：name/已装查询/物化共用同一 manifest（TOCTOU）。
         let manifest = crate::extension::parse_manifest(&root)?;
-        // 注册表条目决定可否原位刷新；读不到 = 槽位空或 foreign
-        // （用户手放），按不可刷新处理。
-        let record = crate::extension::read_installed(
-            &data_dir,
-            &data_dir
-                .join(crate::extension::DIR_NAME)
-                .join(&manifest.ext.name),
-        )
-        .ok();
-        let previous = record.as_ref().and_then(|i| i.meta.as_ref());
+        // 可否原位刷新由 install 持锁后从注册表判定（锁外预读是
+        // 陈旧快照，不可取）；读不到 = 槽位空或 foreign（用户手放）。
         let result = crate::extension::install(
             &data_dir,
             &root,
             cron_store,
             self.agent_shared.config_auto_approve,
             &manifest,
-            previous,
             &crate::extension::Provenance {
                 source: source.clone(),
                 rev: rev.clone(),

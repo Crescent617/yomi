@@ -141,28 +141,43 @@ hook 执行序注意：扩展条目与用户条目混排按字典序，包作者
    全量 clone + checkout）到临时目录，`owner/repo[/子目录][@ref]`；
    本地目录直接用。clone 超时 3 分钟；网络失败不脏任何槽位。取货后
    记录 `git rev-parse HEAD` 为 rev（本地源为 None）。
-2. **收编** `extensions/<name>`：空 → 实体复制；已有且注册表有条目
-   （上次本包安装的归属证明）→ 原位刷新（先拷到隐藏临时目录再
-   swap，不留"删完没拷上"的窗口）；其他（用户目录、无归属证明的
-   残留）→ 拒绝（提示先 remove）。调用方以注册表条目
-   决定 allow_replace，并用同一个预解析 manifest 查记录（防两次
-   parse 之间文件被换名的 TOCTOU）。
-3. **挂载** hooks/bin：逐槽位三种情况——空则建 symlink（创建撞
+2. **收编** `extensions/<name>`：一律先拷到隐藏临时目录 `.<name>.tmp`
+   再 swap 就位（fresh 与刷新同路径——kill -9 落在复制中途只留
+   `.tmp` 孤儿，下次 install 起点清掉，不留半个无记录的槽位，否则
+   重跑撞 occupied、remove 按 foreign 拒绝）。可否刷新不由调用方
+   预读决定：install 持注册表全局锁后从 `ext.lock` 取本扩展条目
+   （锁外预读是陈旧快照），有条目 = 原位刷新，无条目 = fresh（槽位
+   必须为空，被占即拒）。其他（用户目录、无归属证明的残留）→ 拒绝
+   （提示先 remove）。调用方只负责提供同一个预解析 manifest（防
+   两次 parse 之间文件被换名的 TOCTOU）。
+3. **清扫旧挂载**（挂载前）：扫 `hooks/`、`bin/` 挂载树，凡 symlink
+   精确指向本包、而新包没有声明的挂载一律摘除。**扫树本身，不信
+   旧记录名单**——上一次刷新中断留下的挂载可能既不在旧条目
+   （provisional 资源沿用旧记录）也不在新包里，按名单清扫会漏成
+   永久悬空 symlink（phantom-block 同名槽位 + health 看不见）。
+   指向不符（用户动过）留下 warn，由 remove 处置。
+4. **挂载** hooks/bin：逐槽位三种情况——空则建 symlink（创建撞
    AlreadyExists = 并发竞争，退到重判定）；已指向本包则跳过；其他
    （用户文件/他扩展/破损 link）→ 整体拒绝并报占用清单（先建后查，
    撞了不自动回滚已建部分，重跑 install 即收敛——所有权规则保证
    重跑安全）。
-4. **收养 cron**：逐条 `create_cron_job`（ensure：同名即返回不动，
+5. **收养 cron**：逐条 `create_cron_job`（ensure：同名即返回不动，
    缺才建）。输出区分 `created` / `exists (untouched)`。
-5. **写注册表 `ext.lock`**：包内容 hash 先算（lock 是包目录外单
+6. **写注册表 `ext.lock`**：包内容 hash 先算（lock 是包目录外单
    文件、天然不入各包 hash），然后 upsert `extensions/ext.lock` 里
    该扩展的条目并原子整表重写：source、rev、content_hash、资源清单、
    installed_at。单文件 = Cargo.lock 同款心智模型；并发由 install/
-   remove 的全局注册表锁串行。
-   放最后：lock 存在 ⇒ 资源大概率在。
+   remove 的全局注册表锁串行。全程只有两个落盘点：复制完成立刻
+   落一条 **provisional** 条目（资源沿用旧记录，fresh 为空表——
+   目录已是事实而挂载/cron 未走完，没它崩溃后重跑撞 occupied）；
+   收尾落终值条目。**最终落盘失败 = install 整体报错**：报成功却
+   没条目，remove 会按 foreign 拒绝，装了个不可收敛的孤儿。
+   中间任一步失败都不落部分记录：provisional 已保证重跑收敛，
+   remove 回滚 = 条目旧资源 ∪ 包目录扫描 ∪ cron 前缀清扫。
 
 冲突时的原子性：不做跨 fs/sqlite 事务（做不了）；同一扩展名的
-install/remove 由进程内按名锁串行，跨扩展的残余竞争靠"所有权可重入"
+install/remove 由进程内全局注册表锁串行（单文件整表重写下互斥），
+跨扩展的残余竞争靠"所有权可重入"
 保证部分失败后重跑收敛到同一终态。包内容在碰槽位前先完整 walk
 （含单文件 1MB 上限），超限即拒、不留半成品目录。
 

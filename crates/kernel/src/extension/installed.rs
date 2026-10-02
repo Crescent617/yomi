@@ -125,7 +125,8 @@ pub fn lockfile_path(data_dir: &Path) -> PathBuf {
 }
 
 /// 读注册表。文件缺席或损坏 → 空表（损坏 warn 留痕：等价于全部
-/// foreign，目录仍可见，总比注册表消失好）。
+/// foreign，目录仍可见，总比注册表消失好）。供**只读展示**路径
+/// （list/health）；写路径用 read_lockfile_strict。
 pub fn read_lockfile(data_dir: &Path) -> ExtLockfile {
     let path = lockfile_path(data_dir);
     let Ok(raw) = std::fs::read_to_string(&path) else {
@@ -138,6 +139,21 @@ pub fn read_lockfile(data_dir: &Path) -> ExtLockfile {
             ExtLockfile::default()
         }
     }
+}
+
+/// 供 install/remove 的严格读：文件在但损坏 → Err——整表重写会把
+/// 其他扩展的条目一起抹掉，宁可拒绝。缺席 = 空表（首次安装）。
+pub fn read_lockfile_strict(data_dir: &Path) -> Result<ExtLockfile, String> {
+    let path = lockfile_path(data_dir);
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return Ok(ExtLockfile::default());
+    };
+    toml::from_str(&raw).map_err(|e| {
+        format!(
+            "ext.lock corrupt ({}): fix or delete it manually, refusing to rewrite over other extensions' entries: {e}",
+            path.display()
+        )
+    })
 }
 
 /// 整表原子重写（tmp + rename）：崩溃不留半截 lock。写前按名字排序。

@@ -26,8 +26,9 @@ pub use install::{
     install, package_hash, remove, InstallReport, MountReport, MountStatus, RemoveReport,
 };
 pub use installed::{
-    legacy_entry, list_installed, lockfile_path, read_installed, read_lockfile, write_lockfile,
-    ExtLockfile, InstalledExt, LockEntry, Provenance, Resources,
+    legacy_entry, list_installed, lockfile_path, read_installed, read_lockfile,
+    read_lockfile_strict, write_lockfile, ExtLockfile, InstalledExt, LockEntry, Provenance,
+    Resources,
 };
 pub use manifest::{parse_manifest, CronEntry, ExtManifest, ExtMeta};
 pub use snippets::{load_snippets, Snippet, SnippetLoader};
