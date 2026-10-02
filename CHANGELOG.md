@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.10.59] - 2026-10-02
+## [0.11.0] - 2026-10-02
 
 ### Changed
 - 扩展重装/刷新时 cron 消息随包更新：已存在的扩展 cron job，消息文本、会话模板、precheck 刷新到包内最新值（此前 ensure 不动，改 prompts 重装不生效）；schedule、max_runs、expires_at 是部署时机，仍不被重装冲掉。注意 wire 协议升至 34，旧版本 CLI 连新 daemon 会在握手处报版本不匹配。
