@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-03
+
+### Added
+- cron 工具新增 `get`：按 id 或任务名查看单个任务的完整配置；`list` 新增 `offset` 参数，配合 `limit` 翻页。
+
+### Changed
+- cron 工具 `list` 输出摘要化：每条任务只列关键字段，消息/命令截断为预览，完整内容用 `get` 查看——长消息的定时任务不再把列表输出撑得过长。
+
 ## [0.11.0] - 2026-10-02
 
 ### Changed
