@@ -24,6 +24,7 @@ pub mod comms;
 pub mod compactor;
 pub mod config;
 pub mod cron;
+pub mod daemon_lock;
 pub mod event;
 pub mod extension;
 pub mod hook;
@@ -155,6 +156,40 @@ pub async fn build_kernel(config: &Config, enable_cron: bool) -> Result<Arc<Kern
         .await
         .map_err(|e| KernelError::storage(format!("Failed to create data directory: {e}")))?;
 
+    // Daemon 单例锁：只有启用 cron 的 kernel（daemon 模式）需要独占
+    // data_dir——两份调度器同跑是 2026-08-19 双发事故的根因。本地
+    // kernel（enable_cron=false，如 --fg / TUI local）与 daemon 共用
+    // db 是现状设计，不拿锁。锁在 Kernel::stop() 时提前释放。
+    //
+    // 路径先规范化：symlink/相对路径指向同一物理目录的两个 daemon
+    // 必须有同一个锁键，否则各拿各的锁、双发依旧。
+    let lock_dir =
+        std::fs::canonicalize(&config.data_dir).unwrap_or_else(|_| config.data_dir.clone());
+    let daemon_guard = if enable_cron {
+        match daemon_lock::acquire(&lock_dir) {
+            Ok(guard) => Some(guard),
+            Err(daemon_lock::AcquireError::Contended { owner }) => {
+                let socket = owner.as_ref().and_then(|o| o.socket.clone());
+                let owner = owner.map_or_else(
+                    || "another process (owner metadata unreadable)".to_string(),
+                    |o| o.describe(),
+                );
+                return Err(KernelError::DaemonLock {
+                    data_dir: config.data_dir.display().to_string(),
+                    owner,
+                    socket,
+                });
+            }
+            Err(e) => {
+                return Err(KernelError::storage(format!(
+                    "Failed to acquire daemon singleton lock: {e}"
+                )));
+            }
+        }
+    } else {
+        None
+    };
+
     let storage = StorageSet::open_with_config(&config.data_dir, config)
         .await
         .map_err(|e| KernelError::storage(format!("Failed to open storage: {e}")))?;
@@ -195,6 +230,7 @@ pub async fn build_kernel(config: &Config, enable_cron: bool) -> Result<Arc<Kern
         config.gc.clone(),
         config.features.update_session_title_enabled(),
         config.auto_approve,
+        daemon_guard,
     )?;
 
     Ok(kernel)

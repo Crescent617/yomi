@@ -3299,6 +3299,7 @@ dependencies = [
  "lru 0.18.0",
  "mime_guess",
  "moka",
+ "nix 0.31.2",
  "prost 0.13.5",
  "rand 0.10.1",
  "regex",

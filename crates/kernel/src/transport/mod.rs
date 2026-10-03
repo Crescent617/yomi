@@ -93,26 +93,40 @@ impl std::fmt::Display for SocketAddr {
 /// 3. Unix fallback: `directories::BaseDirs::data_dir()/yomi/daemon.sock` (macOS: `~/Library/Application Support/`)
 /// 4. Final fallback: `/tmp/yomi-daemon.sock`
 /// 5. Windows: `Ws("127.0.0.1:57231")`
+///
+/// Panics on a malformed `YOMI_SOCKET`; callers that must not panic
+/// (e.g. best-effort metadata writers) use [`try_socket_addr`].
 pub fn socket_addr() -> SocketAddr {
+    try_socket_addr().expect("Invalid YOMI_SOCKET format")
+}
+
+/// Non-panicking variant of [`socket_addr`]: `None` on malformed `YOMI_SOCKET`.
+pub fn try_socket_addr() -> Option<SocketAddr> {
+    socket_addr_impl()
+}
+
+fn socket_addr_impl() -> Option<SocketAddr> {
     let socket_env = format!("{}SOCKET", crate::ENV_PREFIX);
     if let Ok(val) = std::env::var(&socket_env) {
-        return val.parse().expect("Invalid YOMI_SOCKET format");
+        return val.parse().ok();
     }
     #[cfg(unix)]
     {
-        SocketAddr::Unix(std::env::var_os("XDG_RUNTIME_DIR").map_or_else(
-            || {
-                directories::BaseDirs::new().map_or_else(
-                    || std::path::PathBuf::from("/tmp/yomi-daemon.sock"),
-                    |b| b.data_dir().join("yomi/daemon.sock"),
-                )
-            },
-            |p| std::path::PathBuf::from(p).join("yomi/daemon.sock"),
+        Some(SocketAddr::Unix(
+            std::env::var_os("XDG_RUNTIME_DIR").map_or_else(
+                || {
+                    directories::BaseDirs::new().map_or_else(
+                        || std::path::PathBuf::from("/tmp/yomi-daemon.sock"),
+                        |b| b.data_dir().join("yomi/daemon.sock"),
+                    )
+                },
+                |p| std::path::PathBuf::from(p).join("yomi/daemon.sock"),
+            ),
         ))
     }
     #[cfg(not(unix))]
     {
-        SocketAddr::Ws("127.0.0.1:57231".to_string())
+        Some(SocketAddr::Ws("127.0.0.1:57231".to_string()))
     }
 }
 

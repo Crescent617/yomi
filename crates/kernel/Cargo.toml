@@ -76,3 +76,7 @@ websearch = ["dep:duckduckgo", "dep:scraper", "dep:html2text", "dep:urlencoding"
 rustls = { workspace = true, features = ["ring"] }
 tokio-test = { workspace = true }
 tempfile = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+# daemon_lock 的 flock(2)
+nix = { version = "0.31", features = ["fs"] }

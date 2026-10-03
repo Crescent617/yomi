@@ -909,6 +909,20 @@ pub enum KernelError {
     /// Agent execution error (nested for retry/cancellation checks)
     #[error("Agent error: {0}")]
     Agent(#[source] crate::agent::AgentError),
+
+    /// 另一个 daemon 已持有该 `data_dir` 的单例锁（`daemon_lock`）。
+    /// `owner` 是人类可读的一行描述；`socket` 持有者的监听地址
+    /// （best-effort，供 GUI 冲突后回退连接）。
+    #[error(
+        "data directory '{data_dir}' is already owned by another yomi daemon ({owner}); \
+         stop it with `yomi daemon stop`, or point this instance at a different data \
+         directory with YOMI_DATA_DIR"
+    )]
+    DaemonLock {
+        data_dir: String,
+        owner: String,
+        socket: Option<String>,
+    },
 }
 
 impl KernelError {

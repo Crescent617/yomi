@@ -103,6 +103,10 @@ pub struct Kernel {
     intake: tokio_util::sync::CancellationToken,
     /// Daemon boot time (for `/status` uptime).
     started_at: DateTime<Utc>,
+    /// `data_dir` 单例锁守卫（`daemon_lock`；仅 `enable_cron` 的 kernel 持有）。
+    /// `stop()` 末尾提前 take+drop 释放，使 restart 时新 kernel 构建
+    /// 前锁必然空闲；进程崩溃则由 OS 自动释放。
+    daemon_guard: std::sync::Mutex<Option<crate::daemon_lock::DataDirGuard>>,
 }
 
 const SESSION_JSONL_CHUNK_BYTES: u64 = 256 * 1024;
@@ -440,6 +444,7 @@ impl Kernel {
         gc_config: crate::config::GcConfig,
         update_session_title: bool,
         config_auto_approve: Level,
+        daemon_guard: Option<crate::daemon_lock::DataDirGuard>,
     ) -> Result<Arc<Self>> {
         let session_store = storage.session_store();
         let message_store = storage.message_store();
@@ -581,6 +586,7 @@ impl Kernel {
             shutdown,
             intake,
             started_at: Utc::now(),
+            daemon_guard: std::sync::Mutex::new(daemon_guard),
         }))
     }
 
@@ -684,6 +690,21 @@ impl Kernel {
         self.input_bus.shutdown();
         if let Some(ref bus) = self.agent_shared.event_bus {
             bus.shutdown();
+        }
+        // 最后释放 data_dir 单例锁：此时调度器与在跑 run 已全部停止，
+        // 新 daemon 可以安全构建。锁早于此处释放（而不是拖到进程退出）
+        // 是 restart 交接确定性的关键（serve() 在返回前调用本函数，
+        // 之后才 spawn 替换进程）。poison 无需恢复：守卫唯一职责就是
+        // 被 drop 以放锁。
+        match self.daemon_guard.lock() {
+            Ok(mut guard) => {
+                if guard.take().is_some() {
+                    tracing::info!("daemon singleton lock released by Kernel::stop()");
+                }
+            }
+            Err(poisoned) => {
+                drop(poisoned.into_inner().take());
+            }
         }
     }
 

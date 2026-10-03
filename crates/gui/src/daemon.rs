@@ -130,9 +130,37 @@ pub async fn get_kernel() -> Result<(Arc<dyn kernel::client::KernelApi>, std::pa
         tracing::info!("Connected to existing daemon at {addr}");
         return Ok((Arc::new(kernel::client::RemoteKernel::new(addr)), data_dir));
     }
-    let config = spawn_daemon()
-        .await
-        .map_err(|e| format!("failed to spawn daemon: {e}"))?;
+    let config = match spawn_daemon().await {
+        Ok(config) => config,
+        Err(e) => {
+            // 同 data_dir 已有 daemon 在跑而 socket 不同（try_connect 探测
+            // 不到）时，spawn 会撞单例锁。按老逻辑回退为连接已有 daemon：
+            // 错误里带着持有者的 socket 地址（daemon_lock 的 meta）。meta
+            // 可能是上一任持有者的（best-effort），回退前先实探连通性。
+            let owner_socket = e
+                .downcast_ref::<kernel::types::KernelError>()
+                .and_then(|k| match k {
+                    kernel::types::KernelError::DaemonLock {
+                        socket: Some(s), ..
+                    } => Some(s.clone()),
+                    _ => None,
+                })
+                .and_then(|s| s.parse::<SocketAddr>().ok());
+            if let Some(owner_addr) = owner_socket {
+                if kernel::transport::connect(&owner_addr).await.is_ok() {
+                    tracing::info!(
+                        "data dir owned by another daemon at {owner_addr}; connecting to it"
+                    );
+                    return Ok((
+                        Arc::new(kernel::client::RemoteKernel::new(owner_addr)),
+                        data_dir,
+                    ));
+                }
+                tracing::warn!("lock owner at {owner_addr} is not reachable; not falling back");
+            }
+            return Err(format!("failed to spawn daemon: {e}"));
+        }
+    };
     tracing::info!("Connected to spawned daemon at {addr}");
     Ok((
         Arc::new(kernel::client::RemoteKernel::new(addr)),
