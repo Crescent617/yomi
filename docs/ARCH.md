@@ -244,6 +244,16 @@ graph TD
 5. **工具上下文继承**：`ToolExecCtx` 携带 `parent_messages`（父消息历史）、`cancel_token`（取消令牌）、`working_dir`、`session_id`、`turn`（文件跟踪），支持 `SubagentTool` 的上下文传递。
 6. **存储混合策略**：元数据和高频查询用 SQLite（`sqlx` + WAL 模式），消息历史、文件状态、检查点用 JSONL 文件存储，兼顾关系查询和灵活序列化。
 
+### 取消与归属
+
+"取消到底取消什么"的现行承诺（改动取消语义时同步更新本节）：
+
+- **run 与旁问属会话**：`AgentInput::Cancel`（Esc / 通道 /stop / RPC 同路径）取消当前 run + abort 在飞旁问 + 清 mailbox。
+- **subagent 树随父取消**：conductor spawn 子 agent 时，其 cancel token 派生自父 agent token（`child_token()`），父取消级联整棵子树；级联覆盖 spawn 时父仍在 active 的子——prepare 竞态窗口内幸存的子由 `subagent_claims` 回收 + conductor 孤儿转运兜底，答案不蒸发。
+- **后台 shell / 异步 subagent 属会话但不属 turn**：后台 = 活得比当前 turn 长，是有意设计；计数与展示走 `BgTaskTracker`。daemon 退出由 `kill_on_drop` / `kill_tree` 兜底。
+- **会话删除 = 该会话的一切不要了**：`delete_session` 先 cancel 在跑 run（级联子树）+ 杀掉该会话全部后台 shell 进程树，再删 store 行。
+- **cron job 归 daemon/调度器**：跨会话存活、跨重启恢复是特性，与任何会话的生命周期无关。
+
 ---
 
 ## 数据流

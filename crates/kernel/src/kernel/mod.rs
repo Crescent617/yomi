@@ -1956,6 +1956,22 @@ impl Kernel {
 
     /// Delete a session from storage
     pub async fn delete_session(&self, session_id: &SessionId) -> Result<()> {
+        // 先停该会话的工作，再删行：删除的语义是"这个会话的一切都不
+        // 要了"。Cancel 级联整棵 subagent 树（spawn 时子 agent 的
+        // cancel token 派生自父 token，conductor Cancel 臂统一处理），
+        // 后台 shell 逐个杀进程树——否则删掉的会话会留下孤儿 run
+        // （继续烧 token、往已删目录写 jsonl）和孤儿进程。
+        // cancel/kill 的失败不阻塞删除（只记日志）。
+        self.cancel(session_id);
+        for task in self.list_background_shells(session_id) {
+            if !self.kill_background_shell(session_id, &task.task_id).await {
+                tracing::warn!(
+                    session = %session_id.0,
+                    task = %task.task_id,
+                    "delete_session: background shell already gone"
+                );
+            }
+        }
         // Cascade the channel routing rows with the session — a dangling
         // mapping would keep routing (and watch state) alive for a dead
         // session. (`get_or_create_session` also self-heals at the point
