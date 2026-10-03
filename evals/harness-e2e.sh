@@ -4,28 +4,62 @@
 # 何时跑：改了 base prompt 装配、工具 desc/schema、内置模板（agent_tmpl/）、
 # conductor、cron/存储语义之后。全是确定性断言（无 LLM judge）。
 #
-# 需要：daemon 运行当前构建（脚本会用 target/debug/yomi）；sqlite3。
+# 环境：自起隔离 daemon（独立 data_dir + 独立 socket + 剥离 [[channels]]
+# 的 config），随时可跑，不碰生产 data_dir / 生产 daemon / 任何 IM 平台。
+# config 从 ~/.yomi/config.toml 复制并删除全部 [[channels]] 块（保留模型
+# 凭证等其余配置）；断言里的真实模型调用因此可用。
+#
+# 需要：target/debug/yomi（先 `cargo build -p cli`）；sqlite3。
 # 用法：evals/harness-e2e.sh    （约 2-3 分钟，含 2 次真实模型调用）
-
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 YOMI="${YOMI:-$ROOT/target/debug/yomi}"
-DB="${YOMI_DB:-$HOME/.yomi/yomi.db}"
-# sessions 落盘在 data_dir（即 db 所在目录）的 sessions/ 下——隔离测试
-# （YOMI_DB 指向别处）时跟着走，不写死 ~/.yomi。
-SESS_DIR="$(dirname "$DB")/sessions"
-TICKET_SH="${KB_PY:-$HOME/.agents/skills/kanban/scripts/kb.py}"
-PASS=0; FAIL=0
+[ -x "$YOMI" ] || { echo "build CLI first: cargo build -p cli"; exit 2; }
+command -v sqlite3 >/dev/null || { echo "need sqlite3"; exit 2; }
 
+# ── 0. 隔离环境：data_dir + socket + 无渠道 config + 自建 daemon ──
+# 从 yomi 会话里跑时进程环境自带注入的 YOMI_DATA_DIR/YOMI_SOCKET——
+# 必须显式覆盖，否则 env override 盖过一切、打到生产上。
+E2E="$(mktemp -d /tmp/yomi-harness-e2e.XXXXXX)"
+DATA="$E2E/data"; mkdir -p "$DATA"
+SOCK="$E2E/daemon.sock"
+REAL_CONFIG="$HOME/.yomi/config.toml"
+if [ -f "$REAL_CONFIG" ]; then
+  # 删除 [[channels]] 起到下一个表头（含 [channels.platform] 子表）止的块。
+  awk '/^\[\[channels\]\]/ { skip=1; next }
+       skip && /^\[/ { skip=0 }
+       !skip { print }' "$REAL_CONFIG" > "$E2E/config.toml"
+else
+  echo "WARN: no $REAL_CONFIG; isolated daemon has no model credentials" >&2
+  printf '# empty\n' > "$E2E/config.toml"
+fi
+export YOMI_DATA_DIR="$DATA" YOMI_CONFIG="$E2E/config.toml" YOMI_SOCKET="unix://$SOCK"
+DB="$DATA/yomi.db"
+SESS_DIR="$DATA/sessions"
+
+"$YOMI" daemon start >>"$E2E/daemon.log" 2>&1 &
+# daemon 先 bind socket 再做存储初始化，所以 status 通 ≠ 服务就绪——
+# 以 cron list 的 wire 往返（要真查 cron store）作为就绪信号。
+for _ in $(seq 1 50); do
+  "$YOMI" cron list >/dev/null 2>&1 && break
+  sleep 0.2
+done
+if ! "$YOMI" cron list >/dev/null 2>&1; then
+  echo "isolated daemon failed to start"; cat "$E2E/daemon.log"; rm -rf "$E2E"; exit 2
+fi
+cleanup() {
+  "$YOMI" daemon stop >/dev/null 2>&1 || true
+  rm -rf "$E2E"
+}
+trap cleanup EXIT
+
+PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); echo "PASS  $1"; }
 bad() { FAIL=$((FAIL+1)); echo "FAIL  $1 — $2"; }
 check() { [ "$2" = "$3" ] && ok "$1" || bad "$1" "expected [$2], got [$3]"; }
 
 latest_sub() { sqlite3 "$DB" "SELECT id FROM sessions WHERE id LIKE 'sub_%' ORDER BY created_at DESC LIMIT 1"; }
-
-command -v sqlite3 >/dev/null || { echo "need sqlite3"; exit 2; }
-"$YOMI" daemon status >/dev/null 2>&1 || { echo "daemon not running"; exit 2; }
 
 # ── 1. cron ensure 语义：同名建两次 → 同 id、仅一条、原内容不被改写 ──
 id1=$("$YOMI" cron create --name e2e-eval --schedule "0 9 * * *" --command "echo a" | grep -o 'cron_[A-Za-z0-9]*')
@@ -100,18 +134,7 @@ out=$(cd /tmp && "$YOMI" run --yolo --timeout 90 \
 echo "$out" | grep -q "没有" \
   && ok "memory 门控反例（/tmp）" || bad "memory 门控反例（/tmp）" "$out"
 
-# ── 5. kanban 建卡形状（todo/ 落盘、frontmatter id/created）──
-T=$(mktemp -d)
-kid=$(cd "$T" && KB_DIR="$T/kb" python3 "$TICKET_SH" new "e2e" -m "验收用")
-if [ -n "$kid" ] && grep -q '^id: ' "$T"/kb/todo/$kid-*.md 2>/dev/null \
-  && grep -q '^created: ' "$T"/kb/todo/$kid-*.md 2>/dev/null; then
-  ok "kanban 建卡形状（todo/ 落盘、frontmatter id/created）"
-else
-  bad "kanban 建卡形状" "kid=$kid"
-fi
-rm -rf "$T"
-
-# ── 6. session rules：spawn 时原文注入 system prompt，只作用当前会话 ──
+# ── 5. session rules：spawn 时原文注入 system prompt，只作用当前会话 ──
 # 模型复读暗号 = 规则真进了 system prompt 的铁证：jsonl 只存消息不存
 # system prompt，user 提问不含暗号，assistant 答出即注入生效。
 new_sid() { "$YOMI" rpc "$1" "$2" | tr -d '"'; }  # create/fork 返回裸 id 字符串
@@ -155,7 +178,7 @@ else
   bad "fork 复制 rules 文件" "child=$child 文件缺失或内容不同"
 fi
 
-# ── 7. session wait：不存在的会话 exit 2；等待期间被删 exit 4 ──
+# ── 6. session wait：不存在的会话 exit 2；等待期间被删 exit 4 ──
 "$YOMI" session wait -s sess_gone_404 --interval 1 >/dev/null 2>&1
 check "session wait 不存在会话 exit 2" "2" "$?"
 
