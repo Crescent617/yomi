@@ -19,6 +19,7 @@ pub trait CronStore: Send + Sync {
         &self,
         status: Option<CronJobStatus>,
         limit: usize,
+        offset: usize,
     ) -> Result<Vec<CronJob>, CronError>;
     /// 更新任务（部分更新）
     async fn update(&self, id: &CronJobId, input: &UpdateCronJobInput) -> Result<bool, CronError>;
@@ -102,20 +103,23 @@ impl CronStore for SqliteCronStore {
         &self,
         status: Option<CronJobStatus>,
         limit: usize,
+        offset: usize,
     ) -> Result<Vec<CronJob>, CronError> {
         let rows = if let Some(s) = status {
             sqlx::query_as::<_, CronJobRow>(
-                "SELECT * FROM cron_jobs WHERE status = ? ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM cron_jobs WHERE status = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
             )
             .bind(s.as_str())
             .bind(limit as i64)
+            .bind(offset as i64)
             .fetch_all(&self.pool)
             .await?
         } else {
             sqlx::query_as::<_, CronJobRow>(
-                "SELECT * FROM cron_jobs ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM cron_jobs ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
             )
             .bind(limit as i64)
+            .bind(offset as i64)
             .fetch_all(&self.pool)
             .await?
         };

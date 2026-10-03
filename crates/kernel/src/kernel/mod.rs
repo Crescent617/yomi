@@ -2074,7 +2074,7 @@ impl Kernel {
             .cron_store
             .as_ref()
             .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
-        store.list(status, limit).await.map_err(|e| {
+        store.list(status, limit, 0).await.map_err(|e| {
             crate::types::KernelError::storage(format!("Failed to list cron jobs: {e}"))
         })
     }

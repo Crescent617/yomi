@@ -93,14 +93,33 @@ impl CronTool {
             None => None,
         };
         let limit = args["limit"].as_u64().unwrap_or(50).clamp(1, 200) as usize;
+        let offset = args["offset"].as_u64().unwrap_or(0) as usize;
 
         let jobs = self
             .store
-            .list(status, limit)
+            .list(status, limit, offset)
             .await
             .map_err(|e| KernelError::tool(format!("failed to list cron jobs: {e}")))?;
-        let out = serde_json::to_string(&jobs)?;
-        Ok(ToolOutput::text(out))
+        let out: Vec<Value> = jobs.iter().map(job_summary).collect();
+        Ok(ToolOutput::text(serde_json::to_string(&out)?))
+    }
+
+    async fn handle_get(&self, args: &Value) -> Result<ToolOutput> {
+        let job = if let Some(id) = optional_str(args, "id") {
+            self.store
+                .get(&CronJobId::from(id))
+                .await
+                .map_err(|e| KernelError::tool(format!("failed to get cron job: {e}")))?
+        } else if let Some(name) = optional_str(args, "name") {
+            self.store
+                .get_by_name(&name)
+                .await
+                .map_err(|e| KernelError::tool(format!("failed to get cron job: {e}")))?
+        } else {
+            return Err(KernelError::tool("id or name is required"));
+        };
+        let job = job.ok_or_else(|| KernelError::tool("cron job not found"))?;
+        Ok(ToolOutput::text(serde_json::to_string(&job)?))
     }
 
     async fn handle_create(&self, args: &Value, ctx: &ToolExecCtx<'_>) -> Result<ToolOutput> {
@@ -426,6 +445,52 @@ impl CronTool {
     }
 }
 
+/// Max action text (content/command) shown in `list` summaries.
+const LIST_PREVIEW_MAX: usize = 100;
+/// Max `last_error` shown in `list` summaries.
+const LIST_ERROR_MAX: usize = 200;
+
+/// One-job summary for `list`: identification + scheduling fields, with the
+/// action text truncated. Full detail is served by `get`.
+fn job_summary(job: &crate::cron::CronJob) -> Value {
+    let (ty, preview, session_id) = match &job.action {
+        CronAction::SendMessage {
+            session_id,
+            content,
+            ..
+        } => ("send_message", content.as_str(), session_id.as_deref()),
+        CronAction::Shell { command, .. } => ("shell", command.as_str(), None),
+        CronAction::Internal { .. } => ("internal", "", None),
+    };
+    let mut v = json!({
+        "id": job.id.0,
+        "name": job.name,
+        "schedule": job.schedule,
+        "type": ty,
+        "status": job.status.as_str(),
+        "next_run_at": job.next_run_at,
+        "last_run_at": job.last_run_at,
+        "run_count": job.run_count,
+        "max_runs": job.max_runs,
+        "action_preview": crate::utils::strs::truncate_with_suffix(
+            preview,
+            LIST_PREVIEW_MAX,
+            "...",
+        ),
+    });
+    if let Some(sid) = session_id {
+        v["session_id"] = json!(sid);
+    }
+    if let Some(e) = &job.last_error {
+        v["last_error"] = json!(crate::utils::strs::truncate_with_suffix(
+            e,
+            LIST_ERROR_MAX,
+            "...",
+        ));
+    }
+    v
+}
+
 /// Run a shell command via the shared cron runner (same hardening as the
 /// worker), with the worker's execution timeout. Returns captured stdout
 /// (truncated to 4KB).
@@ -517,14 +582,14 @@ impl Tool for CronTool {
     }
 
     fn desc(&self) -> &'static str {
-        r"Manage cron jobs: scheduled tasks that send a message to a session (waking its agent) or run a shell command on a cron schedule.
-Actions: list, create, update, delete, trigger (run once immediately, for testing).
-Schedule is a cron expression with 5 fields ('0 9 * * 1-5' = Mon–Fri 09:00) or 6 fields with leading seconds, interpreted in the machine's LOCAL timezone. Day-of-week: 0 or 7=Sunday, 1=Monday … 6=Saturday; English abbreviations (mon/tue/...) are also accepted.
-For send_message jobs: pass session_id to deliver every run into that existing session (e.g. the current conversation); omit it so each run starts a fresh independent session (the fresh sessions inherit the creating session's working directory and project; model stays default; sessions are kept after runs).
-Use update with status active/paused to resume/pause a job; pass null (or 0 for max_runs, the zero timestamp for expires_at, '' for precheck) to clear those settings. Job type cannot be changed after creation. On update, session_id accepts a string (rebind to a fixed session) or null (switch to fresh-session-per-run).
-Job names are unique: creating with an existing name returns the existing job unchanged (created=false) instead of failing — safe to call create without checking first; use update to modify an existing job.
-Shell jobs self-retire by exiting with code 42: the scheduler marks the job completed (honored on scheduled runs only, not on manual trigger).
-Sensor gate: optional `precheck` shell command runs before each scheduled trigger — exit 0 proceeds (stdout is appended to the message for send_message jobs), non-zero skips the run silently (not counted in run_count, no error recorded). Manual trigger bypasses the gate."
+        r"Manage cron jobs: scheduled tasks that send a message to a session (waking its agent) or run a shell command.
+Actions: list (summaries, page via limit/offset until a page comes back short), get (full detail by id or name), create, update, delete, trigger (run once now).
+Schedule: cron expression in LOCAL timezone, 5 fields ('0 9 * * 1-5') or 6 with leading seconds; day-of-week 0/7=Sun … 6=Sat, mon/tue/... accepted.
+Job names are unique: create with an existing name returns that job unchanged (created=false); use update to modify it.
+send_message: omit session_id to start a fresh session per run (inherits creator's working dir/project; sessions are kept; model stays default); pass one to deliver into a fixed session. On update, a string rebinds, null switches to per-run. Job type cannot change after creation.
+update: status accepts only active/paused; other settings (name/schedule/action/max_runs/expires_at/precheck) update directly; clear them with null (0 for max_runs, zero timestamp for expires_at, '' for precheck).
+Shell jobs self-retire by exiting 42 (scheduled runs only, not trigger).
+precheck: optional shell gate before each scheduled trigger; non-zero skips silently, manual trigger bypasses it."
     }
 
     fn schema(&self) -> Value {
@@ -534,25 +599,29 @@ Sensor gate: optional `precheck` shell command runs before each scheduled trigge
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "create", "update", "delete", "trigger"],
-                    "description": "list: show jobs; create: add a job; update: partial update (pause/resume via status); delete: remove; trigger: run once immediately"
+                    "enum": ["list", "get", "create", "update", "delete", "trigger"],
+                    "description": "list: summaries; get: full detail by id or name; create: add; update: partial update (pause/resume via status); delete: remove; trigger: run once now"
                 },
                 "id": {
                     "type": "string",
-                    "description": "Job id. Required for update/delete/trigger"
+                    "description": "Job id. Required for get/update/delete/trigger"
                 },
                 "status": {
                     "type": "string",
                     "enum": ["active", "paused", "completed", "failed"],
-                    "description": "For list: filter by status. For update: only active/paused are allowed"
+                    "description": "For list: filter by status. For update: only active/paused"
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "For list: max jobs to return (default 50)"
+                    "description": "For list: page size (default 50)"
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "For list: jobs to skip (default 0)"
                 },
                 "name": {
                     "type": "string",
-                    "description": "Job name. Required for create. Names are unique — reusing an existing name returns the existing job unchanged (created=false)"
+                    "description": "Job name. Required for create; also works as get lookup. Names are unique — reusing one returns the existing job unchanged (created=false)"
                 },
                 "schedule": {
                     "type": "string",
@@ -602,6 +671,7 @@ Sensor gate: optional `precheck` shell command runs before each scheduled trigge
 
         match action {
             "list" => self.handle_list(&args).await,
+            "get" => self.handle_get(&args).await,
             "create" => self.handle_create(&args, &ctx).await,
             "update" => self.handle_update(&args, &ctx).await,
             "delete" => self.handle_delete(&args).await,

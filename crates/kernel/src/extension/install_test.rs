@@ -74,7 +74,7 @@ async fn installed_meta(data: &tempfile::TempDir, name: &str) -> Option<super::s
 
 async fn cron_job_names(store: &Arc<dyn crate::cron::CronStore>) -> Vec<String> {
     store
-        .list(None, 100)
+        .list(None, 100, 0)
         .await
         .unwrap()
         .into_iter()
@@ -110,8 +110,9 @@ impl crate::cron::CronStore for FailCreateStore {
         &self,
         status: Option<crate::cron::CronJobStatus>,
         limit: usize,
+        offset: usize,
     ) -> Result<Vec<crate::cron::CronJob>, crate::cron::CronError> {
-        self.inner.list(status, limit).await
+        self.inner.list(status, limit, offset).await
     }
     async fn update(
         &self,
@@ -197,7 +198,7 @@ async fn install_creates_everything() {
 
     // cron 收养：全名 + 内容来自已装目录的 message_file（与 hash/copy
     // 同一事实源，不读可能已清理的取货临时目录）。
-    let jobs = crate::cron::CronStore::list(&*store, None, 10)
+    let jobs = crate::cron::CronStore::list(&*store, None, 10, 0)
         .await
         .unwrap();
     assert_eq!(jobs.len(), 1);
@@ -424,7 +425,7 @@ async fn install_recovers_after_partial_mounts() {
     .unwrap();
     std::fs::remove_file(data.path().join("hooks/pre_tool_use/50-guard")).unwrap();
     std::fs::remove_file(data.path().join("bin/recall")).unwrap();
-    let jobs = crate::cron::CronStore::list(&*store, None, 10)
+    let jobs = crate::cron::CronStore::list(&*store, None, 10, 0)
         .await
         .unwrap();
     for job in jobs {

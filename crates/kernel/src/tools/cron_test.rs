@@ -320,6 +320,137 @@ async fn list_jobs_with_status_filter() {
 }
 
 #[tokio::test]
+async fn list_returns_summaries_with_truncated_action() {
+    let f = fixture(true, false).await;
+    let long_content = format!("line one. {}", "x".repeat(300));
+    exec(
+        &f.tool,
+        json!({"action": "create", "name": "a", "schedule": "0 9 * * *", "type": "send_message", "content": long_content, "session_id": "sess-1"}),
+    )
+    .await
+    .unwrap();
+
+    let out = exec(&f.tool, json!({"action": "list"})).await.unwrap();
+    let jobs: Value = serde_json::from_str(&output_text(&out)).unwrap();
+    let job = &jobs.as_array().unwrap()[0];
+
+    // 摘要字段齐全
+    for key in [
+        "id",
+        "name",
+        "schedule",
+        "type",
+        "status",
+        "next_run_at",
+        "run_count",
+    ] {
+        assert!(job.get(key).is_some(), "summary missing {key}");
+    }
+    assert_eq!(job["type"], json!("send_message"));
+    assert_eq!(job["session_id"], json!("sess-1"));
+
+    // content 被截断：不含完整原文，预览 ≤ 100 字节 + 省略号
+    let preview = job["action_preview"].as_str().unwrap();
+    assert!(preview.len() <= 103, "preview too long: {}", preview.len());
+    assert!(preview.ends_with("..."));
+    assert!(!output_text(&out).contains(&long_content));
+}
+
+#[tokio::test]
+async fn list_paginates_via_limit_and_offset() {
+    let f = fixture(false, false).await;
+    for i in 0..5 {
+        exec(
+            &f.tool,
+            json!({"action": "create", "name": format!("job-{i}"), "schedule": "0 9 * * *", "type": "shell", "command": "true"}),
+        )
+        .await
+        .unwrap();
+    }
+
+    // created_at DESC：最后一页是 page1[4]
+    let page1: Value = serde_json::from_str(&output_text(
+        &exec(&f.tool, json!({"action": "list", "limit": 2, "offset": 0}))
+            .await
+            .unwrap(),
+    ))
+    .unwrap();
+    let page2: Value = serde_json::from_str(&output_text(
+        &exec(&f.tool, json!({"action": "list", "limit": 2, "offset": 2}))
+            .await
+            .unwrap(),
+    ))
+    .unwrap();
+    let page3: Value = serde_json::from_str(&output_text(
+        &exec(&f.tool, json!({"action": "list", "limit": 2, "offset": 4}))
+            .await
+            .unwrap(),
+    ))
+    .unwrap();
+
+    assert_eq!(page1.as_array().unwrap().len(), 2);
+    assert_eq!(page2.as_array().unwrap().len(), 2);
+    assert_eq!(page3.as_array().unwrap().len(), 1);
+    let pages = [page1, page2, page3];
+    let names: Vec<&str> = pages
+        .iter()
+        .flat_map(|p| p.as_array().unwrap().iter())
+        .map(|j| j["name"].as_str().unwrap())
+        .collect();
+    // offset 越界：空页
+    let beyond: Value = serde_json::from_str(&output_text(
+        &exec(&f.tool, json!({"action": "list", "limit": 2, "offset": 10}))
+            .await
+            .unwrap(),
+    ))
+    .unwrap();
+    assert!(beyond.as_array().unwrap().is_empty());
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    assert_eq!(sorted, vec!["job-0", "job-1", "job-2", "job-3", "job-4"]);
+    // 无重复：翻页不重不漏
+    let mut dedup = names.clone();
+    dedup.sort_unstable();
+    dedup.dedup();
+    assert_eq!(dedup.len(), names.len());
+}
+
+#[tokio::test]
+async fn get_returns_full_job_by_id_and_name() {
+    let f = fixture(true, false).await;
+    let long_content = "y".repeat(300);
+    let out = exec(
+        &f.tool,
+        json!({"action": "create", "name": "daily", "schedule": "0 9 * * *", "type": "send_message", "content": long_content}),
+    )
+    .await
+    .unwrap();
+    let v: Value = serde_json::from_str(&output_text(&out)).unwrap();
+    let job_id = v["job_id"].as_str().unwrap().to_string();
+
+    // by id：完整 content 不截断
+    let out = exec(&f.tool, json!({"action": "get", "id": job_id}))
+        .await
+        .unwrap();
+    let job: Value = serde_json::from_str(&output_text(&out)).unwrap();
+    assert_eq!(job["name"], json!("daily"));
+    assert_eq!(job["action"]["content"].as_str().unwrap(), long_content);
+
+    // by name：同一条
+    let out = exec(&f.tool, json!({"action": "get", "name": "daily"}))
+        .await
+        .unwrap();
+    let job2: Value = serde_json::from_str(&output_text(&out)).unwrap();
+    assert_eq!(job2["id"], json!(job_id));
+
+    // 查不到：报错
+    assert!(exec(&f.tool, json!({"action": "get", "id": "missing"}))
+        .await
+        .is_err());
+    assert!(exec(&f.tool, json!({"action": "get"})).await.is_err());
+}
+
+#[tokio::test]
 async fn update_pause_resume_and_schedule() {
     let f = fixture(true, false).await;
     let out = exec(
@@ -845,7 +976,7 @@ async fn create_with_existing_name_returns_existing_job_unchanged() {
     assert_eq!(v2["created"], json!(false));
     assert_eq!(v2["job_id"], v1["job_id"]);
 
-    let jobs = f.cron_store.list(None, 10).await.unwrap();
+    let jobs = f.cron_store.list(None, 10, 0).await.unwrap();
     assert_eq!(jobs.len(), 1);
     assert_eq!(jobs[0].schedule, "0 9 * * *");
 }

@@ -25,7 +25,7 @@ async fn read_jobs(cron_store: &Arc<dyn CronStore>) -> KernelResult<Vec<CronJob>
         // 上限是"全库最近 1000 条"的软箍（list 按创建时间倒序截
         // 断）：超出部分静默缺席面板——个人部署远在量级之下，真要
         // 支持需加分页。
-        .list(None, 1000)
+        .list(None, 1000, 0)
         .await
         .map_err(|e| crate::types::KernelError::storage(format!("list cron jobs: {e}")))?
         .into_iter()

@@ -378,7 +378,7 @@ mod tests {
         assert!(!second.created);
         assert_eq!(second.job.id.0, first.job.id.0);
         assert_eq!(second.job.schedule, "0 9 * * *");
-        assert_eq!(store.list(None, 10).await.unwrap().len(), 1);
+        assert_eq!(store.list(None, 10, 0).await.unwrap().len(), 1);
 
         // 不同名：正常新建
         let third = super::super::create_cron_job(
@@ -452,8 +452,9 @@ mod tests {
             &self,
             status: Option<CronJobStatus>,
             limit: usize,
+            offset: usize,
         ) -> Result<Vec<CronJob>, CronError> {
-            self.inner.list(status, limit).await
+            self.inner.list(status, limit, offset).await
         }
 
         async fn update(
@@ -498,7 +499,7 @@ mod tests {
 
         assert!(!out.created);
         assert_eq!(out.job.id.0, "cron-winner");
-        assert_eq!(store.list(None, 10).await.unwrap().len(), 1);
+        assert_eq!(store.list(None, 10, 0).await.unwrap().len(), 1);
     }
 
     // ── per-run session 模板捕获与现场建会话 ─────────────────────────

@@ -50,6 +50,7 @@ impl CronStore for MockStore {
         &self,
         _status: Option<CronJobStatus>,
         _limit: usize,
+        _offset: usize,
     ) -> Result<Vec<CronJob>, CronError> {
         Ok(self.jobs.lock().unwrap().values().cloned().collect())
     }
