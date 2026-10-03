@@ -343,6 +343,10 @@ impl KernelServer {
     pub async fn force_shutdown(&self) {
         self.kernel.close_tokens();
         self.shutdown.cancel();
+        // force 路径不跑 Kernel::stop()，但锁必须在此释放：新 daemon
+        // 等不到旧 kernel 的全部 Arc 掉落（连接任务、cron worker 都
+        // 持有克隆）——不释放则随后的重启必然撞自己的锁。
+        self.kernel.release_daemon_guard();
     }
 
     pub fn connection_count(&self) -> usize {

@@ -36,6 +36,18 @@ pub struct Conductor {
     /// 旁问跟踪器（在飞句柄 + 事件流半截镜像；见 `kernel::btw`）。
     /// 旁问与 agent 生命周期无关——由 conductor 直接应答。
     btw: Arc<BtwTracker>,
+    /// 已删除会话的墓碑：`delete_session` 先立碑再发 Cancel。wind-down
+    /// 期间到达的新输入据此被丢弃（而不是触发 ghost respawn 给已删
+    /// 会话跑完整 turn）。会话 id 不复用（ULID），墓碑永久有效；
+    /// 量 = 删除次数，可忽略。
+    deleted_sessions: dashmap::DashSet<SessionId>,
+}
+
+impl Conductor {
+    /// 标记会话已删除（幂等）。详见 `deleted_sessions` 字段注释。
+    pub fn tombstone_session(&self, session_id: &SessionId) {
+        self.deleted_sessions.insert(session_id.clone());
+    }
 }
 
 pub struct ActiveSessionSnapshot {
@@ -97,6 +109,7 @@ impl Conductor {
             spawn_locks: DashMap::new(),
             notification_bus,
             intake,
+            deleted_sessions: dashmap::DashSet::new(),
         }
     }
 
@@ -378,6 +391,20 @@ impl Conductor {
     }
 
     async fn handle_input(&self, sid: SessionId, input: AgentInput) {
+        // 墓碑会话：普通输入直接丢弃（含 mailbox 一并清掉），避免
+        // wind-down 期间的新输入触发 ghost respawn——已删会话不该再
+        // 跑 turn。Cancel/Shutdown 豁免：delete_session 自己发的
+        // Cancel 要正常走完取消路径。
+        if !matches!(input, AgentInput::Cancel | AgentInput::Shutdown)
+            && self.deleted_sessions.contains(&sid)
+        {
+            if let Some(mb) = self.mailboxes.get(&sid) {
+                mb.clear().await;
+                self.emit_mailbox_changed(&sid, mb.value()).await;
+            }
+            tracing::debug!(session = %sid.0, "dropped input for tombstoned session");
+            return;
+        }
         match input {
             input @ (AgentInput::Cancel | AgentInput::Shutdown) => {
                 let mailbox = self.mailboxes.get(&sid).map(|mb| Arc::clone(&mb));
@@ -443,10 +470,17 @@ impl Conductor {
                             );
                         }
                     }
-                    if let Some(mb) = mailbox {
-                        if !mb.is_empty() {
-                            self.wake_agent(&sid, mb).await;
+                    // 已删除会话不 respawn：清空 mailbox 即可，输入没有
+                    // 接收者。
+                    if !self.deleted_sessions.contains(&sid) {
+                        if let Some(mb) = mailbox {
+                            if !mb.is_empty() {
+                                self.wake_agent(&sid, mb).await;
+                            }
                         }
+                    } else if let Some(mb) = mailbox {
+                        mb.clear().await;
+                        self.emit_mailbox_changed(&sid, mb.as_ref()).await;
                     }
                 }
             }
@@ -1048,6 +1082,13 @@ impl Conductor {
         // respawn——"重启打断后 run 被复活再被兜底杀"的根修）；消息留
         // 在 mailbox 随进程退出。
         if self.intake.is_cancelled() {
+            return;
+        }
+        // 墓碑会话不 spawn（双保险：handle_input 与 Cancel 臂已拦截，
+        // 这里是所有 spawn 的公共入口）。
+        if self.deleted_sessions.contains(sid) {
+            mailbox.clear().await;
+            self.emit_mailbox_changed(sid, &mailbox).await;
             return;
         }
         let lock = self

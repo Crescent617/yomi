@@ -250,7 +250,7 @@ graph TD
 
 - **run 与旁问属会话**：`AgentInput::Cancel`（Esc / 通道 /stop / RPC 同路径）取消当前 run + abort 在飞旁问 + 清 mailbox。
 - **subagent 树随父取消**：conductor spawn 子 agent 时，其 cancel token 派生自父 agent token（`child_token()`），父取消级联整棵子树；级联覆盖 spawn 时父仍在 active 的子——prepare 竞态窗口内幸存的子由 `subagent_claims` 回收 + conductor 孤儿转运兜底，答案不蒸发。
-- **后台 shell / 异步 subagent 属会话但不属 turn**：后台 = 活得比当前 turn 长，是有意设计；计数与展示走 `BgTaskTracker`。daemon 退出由 `kill_on_drop` / `kill_tree` 兜底。
+- **后台 shell / 异步 subagent 属会话但不属 turn**：后台 = 活得比当前 turn 长，是有意设计；计数与展示走 `BgTaskTracker`。daemon 退出时：普通 shell 由 `kill_on_drop` 兜底，后台 shell 已脱离句柄（独立进程组），靠显式 `kill_tree` / OS 回收兜底。
 - **会话删除 = 该会话的一切不要了**：`delete_session` 先 cancel 在跑 run（级联子树）+ 杀掉该会话全部后台 shell 进程树，再删 store 行。
 - **cron job 归 daemon/调度器**：跨会话存活、跨重启恢复是特性，与任何会话的生命周期无关。
 
@@ -323,7 +323,7 @@ sequenceDiagram
    - **ChannelHub subscriber**：接收特定事件用于外部渠道回复。
    - **Wire server forwarder**：不向 wire 客户端转发 `InternalEvent`（也不进 replay buffer），避免携带全量消息历史的 `MessageReplaced` 超过帧上限；历史变更由 Conductor 重发的轻量 `AgentEvent::MessageReplaced` 通知，客户端自行拉取消息。
 3. **持久化**：`Conductor` 在收到 `InternalEvent::MessageAdded` 时，将消息追加到 `MessageStore`（JSONL）；`InternalEvent::MessageReplaced` 用于 compaction 后的全量替换。
-4. **取消传播**：用户按 `Ctrl-C` 时，TUI 发送 `ControlCommand::Cancel`，经 `Kernel` → `Conductor` → `Agent` 的 `cancel_token`（`tokio_util::sync::CancellationToken`）传播，Agent 在 `stream` 或 `tool_exec` 中检查取消状态并优雅退出。
+4. **取消传播**：用户按 `Ctrl-C` 时，TUI 发送 `ControlCommand::Cancel`，经 `Kernel` → `Conductor` → `Agent` 的 `cancel_token`（自定义 `CancelToken`，ArcSwap 包装的可重置令牌）传播，Agent 在 `stream` 或 `tool_exec` 中检查取消状态并优雅退出。
 
 ---
 

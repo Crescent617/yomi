@@ -73,17 +73,19 @@ impl std::fmt::Display for AcquireError {
 /// 守卫：持有期间锁不释放。Drop 即释放；`Kernel::stop()` 会提前 take
 /// 并 drop（restart 场景在新 kernel 构建前释放）。
 pub struct DataDirGuard {
-    /// flock 守卫（仅 unix 平台实际持锁；Windows 为 None 占位）。
+    /// flock 守卫（仅 unix 平台实际持锁；Windows 无此字段）。
+    #[cfg(unix)]
     _lock: Option<nix::fcntl::Flock<std::fs::File>>,
     path: PathBuf,
 }
 
 impl std::fmt::Debug for DataDirGuard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DataDirGuard")
-            .field("path", &self.path)
-            .field("locked", &self._lock.is_some())
-            .finish()
+        let mut debug = f.debug_struct("DataDirGuard");
+        debug.field("path", &self.path);
+        #[cfg(unix)]
+        debug.field("locked", &self._lock.is_some());
+        debug.finish()
     }
 }
 
@@ -127,7 +129,7 @@ mod imp {
 
     pub(super) fn acquire(path: PathBuf) -> Result<DataDirGuard, AcquireError> {
         use std::os::unix::fs::OpenOptionsExt;
-        let file = std::fs::OpenOptions::new()
+        let mut file = std::fs::OpenOptions::new()
             .create(true)
             // 不截断：锁的是文件描述符，内容（若有）无关紧要。
             .truncate(false)
@@ -136,7 +138,15 @@ mod imp {
             .mode(0o600)
             .open(&path)
             .map_err(AcquireError::Io)?;
-        match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
+        // nix 的 Flock::lock 是单次 syscall 不重试 EINTR；信号恰好落在
+        // 非阻塞 flock 上会报 "Interrupted system call" 让启动假失败。
+        let lock = loop {
+            match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
+                Err((f, nix::errno::Errno::EINTR)) => file = f,
+                result => break result,
+            }
+        };
+        match lock {
             Ok(lock) => {
                 write_meta(&lock, &path);
                 Ok(DataDirGuard {
@@ -154,7 +164,7 @@ mod imp {
 
     /// 锁已到手；顺手把身份写进 meta，供未来的竞争方诊断。
     /// 任何一步失败都只记日志——不影响持锁本身。
-    fn write_meta(lock: &Flock<std::fs::File>, lock_path: &std::path::Path) {
+    fn write_meta(_lock: &Flock<std::fs::File>, lock_path: &std::path::Path) {
         let owner = LockOwner {
             pid: std::process::id(),
             exe: std::env::current_exe()
@@ -167,13 +177,12 @@ mod imp {
             return;
         };
         let meta_path = meta_file_path(data_dir);
-        match std::fs::File::create(&meta_path)
-            .and_then(|mut f| {
-                use std::io::Write;
-                f.write_all(serde_json::to_string_pretty(&owner)?.as_bytes())
-            })
-            .and_then(|()| lock.sync_all())
-        {
+        match std::fs::File::create(&meta_path).and_then(|mut f| {
+            use std::io::Write;
+            f.write_all(serde_json::to_string_pretty(&owner)?.as_bytes())?;
+            // sync meta 文件本身（不是锁 fd——那对 meta 的持久化毫无意义）。
+            f.sync_all()
+        }) {
             Ok(()) => tracing::info!(
                 lock = %lock_path.display(),
                 pid = owner.pid,
@@ -198,7 +207,7 @@ mod imp {
             "daemon singleton lock is not implemented on this platform; \
              concurrent daemons on one data dir are NOT prevented"
         );
-        Ok(DataDirGuard { _lock: None, path })
+        Ok(DataDirGuard { path })
     }
 }
 

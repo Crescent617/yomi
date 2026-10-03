@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-10-04
+
+### Fixed
+- 同一数据目录下不再可能同时运行两个 yomi daemon 导致定时任务重复触发：此前用不同 socket 启动的第二个 daemon 能绕过已有实例检查；现在第二个实例启动时报错，指明正在运行的实例，并提示先 `yomi daemon stop` 或为本实例改用其他数据目录（`YOMI_DATA_DIR`）。升级前请先用 `yomi daemon stop` 停掉旧 daemon 再启动新版本，旧版本进程不持有新锁、无法被新版本感知。Windows 暂不生效。
+- 删除会话现在会先停掉该会话正在运行的任务和后台命令，再删除记录；此前删除会话后，其启动的后台进程与派生的子任务会继续运行、继续消耗模型用量。
+
+### Changed
+- 图形界面启动时，若同一数据目录已有 daemon 在运行，自动连接它而不再报启动失败。
+
+
 ## [0.11.1] - 2026-10-03
 
 ### Added

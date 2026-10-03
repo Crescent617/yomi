@@ -136,27 +136,42 @@ pub async fn get_kernel() -> Result<(Arc<dyn kernel::client::KernelApi>, std::pa
             // 同 data_dir 已有 daemon 在跑而 socket 不同（try_connect 探测
             // 不到）时，spawn 会撞单例锁。按老逻辑回退为连接已有 daemon：
             // 错误里带着持有者的 socket 地址（daemon_lock 的 meta）。meta
-            // 可能是上一任持有者的（best-effort），回退前先实探连通性。
+            // 可能是上一任持有者的（best-effort）——探测失败时稍等重读
+            // 一次再放弃，持有者可能刚拿到锁、meta 还没写。
             let owner_socket = e
-                .downcast_ref::<kernel::types::KernelError>()
-                .and_then(|k| match k {
-                    kernel::types::KernelError::DaemonLock {
-                        socket: Some(s), ..
-                    } => Some(s.clone()),
-                    _ => None,
+                .chain()
+                .find_map(|cause| {
+                    cause
+                        .downcast_ref::<kernel::types::KernelError>()
+                        .and_then(|k| match k {
+                            kernel::types::KernelError::DaemonLock {
+                                socket: Some(s), ..
+                            } => Some(s.clone()),
+                            _ => None,
+                        })
                 })
                 .and_then(|s| s.parse::<SocketAddr>().ok());
             if let Some(owner_addr) = owner_socket {
-                if kernel::transport::connect(&owner_addr).await.is_ok() {
-                    tracing::info!(
-                        "data dir owned by another daemon at {owner_addr}; connecting to it"
-                    );
-                    return Ok((
-                        Arc::new(kernel::client::RemoteKernel::new(owner_addr)),
-                        data_dir,
-                    ));
+                let mut addr = owner_addr;
+                let mut reachable = kernel::transport::connect(&addr).await.is_ok();
+                if !reachable {
+                    // stale meta：持锁者可能正坐在 lock 与 write_meta
+                    // 之间的微窗口里，稍等重读一次（读到的地址可能已
+                    // 是另一任持有者）。
+                    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                    if let Some(fresh) = kernel::daemon_lock::read_owner(&data_dir)
+                        .and_then(|owner| owner.socket)
+                        .and_then(|s| s.parse::<SocketAddr>().ok())
+                    {
+                        addr = fresh;
+                        reachable = kernel::transport::connect(&addr).await.is_ok();
+                    }
                 }
-                tracing::warn!("lock owner at {owner_addr} is not reachable; not falling back");
+                if reachable {
+                    tracing::info!("data dir owned by another daemon at {addr}; connecting to it");
+                    return Ok((Arc::new(kernel::client::RemoteKernel::new(addr)), data_dir));
+                }
+                tracing::warn!("lock owner at {addr} is not reachable; not falling back");
             }
             return Err(format!("failed to spawn daemon: {e}"));
         }

@@ -8,6 +8,7 @@
    sessions; nothing lives off-stream.
 2. **State is cache** — discarded at will, restored at a fold.
 3. **Model is suspect** — bounded by design, not by hope.
+4. **One data dir, one cron kernel** — `daemon_lock`（flock on `<data_dir>/daemon.lock`，仅 enable_cron 的 kernel 获取，`Kernel::stop()` 释放）；环境隔离靠不同 `YOMI_DATA_DIR` 天然并行。`daemon.lock(.meta)` 是运行时文件，勿手删。取消与归属语义见 `docs/ARCH.md`「取消与归属」。
 
 ### Extension: four ports, no fifth
 
@@ -43,8 +44,12 @@ cargo fmt
 # Check formatting
 cargo fmt -- --check
 
-# Harness 回归冒烟（改 prompt 装配/工具 desc/内置模板/conductor/cron 后跑）
+# Harness 回归冒烟（改 prompt 装配/工具 desc/内置模板/conductor/cron 后跑；
+# 自建隔离 daemon，不碰生产）
 evals/harness-e2e.sh
+
+# daemon 单例锁改动后跑（自建隔离环境）
+evals/daemon-lock-e2e.sh
 
 # 通道类改动（slash 命令、卡片、回复行为）：另需真链路验证（测试账号，见 .agents/skills/yomi-dev）
 

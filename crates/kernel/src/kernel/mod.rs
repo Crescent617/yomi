@@ -608,6 +608,8 @@ impl Kernel {
         let storage = self.storage.clone();
         let base_opts = crate::storage::GcOptions::from_config(&self.gc_config, false);
         let conductor = self.conductor.clone();
+        let agent_shared = self.agent_shared.clone();
+        let input_bus = self.input_bus.clone();
         let token = self.shutdown.child_token();
         tokio::spawn(async move {
             loop {
@@ -617,6 +619,26 @@ impl Kernel {
                 opts.exclude_sessions = conductor.loaded_session_ids();
                 match storage.gc().run(&opts).await {
                     Ok(report) => {
+                        // 清除与 delete_session 同语义：被清扫的会话不
+                        // 再接收输入、不再 spawn，残留后台 shell 杀掉
+                        // （活会话已被 exclude_sessions 排除，这里主要
+                        // 兜"后台任务在跑但 agent 未加载"的边角）。
+                        for sid in &report.sessions {
+                            conductor.tombstone_session(sid);
+                            let _ =
+                                input_bus.publish(sid.clone(), crate::agent::AgentInput::Cancel);
+                            for task in agent_shared.background_tasks.shell_tasks_for(sid) {
+                                if let Err(e) =
+                                    crate::utils::process::terminate_tree_by_pid(task.pid)
+                                {
+                                    tracing::warn!(
+                                        pid = task.pid,
+                                        error = %e,
+                                        "gc: failed to terminate background shell tree"
+                                    );
+                                }
+                            }
+                        }
                         tracing::info!(
                             sessions = report.sessions.len(),
                             orphan_files = report.orphan_files_deleted,
@@ -694,12 +716,20 @@ impl Kernel {
         // 最后释放 data_dir 单例锁：此时调度器与在跑 run 已全部停止，
         // 新 daemon 可以安全构建。锁早于此处释放（而不是拖到进程退出）
         // 是 restart 交接确定性的关键（serve() 在返回前调用本函数，
-        // 之后才 spawn 替换进程）。poison 无需恢复：守卫唯一职责就是
-        // 被 drop 以放锁。
+        // 之后才 spawn 替换进程）。
+        self.release_daemon_guard();
+    }
+
+    /// 释放 `data_dir` 单例锁（若有）。`stop()` 末尾自动调用；此外专供
+    /// `KernelServer::force_shutdown` 使用——那条路只 cancel token、
+    /// 不跑 `stop()`，若不显式释放，新 daemon 在旧 kernel 的 Arc 全部
+    /// 掉落前会撞自己的锁（GUI 强拆重启的常态路径）。
+    pub fn release_daemon_guard(&self) {
+        // poison 无需恢复：守卫唯一职责就是被 drop 以放锁。
         match self.daemon_guard.lock() {
             Ok(mut guard) => {
                 if guard.take().is_some() {
-                    tracing::info!("daemon singleton lock released by Kernel::stop()");
+                    tracing::info!("daemon singleton lock released");
                 }
             }
             Err(poisoned) => {
@@ -1957,15 +1987,53 @@ impl Kernel {
     /// Delete a session from storage
     pub async fn delete_session(&self, session_id: &SessionId) -> Result<()> {
         // 先停该会话的工作，再删行：删除的语义是"这个会话的一切都不
-        // 要了"。Cancel 级联整棵 subagent 树（spawn 时子 agent 的
-        // cancel token 派生自父 token，conductor Cancel 臂统一处理），
-        // 后台 shell 逐个杀进程树——否则删掉的会话会留下孤儿 run
-        // （继续烧 token、往已删目录写 jsonl）和孤儿进程。
+        // 要了"。顺序：墓碑 → Cancel（级联整棵 subagent 树）→ 有界等
+        // 待 run 退出 → 杀后台 shell → 删行。墓碑先行：wind-down 期间
+        // 到达的任何新输入都会被 conductor 丢弃，不会 ghost respawn
+        // 给已删会话跑完整 turn。
         // cancel/kill 的失败不阻塞删除（只记日志）。
-        self.cancel(session_id);
+        self.conductor.tombstone_session(session_id);
+        if let Err(e) = self
+            .input_bus
+            .publish(session_id.clone(), crate::agent::AgentInput::Cancel)
+        {
+            // publish 是 TrySend：Full/Closed 时 cancel 被丢——此时再删
+            // 行就精准复现本函数要消灭的孤儿 run，必须 loudly。
+            tracing::error!(
+                session = %session_id.0,
+                "delete_session: failed to deliver Cancel ({e}); \
+                 the session's run may keep running after deletion"
+            );
+        }
+        // 有界等待 run 真正离开 conductor 的 active 集合再删行：否则
+        // 终态写入落在删除之后、且在跑工具还可能在 kill 清扫之后新
+        // 注册后台任务（已删会话名下的受追踪孤儿）。
+        {
+            const WIND_DOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+            let deadline = tokio::time::Instant::now() + WIND_DOWN_TIMEOUT;
+            loop {
+                let still_running = self
+                    .conductor
+                    .running_sessions()
+                    .iter()
+                    .any(|s| s.session_id == *session_id);
+                if !still_running || tokio::time::Instant::now() >= deadline {
+                    if still_running {
+                        tracing::warn!(
+                            session = %session_id.0,
+                            "delete_session: run did not exit within 5s; deleting anyway"
+                        );
+                    }
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        }
         for task in self.list_background_shells(session_id) {
             if !self.kill_background_shell(session_id, &task.task_id).await {
-                tracing::warn!(
+                // list-then-kill 竞态：进程恰在两者之间退出——属正常，
+                // 不必 warn。
+                tracing::debug!(
                     session = %session_id.0,
                     task = %task.task_id,
                     "delete_session: background shell already gone"

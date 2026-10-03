@@ -26,9 +26,11 @@ DATA="$E2E/data"; mkdir -p "$DATA"
 SOCK="$E2E/daemon.sock"
 REAL_CONFIG="$HOME/.yomi/config.toml"
 if [ -f "$REAL_CONFIG" ]; then
-  # 删除 [[channels]] 起到下一个表头（含 [channels.platform] 子表）止的块。
+  # 删除 [[channels]] 起到下一个非 channels 表头止的块（含缩进或顶格的
+  # [channels.platform] 等子表——跳过错位的子表会让 serde 校验报出
+  # 莫名其妙的启动失败）。
   awk '/^\[\[channels\]\]/ { skip=1; next }
-       skip && /^\[/ { skip=0 }
+       skip && /^\[/ && $0 !~ /^\[channels[.\]]/ { skip=0 }
        !skip { print }' "$REAL_CONFIG" > "$E2E/config.toml"
 else
   echo "WARN: no $REAL_CONFIG; isolated daemon has no model credentials" >&2
@@ -108,8 +110,35 @@ tpl=$(sqlite3 "$DB" "SELECT template FROM sessions WHERE id='$sub'")
 check "template 落库（verifier）" "verifier" "$tpl"
 # 「（${sub}）」的大括号不可省：UTF-8 locale 下全角括号会被并入变量名，
 # 触发 set -u 的 unbound variable 直接 abort（失败分支才炸，极隐蔽）。
-grep -q "VERDICT: " "$SESS_DIR/$sub.jsonl" 2>/dev/null \
-  && ok "verifier 输出含 VERDICT 锚点" || bad "verifier 输出含 VERDICT 锚点" "未找到（${sub}）"
+# 契约是"恰好最后一行是 VERDICT: X，其后无内容"——只 grep 存在性会
+# 漏掉"VERDICT 后还有输出"这种同样压垮调用方末行解析的形状。
+if LAST_LINE=$(python3 - "$SESS_DIR/$sub.jsonl" <<'PYEOF'
+import json, sys
+last_text = ""
+for line in open(sys.argv[1]):
+    try:
+        d = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if d.get("role") != "assistant":
+        continue
+    content = d.get("content")
+    # content 两种形态：结构化 block 列表，或裸字符串（终答案常见）。
+    if isinstance(content, str):
+        if content.strip():
+            last_text = content
+    elif isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
+                last_text = block["text"]
+lines = [l for l in last_text.splitlines() if l.strip()]
+print(lines[-1] if lines else "")
+PYEOF
+) && echo "$LAST_LINE" | grep -qE '^VERDICT: (PASS|FAIL|PARTIAL)$'; then
+  ok "verifier 末行 VERDICT 锚点"
+else
+  bad "verifier 末行 VERDICT 锚点" "末行=[${LAST_LINE:-无 assistant 文本}]（${sub}）"
+fi
 
 # ── 3. explorer 只读：不出现 write/edit 工具调用 ──
 "$YOMI" run --yolo --timeout 180 \

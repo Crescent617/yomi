@@ -162,9 +162,15 @@ pub async fn build_kernel(config: &Config, enable_cron: bool) -> Result<Arc<Kern
     // db 是现状设计，不拿锁。锁在 Kernel::stop() 时提前释放。
     //
     // 路径先规范化：symlink/相对路径指向同一物理目录的两个 daemon
-    // 必须有同一个锁键，否则各拿各的锁、双发依旧。
-    let lock_dir =
-        std::fs::canonicalize(&config.data_dir).unwrap_or_else(|_| config.data_dir.clone());
+    // 必须有同一个锁键，否则各拿各的锁、双发依旧。create_dir_all 刚
+    // 成功而 canonicalize 仍失败属于异常环境，硬失败优于静默退回
+    // 未规范化的路径（那会削弱锁键）。
+    let lock_dir = std::fs::canonicalize(&config.data_dir).map_err(|e| {
+        KernelError::storage(format!(
+            "Failed to canonicalize data directory {}: {e}",
+            config.data_dir.display()
+        ))
+    })?;
     let daemon_guard = if enable_cron {
         match daemon_lock::acquire(&lock_dir) {
             Ok(guard) => Some(guard),
@@ -182,7 +188,8 @@ pub async fn build_kernel(config: &Config, enable_cron: bool) -> Result<Arc<Kern
             }
             Err(e) => {
                 return Err(KernelError::storage(format!(
-                    "Failed to acquire daemon singleton lock: {e}"
+                    "Failed to acquire daemon singleton lock on {}: {e}",
+                    lock_dir.display()
                 )));
             }
         }
