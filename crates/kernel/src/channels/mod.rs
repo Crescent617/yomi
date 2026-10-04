@@ -19,6 +19,7 @@ pub(crate) mod attachments;
 
 pub(crate) mod card_trigger;
 pub(crate) mod comment;
+pub(crate) mod header;
 
 // 目录分组（2026-08-22）：源文件按职责落子目录，模块路径经再导出
 // 与旧平铺完全一致（`crate::channels::X` 零变化）。
@@ -672,27 +673,6 @@ impl SessionRouting {
     }
 }
 
-/// Sanitize a user-controlled display name for the message metadata
-/// header: `[`/`]` and control chars become spaces (a newline or bracket
-/// could forge header fields), runs of whitespace collapse. `None` when
-/// nothing usable remains — callers fall back to the bare-id form.
-pub(crate) fn sanitize_header_name(name: &str) -> Option<String> {
-    let cleaned = name
-        .chars()
-        .map(|c| {
-            if c == '[' || c == ']' || c.is_control() {
-                ' '
-            } else {
-                c
-            }
-        })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    (!cleaned.is_empty()).then_some(cleaned)
-}
-
 // ── Store trait ──────────────────────────────────────────────────────
 
 #[async_trait::async_trait]
@@ -1311,7 +1291,11 @@ impl HistoryMessage {
     /// the bare id. The id stays visible so the agent can still
     /// @-mention the sender.
     pub fn sender_display(&self) -> String {
-        match self.sender_name.as_deref().and_then(sanitize_header_name) {
+        match self
+            .sender_name
+            .as_deref()
+            .and_then(header::sanitize_header_name)
+        {
             Some(name) => format!("{name} ({})", self.sender_id),
             None => self.sender_id.clone(),
         }
@@ -1322,7 +1306,7 @@ impl HistoryMessage {
     pub fn sender_short(&self) -> String {
         self.sender_name
             .as_deref()
-            .and_then(sanitize_header_name)
+            .and_then(header::sanitize_header_name)
             .unwrap_or_else(|| self.sender_id.clone())
     }
 }

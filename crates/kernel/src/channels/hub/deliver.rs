@@ -174,7 +174,7 @@ pub(crate) async fn resolve_notify_quote(
                 let name = msg
                     .sender_name
                     .as_deref()
-                    .and_then(crate::channels::sanitize_header_name);
+                    .and_then(crate::channels::header::sanitize_header_name);
                 return Some(match name {
                     Some(name) => format!("{name}：{snippet}"),
                     None => snippet,

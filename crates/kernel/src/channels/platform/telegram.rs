@@ -128,16 +128,20 @@ impl TelegramAdapter {
             return None;
         }
         let ts = msg.date.format("%Y-%m-%d %H:%M:%S");
-        let msg_id = msg.id.0;
-        let from_part = match tg_display_name(msg.from.as_ref())
-            .and_then(|n| crate::channels::sanitize_header_name(&n))
-        {
-            Some(name) => format!("[from: {name} ({user_id})]"),
-            None => format!("[from_user_id: {user_id}]"),
-        };
-        Some(format!(
-            "[{ts}]{from_part}[chat_id: {chat_id}][msg_id: {msg_id}][platform: telegram]\n{text}"
-        ))
+        let sender_name = tg_display_name(msg.from.as_ref());
+        let header = crate::channels::header::metadata_header(
+            &ts.to_string(),
+            crate::channels::header::HeaderSender::User {
+                name: sender_name.as_deref(),
+                id: user_id,
+            },
+            chat_id,
+            &msg.id.0.to_string(),
+            None,
+            None,
+            "telegram",
+        );
+        Some(format!("{header}\n{text}"))
     }
 
     async fn build_channel_message(

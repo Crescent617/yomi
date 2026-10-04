@@ -923,10 +923,16 @@ impl ChannelHub {
         // The thread opens with this steer — synthesize the same identity
         // metadata header a human message would carry, else the agent
         // sees a bare "[From User] <task>" with no sender/chat anchor.
-        let header = format!(
-            "[{}][from: yomi-cli][chat_id: {chat_id}][msg_id: {root_id}][platform: feishu]",
-            now.with_timezone(&chrono::Local)
+        let header = crate::channels::header::metadata_header(
+            &now.with_timezone(&chrono::Local)
                 .format("%Y-%m-%d %H:%M:%S")
+                .to_string(),
+            crate::channels::header::HeaderSender::Label("yomi-cli"),
+            chat_id,
+            &root_id,
+            None,
+            None,
+            "feishu",
         );
         blocks.push(ContentBlock::Text {
             text: format!("{header}\n{text}"),

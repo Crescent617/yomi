@@ -338,22 +338,18 @@ impl FeishuAdapter {
             (text, image_keys)
         };
 
-        let thread_part = thread_id
-            .as_ref()
-            .map_or(String::new(), |tid| format!("[thread: {tid}]"));
-        let root_part = root_id
-            .as_ref()
-            .map_or(String::new(), |rid| format!("[root: {rid}]"));
-        let from_part = match self
-            .display_name(user_id)
-            .await
-            .and_then(|n| crate::channels::sanitize_header_name(&n))
-        {
-            Some(name) => format!("[from: {name} ({user_id})]"),
-            None => format!("[from_user_id: {user_id}]"),
-        };
-        let header = format!(
-            "[{ts}]{from_part}[chat_id: {chat_id}][msg_id: {msg_id}]{thread_part}{root_part}[platform: feishu]"
+        let sender_name = self.display_name(user_id).await;
+        let header = crate::channels::header::metadata_header(
+            &ts,
+            crate::channels::header::HeaderSender::User {
+                name: sender_name.as_deref(),
+                id: user_id,
+            },
+            chat_id,
+            &msg_id,
+            thread_id.as_deref(),
+            root_id.as_deref(),
+            "feishu",
         );
         // 入站 mention 占位符（`@_user_N`）统一落成中性契约
         // `<@open_id>名字`：content 用全量改写（含 bot 自己的 key——
