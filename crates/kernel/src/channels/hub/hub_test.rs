@@ -3305,7 +3305,8 @@ async fn thread_command_steer_carries_metadata_header() {
 
 /// `/steer` 与 `/queue` 与 /thread 同契：注入/排队消息 verbatim 带适配
 /// 器元数据头，agent 能看到注入者与来源；图片经延迟下载随消息进入
-/// （/steer 此前静默丢图，统一尾部后同路径）。
+/// （/steer 此前静默丢图）、文件占位符改写为 saved 路径（命令臂此前
+/// 不下载）——统一走 `run_verbatim_trigger` 后与普通消息同路径。
 #[tokio::test]
 async fn steer_and_queue_carry_metadata_header() {
     let (store, kernel, _tmp) = watch_batch_harness().await;
@@ -3374,13 +3375,26 @@ async fn steer_and_queue_carry_metadata_header() {
     handle(msg("m1", "/steer 插一句", vec!["img_s".to_string()]))
         .await
         .unwrap();
-    handle(msg("m2", "/queue 排个队", vec![])).await.unwrap();
+    // /queue 带文件：占位符经延迟下载改写为 saved 路径（与普通消息同路径）。
+    *mock.file_behavior.lock().await = "ok";
+    handle(msg(
+        "m2",
+        "/queue 排个队 [file: 数据.csv (lark_file_key: fk_1)]",
+        vec![],
+    ))
+    .await
+    .unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let snap = kernel.mailbox_snapshot(&sid).await;
         if snap.steer.len() == 1 && snap.queue.len() == 1 {
             let blob = format!("{:?} {:?}", snap.steer, snap.queue);
-            for needle in ["[from: 李华儒 (ou_1)]", "/steer 插一句", "/queue 排个队"] {
+            for needle in [
+                "[from: 李华儒 (ou_1)]",
+                "/steer 插一句",
+                "/queue 排个队",
+                "(saved:",
+            ] {
                 assert!(blob.contains(needle), "missing {needle}: {blob}");
             }
             let steer_item = &snap.steer[0];

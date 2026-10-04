@@ -623,8 +623,9 @@ pub(crate) async fn process_files_in_text(
 }
 
 /// Post-gate download of the triggering message's own file attachments
-/// (deferred like images, same call site — the `None` command arm; a
-/// file arriving mid-run flows through here into `send_steer`).
+/// (deferred like images, one call site — `run_verbatim_trigger`, shared
+/// by the `None`/`/steer`/`/thread`/`/queue` arms; a file arriving
+/// mid-run flows through here into `send_steer`).
 /// Processes only the text blocks it's given — history/quoted blocks go
 /// through `assemble_history_with_files` / the quoted-chain processing
 /// instead, keyed per line.

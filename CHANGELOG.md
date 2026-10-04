@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- 通过 `/steer`、`/thread`、`/queue` 命令发送的文件、音频等媒体附件现在与普通消息一致自动下载进入会话；此前只收到不可直接读取的占位符。
 - 通过 `/steer` 命令发送的图片不再被静默丢弃，与 `/thread`、`/queue` 一致进入会话。
 - 通过 `/steer`、`/queue` 命令注入的消息与 `/thread` 一致，现在带有发送者身份与来源信息；此前只收到裸文本，无法得知注入者与出处。
 - Telegram 渠道消息的时间戳改为本地时区，与飞书一致；此前为 UTC，混合渠道部署下时间戳相差 8 小时。

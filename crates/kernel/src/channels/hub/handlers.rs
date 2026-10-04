@@ -29,25 +29,49 @@ use crate::channels::{
     obs::ObsTracker, ChannelConfig, ChannelMessage, ChannelStore, PlatformAdapter, PlatformConfig,
 };
 
-/// The shared tail of the Steer/Thread/Queue command arms: the trigger
-/// steered verbatim (adapter metadata header included, so the agent sees
-/// who sent it and which chat/message anchors it), plus the deferred
-/// image download for any attached images — post-gate, like a plain
-/// trigger. Session titles stay on the stripped payload at each call
-/// site.
-async fn append_verbatim_trigger(
+/// 普通消息与 /steer /thread /queue 命令共享的统一触发流程：
+/// `prepare_trigger` 解析会话与上下文（历史/引用）→ 标题登记（剥掉命令
+/// 词后的 payload；普通消息为全文，空则跳过）→ verbatim 注入触发消息
+/// （适配器元数据头随行，agent 看得到发送者与锚点）→ 文件附件与图片
+/// 延迟下载（全部在 gate 之后；只处理触发消息自身的块——历史/引用块
+/// 由 context 侧按行处理，见 `fetch_message_files` 注释）→ 按 delivery
+/// 投递。四条路径的行为改动只改这里。
+#[allow(clippy::too_many_arguments)] // 通道调度上下文六件套 + 触发参数，同 prepare_trigger 先例
+async fn run_verbatim_trigger(
+    channel_name: &str,
+    config: &ChannelConfig,
+    store: &Arc<dyn ChannelStore>,
+    kernel: &Arc<Kernel>,
     adapter: &Arc<dyn PlatformAdapter>,
+    obs: &Arc<ObsTracker>,
     msg: &ChannelMessage,
-    blocks: &mut Vec<ContentBlock>,
-) {
-    blocks.extend(msg.content.iter().cloned());
-    append_message_images(
-        adapter,
-        msg.external_message_id.as_deref().unwrap_or(""),
-        &msg.image_keys,
-        blocks,
-    )
-    .await;
+    kind: TriggerKind,
+    delivery: Delivery,
+    title: &str,
+) -> Result<()> {
+    let (sid, mut blocks) =
+        prepare_trigger(channel_name, config, store, kernel, adapter, obs, msg, kind).await?;
+    // 标题先于投递登记：send_message 不再从合并块里重提取。
+    if !title.is_empty() {
+        kernel.note_title_input(&sid, title);
+    }
+    let mut user_blocks: Vec<ContentBlock> = msg.content.clone();
+    let msg_id = msg.external_message_id.clone().unwrap_or_default();
+    fetch_trigger_files(kernel, channel_name, adapter, &msg_id, &mut user_blocks).await;
+    blocks.extend(user_blocks);
+    append_message_images(adapter, &msg_id, &msg.image_keys, &mut blocks).await;
+    match delivery {
+        Delivery::Steer => kernel.send_steer(&sid, blocks).await,
+        Delivery::Queue => kernel.send_message_inner(&sid, blocks, false).await?,
+    }
+    Ok(())
+}
+
+/// 统一触发流程的投递方式：/steer /thread /普通消息走 steer（打断注入
+/// 或启动 run），/queue 走排队。
+enum Delivery {
+    Steer,
+    Queue,
 }
 
 pub(crate) async fn handle_incoming_message(
@@ -167,7 +191,7 @@ pub(crate) async fn handle_incoming_message(
             Ok(None)
         }
         ChannelCommand::Steer(text) => {
-            let (sid, mut blocks) = prepare_trigger(
+            run_verbatim_trigger(
                 channel_name,
                 config,
                 store,
@@ -176,12 +200,10 @@ pub(crate) async fn handle_incoming_message(
                 obs,
                 &msg,
                 TriggerKind::Normal,
+                Delivery::Steer,
+                &text,
             )
             .await?;
-            kernel.note_title_input(&sid, &text);
-            // Verbatim steer + images, same contract as /thread /queue.
-            append_verbatim_trigger(adapter, &msg, &mut blocks).await;
-            kernel.send_steer(&sid, blocks).await;
             Ok(None)
         }
         ChannelCommand::Thread(text) => {
@@ -192,7 +214,7 @@ pub(crate) async fn handle_incoming_message(
             if let Some(refusal) = thread_refusal(config, &msg) {
                 return Ok(Some(refusal.to_string()));
             }
-            let (sid, mut blocks) = prepare_trigger(
+            run_verbatim_trigger(
                 channel_name,
                 config,
                 store,
@@ -201,15 +223,10 @@ pub(crate) async fn handle_incoming_message(
                 obs,
                 &msg,
                 TriggerKind::OneShotThread,
+                Delivery::Steer,
+                &text,
             )
             .await?;
-            kernel.note_title_input(&sid, &text);
-            // The thread opens with this steer — verbatim, exactly like
-            // a plain message, so the agent gets the adapter's identity
-            // metadata (who asked, which chat/message) for free. The
-            // session title still comes from the stripped payload above.
-            append_verbatim_trigger(adapter, &msg, &mut blocks).await;
-            kernel.send_steer(&sid, blocks).await;
             Ok(None)
         }
         ChannelCommand::InvalidThreadCommand => Ok(Some(
@@ -239,7 +256,7 @@ pub(crate) async fn handle_incoming_message(
             .await
         }
         ChannelCommand::Queue(text) => {
-            let (sid, mut blocks) = prepare_trigger(
+            run_verbatim_trigger(
                 channel_name,
                 config,
                 store,
@@ -248,14 +265,10 @@ pub(crate) async fn handle_incoming_message(
                 obs,
                 &msg,
                 TriggerKind::Normal,
+                Delivery::Queue,
+                &text,
             )
             .await?;
-            kernel.note_title_input(&sid, &text);
-            // Verbatim queue + images, same contract as /steer /thread.
-            append_verbatim_trigger(adapter, &msg, &mut blocks).await;
-            // The title was just fed from the user's own text — don't
-            // let send_message re-extract it from the merged blocks.
-            kernel.send_message_inner(&sid, blocks, false).await?;
             Ok(None)
         }
         ChannelCommand::ListModels => {
@@ -768,7 +781,10 @@ pub(crate) async fn handle_incoming_message(
             None => format!("Unknown command `{cmd}`. See `/help` for the command list."),
         })),
         ChannelCommand::None => {
-            let (sid, mut content) = prepare_trigger(
+            // Title from the user's bare text: msg.content carries the
+            // adapter's metadata header ([ts][from: …]/[from_user_id: …]),
+            // and context blocks merge ahead of it (see note_title_input).
+            run_verbatim_trigger(
                 channel_name,
                 config,
                 store,
@@ -777,28 +793,10 @@ pub(crate) async fn handle_incoming_message(
                 obs,
                 &msg,
                 TriggerKind::Normal,
+                Delivery::Steer,
+                msg.raw_text.as_deref().unwrap_or(""),
             )
             .await?;
-            // Title from the user's bare text: msg.content carries the
-            // adapter's metadata header ([ts][from: …]/[from_user_id: …]),
-            // and context blocks merge ahead of it (see note_title_input).
-            if let Some(raw) = msg.raw_text.as_deref() {
-                kernel.note_title_input(&sid, raw);
-            }
-            let msg_id = msg.external_message_id.clone().unwrap_or_default();
-            let mut user_blocks = msg.content;
-            fetch_trigger_files(&kernel, channel_name, adapter, &msg_id, &mut user_blocks).await;
-            content.extend(user_blocks);
-            // Deferred image download — only now, after the gate, does
-            // an attached image cost bandwidth.
-            append_message_images(
-                adapter,
-                msg.external_message_id.as_deref().unwrap_or(""),
-                &msg.image_keys,
-                &mut content,
-            )
-            .await;
-            kernel.send_steer(&sid, content).await;
             Ok(None)
         }
     }
