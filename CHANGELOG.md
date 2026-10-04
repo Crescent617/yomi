@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- 高并发长会话下，飞书状态卡的中间遥测更新（工具进度、流式增量、用量等）在事件队列压力下会优先脱落以保住回复正文与结算事件，日志按 episode 各告警一次；此前一律严格排队，队列打满时可能连回复正文一起丢弃。
+
 ## [0.11.4] - 2026-10-04
 
 ### Fixed

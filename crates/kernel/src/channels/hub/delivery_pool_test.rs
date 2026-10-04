@@ -668,3 +668,91 @@ async fn concurrent_sessions_all_deliver_under_io_cap() {
         wait_delivered(&adapter, &format!("并发回复{i}"), "concurrent run lost").await;
     }
 }
+
+/// 脱落分类：遥测类（工具进度/流式增量/用量/内部状态/回退）可脱落；
+/// 回复正文、生命周期、权限/提问、压缩结算永不脱落。
+#[test]
+fn event_is_droppable_classification() {
+    use crate::event::{AgentEvent, AgentStatus, ContentChunk, Event, ModelEvent, ToolEvent};
+    let mid = || crate::types::MessageId::new();
+    let droppable = [
+        Event::Model(ModelEvent::Request {
+            message_id: mid(),
+            message_count: 1,
+        }),
+        Event::Model(ModelEvent::Chunk {
+            message_id: mid(),
+            content: ContentChunk::Text("x".into()),
+        }),
+        Event::Model(ModelEvent::ToolCallDelta {
+            message_id: mid(),
+            tool_id: "t".into(),
+            tool_name: "n".into(),
+            arguments_delta: "d".into(),
+        }),
+        Event::Model(ModelEvent::TokenUsage {
+            message_id: mid(),
+            prompt_tokens: 1,
+            completion_tokens: 1,
+            total_tokens: 2,
+            context_window: 100,
+        }),
+        Event::Model(ModelEvent::Fallback {
+            message_id: mid(),
+            from: "a".into(),
+            to: "b".into(),
+        }),
+        Event::Tool(ToolEvent::Start {
+            message_id: mid(),
+            tool_id: "t".into(),
+            tool_name: "n".into(),
+            arguments: None,
+        }),
+        Event::Tool(ToolEvent::Metadata {
+            message_id: mid(),
+            tool_id: "t".into(),
+            metadata: Default::default(),
+        }),
+        Event::Tool(ToolEvent::End {
+            message_id: mid(),
+            tool_id: "t".into(),
+            tool_name: "n".into(),
+            content_blocks: vec![],
+            elapsed_ms: 1,
+            is_error: false,
+        }),
+        Event::Agent(AgentEvent::StateChanged {
+            state: crate::agent::AgentState::Idle,
+        }),
+    ];
+    for e in &droppable {
+        assert!(super::event_is_droppable(e), "should shed: {e:?}");
+    }
+    let critical = [
+        Event::Model(ModelEvent::End {
+            message_id: mid(),
+            content: vec![],
+        }),
+        Event::Model(ModelEvent::Compacting { active: true }),
+        Event::Model(ModelEvent::Compacted {
+            summary: "s".into(),
+            is_error: false,
+        }),
+        Event::Agent(AgentEvent::Lifecycle {
+            state: AgentStatus::Running,
+        }),
+        Event::Agent(AgentEvent::PermissionRequest {
+            req_id: "r".into(),
+            session_id: "s".into(),
+            tool_id: "t".into(),
+            tool_name: "n".into(),
+            tool_args: "a".into(),
+            tool_level: "l".into(),
+            reason: "r".into(),
+        }),
+        Event::Agent(AgentEvent::AskUserAck { req_id: "r".into() }),
+    ];
+    for e in &critical {
+        assert!(!super::event_is_droppable(e), "must not shed: {e:?}");
+    }
+}

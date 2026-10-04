@@ -53,9 +53,17 @@ struct PoolCtx<K, J, S> {
     /// 关停语义：true = cancel 时排空已入队的活再退（持久化等耐
     /// 久场景）；false = 立即退（投递等实时场景，队列余量丢弃）。
     drain_on_cancel: bool,
+    /// 池名（delivery / persist）——丢件与脱落日志的归因字段：两个
+    /// 池共用一套 ERROR 文本，没有它只能靠旁证猜是谁丢的。
+    label: &'static str,
     /// `wait_idle` 的唤醒点（每处理完一条/worker 退出时 notify）。
     idle_notify: Arc<Notify>,
 }
+
+/// 遥测脱落水位：通道剩余容量低于此值时，`dispatch_sheddable` 的可
+/// 弃任务直接脱落——给关键事件永远留出尾部空位，负载期不再出现
+/// 「队列打满后连关键件一起丢」。
+const SHED_REMAINING: usize = 32;
 
 struct WorkerEntry<J> {
     tx: mpsc::Sender<J>,
@@ -68,6 +76,9 @@ struct WorkerEntry<J> {
     /// 记账再入队，worker 接手后由 guard 销账——任何瞬间都覆盖
     /// 全部未完成活，`is_quiet` 无观察窗口；worker 与 entry 共享）。
     outstanding: Arc<AtomicU32>,
+    /// 脱落 episode 旗标：水位下首次脱落置位并 WARN 一次，水位恢复
+    /// 后清零（下一 episode 再报）——episode 级可见，无逐件刷屏。
+    shedding: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// 见模块文档。约束：`K: Eq + Hash + Clone + Send + Sync + 'static`，
@@ -96,7 +107,9 @@ where
     J: Send + 'static,
     S: Default + Send + 'static,
 {
+    #[allow(clippy::too_many_arguments)] // 机制参数即池配置，沿用 prepare_trigger 先例
     pub(crate) fn new(
+        label: &'static str,
         channel_capacity: usize,
         tick_interval: Duration,
         idle_ttl: Duration,
@@ -114,6 +127,7 @@ where
                 tick_interval,
                 idle_ttl,
                 drain_on_cancel,
+                label,
                 idle_notify: Arc::new(Notify::new()),
             }),
             channel_capacity,
@@ -126,9 +140,33 @@ where
     ///  worker 猝死（panic/关停——正常过期由 worker 自己持锁摘牌，
     /// 锁内永远不该见到 Closed）——销旧账、原地换代、记新账重投。
     pub(crate) fn dispatch(&self, key: &K, job: J) {
+        self.dispatch_inner(key, job, false);
+    }
+
+    /// `dispatch` 的可弃变体（遥测类任务）：通道剩余容量低于
+    /// [`SHED_REMAINING`] 时直接脱落（episode 起沿 WARN 一次）——
+    /// 负载期给关键事件留尾位。脱落的任务从未入队、不记未了账。
+    pub(crate) fn dispatch_sheddable(&self, key: &K, job: J) {
+        self.dispatch_inner(key, job, true);
+    }
+
+    fn dispatch_inner(&self, key: &K, job: J, sheddable: bool) {
         use dashmap::mapref::entry::Entry;
         match self.workers.entry(key.clone()) {
             Entry::Occupied(mut e) => {
+                let remaining = e.get().tx.capacity();
+                if sheddable && remaining < SHED_REMAINING {
+                    if !e.get().shedding.swap(true, Ordering::SeqCst) {
+                        warn!(
+                            pool = self.ctx.label,
+                            "keyed pool: shedding droppable jobs under load (telemetry only; critical events unaffected)"
+                        );
+                    }
+                    return; // 脱落：从未入队，不记账
+                }
+                if remaining >= SHED_REMAINING {
+                    e.get().shedding.store(false, Ordering::SeqCst);
+                }
                 e.get().outstanding.fetch_add(1, Ordering::SeqCst);
                 match e.get().tx.try_send(job) {
                     Ok(()) => {
@@ -136,7 +174,10 @@ where
                     }
                     Err(mpsc::error::TrySendError::Full(returned)) => {
                         e.get().outstanding.fetch_sub(1, Ordering::SeqCst);
-                        error!("keyed pool: queue full, dropping job (deep overload)");
+                        error!(
+                            pool = self.ctx.label,
+                            "keyed pool: queue full, dropping job (deep overload)"
+                        );
                         let _ = returned;
                     }
                     Err(mpsc::error::TrySendError::Closed(returned)) => {
@@ -150,15 +191,21 @@ where
                             // 且破 FIFO；旧 entry 被换走后其未了账
                             // 还会孤立于 `wait_all_idle`，排空承诺被
                             // 截断。保留 entry（旧账可见），丢件留痕。
-                            error!("keyed pool: job lost — pool shutting down, not respawning");
+                            error!(
+                                pool = self.ctx.label,
+                                "keyed pool: job lost — pool shutting down, not respawning"
+                            );
                             let _ = returned;
                         } else {
-                            warn!("keyed pool: worker died abnormally, respawning");
+                            warn!(
+                                pool = self.ctx.label,
+                                "keyed pool: worker died abnormally, respawning"
+                            );
                             let fresh = self.spawn_entry(key.clone());
                             let tx = fresh.tx.clone();
                             let outstanding = Arc::clone(&fresh.outstanding);
                             *e.get_mut() = fresh;
-                            send_accounted(&tx, &outstanding, returned);
+                            send_accounted(self.ctx.label, &tx, &outstanding, returned);
                         }
                     }
                 }
@@ -167,14 +214,17 @@ where
                 if self.ctx.token.is_cancelled() {
                     // 关停中不新建（同 Closed 臂的 must-fix 论证：
                     // cancel 后 dispatch 源应已停，此路径本即异常）。
-                    error!("keyed pool: job lost — pool shutting down, not spawning");
+                    error!(
+                        pool = self.ctx.label,
+                        "keyed pool: job lost — pool shutting down, not spawning"
+                    );
                     return;
                 }
                 let entry = self.spawn_entry(key.clone());
                 let tx = entry.tx.clone();
                 let outstanding = Arc::clone(&entry.outstanding);
                 e.insert(entry);
-                send_accounted(&tx, &outstanding, job);
+                send_accounted(self.ctx.label, &tx, &outstanding, job);
             }
         }
     }
@@ -193,6 +243,7 @@ where
             )),
             last_activity: Instant::now(),
             outstanding,
+            shedding: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -258,11 +309,19 @@ where
 /// 锁内"记账→入队"（dispatch 的 Vacant/Closed 换代分支共用）：
 /// 先记未了账再发送；失败销账留 ERROR（仅关停边缘可达——新通
 /// 道即闭，如 pool 已 cancel）。
-fn send_accounted<J>(tx: &mpsc::Sender<J>, outstanding: &Arc<AtomicU32>, job: J) {
+fn send_accounted<J>(
+    label: &'static str,
+    tx: &mpsc::Sender<J>,
+    outstanding: &Arc<AtomicU32>,
+    job: J,
+) {
     outstanding.fetch_add(1, Ordering::SeqCst);
     if tx.try_send(job).is_err() {
         outstanding.fetch_sub(1, Ordering::SeqCst);
-        error!("keyed pool: job lost — worker queue already closed (pool shutting down?)");
+        error!(
+            pool = label,
+            "keyed pool: job lost — worker queue already closed (pool shutting down?)"
+        );
     }
 }
 

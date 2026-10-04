@@ -88,6 +88,7 @@ pub(crate) fn build(
         })
     });
     KeyedPool::new(
+        "persist",
         QUEUE_DEPTH,
         TICK_INTERVAL,
         IDLE_TTL,

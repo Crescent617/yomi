@@ -35,6 +35,7 @@ fn test_pool(
     idle_ttl: Duration,
 ) -> KeyedPool<&'static str, u32, usize> {
     KeyedPool::new(
+        "test",
         64,
         tick_interval,
         idle_ttl,
@@ -137,6 +138,7 @@ async fn handler_panic_is_swallowed_and_worker_survives() {
         })
     };
     let pool = KeyedPool::new(
+        "test",
         64,
         Duration::from_mins(1),
         Duration::from_mins(1),
@@ -207,6 +209,7 @@ async fn dispatch_after_cancel_is_inert() {
     let log: Log = Arc::new(StdMutex::new(Vec::new()));
     let token = CancellationToken::new();
     let pool = KeyedPool::new(
+        "test",
         64,
         Duration::from_mins(1),
         Duration::from_mins(1),
@@ -274,6 +277,7 @@ async fn dispatch_during_drain_does_not_respawn() {
     let gates = (Arc::new(Notify::new()), Arc::new(Notify::new()));
     let token = CancellationToken::new();
     let pool = KeyedPool::new(
+        "test",
         64,
         Duration::from_mins(1),
         Duration::from_mins(1),
@@ -313,6 +317,7 @@ async fn dispatch_after_cancel_vacant_does_not_spawn() {
     let log: Log = Arc::new(StdMutex::new(Vec::new()));
     let token = CancellationToken::new();
     let pool = KeyedPool::new(
+        "test",
         64,
         Duration::from_mins(1),
         Duration::from_mins(1),
@@ -336,6 +341,7 @@ async fn full_queue_rolls_back_accounting() {
     let entered = Arc::new(Notify::new());
     let gate = Arc::new(Notify::new());
     let pool = KeyedPool::new(
+        "test",
         1,
         Duration::from_mins(1),
         Duration::from_mins(1),
@@ -367,6 +373,7 @@ async fn wait_all_idle_covers_every_key() {
     let entered = Arc::new(Notify::new());
     let gate = Arc::new(Notify::new());
     let pool = KeyedPool::new(
+        "test",
         64,
         Duration::from_mins(1),
         Duration::from_mins(1),
@@ -407,6 +414,7 @@ async fn wait_idle_waits_for_inflight_handler() {
         })
     };
     let pool = KeyedPool::new(
+        "test",
         64,
         Duration::from_mins(1),
         Duration::from_mins(1),
@@ -444,6 +452,7 @@ async fn tick_hook_fires_when_queue_empty() {
         })
     };
     let pool = KeyedPool::new(
+        "test",
         64,
         Duration::from_millis(20),
         Duration::from_mins(1),
@@ -472,6 +481,7 @@ async fn tick_hook_hold_defers_expiry() {
         })
     };
     let pool = KeyedPool::new(
+        "test",
         64,
         Duration::from_millis(20),
         Duration::from_millis(60),
@@ -539,6 +549,7 @@ async fn drain_on_cancel_finishes_queued_jobs() {
     let gate = Arc::new(Notify::new());
     let token = CancellationToken::new();
     let pool = KeyedPool::new(
+        "test",
         64,
         Duration::from_mins(1),
         Duration::from_mins(1),
@@ -575,6 +586,7 @@ async fn no_drain_cancel_drops_queued_jobs() {
     let gate = Arc::new(Notify::new());
     let token = CancellationToken::new();
     let pool = KeyedPool::new(
+        "test",
         64,
         Duration::from_mins(1),
         Duration::from_mins(1),
@@ -596,4 +608,71 @@ async fn no_drain_cancel_drops_queued_jobs() {
     }));
     let jobs: Vec<u32> = log.lock().expect("log").iter().map(|(j, _)| *j).collect();
     assert_eq!(jobs, vec![0], "无 drain：在飞的做完，排队的一律丢弃");
+}
+
+/// 脱落语义：水位（剩余容量 < `SHED_REMAINING`）下 sheddable 直接脱落
+/// （从未入队、不记账）、关键事件照收；水位以上 sheddable 同样照收。
+/// handler 用 gate 卡住第一个任务堆出积压。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sheddable_jobs_shed_under_pressure_critical_never_shed() {
+    let log: Log = Arc::new(StdMutex::new(Vec::new()));
+    let entered = Arc::new(Notify::new());
+    let gate = Arc::new(Notify::new());
+    let handler: Handler<&'static str, u32, usize> = {
+        let log = log.clone();
+        let entered = entered.clone();
+        let gate = gate.clone();
+        Arc::new(move |_key, job, mut state| {
+            let log = log.clone();
+            let entered = entered.clone();
+            let gate = gate.clone();
+            Box::pin(async move {
+                if job == 0 {
+                    entered.notify_one();
+                    gate.notified().await;
+                }
+                state += 1;
+                log.lock().expect("log").push((job, state));
+                state
+            })
+        })
+    };
+    let token = CancellationToken::new();
+    let pool = KeyedPool::new(
+        "test",
+        64,
+        Duration::from_mins(1),
+        Duration::from_mins(1),
+        false,
+        token.clone(),
+        handler,
+        None,
+    );
+    // 新 entry（空通道）上的 sheddable 照收——job 0 被 handler 卡住。
+    pool.dispatch_sheddable(&"a", 0);
+    entered.notified().await;
+    // 关键件堆 31 条：64 - 31 = 剩余 33 ≥ SHED_REMAINING(32)。
+    for i in 1..=31u32 {
+        pool.dispatch(&"a", 100 + i);
+    }
+    // 剩余 33 ≥ 32：sheddable 仍收（占第 32 位）。
+    pool.dispatch_sheddable(&"a", 200);
+    // 关键件再占一位（第 33 条）→ 剩余 31 < 32，进入水位下。
+    pool.dispatch(&"a", 131);
+    // 水位下：sheddable 脱落；关键件照收。
+    pool.dispatch_sheddable(&"a", 201);
+    pool.dispatch_sheddable(&"a", 202);
+    pool.dispatch(&"a", 132);
+    gate.notify_one();
+    tokio::time::timeout(Duration::from_secs(2), pool.wait_all_idle())
+        .await
+        .expect("账漏：wait_all_idle 挂死");
+    let jobs: Vec<u32> = log.lock().expect("log").iter().map(|(j, _)| *j).collect();
+    for present in (1..=31u32).map(|i| 100 + i).chain([0, 200, 131, 132]) {
+        assert!(jobs.contains(&present), "必须处理: {present}");
+    }
+    for shed in [201u32, 202] {
+        assert!(!jobs.contains(&shed), "水位下 sheddable 必须脱落: {shed}");
+    }
+    token.cancel();
 }

@@ -45,8 +45,9 @@ use crate::utils::keyed_pool::{panic_msg, Handler, KeyedPool, TickHook};
 
 /// 每会话事件通道容量。与上游 bus 的全局队列（hub 侧 4096）相配：
 /// 单会话 256 足够吸收正常突发，又限制洪峰期的内存占用（91 会话全满
-/// ≈ 2.3 万事件）；真打满时 ERROR 告警（此时上游 bus 的丢件告警必然
-/// 早已触发）。
+/// ≈ 2.3 万事件）。遥测类事件（`event_is_droppable`）在水位下先行脱
+/// 落（episode WARN），真打满的 ERROR 只剩关键事件——那时上游 bus
+/// 的丢件告警必然早已触发。
 const SESSION_EVENT_CAPACITY: usize = 256;
 
 /// 全局并发平台 IO 上限（feishu 限流按 chat 计，worker 粒度≈chat 粒度，
@@ -69,6 +70,26 @@ const WORKER_IDLE_TTL: std::time::Duration = std::time::Duration::from_mins(15);
 pub(crate) struct DeliveryJob {
     pub(crate) routing: Arc<SessionRouting>,
     pub(crate) event: Event,
+}
+
+/// 遥测类事件（卡片进度/流式增量/用量/内部状态）——队列压力下可脱
+/// 落：最终卡由 `Stopped` 结算重建，丢失只影响中间态展示。关键事件
+/// （回复正文 `ModelEvent::End`、生命周期、权限/提问、压缩结算）永不
+/// 走脱落路径——2026-10-04 的 queue-full 丢件证明「一律 FIFO 到打满
+/// 才丢」会把正文也置于风险中。
+fn event_is_droppable(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Model(
+            ModelEvent::Request { .. }
+                | ModelEvent::Chunk { .. }
+                | ModelEvent::ToolCallDelta { .. }
+                | ModelEvent::TokenUsage { .. }
+                | ModelEvent::Fallback { .. }
+        ) | Event::Tool(
+            ToolEvent::Start { .. } | ToolEvent::Metadata { .. } | ToolEvent::End { .. }
+        ) | Event::Agent(AgentEvent::StateChanged { .. })
+    )
 }
 
 /// actor 共享上下文（机制归池，业务留此）。
@@ -149,6 +170,7 @@ impl DeliveryPool {
         // drain_on_cancel=false：投递是实时业务，关停时余量丢弃（与
         // 手绘版 cancel 即 break 同款；耐久语义属于持久化池）。
         let pool = KeyedPool::new(
+            "delivery",
             SESSION_EVENT_CAPACITY,
             settle_interval,
             idle_ttl,
@@ -197,9 +219,14 @@ impl DeliveryPool {
     }
 
     /// 派一个事件给该会话的 worker（不存在则创建）。同会话严格
-    /// FIFO；entry 锁内 spawn-or-send（机制见 `keyed_pool`）。
+    /// FIFO；entry 锁内 spawn-or-send（机制见 `keyed_pool`）。遥测类
+    /// 事件走 `dispatch_sheddable`（压力下可脱落），关键事件普通派发。
     pub(crate) fn dispatch(&self, session_id: &SessionId, job: DeliveryJob) {
-        self.pool.dispatch(session_id, job);
+        if event_is_droppable(&job.event) {
+            self.pool.dispatch_sheddable(session_id, job);
+        } else {
+            self.pool.dispatch(session_id, job);
+        }
     }
 
     /// 测试谓词：该会话的 worker 是否在册（过期/换代路径的观测缝，
