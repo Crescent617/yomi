@@ -498,7 +498,7 @@ pub(crate) async fn model_key_for_new_channel_session(
 
 /// The persisted overrides a newly-created channel session inherits from
 /// its parent chat session: explicit model choice AND the settings bag's
-/// `context_window`（thread 继承对称于 model_key，见
+/// `context_window`（thread 继承对称于 `model_key`，见
 /// docs/design/session-context-window.md）。Missing mappings or sessions
 /// intentionally yield `(None, None)` — runtime resolution then follows
 /// the configured defaults without persisting anything.

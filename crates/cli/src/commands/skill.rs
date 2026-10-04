@@ -10,7 +10,7 @@ pub async fn list(global: &GlobalArgs) -> Result<()> {
     let mut skill_folders: Vec<PathBuf> = config
         .skill_folders()
         .iter()
-        .map(|p| kernel::expand_tilde(p))
+        .map(kernel::expand_tilde)
         .map(|p| {
             if p.is_relative() {
                 config.data_dir.join(p)

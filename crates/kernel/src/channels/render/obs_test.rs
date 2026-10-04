@@ -1914,6 +1914,18 @@ fn whisper_snippet_sanitizes_markdown_structural_chars() {
 
 #[tokio::test]
 async fn trace_inline_arg_summary_is_capped() {
+    // Collect text from top-level elements and any nested collapsible panel
+    // (the live trace now lives inside one).
+    fn collect(e: &serde_json::Value, out: &mut Vec<String>) {
+        if let Some(c) = e["content"].as_str() {
+            out.push(c.to_string());
+        }
+        if let Some(inner) = e["elements"].as_array() {
+            for i in inner {
+                collect(i, out);
+            }
+        }
+    }
     let tracker = ObsTracker::with_patch_interval(Duration::ZERO);
     let mock = MockAdapter::new();
     let sid = sid();
@@ -1935,18 +1947,6 @@ async fn trace_inline_arg_summary_is_capped() {
 
     let patches = mock.patches.lock().await;
     let body: serde_json::Value = serde_json::from_str(&patches.last().unwrap().1).unwrap();
-    // Collect text from top-level elements and any nested collapsible panel
-    // (the live trace now lives inside one).
-    fn collect(e: &serde_json::Value, out: &mut Vec<String>) {
-        if let Some(c) = e["content"].as_str() {
-            out.push(c.to_string());
-        }
-        if let Some(inner) = e["elements"].as_array() {
-            for i in inner {
-                collect(i, out);
-            }
-        }
-    }
     let mut parts = Vec::new();
     for e in body["body"]["elements"].as_array().unwrap() {
         collect(e, &mut parts);
@@ -3320,8 +3320,7 @@ async fn double_settle_exactly_one_wins() {
     let loser_text = [&o1, &o2]
         .iter()
         .filter_map(|o| o.unsettled.as_ref())
-        .filter_map(|r| r.text().map(str::to_string))
-        .next()
+        .find_map(|r| r.text().map(str::to_string))
         .expect("loser must hand its reply back");
     assert_eq!(loser_text, "答案B");
     // 只有一次终态 PATCH（胜者的 morph）。

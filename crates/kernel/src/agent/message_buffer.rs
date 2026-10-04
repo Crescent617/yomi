@@ -203,7 +203,7 @@ impl MessageBuffer {
                     );
                     if msg.role == Role::Assistant {
                         if let Some(calls) = msg.tool_calls.as_ref().filter(|tc| !tc.is_empty()) {
-                            open = calls.clone();
+                            open.clone_from(calls);
                         }
                     }
                     out.push(msg.clone());

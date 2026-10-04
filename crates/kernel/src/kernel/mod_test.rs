@@ -424,7 +424,7 @@ async fn fork_session_copies_rules_file() {
 }
 
 /// `get_session_rules`：channel 层经 routing 行解析 chat id 再读文件
-/// （thread 行的 actual_chat_id 已 denormalize 父群 id，无需 thread→chat
+/// （thread 行的 `actual_chat_id` 已 denormalize 父群 id，无需 thread→chat
 /// 反查），session 层按会话 id 读；sub-agent 永不返回 session 层——与
 /// spawn 时不注入对齐，视图不能展示下次 spawn 不会注入的规则。
 #[tokio::test]
@@ -504,7 +504,7 @@ async fn get_session_rules_layers_and_sub_agent_exclusion() {
 
 /// `get/set_session_context_window`：覆盖 → 生效值与来源正确；清除 →
 /// 回落模型默认；`Some(0)` 拒绝；未知 session 报 NotFound；换模型
-/// **不清**覆盖（model_default 跟随新模型）；create 传 Some(0) 过滤为
+/// **不清**覆盖（`model_default` 跟随新模型）；create 传 Some(0) 过滤为
 /// 无覆盖。
 #[tokio::test]
 async fn session_context_window_override_roundtrip() {

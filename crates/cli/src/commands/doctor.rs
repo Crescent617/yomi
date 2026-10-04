@@ -243,9 +243,11 @@ pub async fn run(global: &GlobalArgs) -> Result<()> {
                 {
                     Ok((v, _)) => {
                         let db = config.data_dir.join("yomi.db");
-                        let db_mb = std::fs::metadata(&db)
-                            .map(|m| m.len() as f64 / 1_048_576.0)
-                            .unwrap_or(0.0);
+                        // db 字节数仅用于 MiB 展示与 GiB 阈值判断，本地
+                        // sqlite 远小于 2^52 字节，u64→f64 精度损失可忽略。
+                        #[allow(clippy::cast_precision_loss)]
+                        let db_mb =
+                            std::fs::metadata(&db).map_or(0.0, |m| m.len() as f64 / 1_048_576.0);
                         let level = if db_mb > 1024.0 {
                             Level::Warn
                         } else {

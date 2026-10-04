@@ -1,4 +1,4 @@
-//! ConnectionMode::displays_as_local 的回环判定用例。
+//! `ConnectionMode::displays_as_local` 的回环判定用例。
 
 use super::{is_loopback_socket_addr, ConnectionMode};
 use kernel::transport::SocketAddr;

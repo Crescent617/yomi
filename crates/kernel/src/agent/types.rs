@@ -83,6 +83,8 @@ pub struct AgentSpawnArgs {
     pub ext_tools: Vec<Arc<dyn crate::tools::Tool>>,
 }
 
+// ext_tools 是 dyn Tool 无法 Debug，手工实现有意省略，故压制本 lint。
+#[allow(clippy::missing_fields_in_debug)]
 impl std::fmt::Debug for AgentSpawnArgs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentSpawnArgs")
@@ -413,7 +415,7 @@ pub struct AgentShared {
     pub usage_store: Option<Arc<dyn crate::storage::UsageStore>>,
     /// Shared permission state for all agents in a session
     pub permission_state: Option<crate::permission::PermissionState>,
-    /// Skill 目录（低→高优先级）：spawn 装配的输入，也供 skill_load 工具按名解析
+    /// Skill 目录（低→高优先级）：spawn 装配的输入，也供 `skill_load` 工具按名解析
     pub skill_folders: Vec<std::path::PathBuf>,
     /// Skill 热加载协调器：每次 spawn 按目录现场扫描，同目录并发扫描单飞合并
     pub skill_loader: crate::skill::SkillLoader,

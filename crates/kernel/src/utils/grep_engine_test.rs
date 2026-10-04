@@ -8,7 +8,7 @@ fn write_file(dir: &tempfile::TempDir, name: &str, content: &str) {
     write!(f, "{content}").unwrap();
 }
 
-fn params<'a>(pattern: &'a str) -> SearchParams<'a> {
+fn params(pattern: &str) -> SearchParams<'_> {
     SearchParams {
         pattern,
         case_insensitive: false,
@@ -248,7 +248,7 @@ fn deadline_returns_timeout() {
     write_file(&dir, "a.rs", "x\n");
     let mut p = params("x");
     // 已过的截止时刻：立刻超时。
-    p.deadline = Some(Instant::now() - Duration::from_secs(1));
+    p.deadline = Some(Instant::now().checked_sub(Duration::from_secs(1)).unwrap());
     assert!(matches!(
         search(dir.path(), SearchMode::Content, &p),
         Err(SearchError::Timeout(_))

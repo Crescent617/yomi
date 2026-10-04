@@ -301,7 +301,7 @@ impl PlatformConfig {
     /// Deliberately not the run-trigger ack: `OneSecond`/"👀" promises
     /// imminent processing, which a queue makes no claim about. (Feishu
     /// reaction candidates probed live: Hourglass/Bookmark/Pushpin/
-    /// InboxTray are all rejected as invalid `emoji_type`.)
+    /// `InboxTray` are all rejected as invalid `emoji_type`.)
     pub(crate) fn queue_reaction(&self) -> &'static str {
         match self {
             Self::Feishu { .. } => "Get",

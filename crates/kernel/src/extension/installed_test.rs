@@ -2,7 +2,7 @@
 
 use super::{
     list_installed, lockfile_path, read_installed, read_lockfile, write_lockfile, ExtLockfile,
-    LockEntry, Provenance, Resources,
+    LockEntry, Resources,
 };
 
 fn pkg() -> (tempfile::TempDir, std::path::PathBuf) {

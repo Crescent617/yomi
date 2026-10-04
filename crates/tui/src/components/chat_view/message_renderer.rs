@@ -1443,7 +1443,7 @@ pub fn tool_icon(tool_name: &str) -> &'static str {
         | ToolKind::TaskUpdate
         | ToolKind::Todo => " ",
         ToolKind::AskUser => " ",
-        _ => " ",
+        ToolKind::Other => " ",
     }
 }
 

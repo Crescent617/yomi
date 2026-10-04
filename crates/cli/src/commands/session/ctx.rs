@@ -10,7 +10,7 @@ fn fmt_k(t: u32) -> String {
     if t % 1000 == 0 {
         format!("{}k", t / 1000)
     } else {
-        format!("{:.1}k", t as f64 / 1000.0)
+        format!("{:.1}k", f64::from(t) / 1000.0)
     }
 }
 

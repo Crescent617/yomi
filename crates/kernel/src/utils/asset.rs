@@ -122,7 +122,7 @@ fn is_image_annotation(text: &str) -> bool {
 }
 
 /// Drop annotation blocks inserted by [`process_image_blocks`] (a
-/// `[image N: <绝对路径>]` Text immediately following an ImageUrl block).
+/// `[image N: <绝对路径>]` Text immediately following an `ImageUrl` block).
 /// Annotations are model-context decor, not message content: persistence
 /// (jsonl write) and user-facing rendering (live user events) strip them
 /// so the annotation is regenerated exactly once per read-back — never
@@ -167,8 +167,8 @@ pub fn asset_path(url: &str, data_dir: &Path) -> Option<std::path::PathBuf> {
 /// - every successfully resolved image gets a trailing text block with
 ///   its **absolute path** (`[image N: /…/assets/{hash}.{ext}]`), so the
 ///   model can Read it or use file tools on it (attachments, convert…).
-/// Used by the jsonl read-back path and by the conductor's input entry,
-/// so both the current turn and history carry paths.
+///   Used by the jsonl read-back path and by the conductor's input entry,
+///   so both the current turn and history carry paths.
 pub async fn process_image_blocks(
     blocks: Vec<crate::types::ContentBlock>,
     data_dir: &Path,

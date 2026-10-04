@@ -8,7 +8,9 @@
 use crate::args::GlobalArgs;
 use anyhow::{Context, Result};
 use kernel::storage::MessageStore;
-use kernel::types::{ContentBlock, Message, MessageId, Role, SessionMessage};
+use kernel::types::{
+    AssistantMsg, ContentBlock, Message, MessageId, Role, SessionMessage, ToolMsg, UserMsg,
+};
 use kernel::utils::strs;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -149,7 +151,7 @@ fn format_transcript(
 }
 
 /// `format_transcript` 的行号版：`(line_no, message)` 对，section 头标
-/// `· L<n>`（`--line` 路径使用；line_no 为 None 时不标）。
+/// `· L<n>`（`--line` `路径使用；line_no` 为 None 时不标）。
 /// `range` 给定时只渲染行号落在 `[lo, hi]` 内的消息（配对索引用全量，
 /// 显示按窗口）。
 fn format_transcript_with_lines(
@@ -189,11 +191,11 @@ fn format_transcript_with_lines(
         };
     for msg in converted {
         let msg_line = match &msg {
-            SessionMessage::User(m) => line_of.get(&m.id).copied(),
-            SessionMessage::Steer(m) => line_of.get(&m.id).copied(),
-            SessionMessage::Interrupted(m) => line_of.get(&m.id).copied(),
-            SessionMessage::Assistant(m) => line_of.get(&m.id).copied(),
-            SessionMessage::Tool(m) => line_of.get(&m.id).copied(),
+            SessionMessage::User(UserMsg { id, .. })
+            | SessionMessage::Steer(UserMsg { id, .. })
+            | SessionMessage::Interrupted(UserMsg { id, .. })
+            | SessionMessage::Assistant(AssistantMsg { id, .. })
+            | SessionMessage::Tool(ToolMsg { id, .. }) => line_of.get(id).copied(),
         };
         if let (Some((lo, hi)), Some(l)) = (range, msg_line) {
             if l < lo || l > hi {

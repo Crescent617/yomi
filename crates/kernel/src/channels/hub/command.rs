@@ -503,10 +503,10 @@ pub(crate) fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
         },
         CMD_SESSIONS => match (parts.next(), parts.next()) {
             (None, None) => ChannelCommand::Sessions(0),
-            (Some(n), None) => n
-                .parse::<usize>()
-                .map(ChannelCommand::Sessions)
-                .unwrap_or(ChannelCommand::InvalidSessionsCommand),
+            (Some(n), None) => n.parse::<usize>().map_or(
+                ChannelCommand::InvalidSessionsCommand,
+                ChannelCommand::Sessions,
+            ),
             _ => ChannelCommand::InvalidSessionsCommand,
         },
         CMD_STATUS if parts.next().is_none() => ChannelCommand::Status,
@@ -928,24 +928,24 @@ pub(crate) fn suggest_command(cmd: &str) -> Option<&'static str> {
 fn levenshtein(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
-    let (n, m) = (a.len(), b.len());
-    let mut d = vec![vec![0usize; m + 1]; n + 1];
-    for (i, row) in d.iter_mut().enumerate().take(n + 1) {
+    let (rows, cols) = (a.len(), b.len());
+    let mut dist = vec![vec![0usize; cols + 1]; rows + 1];
+    for (i, row) in dist.iter_mut().enumerate().take(rows + 1) {
         row[0] = i;
     }
-    for (j, cell) in d[0].iter_mut().enumerate().take(m + 1) {
+    for (j, cell) in dist[0].iter_mut().enumerate().take(cols + 1) {
         *cell = j;
     }
-    for i in 1..=n {
-        for j in 1..=m {
+    for i in 1..=rows {
+        for j in 1..=cols {
             let cost = usize::from(a[i - 1] != b[j - 1]);
-            d[i][j] = (d[i - 1][j] + 1)
-                .min(d[i][j - 1] + 1)
-                .min(d[i - 1][j - 1] + cost);
+            dist[i][j] = (dist[i - 1][j] + 1)
+                .min(dist[i][j - 1] + 1)
+                .min(dist[i - 1][j - 1] + cost);
             if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
-                d[i][j] = d[i][j].min(d[i - 2][j - 2] + 1);
+                dist[i][j] = dist[i][j].min(dist[i - 2][j - 2] + 1);
             }
         }
     }
-    d[n][m]
+    dist[rows][cols]
 }

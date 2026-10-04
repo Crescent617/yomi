@@ -72,7 +72,7 @@ impl Drop for ResetOnDrop {
 }
 
 /// Heartbeat interval for refreshing live status cards. Long tool calls
-/// emit no events, so event-driven PATCHes stop and the card looks frozen
+/// emit no events, so event-driven `PATCHes` stop and the card looks frozen
 /// (elapsed stuck at the last patch) — this keeps it visibly alive.
 const LIVE_CARD_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -114,7 +114,7 @@ impl ChannelHub {
         }
     }
 
-    /// Channel mapping store（ext_route 的 pseudo-channel 映射复用）。
+    /// Channel mapping store（`ext_route` 的 pseudo-channel 映射复用）。
     pub fn store(&self) -> Arc<dyn ChannelStore> {
         Arc::clone(&self.store)
     }
@@ -981,7 +981,7 @@ impl ChannelHub {
     }
 
     /// Whether the channel this session routes to can render cards —
-    /// the ask_user question card exists only on such surfaces (text
+    /// the `ask_user` question card exists only on such surfaces (text
     /// platforms keep the tool blocked to avoid the 2-minute timeout).
     /// `false` for unrouted sessions and unknown channels alike.
     pub async fn session_channel_supports_cards(&self, session_id: &SessionId) -> bool {

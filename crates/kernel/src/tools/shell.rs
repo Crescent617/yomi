@@ -444,7 +444,7 @@ impl ShellTool {
 }
 
 /// sync 路径输出超 cap 全文落盘后的引用说明（与 background 路径的
-/// 「Log file:」词汇一致——同一份输出约定，模型见到路径可用 read /
+/// 「`Log file:`」词汇一致——同一份输出约定，模型见到路径可用 read /
 /// grep 工具回查）。
 fn format_log_note(log_files: &[(std::path::PathBuf, u64)]) -> String {
     if log_files.is_empty() {

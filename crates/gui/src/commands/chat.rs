@@ -306,7 +306,7 @@ pub async fn send_steer(
     Ok(())
 }
 
-/// `/btw` 旁问：返回 request_id（前端据此关联 `"btw"` 事件流）。
+/// `/btw` 旁问：返回 `request_id（前端据此关联` `"btw"` 事件流）。
 #[tauri::command(rename_all = "snake_case")]
 pub async fn btw(
     state: State<'_, AppState>,

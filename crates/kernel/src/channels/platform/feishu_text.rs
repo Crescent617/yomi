@@ -270,7 +270,7 @@ impl FeishuAdapter {
     /// (anchor ≠ URL) keep their `[text](url)` form.
     fn dedup_bare_links(text: &str) -> String {
         static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-        let re = RE.get_or_init(|| regex::Regex::new(r#"\[([^\]\n]+)\]\(([^)\s]+)\)"#).unwrap());
+        let re = RE.get_or_init(|| regex::Regex::new(r"\[([^\]\n]+)\]\(([^)\s]+)\)").unwrap());
         re.replace_all(text, |caps: &regex::Captures| {
             if caps[1] == caps[2] {
                 caps[1].to_string()

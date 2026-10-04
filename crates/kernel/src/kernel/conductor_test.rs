@@ -319,7 +319,7 @@ async fn orphan_without_parent_is_dropped() {
     );
 }
 
-/// 无文本答案（纯 tool_calls 中间轮结尾等病态边缘）：不转运。
+/// 无文本答案（纯 `tool_calls` 中间轮结尾等病态边缘）：不转运。
 #[tokio::test]
 async fn orphan_without_text_reply_is_dropped() {
     let sub = SessionId::from("sub_notext");
@@ -348,8 +348,8 @@ async fn orphan_without_text_reply_is_dropped() {
     assert!(got.is_err(), "empty reply must not be forwarded");
 }
 
-/// run 循环全接线（复审 should-fix）：事件总线进 MessageAdded
-/// （持久化池 dispatch + `Stopped` 臂 wait_idle 排空）→ Stopped
+/// run 循环全接线（复审 should-fix）：事件总线进 `MessageAdded`
+/// （持久化池 dispatch + `Stopped` 臂 `wait_idle` 排空）→ Stopped
 /// （消费 claim、spawn 转运）→ parent 收到 steer。钉住的是分发臂
 /// 接线本身，不是直调 helper。
 #[tokio::test]
@@ -483,7 +483,7 @@ async fn stopped_waits_for_slow_persist_before_forwarding() {
     let _ = tokio::time::timeout(std::time::Duration::from_secs(3), run).await;
 }
 
-/// MaxIterations 完成带 ⚠ 标注转运。
+/// `MaxIterations` 完成带 ⚠ 标注转运。
 #[tokio::test]
 async fn max_iterations_orphan_forwards_with_warning_tag() {
     let sub = SessionId::from("sub_maxiter");

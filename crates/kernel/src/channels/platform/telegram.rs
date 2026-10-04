@@ -394,8 +394,8 @@ async fn send_one_file(
 const MAX_MESSAGE_UTF16_UNITS: usize = 4000;
 
 /// Telegram render for the `<@USER_ID>` mention contract. User ids are
-/// numeric; anything else (e.g. a feishu open_id seen in history) is left
-/// as-is — a `[text](url)` body with unescaped MarkdownV2 specials would
+/// numeric; anything else (e.g. a feishu `open_id` seen in history) is left
+/// as-is — a `[text](url)` body with unescaped `MarkdownV2` specials would
 /// fail the whole send into plain-text fallback.
 fn telegram_mention(id: &str) -> String {
     if id.bytes().all(|b| b.is_ascii_digit()) {

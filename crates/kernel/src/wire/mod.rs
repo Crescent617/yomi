@@ -11,11 +11,11 @@ use serde::{Deserialize, Serialize};
 /// 31: `Event::Btw` 是新枚举变体——旧客户端反序列化事件帧会直接失败
 /// （连接被读端当致命错误掐断），属破坏性变更，必须让旧端在 Hello 处
 /// 快速失败而不是在事件流上反复重连暴毙。
-/// 32: `ReqMethod` 新增 extension_install/list/remove——老 daemon 收
-/// 到未知变体的请求帧按 InvalidData 断连接（不是拒单帧），新客户端须
+/// 32: `ReqMethod` 新增 `extension_install`/`list`/`remove`——老 daemon 收
+/// 到未知变体的请求帧按 `InvalidData` 断连接（不是拒单帧），新客户端须
 /// 在 Hello 处快速失败拿到干净的 WireProtocolMismatch，而不是含糊的
 /// connection lost。
-/// 33: `ReqMethod` 新增 preview_system_prompt——同上，Hello 处快速失败。
+/// 33: `ReqMethod` 新增 `preview_system_prompt`——同上，Hello 处快速失败。
 pub const WIRE_PROTOCOL_VERSION: u32 = 34;
 
 /// All operations a client can request from the daemon.

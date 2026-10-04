@@ -76,7 +76,7 @@ pub(crate) struct TokenCache {
 /// was lost; redeliveries land within seconds, so a few thousand is ample.
 const DEDUP_CAP: NonZeroUsize = NonZeroUsize::new(4096).unwrap();
 
-/// Cap for the thread-root cache (thread_id → root message id). Threads
+/// Cap for the thread-root cache (`thread_id` → root message id). Threads
 /// are few and long-lived; a miss just costs one API re-fetch.
 const THREAD_ROOT_CAP: NonZeroUsize = DEDUP_CAP;
 

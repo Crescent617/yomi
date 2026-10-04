@@ -10,7 +10,7 @@ use moka::future::Cache;
 use super::{drop_manual_skills, Skill, SkillScanner};
 
 /// 目录扫描结果的缓存时长。
-pub const SCAN_TTL: Duration = Duration::from_secs(60);
+pub const SCAN_TTL: Duration = Duration::from_mins(1);
 
 /// 按目录的热加载器：TTL 缓存 + moka 请求合并（同目录并发扫描只跑一
 /// 次）。Clone 共享缓存。

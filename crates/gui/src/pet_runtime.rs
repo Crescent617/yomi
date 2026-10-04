@@ -255,11 +255,8 @@ fn apply_notification(
         Notification::ConnectionLost { .. } => {
             runtime.set_connection_status(PetConnectionStatus::Disconnected)
         }
-        Notification::BackgroundTasksChanged { .. } => {
+        Notification::BackgroundTasksChanged { .. } | Notification::MailboxChanged { .. } => {
             // The caller refreshes the authoritative running-session snapshot.
-            false
-        }
-        Notification::MailboxChanged { .. } => {
             // Mailbox state doesn't shape pet behavior; the chat view
             // consumes the same notification for its pending rendering.
             false

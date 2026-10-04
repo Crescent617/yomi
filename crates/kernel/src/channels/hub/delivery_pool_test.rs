@@ -463,8 +463,7 @@ async fn in_flight_buffer_blocks_expiry() {
 
 /// Full 丢件分支的覆盖已随机制换芯上移：`keyed_pool_test.rs` 的
 /// `full_queue_rolls_back_accounting`（capacity=1 精确造 Full，钉
-/// 丢件 + 账回滚 + wait_idle 不挂）。本层不再有自有实现可测。
-
+/// 丢件 + 账回滚 + `wait_idle` 不挂）。本层不再有自有实现可测。
 /// TTL 由事件到达驱动：判定节拍之间有事件到达（即便不产生
 /// buffer 的事件），worker 不得过期——entry 时间戳在锁内被刷
 /// 新，过期复核必然放弃。
@@ -572,7 +571,6 @@ async fn dispatch_after_cancel_is_inert_and_safe() {
 /// panic 被双层网吞掉（worker 不死）、cancel 即全池关停（entry
 /// 无清扫需求）。原 janitor 两测试（`janitor_collects_*`、尸体
 /// 重建）随之退役，等价行为见上一条 `dispatch_after_cancel_*`。
-
 /// 三审 should-fix #2 回归：判死探针 panic 必须降级为"视为存活"
 /// ——actor 不死、buffer 不被误结算，后续事件正常投递。
 #[tokio::test]

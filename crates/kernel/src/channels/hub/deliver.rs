@@ -67,6 +67,8 @@ impl RunEndStatus {
 /// reaction policy). Shutdown-interrupted runs are NOT skipped:
 /// subscribers did not stop the run, the daemon went down.
 /// Per-target failures only affect their target.
+// 8 个参数全是跨模块共享的异构引用，打包参数结构体收益不抵改动；行为不变。
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn notify_run_subscribers(
     store: &Arc<dyn ChannelStore>,
     adapter: &Arc<dyn PlatformAdapter>,
@@ -425,6 +427,9 @@ pub(crate) async fn send_info_reply(
 /// width (no `width_mode` override — same as the run/reply cards),
 /// reused by every info card (single-markdown-body via [`info_card`],
 /// multi-element via `/sessions`).
+// 调用方分布在多张卡片文件（welcome/cron_card 等），统一传构造好的 Vec；
+// 改 &[..] 需同步全部调用方，保持签名不动。
+#[allow(clippy::needless_pass_by_value)]
 pub(crate) fn info_card_envelope(title: &str, elements: Vec<serde_json::Value>) -> String {
     serde_json::json!({
         "schema": "2.0",

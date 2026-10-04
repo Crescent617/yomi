@@ -811,8 +811,8 @@ async fn retrying_event_carries_retry_after_wait() {
     assert!((1000..=1250).contains(&wait_ms), "wait_ms: {wait_ms}");
 }
 
-/// 中断标记（mark_interrupted）：落库为带 metadata 的 user 消息，且通过
-/// has_user_after guard 使 pending_tool_calls 收口为 None——被打断的工具
+/// 中断标记（`mark_interrupted`）：落库为带 metadata 的 user 消息，且通过
+/// `has_user_after` guard 使 `pending_tool_calls` 收口为 None——被打断的工具
 /// 批不会在重生后被静默重跑。
 #[tokio::test]
 async fn interrupted_marker_closes_pending_tool_batch() {
@@ -1306,7 +1306,7 @@ mod rewind_tests {
 }
 
 /// 空 completion 毒化回归：模型抽风返回零内容（只有 usage + 无法映射的
-/// finish_reason）时，回合以 Failed 干净收场，且**不落盘**空 assistant
+/// `finish_reason`）时，回合以 Failed 干净收场，且**不落盘**空 assistant
 /// 消息——否则它随每次后续请求重放，被严格网关以 400 "assistant must not
 /// be empty" 拒绝，session 被永久毒化。
 #[tokio::test]
@@ -1469,7 +1469,7 @@ async fn empty_completion_is_not_persisted_and_fails_turn_cleanly() {
     );
 }
 
-/// 外挂合并（Agent::new 收口）：有效进表、撞内建让位、blocklist 拦截、
+/// 外挂合并（`Agent::new` 收口）：有效进表、撞内建让位、blocklist 拦截、
 /// 自声明 level 经 `Tool::level` 流露。
 #[cfg(unix)]
 #[tokio::test]
@@ -2061,7 +2061,7 @@ async fn mid_turn_steer_stays_in_turn_next_turn_anchors_to_it() {
 }
 
 /// mid-turn steer 由注入点打 turn-internal 标记（循环哨兵扫描对它
-/// 透明，与 max_iterations 的 turn 口径对齐）；turn 未开始时注入
+/// 透明，与 `max_iterations` 的 turn 口径对齐）；turn 未开始时注入
 /// 的 steer 无标记，保持哨兵的 turn 硬边界。
 #[cfg(unix)]
 #[tokio::test]
@@ -2072,7 +2072,7 @@ async fn mid_turn_steer_is_marked_turn_internal() {
         msg.metadata
             .as_ref()
             .and_then(|md| md.get(key))
-            .map_or(false, |v| v == "true")
+            .is_some_and(|v| v == "true")
     };
 
     // mid-turn（current_turn 存在）：双标记。

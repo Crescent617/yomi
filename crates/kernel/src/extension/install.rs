@@ -41,7 +41,7 @@ pub struct CronAdoptReport {
 
 /// cron 收养三态：`Created` 缺才建；`Updated` 已存在但包内内容变了
 /// （消息/模板/precheck 刷新到包内值）；`Untouched` 已存在且一致。
-/// schedule/max_runs/expires_at 是用户部署时机，任何态都不动。
+/// `schedule/max_runs/expires_at` 是用户部署时机，任何态都不动。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CronAdoptStatus {
@@ -133,10 +133,10 @@ pub async fn install(
     // 清掉上次刷新崩溃遗留的隐藏临时目录（copy_refresh 的 .<名>.tmp，
     // 点开头扫描器不可见，不清就成永久泄漏）。
     let stray_tmp = data_dir.join(DIR_NAME).join(format!(".{name}.tmp"));
-    if tokio::fs::symlink_metadata(&stray_tmp).await.is_ok() {
-        if tokio::fs::remove_dir_all(&stray_tmp).await.is_err() {
-            let _ = tokio::fs::remove_file(&stray_tmp).await;
-        }
+    if tokio::fs::symlink_metadata(&stray_tmp).await.is_ok()
+        && tokio::fs::remove_dir_all(&stray_tmp).await.is_err()
+    {
+        let _ = tokio::fs::remove_file(&stray_tmp).await;
     }
 
     // 先对源做完整 walk（含 1MB 上限与 ext.toml 可解析性）：超限在此
@@ -296,16 +296,16 @@ pub async fn install(
 
 /// init 安装钩子上限：初始化脚本约定是秒级；超时说明脚本挂了或
 /// 在等交互，连后裔一起收树后判失败（install 报错、可重跑）。
-const INIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+const INIT_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(2);
 
 /// init 输出保留字节数（报告与错误信息共用，看尾不看头）。
 const INIT_OUTPUT_KEEP: usize = 4096;
 
 /// 执行 manifest 声明的 init 钩子（未声明返回 None）。经统一 shell
 /// 探测执行（bash 优先，Windows Git Bash→pwsh→powershell→cmd，命令
-/// 文本走 wrap_command），进程树由 spawn_in_new_tree 建立（超时连
-/// 后裔一起收）；标准环境注入复用 inject_child_env——脚本拿到的
-/// YOMI_DATA_DIR/PATH 与任何 yomi 子进程一致。
+/// 文本走 `wrap_command`），进程树由 `spawn_in_new_tree` 建立（超时连
+/// 后裔一起收）；标准环境注入复用 `inject_child_env`——脚本拿到的
+/// `YOMI_DATA_DIR/PATH` 与任何 yomi 子进程一致。
 async fn run_init(
     data_dir: &Path,
     ext_dir: &Path,
@@ -380,7 +380,7 @@ fn tail_bytes(stdout: &[u8], stderr: &[u8], keep: usize) -> String {
 /// 已存在 ext cron job 的内容对账：包内派生字段（消息文本、会话
 /// 工作目录、precheck）不一致则 update 到包内值并返回 true；一致
 /// 不碰 store 返回 false。权限等级是机器派生值，不参与对账（更新
-/// 时按当前 config 重算，与 create_cron_job 创建路径同规则）。
+/// 时按当前 config 重算，与 `create_cron_job` 创建路径同规则）。
 async fn refresh_cron_content(
     store: &Arc<dyn CronStore>,
     existing: &crate::cron::CronJob,
@@ -959,14 +959,14 @@ async fn os_symlink(target: &Path, link: &Path, is_dir: bool) -> std::io::Result
 }
 
 /// 实体复制包目录：保留执行位。逐文件有界（fstat 预检 + take 封顶
-/// 读取，与 hash 的 read_bounded 同口径——源在 hash 后被换成超大文件
+/// 读取，与 hash 的 `read_bounded` 同口径——源在 hash 后被换成超大文件
 /// 的竞态窗在此闭合），并累计总量/文件数，超限即拒不落地。
 async fn copy_dir(src: &Path, dst: &Path) -> Result<(), ExtError> {
     copy_dir_limited(src, dst, &mut 0, &mut 0).await
 }
 
 /// 有界读一个包文件并写到目标，保留权限位（exec bit 是 bin 的
-/// 生效条件）。fstat 预检 + take 封顶读取，与 hash 的 read_bounded
+/// 生效条件）。fstat 预检 + take 封顶读取，与 hash 的 `read_bounded`
 /// 同口径。
 async fn copy_file_bounded(from: &Path, to: &Path) -> Result<Vec<u8>, ExtError> {
     let data = read_bounded(from, from)?;

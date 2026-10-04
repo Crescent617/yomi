@@ -296,8 +296,8 @@ async fn create_session_with_model(
     id
 }
 
-/// settings 卡 cfg_ctx 回调链路：按钮值 → handle_card_action →
-/// set_chat_context_window → chat session（含 thread 扇出）；Reset all
+/// settings 卡 `cfg_ctx` 回调链路：按钮值 → `handle_card_action` →
+/// `set_chat_context_window` → chat session（含 thread 扇出）；Reset all
 /// 联动清 ctx 覆盖。
 #[tokio::test]
 async fn settings_card_cfg_ctx_callback_and_reset_all() {
@@ -2182,7 +2182,7 @@ async fn bind_command_move_and_bind_back() {
 // ── Chat-level command scope (reply_in_thread) ──────────────────────
 
 /// Test rig for chat-level command tests: a Feishu-shaped config with
-/// reply_in_thread on, plus a `call` driving the handler directly.
+/// `reply_in_thread` on, plus a `call` driving the handler directly.
 struct ChatLevelRig {
     store: Arc<dyn ChannelStore>,
     kernel: Arc<Kernel>,
@@ -9363,7 +9363,7 @@ async fn passive_receipt_skips_commands() {
     assert!(!obs.has_mid_run_posts(&sid));
 }
 
-/// In-thread message (reply_in_thread): the receipt lands on the
+/// In-thread message (`reply_in_thread`): the receipt lands on the
 /// thread's session via the root key.
 #[tokio::test]
 async fn passive_receipt_records_in_thread() {
@@ -10582,7 +10582,7 @@ fn session_time_bucket_boundaries() {
     assert_eq!(session_time_bucket(at(7 * 24 * 3600), now), 3);
 }
 
-/// Title sanitization for `/sessions`: lark_md metacharacters are
+/// Title sanitization for `/sessions`: `lark_md` metacharacters are
 /// full-width'd (a crafted title must not break the card markup or
 /// inject a foreign link), empties fall back, 30-char cap applies.
 #[test]
@@ -11213,8 +11213,8 @@ fn bg_command_parse() {
     ));
 }
 
-/// 卡片回调/RPC 路径与 dispatch 循环并发同 key：get_or_create_session 的
-/// 键锁保证只有一个创建者（reviewer 实锤：cfg_model/ChannelNewThread
+/// 卡片回调/RPC 路径与 dispatch 循环并发同 key：`get_or_create_session` 的
+/// 键锁保证只有一个创建者（reviewer 实锤：`cfg_model/ChannelNewThread`
 /// 在循环外并发可达）。
 #[tokio::test]
 async fn get_or_create_session_concurrent_same_key_single_creator() {

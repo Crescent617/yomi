@@ -376,8 +376,7 @@ async fn test_set_channel_watch_without_channels() {
     let err = client
         .set_channel_watch(None, None, "oc_x".to_string(), None)
         .await
-        .err()
-        .expect("no channels configured must error");
+        .expect_err("no channels configured must error");
     assert!(
         err.to_string().contains("no channels are running"),
         "unexpected error: {err}"

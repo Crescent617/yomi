@@ -48,11 +48,7 @@ fn test_pool(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dispatch_same_key_fifo_and_state_threaded() {
     let log: Log = Arc::new(StdMutex::new(Vec::new()));
-    let pool = test_pool(
-        log.clone(),
-        Duration::from_secs(60),
-        Duration::from_secs(60),
-    );
+    let pool = test_pool(log.clone(), Duration::from_mins(1), Duration::from_mins(1));
     for job in 0..20u32 {
         pool.dispatch(&"a", job);
     }
@@ -130,9 +126,10 @@ async fn handler_panic_is_swallowed_and_worker_survives() {
             let log = log.clone();
             let panic_once = panic_once.clone();
             Box::pin(async move {
-                if panic_once.fetch_add(1, Ordering::SeqCst) == 0 {
-                    panic!("simulated handler bug");
-                }
+                assert!(
+                    panic_once.fetch_add(1, Ordering::SeqCst) != 0,
+                    "simulated handler bug"
+                );
                 state += 1;
                 log.lock().expect("log").push((job, state));
                 state
@@ -141,8 +138,8 @@ async fn handler_panic_is_swallowed_and_worker_survives() {
     };
     let pool = KeyedPool::new(
         64,
-        Duration::from_secs(60),
-        Duration::from_secs(60),
+        Duration::from_mins(1),
+        Duration::from_mins(1),
         false,
         CancellationToken::new(),
         handler,
@@ -176,11 +173,7 @@ async fn closed_replacement_redelivers_after_abort() {
     // Closed 换代 Ok 臂（复审 should-fix）：abort 强杀 worker →
     // dispatch 走 Closed 原地换代并重投——新 worker 正常处理。
     let log: Log = Arc::new(StdMutex::new(Vec::new()));
-    let pool = test_pool(
-        log.clone(),
-        Duration::from_secs(60),
-        Duration::from_secs(60),
-    );
+    let pool = test_pool(log.clone(), Duration::from_mins(1), Duration::from_mins(1));
     pool.dispatch(&"a", 1);
     assert!(spin_until(Duration::from_secs(2), || !log
         .lock()
@@ -215,8 +208,8 @@ async fn dispatch_after_cancel_is_inert() {
     let token = CancellationToken::new();
     let pool = KeyedPool::new(
         64,
-        Duration::from_secs(60),
-        Duration::from_secs(60),
+        Duration::from_mins(1),
+        Duration::from_mins(1),
         false,
         token.clone(),
         recording_handler(log.clone()),
@@ -282,8 +275,8 @@ async fn dispatch_during_drain_does_not_respawn() {
     let token = CancellationToken::new();
     let pool = KeyedPool::new(
         64,
-        Duration::from_secs(60),
-        Duration::from_secs(60),
+        Duration::from_mins(1),
+        Duration::from_mins(1),
         true,
         token.clone(),
         dual_gated_handler(log.clone(), entered.clone(), gates.clone()),
@@ -321,8 +314,8 @@ async fn dispatch_after_cancel_vacant_does_not_spawn() {
     let token = CancellationToken::new();
     let pool = KeyedPool::new(
         64,
-        Duration::from_secs(60),
-        Duration::from_secs(60),
+        Duration::from_mins(1),
+        Duration::from_mins(1),
         true,
         token.clone(),
         recording_handler(log.clone()),
@@ -344,8 +337,8 @@ async fn full_queue_rolls_back_accounting() {
     let gate = Arc::new(Notify::new());
     let pool = KeyedPool::new(
         1,
-        Duration::from_secs(60),
-        Duration::from_secs(60),
+        Duration::from_mins(1),
+        Duration::from_mins(1),
         false,
         CancellationToken::new(),
         gated_handler(log.clone(), entered.clone(), gate.clone()),
@@ -375,8 +368,8 @@ async fn wait_all_idle_covers_every_key() {
     let gate = Arc::new(Notify::new());
     let pool = KeyedPool::new(
         64,
-        Duration::from_secs(60),
-        Duration::from_secs(60),
+        Duration::from_mins(1),
+        Duration::from_mins(1),
         false,
         CancellationToken::new(),
         gated_handler(log.clone(), entered.clone(), gate.clone()),
@@ -415,8 +408,8 @@ async fn wait_idle_waits_for_inflight_handler() {
     };
     let pool = KeyedPool::new(
         64,
-        Duration::from_secs(60),
-        Duration::from_secs(60),
+        Duration::from_mins(1),
+        Duration::from_mins(1),
         false,
         CancellationToken::new(),
         handler,
@@ -453,7 +446,7 @@ async fn tick_hook_fires_when_queue_empty() {
     let pool = KeyedPool::new(
         64,
         Duration::from_millis(20),
-        Duration::from_secs(60),
+        Duration::from_mins(1),
         false,
         CancellationToken::new(),
         recording_handler(log),
@@ -500,11 +493,7 @@ async fn tick_hook_hold_defers_expiry() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn different_keys_get_independent_workers() {
     let log: Log = Arc::new(StdMutex::new(Vec::new()));
-    let pool = test_pool(
-        log.clone(),
-        Duration::from_secs(60),
-        Duration::from_secs(60),
-    );
+    let pool = test_pool(log.clone(), Duration::from_mins(1), Duration::from_mins(1));
     pool.dispatch(&"a", 1);
     pool.dispatch(&"b", 2);
     pool.dispatch(&"c", 3);
@@ -551,8 +540,8 @@ async fn drain_on_cancel_finishes_queued_jobs() {
     let token = CancellationToken::new();
     let pool = KeyedPool::new(
         64,
-        Duration::from_secs(60),
-        Duration::from_secs(60),
+        Duration::from_mins(1),
+        Duration::from_mins(1),
         true,
         token.clone(),
         gated_handler(log.clone(), entered.clone(), gate.clone()),
@@ -587,8 +576,8 @@ async fn no_drain_cancel_drops_queued_jobs() {
     let token = CancellationToken::new();
     let pool = KeyedPool::new(
         64,
-        Duration::from_secs(60),
-        Duration::from_secs(60),
+        Duration::from_mins(1),
+        Duration::from_mins(1),
         false,
         token.clone(),
         gated_handler(log.clone(), entered.clone(), gate.clone()),

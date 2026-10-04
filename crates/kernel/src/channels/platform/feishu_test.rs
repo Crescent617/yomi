@@ -1489,7 +1489,7 @@ async fn unknown_event_without_text_is_ignored() {
 /// An `im.message.receive_v1` event for an interactive (card) message.
 /// `chat_type` + `mentions` drive the mention gate; the body itself is only
 /// the legacy placeholder — the real text is fetched from `om_card`.
-fn card_event(chat_type: &str, mentions: serde_json::Value) -> serde_json::Value {
+fn card_event(chat_type: &str, mentions: &serde_json::Value) -> serde_json::Value {
     json!({
         "header": { "event_type": "im.message.receive_v1" },
         "event": {
@@ -1514,7 +1514,7 @@ async fn p2p_card_event_fetches_body_and_forwards() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
 
     let msg_id = adapter
-        .parse_event_json(&card_event("p2p", json!([])), &tx)
+        .parse_event_json(&card_event("p2p", &json!([])), &tx)
         .await
         .unwrap();
 
@@ -1545,7 +1545,7 @@ async fn group_card_with_bot_mention_forwards() {
     let mentions = json!([{ "key": "@_user_1", "id": { "open_id": "ou_bot" } }]);
 
     let msg_id = adapter
-        .parse_event_json(&card_event("group", mentions), &tx)
+        .parse_event_json(&card_event("group", &mentions), &tx)
         .await
         .unwrap();
 
@@ -1564,7 +1564,7 @@ async fn group_card_without_bot_mention_is_ignored() {
     let mentions = json!([{ "key": "@_user_1", "id": { "open_id": "ou_other" } }]);
 
     let msg_id = adapter
-        .parse_event_json(&card_event("group", mentions), &tx)
+        .parse_event_json(&card_event("group", &mentions), &tx)
         .await
         .unwrap();
 

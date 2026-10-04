@@ -212,7 +212,7 @@ fn test_duplicate_tool_response_removed() {
     assert_eq!(buffer.messages()[1].role, Role::Tool);
 }
 
-/// 空 completion 毒化自愈：无内容、无 tool_calls 的 assistant 消息（模型
+/// 空 completion 毒化自愈：无内容、无 `tool_calls` 的 assistant 消息（模型
 /// 抽风落盘的毒）在 sanitize 时被摘除，其余消息原样保留——已中毒 session
 /// 升级后下一轮自动康复，不必手工删 jsonl。
 #[test]
@@ -260,7 +260,7 @@ fn test_nonempty_assistant_without_tools_kept() {
     assert_eq!(buffer.messages()[1].role, Role::Assistant);
 }
 
-/// 边界 pin：仅含 thinking 的 assistant（content 非空、无 tool_calls）不是
+/// 边界 pin：仅含 thinking 的 assistant（content 非空、无 `tool_calls`）不是
 /// 毒，sanitize 必须保留——防止未来"清理空消息"类重构把规则放宽误伤。
 #[test]
 fn test_thinking_only_assistant_kept() {
@@ -471,7 +471,7 @@ fn close_dangling_multiple_batches_each_closed() {
         create_user_message("u"),
         create_assistant_with_tools(vec!["b1", "b2"]),
     ]);
-    let (out, synthesized) = MessageBuffer::close_dangling_tool_batches(&history, 1000);
+    let (_out, synthesized) = MessageBuffer::close_dangling_tool_batches(&history, 1000);
     assert_eq!(synthesized.len(), 3);
     let ids: Vec<_> = synthesized
         .iter()

@@ -1,4 +1,4 @@
-//! 91 会话洪峰压测（2026-08-21 EventBus 丢件事故的回归门）。
+//! 91 会话洪峰压测（2026-08-21 `EventBus` 丢件事故的回归门）。
 //!
 //! 现场还原：Mock LLM（本地 TCP SSE 假端点，秒回罐装文本）+ 记录型
 //! MockAdapter（每条 send 注入飞书 RTT 级延迟——当年事故的核心变量
@@ -32,7 +32,7 @@ const MARKER: &str = "洪峰回复已送达";
 /// 全量投递的等待上限（秒）。
 const DEADLINE_SECS: u64 = 90;
 
-/// Mock LLM：接受任意 POST，回一条罐装 OpenAI 兼容 SSE 流（两个文本
+/// Mock LLM：接受任意 POST，回一条罐装 `OpenAI` 兼容 SSE 流（两个文本
 /// chunk + finish(usage) + [DONE]）。写入前注入 0-30ms 抖动模拟
 /// provider 延迟差异。返回监听地址。
 async fn mock_llm_server() -> std::net::SocketAddr {
@@ -72,11 +72,13 @@ async fn mock_llm_server() -> std::net::SocketAddr {
                     buf.extend_from_slice(&chunk[..n]);
                 }
                 // provider 延迟抖动 0-30ms。
-                let jitter = (std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .subsec_nanos()
-                    % 31) as u64;
+                let jitter = u64::from(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .subsec_nanos()
+                        % 31,
+                );
                 tokio::time::sleep(std::time::Duration::from_millis(jitter)).await;
 
                 let frame = |delta: &str, finish: &str| {
@@ -103,7 +105,7 @@ async fn mock_llm_server() -> std::net::SocketAddr {
     addr
 }
 
-/// 记录型 adapter：每条 send_message 注入 5-15ms 延迟（飞书 API RTT
+/// 记录型 adapter：每条 `send_message` 注入 5-15ms 延迟（飞书 API RTT
 /// 量级——事故的核心变量），文本入向量供断言。
 struct StressAdapter {
     sent: tokio::sync::Mutex<Vec<String>>,
@@ -260,9 +262,8 @@ async fn flood_91_sessions_all_delivered() {
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "only {delivered}/{SESSIONS} replies delivered within {DEADLINE_SECS_SECS}s — \
+            "only {delivered}/{SESSIONS} replies delivered within {DEADLINE_SECS}s — \
              the flood lost replies again",
-            DEADLINE_SECS_SECS = DEADLINE_SECS,
         );
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
@@ -335,7 +336,7 @@ async fn flood_91_sessions_all_delivered() {
     eprintln!("stress result: {SESSIONS} sessions fully delivered in {elapsed:?}, bus drops = 0");
 }
 
-/// 确保 `InputBus` 引用不被 dead_code 误报（压测路径经 kernel 内部使用）。
+/// 确保 `InputBus` 引用不被 `dead_code` 误报（压测路径经 kernel 内部使用）。
 #[allow(dead_code)]
 fn _type_pin(_: &Arc<InputBus>) {}
 

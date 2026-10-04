@@ -918,9 +918,9 @@ impl Conductor {
     /// 组装一份"若现在 spawn 主会话会得到"的完整 system prompt——
     /// `preview_system_prompt` RPC 的实现，供调试与装扩展后验收。
     /// 与 spawn 同路径：compose 基础段（无 channel/watch/模板——预览
-    /// 未路由主会话的默认形态）→ SystemPromptBuilder 拼项目 memory +
-    /// skills 表 + 扩展 snippets。working_dir 缺省 daemon 默认
-    /// workspace；session_id 仅影响 rules 段与 builder 的会话槽位。
+    /// 未路由主会话的默认形态）→ `SystemPromptBuilder` 拼项目 memory +
+    /// skills 表 + 扩展 snippets。`working_dir` 缺省 daemon 默认
+    /// workspace；`session_id` 仅影响 rules 段与 builder 的会话槽位。
     pub async fn preview_system_prompt(
         &self,
         working_dir: Option<std::path::PathBuf>,

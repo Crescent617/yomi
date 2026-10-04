@@ -363,10 +363,10 @@ fn effective_attachment_base(
     data_dir: &std::path::Path,
     base_dir: Option<String>,
 ) -> std::path::PathBuf {
-    base_dir
-        .filter(|d| !d.is_empty())
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| kernel::utils::path::session_workspace_dir(data_dir, None))
+    base_dir.filter(|d| !d.is_empty()).map_or_else(
+        || kernel::utils::path::session_workspace_dir(data_dir, None),
+        std::path::PathBuf::from,
+    )
 }
 
 /// Resolve a declared attachment path against the session workspace
@@ -407,8 +407,7 @@ pub async fn open_attachment(
             let data_dir = state
                 .data_dir
                 .read()
-                .map(|g| g.clone())
-                .unwrap_or_else(|e| e.into_inner().clone());
+                .map_or_else(|e| e.into_inner().clone(), |g| g.clone());
             let base = effective_attachment_base(&data_dir, base_dir);
             resolve_attachment_arg(&base, &path).await?
         }

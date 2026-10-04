@@ -113,10 +113,10 @@ fn pending_key(kernel: &Kernel, channel_name: &str, chat_id: &str) -> String {
 /// answer publicly). A missing row means watch is off — drop, never
 /// resurrect. A dangling row (alive, session gone) is healed by the
 /// locked get-or-create in the same critical section. (Residual
-/// micro-window, accepted: delete_session/gc takes no route lock, so a
+/// micro-window, accepted: `delete_session/gc` takes no route lock, so a
 /// row+session delete can still land between the re-read and the
 /// locked create — the create then resurrects a just-ended watch row.
-/// Same window existed pre-refactor; locking delete_session isn't
+/// Same window existed pre-refactor; locking `delete_session` isn't
 /// worth it.)
 pub(crate) async fn mirror_message(
     channel_name: &str,

@@ -165,8 +165,9 @@ impl SessionMessage {
     /// Concatenate all text content from the message blocks.
     pub fn text_content(&self) -> String {
         match self {
-            SessionMessage::User(msg) | SessionMessage::Steer(msg) => msg.text_content(),
-            SessionMessage::Interrupted(msg) => msg.text_content(),
+            SessionMessage::User(msg)
+            | SessionMessage::Steer(msg)
+            | SessionMessage::Interrupted(msg) => msg.text_content(),
             SessionMessage::Assistant(msg) => msg.text_content(),
             SessionMessage::Tool(msg) => msg.text_content(),
         }

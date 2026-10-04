@@ -1409,6 +1409,8 @@ pub(crate) fn fmt_elapsed(d: Duration) -> String {
 
 /// Format a token count compactly: `999` → `999`, `12_345` → `12.3k`,
 /// `2_345_678` → `2.3m` (prompt totals climb fast on long runs).
+// 仅显示用格式化：token 计数远小于 2^52，u64→f64 精度损失可忽略。
+#[allow(clippy::cast_precision_loss)]
 pub(crate) fn fmt_tokens(tokens: u64) -> String {
     if tokens < 1_000 {
         tokens.to_string()

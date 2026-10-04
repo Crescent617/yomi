@@ -540,7 +540,7 @@ pub(crate) async fn handle_incoming_message(
             // breaks /info.
             let top_level = msg.thread_id.is_none() && msg.root_id.is_none();
             let watch_line = if top_level {
-                crate::channels::hub::watch::get_channel_watch_by_name(&store, channel_name, &chat_id)
+                crate::channels::hub::watch::get_channel_watch_by_name(store, channel_name, &chat_id)
                     .await
                     .ok()
                     .and_then(|st| format_watch_line(&st))
@@ -608,7 +608,7 @@ pub(crate) async fn handle_incoming_message(
             let key = command_session_key(&msg, rit, &chat_id, &mapping_key);
             let mut sid = store.find_mapping(channel_name, key).await?;
             if let Ok(status) = crate::channels::hub::watch::get_channel_watch_by_name(
-                &store,
+                store,
                 channel_name,
                 &chat_id,
             )
@@ -810,14 +810,14 @@ pub(crate) async fn handle_incoming_message(
 /// Deferred file-attachment download for the triggering message's own
 /// blocks (post-gate, like images): `[file: … (lark_file_key: …)]`
 /// placeholders rewrite to local `(saved: …)` paths — failures keep
-/// the bare placeholder, the message header carries the msg_id
+/// the bare placeholder, the message header carries the `msg_id`
 /// (design doc docs/design/file-attachment-download.md).
 async fn fetch_trigger_files(
     kernel: &Kernel,
     channel_name: &str,
     adapter: &Arc<dyn PlatformAdapter>,
     msg_id: &str,
-    content: &mut Vec<ContentBlock>,
+    content: &mut [ContentBlock],
 ) {
     let dest = files_root(&kernel.data_dir().await, channel_name).join(msg_id);
     fetch_message_files(adapter, msg_id, content, &dest).await;
@@ -1187,6 +1187,8 @@ pub(crate) const SESSIONS_SCAN_LIMIT: usize = 50;
 /// through the list (`/sessions 20` skips the first 20 matches).
 /// Card-capable platforms get a fancy card (reply is `None`); everyone
 /// else gets a plain text list.
+// 参数均为必要的异构引用，打包成结构体只会增加间接层；沿用 handle_bind 的抑制先例。
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_sessions_command(
     channel_name: &str,
     config: &ChannelConfig,
@@ -1357,7 +1359,7 @@ pub(crate) fn session_link_title(info: &crate::storage::session::SessionInfo) ->
 /// user-influenceable (first message, `/thread <topic>`, LLM titles,
 /// rename API), and raw metacharacters would break the markup or inject
 /// a foreign link. `<a href>` is the text-path markup and `[**..**](..)`
-/// the card-path one, so both angle brackets and lark_md metacharacters
+/// the card-path one, so both angle brackets and `lark_md` metacharacters
 /// are full-width'd. Empty → `(untitled)`; capped at 30 chars.
 pub(crate) fn sanitize_session_title(raw: &str) -> String {
     let title = raw.trim();

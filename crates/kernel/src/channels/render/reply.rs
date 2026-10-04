@@ -1114,25 +1114,24 @@ pub(crate) fn balance_fences(text: &str) -> std::borrow::Cow<'_, str> {
             continue;
         };
         match open {
-            Some((oc, olen)) => {
-                // Marker chars are ASCII, so `len` is also the byte
-                // index of the run's end. CommonMark closers allow
-                // only spaces/tabs after the run.
+            // Marker chars are ASCII, so `len` is also the byte
+            // index of the run's end. CommonMark closers allow
+            // only spaces/tabs after the run.
+            Some((oc, olen))
                 if c == oc
                     && len >= olen
                     && trimmed[len..]
                         .trim_matches(|ch| ch == ' ' || ch == '\t')
-                        .is_empty()
-                {
-                    open = None;
-                }
+                        .is_empty() =>
+            {
+                open = None;
             }
             // A backtick opener's info string may not contain a
             // backtick (CommonMark) — such a line is a paragraph,
             // not a fence (````bash echo `date``` style sloppy
             // markdown-about-markdown).
             None if c != '`' || !trimmed[len..].contains('`') => open = Some((c, len)),
-            None => {}
+            Some(_) | None => {}
         }
     }
     match open {

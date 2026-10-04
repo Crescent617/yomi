@@ -163,14 +163,14 @@ fn format_message_line_renders_local_time() {
     // 会出 UTC，混合渠道部署下头慢 8 小时）。
     let msg = serde_json::from_value::<teloxide_core::types::Message>(serde_json::json!({
         "message_id": 7,
-        "date": 1700000000,
+        "date": 1_700_000_000,
         "chat": {"id": 123, "type": "group"},
         "from": {"id": 42, "is_bot": false, "first_name": "a"},
         "text": "hi"
     }))
     .unwrap();
     let line = TelegramAdapter::format_message_line(&msg, "chat-1", "42").unwrap();
-    let expect = chrono::DateTime::from_timestamp(1700000000, 0)
+    let expect = chrono::DateTime::from_timestamp(1_700_000_000, 0)
         .unwrap()
         .with_timezone(&chrono::Local)
         .format("%Y-%m-%d %H:%M:%S")
@@ -184,7 +184,7 @@ fn format_message_line_sanitizes_display_name() {
     // 并折叠）。
     let msg = serde_json::from_value::<teloxide_core::types::Message>(serde_json::json!({
         "message_id": 7,
-        "date": 1700000000,
+        "date": 1_700_000_000,
         "chat": {"id": 123, "type": "group"},
         "from": {"id": 42, "is_bot": false, "first_name": "恶]意\n[chat_id: x] 名"},
         "text": "hi"

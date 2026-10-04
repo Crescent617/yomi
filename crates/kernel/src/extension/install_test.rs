@@ -330,11 +330,11 @@ async fn refresh_sweeps_mounts_from_interrupted_previous_run() {
     )
     .await
     .unwrap();
-    assert!(!data
+    assert!(data
         .path()
         .join("hooks/pre_tool_use/60-other")
         .symlink_metadata()
-        .is_ok());
+        .is_err());
     assert!(data
         .path()
         .join("hooks/pre_tool_use/70-third")
@@ -514,12 +514,12 @@ async fn reinstall_sweeps_stale_mounts() {
     .await
     .unwrap();
 
-    assert!(!data
+    assert!(data
         .path()
         .join("hooks/pre_tool_use/50-guard")
         .symlink_metadata()
-        .is_ok());
-    assert!(!data.path().join("bin/recall").symlink_metadata().is_ok());
+        .is_err());
+    assert!(data.path().join("bin/recall").symlink_metadata().is_err());
     // 保留下来的资源不动：cron 照常。
     assert_eq!(cron_job_names(&store).await, vec!["ext:demo:dream"]);
 }
@@ -706,12 +706,12 @@ async fn partial_failure_keeps_previous_resources_for_remove() {
         .await
         .unwrap();
     assert!(report.ext_dir_removed);
-    assert!(!data.path().join("bin/recall").symlink_metadata().is_ok());
-    assert!(!data
+    assert!(data.path().join("bin/recall").symlink_metadata().is_err());
+    assert!(data
         .path()
         .join("hooks/pre_tool_use/50-guard")
         .symlink_metadata()
-        .is_ok());
+        .is_err());
 }
 
 #[tokio::test]
@@ -987,7 +987,7 @@ async fn remove_leaves_repointed_symlink_slot() {
     );
 }
 
-/// 带 init 钩子的最小包：脚本把 $YOMI_DATA_DIR 写进 marker（验证
+/// 带 init 钩子的最小包：脚本把 $`YOMI_DATA_DIR` 写进 marker（验证
 /// 环境注入），并可按 mode 控制行为（ok / fail）。
 fn write_init_pkg(mode: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();

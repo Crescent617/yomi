@@ -1026,8 +1026,9 @@ impl Kernel {
         let model_default = self
             .models
             .get(&model_key)
-            .map(|m| m.context_window)
-            .unwrap_or(crate::compactor::DEFAULT_CONTEXT_WINDOW);
+            .map_or(crate::compactor::DEFAULT_CONTEXT_WINDOW, |m| {
+                m.context_window
+            });
         let override_ = info
             .settings
             .and_then(|s| s.context_window)
@@ -1615,7 +1616,7 @@ impl Kernel {
 
     /// Ephemeral side question (`/btw`): route a `Btw` input to the session's
     /// agent; the answer streams back as `btw` events carrying the returned
-    /// request_id. Validation mirrors the CLI/GUI call sites (unknown
+    /// `request_id`. Validation mirrors the CLI/GUI call sites (unknown
     /// sessions are rejected there, same as `send_message`).
     pub async fn btw(
         &self,

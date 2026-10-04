@@ -322,7 +322,7 @@ async fn unknown_template_errors_with_available_list() {
 
 /// 事件流捕获最终答案（2026-08-21 e2e 实锤的既有 bug：Stopped 后读
 /// store 与 conductor 异步落盘竞态，sync 首轮返回偶发为空）。答案
-/// 必须来自 MessageAdded 事件本体——本用例不配置 message_store，
+/// 必须来自 `MessageAdded` 事件本体——本用例不配置 `message_store`，
 /// store 兜底路径不存在；同时钉住 claim 插入路径。
 #[tokio::test]
 async fn sync_result_comes_from_event_stream_not_store() {

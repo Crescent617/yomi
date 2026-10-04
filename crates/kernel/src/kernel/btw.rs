@@ -230,7 +230,7 @@ impl BtwTracker {
     }
 
     /// 旁路流自然结束（runner task 出口调用）：与 abort 抢删句柄——
-    /// 双方的句柄删除都是 DashMap 单条原子操作，一条句柄只会被一
+    /// 双方的句柄删除都是 `DashMap` 单条原子操作，一条句柄只会被一
     /// 个路径删掉，Done 恰好一次是结构保证而非时序运气。
     pub(crate) fn complete(&self, sid: &SessionId, request_id: &BtwId, reason: BtwEndReason) {
         if self

@@ -104,7 +104,21 @@ pub(crate) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
             "content": format!("<font color='grey'>… and {overflow} more</font>"),
         }));
     }
-    if !items.is_empty() {
+    if items.is_empty() {
+        elements.push(serde_json::json!({
+            "tag": "column_set",
+            "columns": [{
+                "tag": "column", "width": "weighted", "weight": 1,
+                "elements": [{
+                    "tag": "button",
+                    "text": { "tag": "plain_text", "content": "🔄 Refresh" },
+                    "type": "default",
+                    "size": "small",
+                    "behaviors": [{ "type": "callback", "value": { "action": "mb_refresh", "sid": sid.0 } }],
+                }],
+            }],
+        }));
+    } else {
         elements.push(serde_json::json!({
             "tag": "column_set",
             "columns": [
@@ -129,20 +143,6 @@ pub(crate) fn pending_card(sid: &SessionId, snapshot: &MailboxSnapshot) -> Strin
                     }],
                 },
             ],
-        }));
-    } else {
-        elements.push(serde_json::json!({
-            "tag": "column_set",
-            "columns": [{
-                "tag": "column", "width": "weighted", "weight": 1,
-                "elements": [{
-                    "tag": "button",
-                    "text": { "tag": "plain_text", "content": "🔄 Refresh" },
-                    "type": "default",
-                    "size": "small",
-                    "behaviors": [{ "type": "callback", "value": { "action": "mb_refresh", "sid": sid.0 } }],
-                }],
-            }],
         }));
     }
     info_card_envelope(
@@ -177,7 +177,7 @@ pub(crate) fn pending_text(snapshot: &MailboxSnapshot) -> String {
 
 /// 按钮回调（`mb_retract` / `mb_clear` / `mb_refresh`）：执行后原地
 /// 刷新这张卡片（read-modify-write 后取一次快照——与并发事件交错时
-/// 可能不是最新，但 mailbox_changed 事件链保证各端最终收敛）。卡片
+/// 可能不是最新，但 `mailbox_changed` 事件链保证各端最终收敛）。卡片
 /// 不跟踪 mailbox 变化自动刷新：多卡片并存时注册表难维护，需要最新
 /// 状态点 🔄 或重发 `/mailbox`。
 pub(crate) async fn handle_card_action(

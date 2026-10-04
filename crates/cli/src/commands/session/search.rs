@@ -173,11 +173,9 @@ fn harvest_strs(v: &serde_json::Value, verbose: bool, buf: &mut String) {
     // 单字符串上限：base64 图片等大负载不进索引（防护意图保留）。
     const MAX_STR: usize = 64 * 1024;
     match v {
-        serde_json::Value::String(s) => {
-            if s.len() <= MAX_STR {
-                buf.push_str(s);
-                buf.push('\n');
-            }
+        serde_json::Value::String(s) if s.len() <= MAX_STR => {
+            buf.push_str(s);
+            buf.push('\n');
         }
         serde_json::Value::Array(items) => {
             for item in items {
@@ -398,9 +396,9 @@ pub async fn run(
     }
 
     for r in &results {
-        let (title, age) = meta
-            .get(&r.session_id)
-            .map(|(t, ts)| {
+        let (title, age) = meta.get(&r.session_id).map_or_else(
+            || ("(unknown session)".to_string(), "?".to_string()),
+            |(t, ts)| {
                 let title = t.clone().unwrap_or_else(|| "(no title)".to_string());
                 let secs = (chrono::Utc::now() - *ts).num_seconds().max(0);
                 let age = if secs < 3600 {
@@ -411,8 +409,8 @@ pub async fn run(
                     format!("{}d", secs / 86400)
                 };
                 (title, age)
-            })
-            .unwrap_or_else(|| ("(unknown session)".to_string(), "?".to_string()));
+            },
+        );
         let title: String = title.chars().take(60).collect();
         println!(
             "{}  {:<6} {:<60} ({} match{})",

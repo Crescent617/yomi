@@ -37,7 +37,7 @@ pub fn expand_tilde(path: impl AsRef<str>) -> PathBuf {
 ///
 /// 宿主两侧都调：GUI（in-process daemon 共享本进程 env，时序在
 /// logging 之后、spawn 任何子进程之前）与 CLI daemon 入口
-/// （init_logging 之后）。dev 模式 `current_exe` 在
+/// （`init_logging` 之后）。dev 模式 `current_exe` 在
 /// target/{debug,release}，同目录的 cargo 构建产物里通常也有
 /// yomi，行为一致。
 pub fn prepend_exe_dir_to_path() {

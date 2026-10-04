@@ -40,7 +40,7 @@ pub struct SessionInfo {
 /// 设计见 docs/design/session-context-window.md。
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SessionOverrides {
-    /// 覆盖模型的 context_window（压缩触发点、provider 输入自检、ctx%
+    /// 覆盖模型的 `context_window`（压缩触发点、provider 输入自检、ctx%
     /// 展示）；`None` = 跟随模型配置。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u32>,
@@ -63,8 +63,8 @@ impl SessionOverrides {
     }
 
     /// 从存储字符串解析；NULL/非法 JSON 一律视为无覆盖。非法值只可能
-    /// 来自手工改库——写侧（json_valid 兜底）下次写入即自愈，这里只
-    /// debug 记录（resolve_model 每 turn 读，warn 会刷屏）。
+    /// 来自手工改库——写侧（`json_valid` 兜底）下次写入即自愈，这里只
+    /// debug 记录（`resolve_model` 每 turn 读，warn 会刷屏）。
     pub fn from_storage(raw: Option<&str>) -> Option<Self> {
         let raw = raw?;
         match serde_json::from_str::<Self>(raw) {

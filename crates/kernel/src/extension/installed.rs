@@ -109,7 +109,7 @@ pub fn lockfile_path(data_dir: &Path) -> PathBuf {
 
 /// 读注册表。文件缺席或损坏 → 空表（损坏 warn 留痕：等价于全部
 /// foreign，目录仍可见，总比注册表消失好）。供**只读展示**路径
-/// （list/health）；写路径用 read_lockfile_strict。
+/// （list/health）；写路径用 `read_lockfile_strict`。
 pub fn read_lockfile(data_dir: &Path) -> ExtLockfile {
     let path = lockfile_path(data_dir);
     let Ok(raw) = std::fs::read_to_string(&path) else {

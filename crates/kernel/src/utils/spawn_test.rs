@@ -111,9 +111,10 @@ async fn timeout_kills_process_group() {
         if last_change.elapsed() > Duration::from_millis(1500) {
             return; // 心跳停摆：组杀到达后裔。
         }
-        if std::time::Instant::now() > deadline {
-            panic!("descendant survived group kill (heartbeat still updating)");
-        }
+        assert!(
+            std::time::Instant::now() <= deadline,
+            "descendant survived group kill (heartbeat still updating)"
+        );
     }
 }
 
@@ -179,7 +180,7 @@ async fn drain_grace_expiry_keeps_partial_capture() {
     let script = sh_script(&dir, "orphan", "echo hello\nsleep 30 &\n");
     let mut cmd = tokio::process::Command::new(&script);
     let begin = std::time::Instant::now();
-    let c = spawn_captured(&mut cmd, None, Duration::from_secs(60), None)
+    let c = spawn_captured(&mut cmd, None, Duration::from_mins(1), None)
         .await
         .unwrap();
     assert_eq!(c.exit_code, Some(0));
@@ -209,12 +210,11 @@ async fn flood_capture_keeps_head_and_tail() {
     assert_eq!(c.exit_code, Some(0));
     let out = String::from_utf8_lossy(&c.stdout);
     assert!(c.stdout.len() <= 1000, "captured {} bytes", c.stdout.len());
-    assert!(out.starts_with("line-1\n"), "head lost: {:.50}", out);
-    assert!(out.ends_with("line-5000\n"), "tail lost: {:.50}", out);
+    assert!(out.starts_with("line-1\n"), "head lost: {out:.50}");
+    assert!(out.ends_with("line-5000\n"), "tail lost: {out:.50}");
     assert!(
         !out.contains("line-2500"),
-        "middle should be dropped: {:.100}",
-        out
+        "middle should be dropped: {out:.100}"
     );
     assert!(c.log_files.is_empty(), "no overflow log configured");
 }

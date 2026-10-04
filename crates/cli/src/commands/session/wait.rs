@@ -43,7 +43,7 @@ async fn probe(kernel: &kernel::client::RemoteKernel, sid: &SessionId) -> Result
     })
 }
 
-/// 判定"会话已消失"（被 delete_session/gc 删除）与瞬时故障区分：
+/// 判定"会话已消失"（被 `delete_session/gc` 删除）与瞬时故障区分：
 /// 类型化 downcast 为主，wire 错误文本前缀兜底。
 fn is_session_gone(e: &anyhow::Error) -> bool {
     e.chain().any(|cause| {

@@ -176,7 +176,7 @@ async fn abort_emits_done_exactly_once_for_live_handle() {
     let mut rx = bus.subscribe(sid.clone());
     let tracker = BtwTracker::new(bus);
     let running = tokio::spawn(async {
-        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        tokio::time::sleep(std::time::Duration::from_mins(1)).await;
     });
     tracker.register(sid.clone(), BtwId::new(), running.abort_handle());
 
@@ -235,7 +235,7 @@ async fn done_exactly_once_complete_wins_then_abort_noop() {
     let tracker = BtwTracker::new(bus);
     let rid = BtwId::new();
     let running = tokio::spawn(async {
-        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        tokio::time::sleep(std::time::Duration::from_mins(1)).await;
     });
     tracker.register(sid.clone(), rid.clone(), running.abort_handle());
 
@@ -267,7 +267,7 @@ async fn done_exactly_once_abort_wins_then_complete_noop() {
     let tracker = BtwTracker::new(bus);
     let rid = BtwId::new();
     let running = tokio::spawn(async {
-        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        tokio::time::sleep(std::time::Duration::from_mins(1)).await;
     });
     tracker.register(sid.clone(), rid.clone(), running.abort_handle());
 
@@ -315,7 +315,7 @@ struct FixedStreamProvider {
 
 #[async_trait::async_trait]
 impl Provider for FixedStreamProvider {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "fixed-stream"
     }
 

@@ -334,7 +334,7 @@ fn strip_attachment_tokens_removes_complete_tokens() {
 
 #[test]
 fn strip_attachment_tokens_keeps_unterminated_head() {
-    let text = format!("前文{}", ATTACHMENT_TOKEN_PREFIX);
+    let text = format!("前文{ATTACHMENT_TOKEN_PREFIX}");
     assert_eq!(strip_attachment_tokens(&text), text);
 }
 

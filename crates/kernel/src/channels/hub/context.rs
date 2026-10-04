@@ -824,7 +824,7 @@ pub(crate) async fn record_passive_receipt(
     // cost an API lookup for chatter the bot wasn't even addressed in).
     // The plain key resolves rit=on threads (key == root); for other
     // shapes a present `root_id` is a free database-only fallback.
-    let mapping_key = session_mapping_key(&msg, &msg.external_chat_id, rit);
+    let mapping_key = session_mapping_key(msg, &msg.external_chat_id, rit);
     // A top-level group message in reply_in_thread mode keys by its own
     // id — never mapped, never a mid-run post (it doesn't interleave
     // with any thread's run).

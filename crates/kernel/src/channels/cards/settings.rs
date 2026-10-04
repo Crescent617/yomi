@@ -258,7 +258,7 @@ fn select_row(
     label: &str,
     options: &[String],
     initial: usize,
-    callback_value: serde_json::Value,
+    callback_value: &serde_json::Value,
 ) -> serde_json::Value {
     let opts: Vec<serde_json::Value> = options
         .iter()
@@ -320,7 +320,7 @@ fn settings_card(scope: &Scope, state: &SettingsState) -> String {
         "Mention required",
         &tri_options(state.default_mention),
         tri_initial(state.mention_override),
-        set_row(scope, "mention"),
+        &set_row(scope, "mention"),
     )];
     // rit 是 chat-only，thread 卡不渲染。
     if !scope.thread {
@@ -329,7 +329,7 @@ fn settings_card(scope: &Scope, state: &SettingsState) -> String {
             "Reply in thread",
             &tri_options(state.default_rit),
             tri_initial(state.rit_override),
-            set_row(scope, "threads"),
+            &set_row(scope, "threads"),
         ));
     }
     // Model row: every configured key + the reset pseudo-option.
@@ -348,7 +348,7 @@ fn settings_card(scope: &Scope, state: &SettingsState) -> String {
         "Model",
         &model_options,
         model_initial,
-        scope.callback("cfg_model"),
+        &scope.callback("cfg_model"),
     ));
     // Context window row: presets keyed to the resolved model's
     // configured window — 25/50/75/100% + the reset pseudo-option.
@@ -356,6 +356,8 @@ fn settings_card(scope: &Scope, state: &SettingsState) -> String {
     // the THEN-current model default. A custom value set elsewhere
     // (TUI/GUI/CLI) shows as a `custom (Nk)` option so the visible
     // selection never lies (selecting it is a no-op).
+    // token 计数远小于 2^52，仅显示格式化，u64→f64 精度损失可忽略。
+    #[allow(clippy::cast_precision_loss)]
     let fmt_k = |t: u64| {
         if t % 1000 == 0 {
             format!("{}k", t / 1000)
@@ -397,7 +399,7 @@ fn settings_card(scope: &Scope, state: &SettingsState) -> String {
         "Context window",
         &ctx_labels,
         ctx_initial,
-        scope.callback("cfg_ctx"),
+        &scope.callback("cfg_ctx"),
     ));
     // Watch row: two-state, no `default` pseudo-option — the watched set
     // is the whole state (see `/watch`). Chat-scope groups only: the
@@ -415,7 +417,7 @@ fn settings_card(scope: &Scope, state: &SettingsState) -> String {
             &["on".to_string(), "off".to_string()],
             // off → index 1, on → index 0 (options are ["on", "off"]).
             usize::from(!state.watch_on),
-            scope.callback("cfg_watch"),
+            &scope.callback("cfg_watch"),
         ));
         if state.watch_on {
             elements.push(json!({
@@ -804,6 +806,8 @@ fn map_cfg_set(opt: &str) -> CfgSetOp {
 /// `cfg_model` mapping: `Some(Some(key))` switch, `Some(None)` reset
 /// (the `default (…)` pseudo-option), `None` no-op. Callers must not
 /// reach here on a `list_models` failure (handled upstream).
+// 三态语义如上所述，与调用点 match 一一对应；引入枚举只会多一层映射。
+#[allow(clippy::option_option)]
 fn map_cfg_model<'a>(models: &[String], opt: &'a str) -> Option<Option<&'a str>> {
     if opt.starts_with("default (") {
         Some(None)

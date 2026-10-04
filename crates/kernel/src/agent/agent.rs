@@ -478,7 +478,7 @@ impl Agent {
     /// Append a user-role interruption marker to the history (Claude Code
     /// 同款 `[Request interrupted by user]`): after an abort the model must
     /// not assume its last actions completed. The marker also trips the
-    /// has_user_after guard in `pending_tool_calls`, so an interrupted tool
+    /// `has_user_after` guard in `pending_tool_calls`, so an interrupted tool
     /// batch is never silently re-executed after a respawn. Calls aborted
     /// mid-batch additionally get a synthesized cancelled result persisted
     /// at the abort site (`tool_exec::run_parallel`), keeping the

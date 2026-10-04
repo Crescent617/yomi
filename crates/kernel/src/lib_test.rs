@@ -1,9 +1,11 @@
 use super::*;
 
 fn hermetic_config() -> Config {
-    let mut config = Config::default();
     // Keep the test hermetic: no skill folders from the host machine.
-    config.skill_folders = Some(vec![]);
+    let mut config = Config {
+        skill_folders: Some(vec![]),
+        ..Config::default()
+    };
     config.finalize();
     config
 }

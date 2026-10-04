@@ -19,7 +19,7 @@ use crate::types::{ContentBlock, SessionId};
 use crate::channels::hub_deliver::info_card_envelope;
 use crate::channels::{CardAction, PlatformAdapter};
 
-/// req_id → 已发问题卡（多问题时一题一张；关闭/回答时需要知道
+/// `req_id` → 已发问题卡（多问题时一题一张；关闭/回答时需要知道
 /// patch 哪几张、各自属于哪一问）。
 #[derive(Default)]
 pub(crate) struct AskCardRegistry {
@@ -89,7 +89,7 @@ impl AskCardRegistry {
         Self::default()
     }
 
-    /// 渲染并发送问题卡（每题一张），登记 req_id → 卡片引用。
+    /// 渲染并发送问题卡（每题一张），登记 `req_id` → 卡片引用。
     pub(crate) async fn send_question_cards(
         &self,
         adapter: &Arc<dyn PlatformAdapter>,

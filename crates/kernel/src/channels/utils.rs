@@ -32,7 +32,7 @@ pub(crate) fn map_outside_code_spans(text: &str, f: &mut dyn FnMut(&str, &mut St
 /// agent prompt's Mentions section) into native syntax via `render`.
 /// Fenced code blocks and inline code spans are left untouched so the
 /// agent can show the syntax literally. The id pattern is bounded
-/// (`{1,64}`) — feishu open_ids run ~36 chars, telegram ids are numeric —
+/// (`{1,64}`) — feishu `open_ids` run ~36 chars, telegram ids are numeric —
 /// so a runaway `<@...>` never matches.
 pub(crate) fn rewrite_mentions(text: &str, render: &dyn Fn(&str) -> String) -> String {
     map_outside_code_spans(text, &mut |segment, out| {

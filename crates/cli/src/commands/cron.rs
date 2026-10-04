@@ -86,86 +86,6 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::build_action;
-    use kernel::cron::CronAction;
-
-    #[test]
-    fn message_with_work_dir_fills_session_template() {
-        let action = build_action(
-            Some("hi".to_string()),
-            None,
-            None,
-            Some("/proj".to_string()),
-        )
-        .unwrap()
-        .unwrap();
-        let CronAction::SendMessage {
-            session_template, ..
-        } = action
-        else {
-            panic!("expected SendMessage");
-        };
-        let tpl = session_template.expect("template filled from --work-dir");
-        assert_eq!(tpl.working_dir.as_deref(), Some("/proj"));
-        // 权限等级留给 kernel 按 config 重算（下限 caution），CLI 不预设。
-        assert!(tpl.auto_approve_level.is_none());
-        assert!(tpl.project_id.is_none());
-    }
-
-    #[test]
-    fn message_without_work_dir_keeps_template_absent() {
-        let action = build_action(Some("hi".to_string()), None, None, None)
-            .unwrap()
-            .unwrap();
-        let CronAction::SendMessage {
-            session_template, ..
-        } = action
-        else {
-            panic!("expected SendMessage");
-        };
-        assert!(session_template.is_none());
-    }
-
-    #[test]
-    fn message_with_session_and_work_dir_is_rejected() {
-        // 绑定会话有自己的工作目录，--work-dir 无意义——显式报错而非静默忽略。
-        let err = build_action(
-            Some("hi".to_string()),
-            None,
-            Some("sess_1".to_string()),
-            Some("/proj".to_string()),
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("--work-dir"), "{err}");
-    }
-
-    #[test]
-    fn shell_work_dir_unchanged() {
-        let action = build_action(None, Some("ls".to_string()), None, Some("/x".to_string()))
-            .unwrap()
-            .unwrap();
-        let CronAction::Shell { working_dir, .. } = action else {
-            panic!("expected Shell");
-        };
-        assert_eq!(working_dir.as_deref(), Some("/x"));
-    }
-
-    #[test]
-    fn bare_work_dir_is_rejected() {
-        // update 只带 --work-dir 不得静默通过（恢复 clap 约束解除前的硬拒绝）。
-        let err = build_action(None, None, None, Some("/x".to_string())).unwrap_err();
-        assert!(err.to_string().contains("--work-dir"), "{err}");
-    }
-
-    #[test]
-    fn no_action_flags_means_keep_current() {
-        // update 不带 action 类 flag：None = 不动现有 action。
-        assert!(build_action(None, None, None, None).unwrap().is_none());
-    }
-}
-
 /// One-line action summary for the list table.
 fn action_summary(action: &CronAction) -> String {
     match action {
@@ -387,4 +307,84 @@ pub async fn trigger(_global: &GlobalArgs, job_id: String) -> Result<()> {
         .context("Failed to trigger cron job")?;
     println!("Cron job {job_id} triggered.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_action;
+    use kernel::cron::CronAction;
+
+    #[test]
+    fn message_with_work_dir_fills_session_template() {
+        let action = build_action(
+            Some("hi".to_string()),
+            None,
+            None,
+            Some("/proj".to_string()),
+        )
+        .unwrap()
+        .unwrap();
+        let CronAction::SendMessage {
+            session_template, ..
+        } = action
+        else {
+            panic!("expected SendMessage");
+        };
+        let tpl = session_template.expect("template filled from --work-dir");
+        assert_eq!(tpl.working_dir.as_deref(), Some("/proj"));
+        // 权限等级留给 kernel 按 config 重算（下限 caution），CLI 不预设。
+        assert!(tpl.auto_approve_level.is_none());
+        assert!(tpl.project_id.is_none());
+    }
+
+    #[test]
+    fn message_without_work_dir_keeps_template_absent() {
+        let action = build_action(Some("hi".to_string()), None, None, None)
+            .unwrap()
+            .unwrap();
+        let CronAction::SendMessage {
+            session_template, ..
+        } = action
+        else {
+            panic!("expected SendMessage");
+        };
+        assert!(session_template.is_none());
+    }
+
+    #[test]
+    fn message_with_session_and_work_dir_is_rejected() {
+        // 绑定会话有自己的工作目录，--work-dir 无意义——显式报错而非静默忽略。
+        let err = build_action(
+            Some("hi".to_string()),
+            None,
+            Some("sess_1".to_string()),
+            Some("/proj".to_string()),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("--work-dir"), "{err}");
+    }
+
+    #[test]
+    fn shell_work_dir_unchanged() {
+        let action = build_action(None, Some("ls".to_string()), None, Some("/x".to_string()))
+            .unwrap()
+            .unwrap();
+        let CronAction::Shell { working_dir, .. } = action else {
+            panic!("expected Shell");
+        };
+        assert_eq!(working_dir.as_deref(), Some("/x"));
+    }
+
+    #[test]
+    fn bare_work_dir_is_rejected() {
+        // update 只带 --work-dir 不得静默通过（恢复 clap 约束解除前的硬拒绝）。
+        let err = build_action(None, None, None, Some("/x".to_string())).unwrap_err();
+        assert!(err.to_string().contains("--work-dir"), "{err}");
+    }
+
+    #[test]
+    fn no_action_flags_means_keep_current() {
+        // update 不带 action 类 flag：None = 不动现有 action。
+        assert!(build_action(None, None, None, None).unwrap().is_none());
+    }
 }
