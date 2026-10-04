@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import {
     ArrowUp,
     Command,
@@ -25,6 +26,8 @@
   import { askBtw } from "../../btw.svelte";
   import { sanitizeControlPuaPaste } from "../../utils";
   import { open } from "@tauri-apps/plugin-dialog";
+  import { readFile } from "@tauri-apps/plugin-fs";
+  import { previewImage } from "../../image-preview.svelte";
 
   import ModelSelector from "./ModelSelector.svelte";
   import PermissionSelector from "./PermissionSelector.svelte";
@@ -251,7 +254,7 @@
   export function setContent(text: string) {
     content = text;
     clearInlineImages();
-    fileAttachments = [];
+    clearFileAttachments();
     clearQuotes();
     requestAnimationFrame(autoResize);
   }
@@ -268,11 +271,20 @@
     }
   }
 
+  /** Quotes + file-attachment suffix around the typed draft text. */
+  function composeOutgoingWithAttachments(baseText: string): string {
+    const fileSuffix =
+      fileAttachments.length > 0
+        ? "\n" + fileAttachments.map((p) => `[File: ${p}]`).join("\n")
+        : "";
+    return composeOutgoingText(quotes, baseText) + fileSuffix;
+  }
+
   async function queueInput() {
     if (isSending) return;
     const session = activeSession;
     if (!session || !content.trim()) return;
-    const text = composeOutgoingText(quotes, content.trim());
+    const text = composeOutgoingWithAttachments(content.trim());
     try {
       const queued = await enqueue(
         session.id,
@@ -290,7 +302,7 @@
       }
       content = "";
       clearInlineImages();
-      fileAttachments = [];
+      clearFileAttachments();
       clearQuotes();
       autoResize();
     } catch {
@@ -400,8 +412,7 @@
           break;
         case "/steer":
           {
-            const steerText = composeOutgoingText(
-              quotes,
+            const steerText = composeOutgoingWithAttachments(
               parts.slice(1).join(" ").trim(),
             );
             if (!steerText && inlineImages.length === 0) {
@@ -461,7 +472,10 @@
           break;
         default:
           // Unknown command — treat as normal message
-          await api.sendMessage(session_id, composeOutgoingText(quotes, text));
+          await api.sendMessage(
+            session_id,
+            composeOutgoingWithAttachments(text),
+          );
       }
       return true;
     } catch (e: unknown) {
@@ -488,7 +502,7 @@
         }
         content = "";
         autoResize();
-        fileAttachments = [];
+        clearFileAttachments();
         clearInlineImages();
         clearQuotes();
         return;
@@ -497,14 +511,9 @@
       content = "";
       autoResize();
 
-      // Append file attachments as suffix text
-      const fileSuffix =
-        fileAttachments.length > 0
-          ? "\n" + fileAttachments.map((p) => `[File: ${p}]`).join("\n")
-          : "";
-      const text = composeOutgoingText(quotes, baseText) + fileSuffix;
+      const text = composeOutgoingWithAttachments(baseText);
 
-      fileAttachments = [];
+      clearFileAttachments();
       clearQuotes();
 
       if (inlineImages.length > 0) {
@@ -612,6 +621,78 @@
   let fileAttachments = $state<string[]>([]);
   let isSending = $state(false);
 
+  // Image attachments get a local thumbnail preview: bytes are read
+  // straight from disk into an object URL. The file dialog picks files on
+  // this host, so a local read works in remote mode too (the daemon never
+  // sees the picker). Missing entry = render the plain text chip.
+  const IMAGE_MIME: Record<string, string> = {
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    gif: "image/gif",
+    webp: "image/webp",
+    svg: "image/svg+xml",
+    avif: "image/avif",
+    bmp: "image/bmp",
+    ico: "image/x-icon",
+  };
+  const MAX_PREVIEW_BYTES = 20 * 1024 * 1024;
+  let imagePreviews = $state<Record<string, string>>({});
+
+  function imageExt(path: string): string | null {
+    const ext = path.split(".").pop()?.toLowerCase() ?? "";
+    return IMAGE_MIME[ext] ? ext : null;
+  }
+
+  function basename(path: string): string {
+    return path.split(/[/\\]/).filter(Boolean).pop() ?? path;
+  }
+
+  async function loadImagePreview(path: string) {
+    try {
+      const bytes = await readFile(path);
+      if (bytes.byteLength > MAX_PREVIEW_BYTES) return;
+      // An explicit type matters for SVG: sniffing detects raster
+      // signatures but not markup, so a typeless Blob may never render.
+      const url = URL.createObjectURL(
+        new Blob([bytes], { type: IMAGE_MIME[imageExt(path)!] }),
+      );
+      // The attachment may have been removed or the draft reset while the
+      // read was in flight — don't leak the URL for a stale path.
+      if (!fileAttachments.includes(path)) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      // A re-attach of the same path may have beaten this read home —
+      // revoke the URL it installed instead of overwriting it.
+      const prev = imagePreviews[path];
+      if (prev) URL.revokeObjectURL(prev);
+      imagePreviews = { ...imagePreviews, [path]: url };
+    } catch {
+      // Unreadable or outside the fs scope: keep the plain chip.
+    }
+  }
+
+  function dropImagePreview(path: string) {
+    const url = imagePreviews[path];
+    if (!url) return;
+    URL.revokeObjectURL(url);
+    const rest = { ...imagePreviews };
+    delete rest[path];
+    imagePreviews = rest;
+  }
+
+  function clearFileAttachments() {
+    for (const url of Object.values(imagePreviews)) URL.revokeObjectURL(url);
+    imagePreviews = {};
+    fileAttachments = [];
+  }
+
+  // ChatInput unmounts when the session switches to a non-chat tab —
+  // revoke pending previews too. Emptying fileAttachments also makes any
+  // in-flight read self-revoke via its includes() guard when it lands.
+  onDestroy(clearFileAttachments);
+
   async function attachFiles() {
     try {
       const selected = await open({ multiple: true });
@@ -620,6 +701,8 @@
       const newPaths = paths.filter((p) => !fileAttachments.includes(p));
       if (newPaths.length === 0) return;
       fileAttachments = [...fileAttachments, ...newPaths];
+      for (const p of newPaths.filter((p) => imageExt(p) !== null))
+        void loadImagePreview(p);
       requestAnimationFrame(autoResize);
       textareaRef?.focus();
     } catch (e) {
@@ -628,6 +711,7 @@
   }
 
   function removeFileAttachment(path: string) {
+    dropImagePreview(path);
     fileAttachments = fileAttachments.filter((p) => p !== path);
   }
 
@@ -840,7 +924,7 @@
       // Restore this session's draft; attachments are not persisted
       content = currentId ? (inputDrafts[currentId] ?? "") : "";
       clearInlineImages();
-      fileAttachments = [];
+      clearFileAttachments();
       clearQuotes();
       requestAnimationFrame(autoResize);
     }
@@ -1061,11 +1145,27 @@
     {#if fileAttachments.length > 0}
       <div class="flex items-center gap-2 mt-1.5 px-2 flex-wrap">
         {#each fileAttachments as path (path)}
+          {@const preview = imagePreviews[path]}
           <div
             class="flex items-center gap-1.5 rounded-md border border-border bg-secondary px-2 py-0.5"
           >
+            {#if preview}
+              <button
+                type="button"
+                onclick={() => previewImage(preview)}
+                class="shrink-0 cursor-zoom-in"
+                title={`${path} (click to preview)`}
+              >
+                <img
+                  src={preview}
+                  alt=""
+                  class="h-9 w-9 rounded object-cover"
+                  onerror={() => dropImagePreview(path)}
+                />
+              </button>
+            {/if}
             <span class="text-xs text-muted-foreground truncate max-w-50"
-              >{path.split("/").pop()}</span
+              >{basename(path)}</span
             >
             <button
               type="button"

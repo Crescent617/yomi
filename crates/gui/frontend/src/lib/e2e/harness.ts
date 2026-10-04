@@ -22,6 +22,7 @@ import * as mermaid from "../mermaid";
 import * as shareCard from "../share-card";
 import * as commandPalette from "../command-palette.svelte";
 import * as searchHighlight from "../components/chat/search-highlight";
+import * as ChatInput from "../components/chat/ChatInput.svelte";
 import * as MessageList from "../components/chat/MessageList.svelte";
 import * as QuoteSelectionPopover from "../components/chat/QuoteSelectionPopover.svelte";
 import * as StatusBar from "../components/layout/StatusBar.svelte";
@@ -41,6 +42,7 @@ export const api = {
   shareCard,
   commandPalette,
   searchHighlight,
+  ChatInput,
   MessageList,
   QuoteSelectionPopover,
   StatusBar,
