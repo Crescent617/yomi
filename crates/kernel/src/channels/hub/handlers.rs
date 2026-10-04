@@ -182,7 +182,12 @@ pub(crate) async fn handle_incoming_message(
             )
             .await?;
             kernel.note_title_input(&sid, &text);
-            blocks.push(ContentBlock::Text { text });
+            // The thread opens with this steer — steer the trigger
+            // verbatim, exactly like a plain message, so the agent gets
+            // the adapter's identity metadata (who asked, which
+            // chat/message) for free. The session title still comes
+            // from the stripped payload above.
+            blocks.extend(msg.content.iter().cloned());
             // Deferred image download — as for a plain trigger, only
             // now, after the gate, does an attached image cost
             // bandwidth.

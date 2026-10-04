@@ -3226,6 +3226,83 @@ async fn thread_command_titles_session_from_payload_text() {
     kernel.stop().await;
 }
 
+/// `/thread <text>` steer carries the adapter's metadata header: the
+/// thread-opening message identifies its sender like a plain message
+/// does, instead of a bare "[From User] <payload>". The trigger is
+/// steered verbatim — the command token stays in the text, as it does
+/// for a plain message's own content.
+#[tokio::test]
+async fn thread_command_steer_carries_metadata_header() {
+    let (store, kernel, _tmp) = watch_batch_harness().await;
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "fake".into(),
+            app_secret: "fake".into(),
+        },
+        require_mention: false,
+        ..Default::default()
+    };
+    let msg = ChannelMessage {
+        external_chat_id: "oc_thread_hdr".to_string(),
+        external_user_id: "ou_1".to_string(),
+        external_message_id: Some("m1".to_string()),
+        is_mention: true,
+        raw_text: Some("/thread 看看这个".to_string()),
+        content: vec![ContentBlock::Text {
+            text: "[2026-10-04 08:00:00][from: 李华儒 (ou_1)][chat_id: oc_thread_hdr][msg_id: m1][platform: feishu]\n/thread 看看这个".to_string(),
+        }],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: true,
+        create_time: Some(1000),
+        doc_comment: None,
+    };
+    let reply = handle_incoming_message(
+        "mock",
+        &config,
+        &store,
+        Arc::clone(&kernel),
+        msg,
+        &obs,
+        &adapter,
+    )
+    .await
+    .unwrap();
+    assert_eq!(reply, None);
+    let sid = store
+        .find_mapping("mock", "m1")
+        .await
+        .unwrap()
+        .expect("session created");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let msgs = kernel.list_messages(&sid).await.unwrap_or_default();
+        let hit = msgs.iter().find(|m| format!("{m:?}").contains("看看这个"));
+        if let Some(m) = hit {
+            let blob = format!("{m:?}");
+            assert!(blob.contains("[from: 李华儒 (ou_1)]"), "{blob}");
+            assert!(
+                blob.contains("/thread 看看这个"),
+                "verbatim trigger keeps the command token: {blob}"
+            );
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "thread steer never landed"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    kernel.stop().await;
+}
+
 /// `yomi channel new-thread`: posts the anchor, creates a session keyed
 /// by it (in-thread follow-ups adopt it), injects the task — and with a
 /// `--title`, the task is posted separately as the thread opener.
@@ -3233,13 +3310,29 @@ async fn thread_command_titles_session_from_payload_text() {
 async fn channel_new_thread_runs_task_in_session_keyed_by_anchor() {
     let (_pool, store) = create_test_pool().await;
     let store: Arc<dyn ChannelStore> = store;
+    // Blackhole model: the run hangs on the model call, so the steered
+    // task message lands in the transcript for content assertions.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((s, _)) = listener.accept().await {
+            held.push(s);
+        }
+    });
     let tmp = tempfile::TempDir::new().unwrap();
     let mut kconfig = crate::config::Config {
         data_dir: tmp.path().to_path_buf(),
+        models: vec![crate::provider::ModelConfig {
+            name: "blackhole".into(),
+            endpoint: format!("http://{addr}"),
+            ..Default::default()
+        }],
         ..crate::config::Config::default()
     };
     kconfig.finalize();
     let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+    kernel.start();
 
     let mock = Arc::new(MockAdapter::new("mock"));
     mock.issue_ids
@@ -3282,6 +3375,27 @@ async fn channel_new_thread_runs_task_in_session_keyed_by_anchor() {
     assert_eq!(mapped.0.as_str(), sid);
     let title = wait_for_title(&kernel, &SessionId::from(sid.clone())).await;
     assert_eq!(title, "调研 X");
+    // The thread-opening steer carries the synthesized identity header,
+    // not a bare "[From User] 调研 X".
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let msgs = kernel
+            .list_messages(&SessionId::from(sid.clone()))
+            .await
+            .unwrap_or_default();
+        let hit = msgs.iter().find(|m| format!("{m:?}").contains("调研 X"));
+        if let Some(m) = hit {
+            let blob = format!("{m:?}");
+            assert!(blob.contains("[from: yomi-cli]"), "{blob}");
+            assert!(blob.contains("[msg_id: msg-1]"), "{blob}");
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "task steer never landed"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 
     // With --title: the root carries the title, the task opens the thread.
     let out = hub

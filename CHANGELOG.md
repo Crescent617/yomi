@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- 通过 `/thread` 命令或 `yomi channel new-thread` 开启话题时，会话收到的首条任务消息现在带有与普通消息一致的发送者身份与来源信息（发送者、会话与消息锚点）；此前只收到裸任务文本，无法得知是谁在何处发起的任务。
+
 ## [0.11.2] - 2026-10-04
 
 ### Fixed

@@ -885,6 +885,7 @@ impl ChannelHub {
 
         // 3. A synthetic top-level trigger keyed by (and anchored to) the
         // anchor message — the `/thread` flow minus its human message.
+        let now = chrono::Utc::now();
         let msg = ChannelMessage {
             external_chat_id: chat_id.to_string(),
             external_user_id: "yomi-cli".to_string(),
@@ -897,7 +898,7 @@ impl ChannelHub {
             root_id: None,
             parent_id: None,
             is_group: true,
-            create_time: Some(chrono::Utc::now().timestamp_millis()),
+            create_time: Some(now.timestamp_millis()),
             doc_comment: None,
         };
         send_gate_reaction(
@@ -919,8 +920,16 @@ impl ChannelHub {
         )
         .await?;
         kernel.note_title_input(&sid, text);
+        // The thread opens with this steer — synthesize the same identity
+        // metadata header a human message would carry, else the agent
+        // sees a bare "[From User] <task>" with no sender/chat anchor.
+        let header = format!(
+            "[{}][from: yomi-cli][chat_id: {chat_id}][msg_id: {root_id}][platform: feishu]",
+            now.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S")
+        );
         blocks.push(ContentBlock::Text {
-            text: text.to_string(),
+            text: format!("{header}\n{text}"),
         });
         kernel.send_steer(&sid, blocks).await;
 
