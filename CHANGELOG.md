@@ -15,6 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.6] - 2026-10-04
+
+### Added
+- `web_search` 优先使用搜索引擎服务端提取的网页正文：配置 Kimi 搜索（`KIMI_AGENT_API_KEY`）后，正文由 Kimi 服务端抓取并随结果返回，不再占用"最多抓取 3 页"的本地预算，有几条用几条；没有服务端正文的结果仍按原逻辑本地抓取。
+
+### Changed
+- `web_search` 的网页正文截断从 5000 字符降到 2000 字符，搜索结果占用的上下文约减一半。
+
+### Fixed
+- Kimi 搜索默认端点改为 `api.kimi.com/coding/v1/search`：此前默认的 `agent-gw.kimi.com` 对 Kimi-for-coding 订阅 key 返回 403，导致配了 key 也无法搜索；仍可用 `KIMI_SEARCH_ENDPOINT` 覆盖。
+
 ## [0.11.5] - 2026-10-04
 
 ### Changed
