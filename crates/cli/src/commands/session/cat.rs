@@ -151,7 +151,7 @@ fn format_transcript(
 }
 
 /// `format_transcript` 的行号版：`(line_no, message)` 对，section 头标
-/// `· L<n>`（`--line` `路径使用；line_no` 为 None 时不标）。
+/// `· L<n>`（`--line` 路径使用；`line_no` 为 None 时不标）。
 /// `range` 给定时只渲染行号落在 `[lo, hi]` 内的消息（配对索引用全量，
 /// 显示按窗口）。
 fn format_transcript_with_lines(

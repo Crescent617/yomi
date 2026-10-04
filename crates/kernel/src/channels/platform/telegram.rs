@@ -28,6 +28,16 @@ fn tg_display_name(user: Option<&teloxide_core::types::User>) -> Option<String> 
     }
 }
 
+/// 消息头时间戳渲染：UTC 事件时间转指定时区（生产路径固定传
+/// `chrono::Local`，与 feishu 信封头一致；测试传固定 offset 以钉住
+/// 行为，不依赖宿主时区）。
+fn format_header_ts<Tz: chrono::TimeZone>(dt: chrono::DateTime<chrono::Utc>, tz: &Tz) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    dt.with_timezone(tz).format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
 impl TelegramAdapter {
     pub fn new(token: String) -> Self {
         let client = teloxide_core::net::default_reqwest_settings()
@@ -129,13 +139,10 @@ impl TelegramAdapter {
         }
         // 渲染前转本地时区（与 feishu 信封头一致——否则混合渠道部署下
         // telegram 头慢 8 小时，正是 header.rs 单点化要杜绝的漂移）。
-        let ts = msg
-            .date
-            .with_timezone(&chrono::Local)
-            .format("%Y-%m-%d %H:%M:%S");
+        let ts = format_header_ts(msg.date, &chrono::Local);
         let sender_name = tg_display_name(msg.from.as_ref());
         let header = crate::channels::header::metadata_header(
-            &ts.to_string(),
+            &ts,
             crate::channels::header::HeaderSender::User {
                 name: sender_name.as_deref(),
                 id: user_id,

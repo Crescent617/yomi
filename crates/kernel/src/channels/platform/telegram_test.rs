@@ -158,6 +158,17 @@ fn tg_display_name_prefers_full_name_then_username() {
 }
 
 #[test]
+fn format_header_ts_renders_given_timezone() {
+    // 钉固定 offset：不依赖宿主时区（UTC 宿主上 Local == Utc，
+    // 直接测 format_message_line 测不出 UTC/Local 混淆）。
+    let dt = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    let cst = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+    assert_eq!(super::format_header_ts(dt, &cst), "2023-11-15 06:13:20");
+    let utc = chrono::FixedOffset::east_opt(0).unwrap();
+    assert_eq!(super::format_header_ts(dt, &utc), "2023-11-14 22:13:20");
+}
+
+#[test]
 fn format_message_line_renders_local_time() {
     // 信封头时间戳与 feishu 一致渲染本地时区（DateTime<Utc> 直接 format
     // 会出 UTC，混合渠道部署下头慢 8 小时）。
