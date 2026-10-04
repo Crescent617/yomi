@@ -158,6 +158,27 @@ fn tg_display_name_prefers_full_name_then_username() {
 }
 
 #[test]
+fn format_message_line_renders_local_time() {
+    // 信封头时间戳与 feishu 一致渲染本地时区（DateTime<Utc> 直接 format
+    // 会出 UTC，混合渠道部署下头慢 8 小时）。
+    let msg = serde_json::from_value::<teloxide_core::types::Message>(serde_json::json!({
+        "message_id": 7,
+        "date": 1700000000,
+        "chat": {"id": 123, "type": "group"},
+        "from": {"id": 42, "is_bot": false, "first_name": "a"},
+        "text": "hi"
+    }))
+    .unwrap();
+    let line = TelegramAdapter::format_message_line(&msg, "chat-1", "42").unwrap();
+    let expect = chrono::DateTime::from_timestamp(1700000000, 0)
+        .unwrap()
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+    assert!(line.contains(&format!("[{expect}]")), "{line}");
+}
+
+#[test]
 fn format_message_line_sanitizes_display_name() {
     // TG 名字用户可控：`]`/换行可伪造头字段——拼头前消毒（剥为空白
     // 并折叠）。

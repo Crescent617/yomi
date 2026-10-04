@@ -127,7 +127,12 @@ impl TelegramAdapter {
         if text.is_empty() {
             return None;
         }
-        let ts = msg.date.format("%Y-%m-%d %H:%M:%S");
+        // 渲染前转本地时区（与 feishu 信封头一致——否则混合渠道部署下
+        // telegram 头慢 8 小时，正是 header.rs 单点化要杜绝的漂移）。
+        let ts = msg
+            .date
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M:%S");
         let sender_name = tg_display_name(msg.from.as_ref());
         let header = crate::channels::header::metadata_header(
             &ts.to_string(),

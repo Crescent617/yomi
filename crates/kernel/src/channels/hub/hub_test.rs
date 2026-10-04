@@ -3303,6 +3303,92 @@ async fn thread_command_steer_carries_metadata_header() {
     kernel.stop().await;
 }
 
+/// `/steer` 与 `/queue` 与 /thread 同契：注入/排队消息 verbatim 带适配
+/// 器元数据头，agent 能看到注入者与来源。
+#[tokio::test]
+async fn steer_and_queue_carry_metadata_header() {
+    let (store, kernel, _tmp) = watch_batch_harness().await;
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Feishu {
+            app_id: "fake".into(),
+            app_secret: "fake".into(),
+        },
+        require_mention: false,
+        ..Default::default()
+    };
+    let msg = |mid: &str, text: &str| {
+        ChannelMessage {
+        external_chat_id: "oc_sq".to_string(),
+        external_user_id: "ou_1".to_string(),
+        external_message_id: Some(mid.to_string()),
+        is_mention: true,
+        raw_text: Some(text.to_string()),
+        content: vec![ContentBlock::Text {
+            text: format!(
+                "[2026-10-04 09:00:00][from: 李华儒 (ou_1)][chat_id: oc_sq][msg_id: {mid}][platform: feishu]\n{text}"
+            ),
+        }],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: true,
+        create_time: Some(1000),
+        doc_comment: None,
+    }
+    };
+    let handle = |m: ChannelMessage| {
+        handle_incoming_message(
+            "mock",
+            &config,
+            &store,
+            Arc::clone(&kernel),
+            m,
+            &obs,
+            &adapter,
+        )
+    };
+    // 先占住 run（黑洞模型挂起），后续 /steer、/queue 均落 mailbox pending。
+    handle(msg("m0", "blocker")).await.unwrap();
+    let sid = store
+        .find_mapping("mock", "oc_sq")
+        .await
+        .unwrap()
+        .expect("session created");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if kernel.get_session(&sid).await.unwrap().phase == "streaming" {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "agent not blocked");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    handle(msg("m1", "/steer 插一句")).await.unwrap();
+    handle(msg("m2", "/queue 排个队")).await.unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let snap = kernel.mailbox_snapshot(&sid).await;
+        if snap.steer.len() == 1 && snap.queue.len() == 1 {
+            let blob = format!("{:?} {:?}", snap.steer, snap.queue);
+            for needle in ["[from: 李华儒 (ou_1)]", "/steer 插一句", "/queue 排个队"] {
+                assert!(blob.contains(needle), "missing {needle}: {blob}");
+            }
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "steer/queue never landed"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    kernel.stop().await;
+}
+
 /// `yomi channel new-thread`: posts the anchor, creates a session keyed
 /// by it (in-thread follow-ups adopt it), injects the task — and with a
 /// `--title`, the task is posted separately as the thread opener.

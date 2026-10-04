@@ -158,7 +158,11 @@ pub(crate) async fn handle_incoming_message(
             )
             .await?;
             kernel.note_title_input(&sid, &text);
-            blocks.push(ContentBlock::Text { text });
+            // Steer the trigger verbatim (adapter metadata header
+            // included) like a plain message — the agent sees who
+            // injected it; same contract as /thread. The session title
+            // still comes from the stripped payload above.
+            blocks.extend(msg.content.iter().cloned());
             kernel.send_steer(&sid, blocks).await;
             Ok(None)
         }
@@ -240,7 +244,9 @@ pub(crate) async fn handle_incoming_message(
             )
             .await?;
             kernel.note_title_input(&sid, &text);
-            blocks.push(ContentBlock::Text { text });
+            // Queue the trigger verbatim (adapter metadata header
+            // included) — same contract as /thread and /steer.
+            blocks.extend(msg.content.iter().cloned());
             // The title was just fed from the user's own text — don't
             // let send_message re-extract it from the merged blocks.
             // Deferred image download — as for a plain trigger, only

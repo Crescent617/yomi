@@ -89,6 +89,9 @@ cargo test -p kernel e2e_feishu -- --ignored --nocapture
 
 **E. 非通道类（cron 等）**：CLI 驱动 + sqlite/jsonl 断言。以 cron per-run 为例：① create 省略 `--session` → get `session_id:null` + `session_template`；② 同 job trigger×2 → 两个不同新 session，各收各的消息；③ 排下一分钟 + max_runs 1 → 新 session、`run_count=1`、自动 completed；④ `--session` 绑定 → 消息追加进该 session、不新建；⑤ update 带 `--session` 绑定 / 不带解绑；⑥ 收尾删测试 job。
 
+**F. `/thread` 开消息带身份头**（0.11.3 修复回归）：群里发 `@bot /thread 记住暗号 N，等下问你` → 新 session（mapping key = 命令消息 id）首条 user 消息必须含 `[from: 名字 (ou_…)][chat_id][msg_id][platform]` 头 + verbatim `/thread …` 文本；话题内 `@bot 暗号是什么` 追问 → 并入同一 session（消息带 `[thread:][root:]` 头）且答出 N。断言同「yomi 侧观测」的转录检查。
+**G. `channel new-thread` 合成头**：`<三件套> yomi channel new-thread --chat <群> --text "记住数字 M"` → 新 session 首条 user 消息含 `[from: yomi-cli][chat_id][msg_id: <root_id>][platform: feishu]`（时间戳为本地时区），返回的 `root_id` 与 mapping key 一致，bot 在话题内回话确认 M。
+
 **收尾**：场景全部跑完 → `<三件套> ./target/debug/yomi daemon stop` 拆环境——别留测试 daemon 过夜（与生产并行占 socket 和 test bot 长连接）。
 
 ## 3. 排错对照
