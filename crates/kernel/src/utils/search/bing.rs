@@ -101,6 +101,7 @@ fn parse_results(html: &str, limit: usize) -> Result<Vec<SearchResult>, String> 
                 url,
                 snippet,
                 source: "bing",
+                content: None,
             });
         }
     }
@@ -111,6 +112,10 @@ fn parse_results(html: &str, limit: usize) -> Result<Vec<SearchResult>, String> 
 
     Ok(results)
 }
+
+#[cfg(test)]
+#[path = "bing_test.rs"]
+mod tests;
 
 /// Decode Bing redirect URL to get the actual URL.
 ///

@@ -4,6 +4,19 @@
 //! The [`available_engines`] helper builds the runtime list from environment
 //! variables. Search engines are tried serially in priority order until one
 //! returns results.
+//!
+//! Server-side page content availability by engine (surfaced through
+//! [`SearchResult::content`]; the `web_search` tool fetches pages itself
+//! only for results without it):
+//!
+//! | Engine   | Content source |
+//! |----------|----------------|
+//! | Kimi     | Yes — server-side page crawling (`enable_page_crawling`) |
+//! | SearXNG  | No — the JSON `content` field is the snippet |
+//! | Serper   | No — snippet only |
+//! | Brave    | No — description only (`llm-context` is a separate endpoint) |
+//! | DuckDuckGo | No — crate scrapes title/url/snippet |
+//! | Bing     | No — HTML scraping, snippet only |
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -24,6 +37,11 @@ pub struct SearchResult {
     pub url: String,
     pub snippet: String,
     pub source: &'static str,
+    /// Provider-supplied page content, when the engine extracts it
+    /// server-side (e.g. Kimi with page crawling). `None` for raw engines;
+    /// callers fall back to fetching the page themselves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
 }
 
 /// Core trait for every search engine backend.
@@ -188,7 +206,7 @@ pub async fn fetch_content(url: &str) -> Result<String, String> {
 
     let truncated = truncate_with_suffix(
         &text,
-        5_000,
+        MAX_CONTENT_CHARS,
         &format!(
             "\n\n[Content truncated - original length: {} characters]",
             text.len()
@@ -196,6 +214,48 @@ pub async fn fetch_content(url: &str) -> Result<String, String> {
     );
 
     Ok(truncated)
+}
+
+/// Page content cap applied to both fetched and provider-supplied text
+/// before it enters the agent's context.
+pub(crate) const MAX_CONTENT_CHARS: usize = 2_000;
+
+/// `(result_index, text)` pairs keyed back to the results list.
+pub(crate) type IndexedContents = Vec<(usize, String)>;
+
+/// Split results into provider-supplied contents and the client-side fetch
+/// shortlist: the first `fetch_budget` results without provider content.
+/// Provider content is uncapped — every result that has it is included.
+pub(crate) fn plan_contents(
+    results: &[SearchResult],
+    fetch_budget: usize,
+) -> (IndexedContents, IndexedContents) {
+    let mut contents = Vec::new();
+    let mut missing = Vec::new();
+    for (i, result) in results.iter().enumerate() {
+        match provider_content(result) {
+            Some(text) => contents.push((i, text)),
+            None if missing.len() < fetch_budget => missing.push((i, result.url.clone())),
+            None => {}
+        }
+    }
+    (contents, missing)
+}
+
+/// Provider-supplied page content for a result, truncated like fetched
+/// content. `None` when the engine returned no usable content — callers
+/// then fall back to fetching the page themselves.
+pub(crate) fn provider_content(result: &SearchResult) -> Option<String> {
+    match &result.content {
+        Some(content) if !content.trim().is_empty() => {
+            Some(crate::utils::strs::truncate_with_suffix(
+                content,
+                MAX_CONTENT_CHARS,
+                "\n\n[Content truncated]",
+            ))
+        }
+        _ => None,
+    }
 }
 
 /// Format search results with optional page content.

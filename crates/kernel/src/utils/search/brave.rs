@@ -49,35 +49,49 @@ impl SearchEngine for BraveEngine {
             .await
             .map_err(|e| format!("Failed to parse Brave response: {e}"))?;
 
-        let results = json
-            .get("web")
-            .and_then(|w| w.get("results"))
-            .and_then(|r| r.as_array())
-            .ok_or("Brave response missing web.results")?;
-
-        let mut out = Vec::with_capacity(results.len());
-        for item in results.iter().take(limit) {
-            let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("");
-            let url = item.get("url").and_then(|v| v.as_str()).unwrap_or("");
-            let snippet = item
-                .get("description")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-
-            if !title.is_empty() && !url.is_empty() {
-                out.push(SearchResult {
-                    title: title.to_string(),
-                    url: url.to_string(),
-                    snippet: snippet.to_string(),
-                    source: "brave",
-                });
-            }
-        }
-
-        if out.is_empty() {
-            return Err("Brave returned no results".to_string());
-        }
-
-        Ok(out)
+        parse_results(&json, limit)
     }
 }
+
+/// Parse Brave web search results.
+///
+/// The web search endpoint is description-only; Brave's separate
+/// `llm-context` endpoint is an aggregated grounding bundle, not per-result
+/// content. `content` stays `None`.
+fn parse_results(json: &serde_json::Value, limit: usize) -> Result<Vec<SearchResult>, String> {
+    let results = json
+        .get("web")
+        .and_then(|w| w.get("results"))
+        .and_then(|r| r.as_array())
+        .ok_or("Brave response missing web.results")?;
+
+    let mut out = Vec::with_capacity(results.len());
+    for item in results.iter().take(limit) {
+        let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        let url = item.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        let snippet = item
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if !title.is_empty() && !url.is_empty() {
+            out.push(SearchResult {
+                title: title.to_string(),
+                url: url.to_string(),
+                snippet: snippet.to_string(),
+                source: "brave",
+                content: None,
+            });
+        }
+    }
+
+    if out.is_empty() {
+        return Err("Brave returned no results".to_string());
+    }
+
+    Ok(out)
+}
+
+#[cfg(test)]
+#[path = "brave_test.rs"]
+mod tests;

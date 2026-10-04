@@ -23,6 +23,10 @@ fn parses_organic_results() {
     assert_eq!(results[0].url, "https://www.rust-lang.org/");
     assert_eq!(results[0].snippet, "A language empowering everyone.");
     assert_eq!(results[0].source, "serper");
+    assert!(
+        results[0].content.is_none(),
+        "Serper search has no server-side page content"
+    );
 }
 
 #[test]

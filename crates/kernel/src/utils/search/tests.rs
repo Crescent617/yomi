@@ -32,12 +32,14 @@ fn test_merge_results() {
         url: "https://a1".to_string(),
         snippet: String::new(),
         source: "a",
+        content: None,
     }];
     let b = vec![SearchResult {
         title: "B1".to_string(),
         url: "https://b1".to_string(),
         snippet: String::new(),
         source: "b",
+        content: None,
     }];
     let merged = merge_results(&[a, b], 10);
     assert_eq!(merged.len(), 2);
@@ -52,15 +54,79 @@ fn test_merge_results_dedup() {
         url: "https://dup".to_string(),
         snippet: String::new(),
         source: "a",
+        content: None,
     }];
     let b = vec![SearchResult {
         title: "B1".to_string(),
         url: "https://dup".to_string(),
         snippet: String::new(),
         source: "b",
+        content: None,
     }];
     let merged = merge_results(&[a, b], 10);
     assert_eq!(merged.len(), 1);
+}
+
+#[test]
+fn provider_content_preferred_and_truncated() {
+    let with_content = SearchResult {
+        title: "t".to_string(),
+        url: "https://example.com".to_string(),
+        snippet: String::new(),
+        source: "kimi",
+        content: Some("x".repeat(5_000)),
+    };
+    let text = provider_content(&with_content).expect("provider content should be used");
+    assert!(text.len() < 5_000);
+    assert!(text.contains("[Content truncated]"));
+
+    let empty_content = SearchResult {
+        content: Some("   ".to_string()),
+        ..with_content.clone()
+    };
+    assert!(provider_content(&empty_content).is_none());
+
+    let no_content = SearchResult {
+        content: None,
+        ..with_content
+    };
+    assert!(provider_content(&no_content).is_none());
+}
+
+#[test]
+fn plan_contents_uncaps_provider_content_and_budgets_fetches() {
+    let mk = |url: &str, content: Option<&str>| SearchResult {
+        title: "t".to_string(),
+        url: url.to_string(),
+        snippet: String::new(),
+        source: "test",
+        content: content.map(str::to_string),
+    };
+    let results = vec![
+        mk("https://a", Some("provider text")),
+        mk("https://b", None),
+        mk("https://c", Some("   ")), // whitespace counts as missing
+        mk("https://d", None),
+        mk("https://e", None),
+        mk("https://f", None),
+    ];
+
+    let (contents, missing) = plan_contents(&results, 3);
+
+    // Provider content included for every result that has it, not counted
+    // against the fetch budget.
+    assert_eq!(contents.len(), 1);
+    assert_eq!(contents[0].0, 0);
+    assert_eq!(contents[0].1, "provider text");
+    // Fetch shortlist covers only the first 3 results missing content.
+    assert_eq!(
+        missing.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    assert_eq!(missing[0].1, "https://b");
+
+    let (contents, missing) = plan_contents(&results, 0);
+    assert!(contents.len() == 1 && missing.is_empty());
 }
 
 #[test]
@@ -71,12 +137,14 @@ fn test_format_results() {
             url: "https://example.com/1".to_string(),
             snippet: "Snippet 1".to_string(),
             source: "ddg",
+            content: None,
         },
         SearchResult {
             title: "Test Title 2".to_string(),
             url: "https://example.com/2".to_string(),
             snippet: "Snippet 2".to_string(),
             source: "bing",
+            content: None,
         },
     ];
 
@@ -108,6 +176,7 @@ async fn search_all_stops_after_first_success() {
                 url: "https://example.com".to_string(),
                 snippet: String::new(),
                 source: "serper",
+                content: None,
             }]),
             calls: Arc::clone(&calls),
         }),

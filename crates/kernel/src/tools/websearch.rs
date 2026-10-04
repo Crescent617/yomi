@@ -8,6 +8,9 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 const MAX_QUERY_LENGTH: usize = 1000;
+/// Client-side page-fetch budget: at most this many results without
+/// provider-supplied content are fetched per search.
+const FETCH_BUDGET: usize = 3;
 
 pub struct WebSearchTool {
     engines: Vec<Box<dyn crate::utils::search::SearchEngine>>,
@@ -52,7 +55,7 @@ impl Tool for WebSearchTool {
                 },
                 "fetch_content": {
                     "type": "boolean",
-                    "description": "Whether to fetch full content from top results (default: true)",
+                    "description": "Whether to include page content (default: true). When enabled, content the search engine already extracted server-side is included for every result that has it; up to 3 pages without it are fetched directly.",
                     "default": true
                 }
             },
@@ -84,25 +87,30 @@ impl Tool for WebSearchTool {
             Err(e) => return Ok(ToolOutput::error(e)),
         };
 
-        // Fetch content from top results concurrently if requested.
+        // Fetch content from top results if requested. Provider-supplied
+        // content (server-side page crawling) is used for every result that
+        // has it, uncapped; the client-side fetch budget applies only to
+        // results still missing content, and fetched text is truncated the
+        // same way.
         let contents = if should_fetch {
-            let futures: Vec<_> = results
-                .iter()
-                .take(3)
-                .enumerate()
-                .map(|(i, result)| async move {
-                    match crate::utils::search::fetch_content(&result.url).await {
-                        Ok(content) => Some((i, content)),
+            let (mut contents, missing) =
+                crate::utils::search::plan_contents(&results, FETCH_BUDGET);
+            let fetches: Vec<_> = missing
+                .into_iter()
+                .map(|(i, url)| async move {
+                    match crate::utils::search::fetch_content(&url).await {
+                        Ok(text) => Some((i, text)),
                         Err(_) => None,
                     }
                 })
                 .collect();
-
-            futures::future::join_all(futures)
-                .await
-                .into_iter()
-                .flatten()
-                .collect()
+            contents.extend(
+                futures::future::join_all(fetches)
+                    .await
+                    .into_iter()
+                    .flatten(),
+            );
+            contents
         } else {
             Vec::new()
         };
@@ -113,7 +121,7 @@ impl Tool for WebSearchTool {
             query,
             results.len(),
             if should_fetch && !contents.is_empty() {
-                format!(", content fetched from {} pages", contents.len())
+                format!(", page content from {} results", contents.len())
             } else {
                 String::new()
             }

@@ -72,6 +72,7 @@ fn parse_results(json: &serde_json::Value, limit: usize) -> Result<Vec<SearchRes
                     .unwrap_or("")
                     .to_string(),
                 source: "serper",
+                content: None,
             })
         })
         .take(limit)

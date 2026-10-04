@@ -3,6 +3,11 @@
 //! Uses the **Lite** backend (`lite.duckduckgo.com`) which is a minimal
 //! HTML-only interface with less anti-bot friction than the full
 //! `html.duckduckgo.com` endpoint.
+//!
+//! The crate scrapes title/url/snippet only — there is no server-side page
+//! content, so `content` stays `None`. Parsing lives inside the crate, so
+//! there is no pure parse function to unit test here; see the ignored live
+//! test in `ddg_test.rs`.
 
 use crate::utils::search::{SearchEngine, SearchResult};
 use async_trait::async_trait;
@@ -44,6 +49,7 @@ impl SearchEngine for DdgEngine {
                 url: r.url,
                 snippet: r.snippet,
                 source: "ddg",
+                content: None,
             });
         }
 
@@ -54,3 +60,7 @@ impl SearchEngine for DdgEngine {
         Ok(results)
     }
 }
+
+#[cfg(test)]
+#[path = "ddg_test.rs"]
+mod tests;

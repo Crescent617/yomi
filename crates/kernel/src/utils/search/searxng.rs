@@ -49,31 +49,45 @@ impl SearchEngine for SearxngEngine {
             .await
             .map_err(|e| format!("Failed to parse SearXNG response: {e}"))?;
 
-        let results = json
-            .get("results")
-            .and_then(|r| r.as_array())
-            .ok_or("SearXNG response missing results")?;
-
-        let mut out = Vec::with_capacity(results.len());
-        for item in results.iter().take(limit) {
-            let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("");
-            let url = item.get("url").and_then(|v| v.as_str()).unwrap_or("");
-            let snippet = item.get("content").and_then(|v| v.as_str()).unwrap_or("");
-
-            if !title.is_empty() && !url.is_empty() {
-                out.push(SearchResult {
-                    title: title.to_string(),
-                    url: url.to_string(),
-                    snippet: snippet.to_string(),
-                    source: "searxng",
-                });
-            }
-        }
-
-        if out.is_empty() {
-            return Err("SearXNG returned no results".to_string());
-        }
-
-        Ok(out)
+        parse_results(&json, limit)
     }
 }
+
+/// Parse `SearXNG` JSON results.
+///
+/// `SearXNG`'s `content` field is the engine-extracted description — the same
+/// text we map to `snippet`. Stock `SearXNG` has no server-side page crawling,
+/// so `content` stays `None` and the client fetches pages when asked.
+fn parse_results(json: &serde_json::Value, limit: usize) -> Result<Vec<SearchResult>, String> {
+    let results = json
+        .get("results")
+        .and_then(|r| r.as_array())
+        .ok_or("SearXNG response missing results")?;
+
+    let mut out = Vec::with_capacity(results.len());
+    for item in results.iter().take(limit) {
+        let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        let url = item.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        let snippet = item.get("content").and_then(|v| v.as_str()).unwrap_or("");
+
+        if !title.is_empty() && !url.is_empty() {
+            out.push(SearchResult {
+                title: title.to_string(),
+                url: url.to_string(),
+                snippet: snippet.to_string(),
+                source: "searxng",
+                content: None,
+            });
+        }
+    }
+
+    if out.is_empty() {
+        return Err("SearXNG returned no results".to_string());
+    }
+
+    Ok(out)
+}
+
+#[cfg(test)]
+#[path = "searxng_test.rs"]
+mod tests;
