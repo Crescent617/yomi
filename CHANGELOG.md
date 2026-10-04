@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.5] - 2026-10-04
+
 ### Changed
 - 高并发长会话下，飞书状态卡的流式增量与内部状态更新（高频、不影响最终卡片内容）在事件队列压力下会优先脱落，以保住回复正文与结算事件，日志按 episode 各告警一次；此前一律严格排队，队列打满时可能连回复正文一起丢弃。
 
