@@ -3304,7 +3304,8 @@ async fn thread_command_steer_carries_metadata_header() {
 }
 
 /// `/steer` 与 `/queue` 与 /thread 同契：注入/排队消息 verbatim 带适配
-/// 器元数据头，agent 能看到注入者与来源。
+/// 器元数据头，agent 能看到注入者与来源；图片经延迟下载随消息进入
+/// （/steer 此前静默丢图，统一尾部后同路径）。
 #[tokio::test]
 async fn steer_and_queue_carry_metadata_header() {
     let (store, kernel, _tmp) = watch_batch_harness().await;
@@ -3321,9 +3322,9 @@ async fn steer_and_queue_carry_metadata_header() {
         require_mention: false,
         ..Default::default()
     };
-    let msg = |mid: &str, text: &str| {
+    let msg = |mid: &str, text: &str, image_keys: Vec<String>| {
         ChannelMessage {
-        external_chat_id: "oc_sq".to_string(),
+            external_chat_id: "oc_sq".to_string(),
         external_user_id: "ou_1".to_string(),
         external_message_id: Some(mid.to_string()),
         is_mention: true,
@@ -3333,14 +3334,14 @@ async fn steer_and_queue_carry_metadata_header() {
                 "[2026-10-04 09:00:00][from: 李华儒 (ou_1)][chat_id: oc_sq][msg_id: {mid}][platform: feishu]\n{text}"
             ),
         }],
-        image_keys: vec![],
+        image_keys,
         thread_id: None,
         root_id: None,
         parent_id: None,
         is_group: true,
         create_time: Some(1000),
         doc_comment: None,
-    }
+        }
     };
     let handle = |m: ChannelMessage| {
         handle_incoming_message(
@@ -3354,7 +3355,7 @@ async fn steer_and_queue_carry_metadata_header() {
         )
     };
     // 先占住 run（黑洞模型挂起），后续 /steer、/queue 均落 mailbox pending。
-    handle(msg("m0", "blocker")).await.unwrap();
+    handle(msg("m0", "blocker", vec![])).await.unwrap();
     let sid = store
         .find_mapping("mock", "oc_sq")
         .await
@@ -3368,8 +3369,12 @@ async fn steer_and_queue_carry_metadata_header() {
         assert!(std::time::Instant::now() < deadline, "agent not blocked");
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    handle(msg("m1", "/steer 插一句")).await.unwrap();
-    handle(msg("m2", "/queue 排个队")).await.unwrap();
+    // /steer 带图：图片经延迟下载随 steer 进入（与 /queue 同路径）。
+    *mock.image_download_ok.lock().await = true;
+    handle(msg("m1", "/steer 插一句", vec!["img_s".to_string()]))
+        .await
+        .unwrap();
+    handle(msg("m2", "/queue 排个队", vec![])).await.unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let snap = kernel.mailbox_snapshot(&sid).await;
@@ -3378,6 +3383,12 @@ async fn steer_and_queue_carry_metadata_header() {
             for needle in ["[from: 李华儒 (ou_1)]", "/steer 插一句", "/queue 排个队"] {
                 assert!(blob.contains(needle), "missing {needle}: {blob}");
             }
+            let steer_item = &snap.steer[0];
+            assert!(
+                steer_item.blocks_len >= 2,
+                "image block must ride along: blocks_len={}",
+                steer_item.blocks_len
+            );
             break;
         }
         assert!(

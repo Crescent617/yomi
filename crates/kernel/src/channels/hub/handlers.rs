@@ -29,6 +29,27 @@ use crate::channels::{
     obs::ObsTracker, ChannelConfig, ChannelMessage, ChannelStore, PlatformAdapter, PlatformConfig,
 };
 
+/// The shared tail of the Steer/Thread/Queue command arms: the trigger
+/// steered verbatim (adapter metadata header included, so the agent sees
+/// who sent it and which chat/message anchors it), plus the deferred
+/// image download for any attached images — post-gate, like a plain
+/// trigger. Session titles stay on the stripped payload at each call
+/// site.
+async fn append_verbatim_trigger(
+    adapter: &Arc<dyn PlatformAdapter>,
+    msg: &ChannelMessage,
+    blocks: &mut Vec<ContentBlock>,
+) {
+    blocks.extend(msg.content.iter().cloned());
+    append_message_images(
+        adapter,
+        msg.external_message_id.as_deref().unwrap_or(""),
+        &msg.image_keys,
+        blocks,
+    )
+    .await;
+}
+
 pub(crate) async fn handle_incoming_message(
     channel_name: &str,
     config: &ChannelConfig,
@@ -158,11 +179,8 @@ pub(crate) async fn handle_incoming_message(
             )
             .await?;
             kernel.note_title_input(&sid, &text);
-            // Steer the trigger verbatim (adapter metadata header
-            // included) like a plain message — the agent sees who
-            // injected it; same contract as /thread. The session title
-            // still comes from the stripped payload above.
-            blocks.extend(msg.content.iter().cloned());
+            // Verbatim steer + images, same contract as /thread /queue.
+            append_verbatim_trigger(adapter, &msg, &mut blocks).await;
             kernel.send_steer(&sid, blocks).await;
             Ok(None)
         }
@@ -186,22 +204,11 @@ pub(crate) async fn handle_incoming_message(
             )
             .await?;
             kernel.note_title_input(&sid, &text);
-            // The thread opens with this steer — steer the trigger
-            // verbatim, exactly like a plain message, so the agent gets
-            // the adapter's identity metadata (who asked, which
-            // chat/message) for free. The session title still comes
-            // from the stripped payload above.
-            blocks.extend(msg.content.iter().cloned());
-            // Deferred image download — as for a plain trigger, only
-            // now, after the gate, does an attached image cost
-            // bandwidth.
-            append_message_images(
-                adapter,
-                msg.external_message_id.as_deref().unwrap_or(""),
-                &msg.image_keys,
-                &mut blocks,
-            )
-            .await;
+            // The thread opens with this steer — verbatim, exactly like
+            // a plain message, so the agent gets the adapter's identity
+            // metadata (who asked, which chat/message) for free. The
+            // session title still comes from the stripped payload above.
+            append_verbatim_trigger(adapter, &msg, &mut blocks).await;
             kernel.send_steer(&sid, blocks).await;
             Ok(None)
         }
@@ -244,20 +251,10 @@ pub(crate) async fn handle_incoming_message(
             )
             .await?;
             kernel.note_title_input(&sid, &text);
-            // Queue the trigger verbatim (adapter metadata header
-            // included) — same contract as /thread and /steer.
-            blocks.extend(msg.content.iter().cloned());
+            // Verbatim queue + images, same contract as /steer /thread.
+            append_verbatim_trigger(adapter, &msg, &mut blocks).await;
             // The title was just fed from the user's own text — don't
             // let send_message re-extract it from the merged blocks.
-            // Deferred image download — as for a plain trigger, only
-            // now, after the gate, does an attached image cost bandwidth.
-            append_message_images(
-                adapter,
-                msg.external_message_id.as_deref().unwrap_or(""),
-                &msg.image_keys,
-                &mut blocks,
-            )
-            .await;
             kernel.send_message_inner(&sid, blocks, false).await?;
             Ok(None)
         }
