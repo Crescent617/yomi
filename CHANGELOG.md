@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-10-04
+
 ### Fixed
 - 通过 `/steer`、`/thread`、`/queue` 命令发送的文件、音频等媒体附件现在与普通消息一致自动下载进入会话；此前只收到不可直接读取的占位符。
 - 通过 `/steer` 命令发送的图片不再被静默丢弃，与 `/thread`、`/queue` 一致进入会话。
