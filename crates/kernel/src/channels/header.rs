@@ -2,10 +2,11 @@
 //! line of a steered inbound message, identifying who sent it, where,
 //! and which message anchors it. Single construction site for all
 //! producers (feishu events, telegram, the synthetic new-thread
-//! trigger) so the format can't drift apart (v0.11.3: the new-thread
-//! header was born as a fourth copy and immediately shipped a timezone
-//! bug). Doc-comment provenance headers live in `comment.rs` — a
-//! different segment set, intentionally not unified here.
+//! trigger) so the format can't drift apart — the pre-consolidation
+//! copies had already drifted once: telegram's header rendered UTC
+//! where feishu's rendered local time, 8 hours apart on a UTC+8 host.
+//! Doc-comment provenance headers live in `comment.rs` — a different
+//! segment set, intentionally not unified here.
 
 use std::fmt::Write;
 
