@@ -72,23 +72,16 @@ pub(crate) struct DeliveryJob {
     pub(crate) event: Event,
 }
 
-/// 遥测类事件（卡片进度/流式增量/用量/内部状态）——队列压力下可脱
-/// 落：最终卡由 `Stopped` 结算重建，丢失只影响中间态展示。关键事件
-/// （回复正文 `ModelEvent::End`、生命周期、权限/提问、压缩结算）永不
-/// 走脱落路径——2026-10-04 的 queue-full 丢件证明「一律 FIFO 到打满
-/// 才丢」会把正文也置于风险中。
+/// 遥测类事件（流式增量/内部状态展示）——队列压力下可脱落：高频、
+/// 且不进最终结算卡（正文由 `ModelEvent::End` 完整携带、结算卡由
+/// `Stopped` 重建），丢失只影响中间态展示。除此之外一律走关键路径：
+/// 进最终卡的事件（`ToolEvent::{Start,End}`、`TokenUsage` 等）频率低、
+/// 每件都关键，不值得为它们冒正文级风险——2026-10-04 的 queue-full
+/// 丢件证明「一律 FIFO 到打满才丢」会把正文也置于风险中。
 fn event_is_droppable(event: &Event) -> bool {
     matches!(
         event,
-        Event::Model(
-            ModelEvent::Request { .. }
-                | ModelEvent::Chunk { .. }
-                | ModelEvent::ToolCallDelta { .. }
-                | ModelEvent::TokenUsage { .. }
-                | ModelEvent::Fallback { .. }
-        ) | Event::Tool(
-            ToolEvent::Start { .. } | ToolEvent::Metadata { .. } | ToolEvent::End { .. }
-        ) | Event::Agent(AgentEvent::StateChanged { .. })
+        Event::Model(ModelEvent::Chunk { .. }) | Event::Agent(AgentEvent::StateChanged { .. })
     )
 }
 

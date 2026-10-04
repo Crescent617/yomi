@@ -669,20 +669,33 @@ async fn concurrent_sessions_all_deliver_under_io_cap() {
     }
 }
 
-/// 脱落分类：遥测类（工具进度/流式增量/用量/内部状态/回退）可脱落；
-/// 回复正文、生命周期、权限/提问、压缩结算永不脱落。
+/// 脱落分类：仅流式增量与内部状态展示（高频、不进最终结算卡）可脱落；
+/// 回复正文、进最终卡的低频事件（工具起止/用量/回退等）、生命周期、
+/// 权限/提问、压缩结算永不脱落。
 #[test]
 fn event_is_droppable_classification() {
     use crate::event::{AgentEvent, AgentStatus, ContentChunk, Event, ModelEvent, ToolEvent};
     let mid = || crate::types::MessageId::new();
     let droppable = [
-        Event::Model(ModelEvent::Request {
-            message_id: mid(),
-            message_count: 1,
-        }),
         Event::Model(ModelEvent::Chunk {
             message_id: mid(),
             content: ContentChunk::Text("x".into()),
+        }),
+        Event::Agent(AgentEvent::StateChanged {
+            state: crate::agent::AgentState::Idle,
+        }),
+    ];
+    for e in &droppable {
+        assert!(super::event_is_droppable(e), "should shed: {e:?}");
+    }
+    let critical = [
+        Event::Model(ModelEvent::End {
+            message_id: mid(),
+            content: vec![],
+        }),
+        Event::Model(ModelEvent::Request {
+            message_id: mid(),
+            message_count: 1,
         }),
         Event::Model(ModelEvent::ToolCallDelta {
             message_id: mid(),
@@ -720,18 +733,6 @@ fn event_is_droppable_classification() {
             content_blocks: vec![],
             elapsed_ms: 1,
             is_error: false,
-        }),
-        Event::Agent(AgentEvent::StateChanged {
-            state: crate::agent::AgentState::Idle,
-        }),
-    ];
-    for e in &droppable {
-        assert!(super::event_is_droppable(e), "should shed: {e:?}");
-    }
-    let critical = [
-        Event::Model(ModelEvent::End {
-            message_id: mid(),
-            content: vec![],
         }),
         Event::Model(ModelEvent::Compacting { active: true }),
         Event::Model(ModelEvent::Compacted {
