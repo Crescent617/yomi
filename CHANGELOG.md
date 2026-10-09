@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.8] - 2026-10-09
+
 ### Fixed
 - GUI 会话标题栏的面包屑（路径导航）不再硬限 256 像素宽度，长标题可以完整展开。
 
