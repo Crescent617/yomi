@@ -136,7 +136,7 @@
 
 <div
   bind:this={menuRef}
-  class="relative flex min-w-0 items-center gap-0 text-sm"
+  class="relative flex min-w-0 flex-1 items-center gap-0 text-sm"
 >
   <button
     type="button"
@@ -162,9 +162,9 @@
           event.stopPropagation();
           void openSessions(session.project_id ?? selectedProjectId);
         }}
-        class="flex min-w-0 max-w-64 items-center gap-1 rounded-sm px-1 py-0.5 font-normal text-foreground transition-colors hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        class="flex min-w-0 flex-1 items-center gap-1 rounded-sm px-1 py-0.5 font-normal text-foreground transition-colors hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         aria-expanded={menu === "session"}
-        title="Switch session"
+        title={item.label}
       >
         <span class="truncate">{item.label}</span>
         <ChevronDown class="size-3 shrink-0 text-foreground" />
