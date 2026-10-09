@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- GUI 会话标题栏的面包屑（路径导航）不再硬限 256 像素宽度，长标题可以完整展开。
+
+### Changed
+- daemon 单例锁文件从数据目录移到 `/tmp`（按数据目录路径哈希命名，可用 `yomi daemon lock-path` 查询），数据目录不再出现运行时锁文件；tmp 由系统定期清理。与旧版本并存期间继续占用旧锁文件，旧版实例照常互斥。
+- `yomi daemon start` 与 spawn 就绪判定改用 wire 协议握手：socket 文件残留或端口被非 yomi 进程占用时不再误判为"daemon 已在运行"，会正常走启动流程并给出明确错误。
+
 ## [0.11.7] - 2026-10-04
 
 ### Added
