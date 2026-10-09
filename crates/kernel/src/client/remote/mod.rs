@@ -63,6 +63,16 @@ struct Connection {
     cancel: tokio_util::sync::CancellationToken,
 }
 
+impl Drop for Connection {
+    fn drop(&mut self) {
+        // 断开即停 reader/heartbeat：hello 探测（`try_connect_hello`）
+        // 建连验证后立刻丢弃连接，若不在此处 cancel，两个任务会拿着
+        // socket 半端一直跑到进程结束（对 healthy daemon 心跳永远
+        // 收到 pong，永不超时）。cancel 幂等，与各处显式 cancel 不冲突。
+        self.cancel.cancel();
+    }
+}
+
 /// Client-side kernel proxy that talks to a kernel daemon over IPC.
 /// Uses lazy connect: the connection is established on the first API call.
 pub struct RemoteKernel {

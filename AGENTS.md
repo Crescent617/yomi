@@ -8,7 +8,7 @@
    sessions; nothing lives off-stream.
 2. **State is cache** — discarded at will, restored at a fold.
 3. **Model is suspect** — bounded by design, not by hope.
-4. **One data dir, one cron kernel** — `daemon_lock`（flock on `<data_dir>/daemon.lock`，仅 enable_cron 的 kernel 获取，`Kernel::stop()` 释放）；环境隔离靠不同 `YOMI_DATA_DIR` 天然并行。`daemon.lock(.meta)` 是运行时文件，勿手删。取消与归属语义见 `docs/ARCH.md`「取消与归属」。
+4. **One data dir, one cron kernel** — `daemon_lock`（flock on `/tmp/yomi-daemon-<uid>-<hash>.lock`，`<hash>` = 规范化 `data_dir` 路径的 FNV-1a；unix 固定 /tmp 不吃 `$TMPDIR`，仅 enable_cron 的 kernel 获取，`Kernel::stop()` 释放）；环境隔离靠不同 `YOMI_DATA_DIR` 天然并行。锁与 `*.lock.meta` 是运行时文件，放 tmp 不进 data_dir（系统定期清理，残骸无害），勿手删；路径查询用 `yomi daemon lock-path`。升级窗口：`<data_dir>/daemon.lock`（旧版锁文件）存在时同样抢持，旧版 daemon 在跑会 Contended、旧版竞争者继续被拒。"daemon 是否在跑"的判定以 wire hello 通过为准（`cli::daemon::try_connect_hello`），socket 可连不算数。取消与归属语义见 `docs/ARCH.md`「取消与归属」。
 
 ### Extension: four ports, no fifth
 

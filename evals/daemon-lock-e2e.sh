@@ -48,6 +48,12 @@ wait_down() { # socket
   done
   return 1
 }
+# 锁与 meta 自 2026-10 起在 /tmp（按 data_dir 哈希命名，见 daemon_lock
+# 模块文档），路径由 CLI 自报，sed 把 .lock 换成 .lock.meta。
+lock_meta() { # data_dir
+  env YOMI_DATA_DIR="$1" YOMI_CONFIG="$E2E/config.toml" \
+    "$YOMI" daemon lock-path | sed 's/\.lock$/.lock.meta/'
+}
 
 echo "── 1. daemon A 起（data-a / a.sock）"
 run_daemon "$DA" "$E2E/a.sock" "$E2E/a.log"
@@ -74,7 +80,7 @@ echo "── 4. restart A：锁交接后新 daemon 持锁"
 env YOMI_DATA_DIR="$DA" YOMI_CONFIG="$E2E/config.toml" YOMI_SOCKET="unix://$E2E/a.sock" \
   "$YOMI" daemon restart >/dev/null 2>&1 || { echo "FAIL: restart A"; cat "$E2E/a.log"; exit 1; }
 wait_up "$DA" "$E2E/a.sock" || { echo "FAIL: A not up after restart"; exit 1; }
-META_AFTER="$(cat "$DA/daemon.lock.meta" | grep '"pid"' | grep -o '[0-9]*')"
+META_AFTER="$(grep '"pid"' "$(lock_meta "$DA")" | grep -o '[0-9]*' | head -1)"
 [ -n "$META_AFTER" ] || { echo "FAIL: no meta after restart"; exit 1; }
 # 拒绝方报错里的 pid 与当前持有者一致（再次起 B 验证）
 B_OUT2="$(env YOMI_DATA_DIR="$DA" YOMI_CONFIG="$E2E/config.toml" YOMI_SOCKET="unix://$SB" \
@@ -84,12 +90,12 @@ echo "$B_OUT2" | grep -q "$META_AFTER" \
 echo "ok (holder pid $META_AFTER)"
 
 echo "── 5. kill -9 持有者：无 stale 锁，竞争者立即获锁"
-A_PID="$(grep '"pid"' "$DA/daemon.lock.meta" | grep -o '[0-9]*' | head -1)"
+A_PID="$(grep '"pid"' "$(lock_meta "$DA")" | grep -o '[0-9]*' | head -1)"
 kill -9 "$A_PID" 2>/dev/null || { echo "FAIL: kill A pid $A_PID"; exit 1; }
 sleep 0.5
 run_daemon "$DA" "$E2E/d.sock" "$E2E/d.log"
 wait_up "$DA" "$E2E/d.sock" || { echo "FAIL: D did not acquire lock after kill -9"; cat "$E2E/d.log"; exit 1; }
-D_PID="$(grep '"pid"' "$DA/daemon.lock.meta" | grep -o '[0-9]*' | head -1)"
+D_PID="$(grep '"pid"' "$(lock_meta "$DA")" | grep -o '[0-9]*' | head -1)"
 [ "$D_PID" != "$A_PID" ] || { echo "FAIL: meta pid unchanged after kill -9 recovery"; exit 1; }
 echo "ok (new holder pid $D_PID)"
 

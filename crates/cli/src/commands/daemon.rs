@@ -17,6 +17,8 @@ pub enum DaemonCommands {
     Restart,
     /// Check daemon status
     Status,
+    /// Print the daemon singleton lock file path for the configured data dir
+    LockPath,
     /// Compute the blake3 hash of a socket auth password
     AuthHash {
         /// Generate a random high-entropy token and hash it (recommended:
@@ -37,13 +39,17 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
 
     match cmd {
         DaemonCommands::Start { auto_exit } => {
-            // Guard against running multiple daemon instances
-            let pid_file = crate::daemon::pid_file_path();
-            if crate::daemon::try_connect().await.is_some() {
+            // Guard against running multiple daemon instances. "Already
+            // running" 的判定必须过 wire hello——socket 文件还在、
+            // 对面 accept 但不是健康 yomi（残骸/卡死/别的进程）时，
+            // 不能拿它挡启动；hello 不通就继续走下面的启动流程，
+            // 真被占用会在单例锁或 bind 处得到明确错误。
+            if crate::daemon::try_connect_hello().await.is_some() {
                 tracing::info!("Daemon already running, refusing to start");
                 println!("Daemon is already running");
                 return Ok(());
             }
+            let pid_file = crate::daemon::pid_file_path();
             if let Ok(s) = tokio::fs::read_to_string(&pid_file).await {
                 if let Ok(pid) = s.trim().parse::<u32>() {
                     if crate::daemon::process_exists(pid) {
@@ -227,6 +233,13 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
         DaemonCommands::Status => {
             let status = crate::daemon::daemon_status().await?;
             println!("{status}");
+        }
+        DaemonCommands::LockPath => {
+            let config = crate::utils::load_config(global.config.as_ref())?;
+            println!(
+                "{}",
+                kernel::daemon_lock::lock_file_path(&config.data_dir).display()
+            );
         }
         DaemonCommands::AuthHash { generate, password } => {
             if generate {

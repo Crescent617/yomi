@@ -62,6 +62,26 @@ pub async fn try_connect() -> Option<kernel::transport::Stream> {
     }
 }
 
+/// Hello 探测的单次上界：对面 accept 但一直不答 wire 协议时不能干等
+/// RPC 超时（30s）。daemon 从 bind 到能答 hello 之间隔着 channel 初始化，
+/// 可能很长——上界只兜"装死"的对面，不限制正常初始化时长（调用方按
+/// 阶段给总预算，见 `spawn_daemon_with_auto_exit`）。
+const HELLO_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Socket 可连 ≠ daemon 活着：unix socket 文件可能是残骸，端口对面
+/// 可能 accept 但不是 yomi（或卡在初始化答不了 hello）。只有 wire
+/// hello（协议版本校验）通过，才配说 "daemon already running"。
+/// 探测用的连接立即丢弃（Drop 取消 reader/heartbeat）。
+pub async fn try_connect_hello() -> Option<kernel::client::RemoteKernel> {
+    tokio::time::timeout(
+        HELLO_PROBE_TIMEOUT,
+        kernel::client::RemoteKernel::connect(&socket_addr()),
+    )
+    .await
+    .ok()
+    .and_then(|r| r.ok())
+}
+
 /// Spawn the daemon as a fully detached background process.
 /// If a daemon is already accepting connections, returns Ok immediately.
 /// Otherwise spawns a new process and polls until the socket is ready
@@ -73,8 +93,15 @@ pub async fn spawn_daemon() -> Result<()> {
 pub async fn spawn_daemon_with_auto_exit(auto_exit: bool) -> Result<()> {
     const SPAWN_READY_TIMEOUT: Duration = Duration::from_secs(10);
     const SPAWN_READY_INTERVAL: Duration = Duration::from_millis(100);
+    // hello 阶段的独立预算：bind 之后 server.start 还要做 channel 初始化
+    // （ws 连接/重试，坏网络下可能远超 10s），hello 只有 serve 起来才
+    // 答得出；这段时间从 bind 成功起另算，不被 spawn 时刻的预算卡死。
+    const SPAWN_HELLO_TIMEOUT: Duration = Duration::from_secs(30);
 
-    if try_connect().await.is_some() {
+    // "已在跑"的判定必须过 hello：socket 残骸/非 yomi 监听不算。
+    // hello 不通就继续走 spawn；真被占用会在 bind 或单例锁处得到
+    // 明确错误。
+    if try_connect_hello().await.is_some() {
         tracing::info!("Daemon already running, skipping spawn");
         return Ok(());
     }
@@ -127,14 +154,22 @@ pub async fn spawn_daemon_with_auto_exit(auto_exit: bool) -> Result<()> {
     let pid = child.id();
     tracing::info!("Spawned daemon process (PID {pid})");
 
-    // Poll until the daemon socket is actually accepting connections.
-    // Daemon initialisation (storage, provider, skills) can take a few
-    // seconds, so we allow up to 10 s.
+    // 就绪判定分两段，"socket 可 accept" 不算就绪——调用方一拿到 Ok
+    // 就开始发 RPC：
+    // 1) 等 bind：进程活着且监听，预算 10s（transport connect，便宜）。
+    // 2) 等 hello：每个探测仍有 5s 上界，防对面装死。
     let start = tokio::time::Instant::now();
     while start.elapsed() < SPAWN_READY_TIMEOUT {
-        if try_connect().await.is_some() {
-            tracing::info!("Daemon ready after {:?}", start.elapsed());
-            return Ok(());
+        if kernel::transport::connect(&socket_addr()).await.is_ok() {
+            let hello_start = tokio::time::Instant::now();
+            while hello_start.elapsed() < SPAWN_HELLO_TIMEOUT {
+                if try_connect_hello().await.is_some() {
+                    tracing::info!("Daemon ready after {:?}", start.elapsed());
+                    return Ok(());
+                }
+                sleep(SPAWN_READY_INTERVAL).await;
+            }
+            break;
         }
         sleep(SPAWN_READY_INTERVAL).await;
     }
@@ -351,8 +386,10 @@ async fn self_restart_settled(old_pid: Option<u32>) -> bool {
     let start = tokio::time::Instant::now();
     while start.elapsed() < SETTLE_GRACE {
         sleep(SETTLE_POLL).await;
+        // 交接完成的判据 = 新 pid 持有 socket 且答 hello；只"能连"
+        // 不算数（残骸 socket 也能连上 transport）。
         let pid = read_daemon_pid().await;
-        if pid.is_some() && pid != Some(old_pid) && try_connect().await.is_some() {
+        if pid.is_some() && pid != Some(old_pid) && try_connect_hello().await.is_some() {
             return true;
         }
     }
@@ -428,8 +465,11 @@ pub async fn daemon_status() -> Result<String> {
     let addr = socket_addr();
     let pid_file = pid_file_path();
 
-    if let Ok(stream) = kernel::transport::connect(&addr).await {
-        drop(stream);
+    // "Running" 的定义：wire hello 通过。transport 可连但答不了
+    // hello 的（残骸 socket / 卡死的进程）不算 running，落到下面的
+    // stale/starting 分支给处置提示。
+    if let Some(kernel) = try_connect_hello().await {
+        drop(kernel);
         tracing::info!("Daemon is running and accepting connections on {addr}");
         return Ok("Daemon is running".to_string());
     }
