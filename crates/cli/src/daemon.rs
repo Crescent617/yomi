@@ -84,19 +84,16 @@ pub async fn try_connect_hello() -> Option<kernel::client::RemoteKernel> {
 
 /// Spawn the daemon as a fully detached background process.
 /// If a daemon is already accepting connections, returns Ok immediately.
-/// Otherwise spawns a new process and polls until the socket is ready
-/// (up to 10 s) so callers never race with daemon initialisation.
+/// Otherwise spawns a new process and polls until the daemon answers the
+/// hello handshake (up to 30 s — channel init can be slow) so callers
+/// never race with daemon initialisation.
 pub async fn spawn_daemon() -> Result<()> {
     spawn_daemon_with_auto_exit(true).await
 }
 
 pub async fn spawn_daemon_with_auto_exit(auto_exit: bool) -> Result<()> {
-    const SPAWN_READY_TIMEOUT: Duration = Duration::from_secs(10);
+    const SPAWN_READY_TIMEOUT: Duration = Duration::from_secs(30);
     const SPAWN_READY_INTERVAL: Duration = Duration::from_millis(100);
-    // hello 阶段的独立预算：bind 之后 server.start 还要做 channel 初始化
-    // （ws 连接/重试，坏网络下可能远超 10s），hello 只有 serve 起来才
-    // 答得出；这段时间从 bind 成功起另算，不被 spawn 时刻的预算卡死。
-    const SPAWN_HELLO_TIMEOUT: Duration = Duration::from_secs(30);
 
     // "已在跑"的判定必须过 hello：socket 残骸/非 yomi 监听不算。
     // hello 不通就继续走 spawn；真被占用会在 bind 或单例锁处得到
@@ -154,24 +151,43 @@ pub async fn spawn_daemon_with_auto_exit(auto_exit: bool) -> Result<()> {
     let pid = child.id();
     tracing::info!("Spawned daemon process (PID {pid})");
 
-    // 就绪判定分两段，"socket 可 accept" 不算就绪——调用方一拿到 Ok
-    // 就开始发 RPC：
-    // 1) 等 bind：进程活着且监听，预算 10s（transport connect，便宜）。
-    // 2) 等 hello：每个探测仍有 5s 上界，防对面装死。
+    // 就绪 = hello 握手通过（"socket 可 accept" 不算——调用方一拿到 Ok
+    // 就开始发 RPC）。探测前先看子进程是否已退出：daemon start 是
+    // 阻塞式前台进程，hello 只能等它初始化完才答得出；它活着但还没
+    // 答 hello ≠ 失败。秒死由 try_wait 直接发现；总预算 30s 兜慢初始化；
+    // 每个探测自身有 5s 上界，防对面装死。
     let start = tokio::time::Instant::now();
-    while start.elapsed() < SPAWN_READY_TIMEOUT {
-        if kernel::transport::connect(&socket_addr()).await.is_ok() {
-            let hello_start = tokio::time::Instant::now();
-            while hello_start.elapsed() < SPAWN_HELLO_TIMEOUT {
-                if try_connect_hello().await.is_some() {
-                    tracing::info!("Daemon ready after {:?}", start.elapsed());
-                    return Ok(());
-                }
-                sleep(SPAWN_READY_INTERVAL).await;
+    let failure: Option<String> = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                break Some(format!(
+                    "daemon process (PID {pid}) exited before ready: {status}"
+                ));
             }
-            break;
+            Ok(None) => {}
+            Err(e) => tracing::warn!("try_wait failed (PID {pid}): {e}"),
+        }
+        if try_connect_hello().await.is_some() {
+            tracing::info!("Daemon ready after {:?}", start.elapsed());
+            return Ok(());
+        }
+        if start.elapsed() >= SPAWN_READY_TIMEOUT {
+            break Some(format!(
+                "daemon spawned (PID {pid}) but did not become ready within {SPAWN_READY_TIMEOUT:?}"
+            ));
         }
         sleep(SPAWN_READY_INTERVAL).await;
+    };
+
+    // 并发 spawn 竞态：我们的孩子可能因为抢锁/抢 socket 输给另一个
+    // 同时启动的 daemon 而退出——只要 socket 后面答得出 hello，对方
+    // 就是就绪的 daemon，视为成功（旧两段式行为一致）。
+    if try_connect_hello().await.is_some() {
+        tracing::info!(
+            "Daemon ready after {:?} (spawned child lost the race)",
+            start.elapsed()
+        );
+        return Ok(());
     }
 
     // Daemon failed to become ready — clean up the orphan process.
@@ -183,12 +199,9 @@ pub async fn spawn_daemon_with_auto_exit(auto_exit: bool) -> Result<()> {
         }),
     )
     .await;
-    tracing::warn!(
-        "Daemon spawned (PID {pid}) but did not become ready within {SPAWN_READY_TIMEOUT:?}"
-    );
-    Err(anyhow::anyhow!(
-        "Daemon spawned (PID {pid}) but did not become ready within {SPAWN_READY_TIMEOUT:?}"
-    ))
+    let msg = failure.unwrap_or_else(|| "daemon failed to become ready".to_string());
+    tracing::warn!("{msg}");
+    Err(anyhow::anyhow!("{msg}"))
 }
 
 /// Force-stop the daemon and wait for the process to actually exit.

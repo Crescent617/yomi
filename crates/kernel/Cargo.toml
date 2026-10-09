@@ -78,5 +78,5 @@ tokio-test = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-# daemon_lock 的 flock(2) 与锁键里的 getuid()
-nix = { version = "0.31", features = ["fs", "user"] }
+# daemon_lock 的 flock(2)
+nix = { version = "0.31", features = ["fs"] }

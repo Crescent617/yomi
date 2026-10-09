@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- daemon 单例锁改放在数据目录的 `run/` 子目录（`yomi daemon lock-path` 可查路径），运行时文件归拢一处；不再兼容旧版锁文件——升级期间请用 `yomi daemon restart` 原地换版本，不要新旧进程混跑同一数据目录。
+- spawn 拉起 daemon 的就绪判定简化为单循环：hello 握手通过即就绪，进程提前退出立即报错（不再等满超时，报错区分"秒退"与"超时"），总预算 30 秒（每次探测另有 5 秒上界）兜住慢初始化。
+
 ## [0.11.8] - 2026-10-09
 
 ### Fixed

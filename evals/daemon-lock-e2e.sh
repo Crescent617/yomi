@@ -48,11 +48,9 @@ wait_down() { # socket
   done
   return 1
 }
-# 锁与 meta 自 2026-10 起在 /tmp（按 data_dir 哈希命名，见 daemon_lock
-# 模块文档），路径由 CLI 自报，sed 把 .lock 换成 .lock.meta。
+# 锁与 meta 在 <data_dir>/run/ 下（2026-10-09 起），路径确定，直读。
 lock_meta() { # data_dir
-  env YOMI_DATA_DIR="$1" YOMI_CONFIG="$E2E/config.toml" \
-    "$YOMI" daemon lock-path | sed 's/\.lock$/.lock.meta/'
+  echo "$1/run/daemon.lock.meta"
 }
 
 echo "── 1. daemon A 起（data-a / a.sock）"
