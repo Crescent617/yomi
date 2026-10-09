@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.10] - 2026-10-10
+
 ### Fixed
 - `yomi daemon start` 不再用 pid 文件判断"daemon 是否已运行"：容器/PVC 场景下 pod 重建的新 pid namespace 里，残留 pid 文件指向的号极易被无关进程占用，导致误报"已在运行"拒绝启动。现在活性只信 wire hello，排他只信单例锁；pid 文件保留为停机信号靶标（`daemon stop` 用）。
 
