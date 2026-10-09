@@ -103,4 +103,15 @@ env YOMI_DATA_DIR="$DC" YOMI_CONFIG="$E2E/config.toml" YOMI_SOCKET="unix://$E2E/
 wait_down "$E2E/d.sock" && wait_down "$E2E/c.sock" || { echo "FAIL: cleanup"; exit 1; }
 echo "ok"
 
+echo "── 7. K8s pod 重建场景：残留 pid 文件指向存活但无关的进程，不得挡启动"
+# pid 文件是 socket 同级的 .pid；pod 重建后新 pid namespace 里，旧 pod
+# 留下的 pid 号极易被无关进程占用——若拿它当活性判据会误拒启动。
+# 用本脚本自己的 pid（必活、且不是 daemon）种残留。
+echo $$ > "$E2E/d.pid"
+run_daemon "$DA" "$E2E/d.sock" "$E2E/e.log"
+wait_up "$DA" "$E2E/d.sock" || { echo "FAIL: stale-pid/live-process blocked start"; cat "$E2E/e.log"; exit 1; }
+env YOMI_DATA_DIR="$DA" YOMI_CONFIG="$E2E/config.toml" YOMI_SOCKET="unix://$E2E/d.sock" "$YOMI" daemon stop >/dev/null 2>&1
+wait_down "$E2E/d.sock" || { echo "FAIL: cleanup after stale-pid test"; exit 1; }
+echo "ok"
+
 echo "PASS: daemon-lock e2e"

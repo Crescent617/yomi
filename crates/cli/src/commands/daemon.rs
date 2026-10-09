@@ -39,28 +39,18 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
 
     match cmd {
         DaemonCommands::Start { auto_exit } => {
-            // Guard against running multiple daemon instances. "Already
-            // running" 的判定必须过 wire hello——socket 文件还在、
-            // 对面 accept 但不是健康 yomi（残骸/卡死/别的进程）时，
-            // 不能拿它挡启动；hello 不通就继续走下面的启动流程，
-            // 真被占用会在单例锁或 bind 处得到明确错误。
+            // Guard: "已运行"只信 wire hello——socket 可连但答不出 hello
+            // 的（残骸/卡死/别的进程）不挡启动；真被占用会在单例锁或
+            // bind 处得到明确错误。
+            //
+            // 故意不看 pid 文件："pid 活着"在容器里不可靠（pod 重建后
+            // 新 pid namespace 里同号进程一大把，PVC 上残留的 pid 文件
+            // 会让我们把无关进程当成 daemon 拒启动）。pid 文件降级为
+            // 纯粹的停机信号靶标（daemon stop 用），不再是活性判据。
             if crate::daemon::try_connect_hello().await.is_some() {
                 tracing::info!("Daemon already running, refusing to start");
                 println!("Daemon is already running");
                 return Ok(());
-            }
-            let pid_file = crate::daemon::pid_file_path();
-            if let Ok(s) = tokio::fs::read_to_string(&pid_file).await {
-                if let Ok(pid) = s.trim().parse::<u32>() {
-                    if crate::daemon::process_exists(pid) {
-                        tracing::info!(pid = pid, "Daemon already running, refusing to start");
-                        println!("Daemon is already running (PID {pid})");
-                        return Ok(());
-                    }
-                }
-                // Stale PID file — clean it up
-                let _ = tokio::fs::remove_file(&pid_file).await;
-                tracing::info!("Stale PID file, cleaning up");
             }
 
             if let Some(config_path) = &global.config {
@@ -136,6 +126,8 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
             }
 
             // Write PID file so external tools can find and signal us.
+            // 它只是停机信号靶标（daemon stop 按它发信号），不是活性判据。
+            let pid_file = crate::daemon::pid_file_path();
             if let Some(parent) = pid_file.parent() {
                 tokio::fs::create_dir_all(parent).await?;
             }
