@@ -59,3 +59,43 @@ jobs:
   gui-build:
     name: Build GUI (Windows)
     uses: ./.github/workflows/build-windows.yml
+
+  # MSI 无头装-验-卸（per-user 包的端到端守门；本地 win11 VM 随
+  # qemu/macOS 升级已不可 boot，runner 就是真 Windows 且可重复）。
+  msi-e2e:
+    name: msi install e2e
+    runs-on: windows-latest
+    needs: gui-build
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          name: gui-windows-installers
+          path: dist
+
+      - name: Install / verify / uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msi = Get-ChildItem dist/*.msi | Select-Object -First 1
+          $dir = "$env:LOCALAPPDATA\Programs\Yomi"
+
+          # 装（per-user 免管理员静默装；exit 0 即第一重断言）
+          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$($msi.FullName)`"", '/qn', '/norestart', '/l*v', "$env:TEMP\msi-e2e-install.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content "$env:TEMP\msi-e2e-install.log" -Tail 40; throw "install exit=$($p.ExitCode)" }
+
+          # 验：落点、sidecar、HKCU 卸载项、用户 PATH、CLI 可跑
+          function Should-BeTrue($cond, $what) { if (-not $cond) { throw "check failed: $what" } }
+          Should-BeTrue (Test-Path "$dir\yomi-gui.exe") 'yomi-gui.exe present'
+          Should-BeTrue (Test-Path "$dir\yomi.exe") 'sidecar yomi.exe present'
+          $prod = Get-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' |
+            Where-Object { $_.DisplayName -like '*Yomi*' } | Select-Object -First 1
+          Should-BeTrue ($null -ne $prod) 'HKCU uninstall entry'
+          Should-BeTrue (((Get-ItemProperty 'HKCU:\Environment').Path) -like "*$dir*") 'user PATH contains dir'
+          $v = & "$dir\yomi.exe" --version
+          Should-BeTrue ("$v" -match 'yomi 0\.') "yomi --version => $v"
+
+          # 卸 + 清理干净
+          $u = Start-Process msiexec.exe -ArgumentList '/x', "`"$($prod.PSChildName)`"", '/qn', '/norestart' -Wait -PassThru
+          if ($u.ExitCode -ne 0) { throw "uninstall exit=$($u.ExitCode)" }
+          Should-BeTrue (-not (Test-Path $dir)) 'dir removed'
+          Should-BeTrue (-not (((Get-ItemProperty 'HKCU:\Environment').Path) -like "*$dir*")) 'user PATH cleaned'
