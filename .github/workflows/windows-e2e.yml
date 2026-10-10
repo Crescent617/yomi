@@ -79,9 +79,12 @@ jobs:
           $msi = Get-ChildItem dist/*.msi | Select-Object -First 1
           $dir = "$env:LOCALAPPDATA\Programs\Yomi"
 
-          # 装（per-user 免管理员静默装；exit 0 即第一重断言）
-          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$($msi.FullName)`"", '/qn', '/norestart', '/l*v', "$env:TEMP\msi-e2e-install.log" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { Get-Content "$env:TEMP\msi-e2e-install.log" -Tail 40; throw "install exit=$($p.ExitCode)" }
+          # 装（per-user 免管理员静默装；exit 0 即第一重断言）。
+          # 用调用操作符而非 Start-Process -ArgumentList：后者对嵌入
+          # 引号的参数重组有前科，这次把 /i 值拼丢成空串（msiexec
+          # 1619）。
+          & msiexec.exe /i "$($msi.FullName)" /qn /norestart /l*v "$env:TEMP\msi-e2e-install.log" | Out-Null
+          if ($LASTEXITCODE -ne 0) { Get-Content "$env:TEMP\msi-e2e-install.log" -Tail 40; throw "install exit=$LASTEXITCODE" }
 
           # 验：落点、sidecar、HKCU 卸载项、用户 PATH、CLI 可跑
           function Should-BeTrue($cond, $what) { if (-not $cond) { throw "check failed: $what" } }
@@ -95,7 +98,7 @@ jobs:
           Should-BeTrue ("$v" -match 'yomi 0\.') "yomi --version => $v"
 
           # 卸 + 清理干净
-          $u = Start-Process msiexec.exe -ArgumentList '/x', "`"$($prod.PSChildName)`"", '/qn', '/norestart' -Wait -PassThru
-          if ($u.ExitCode -ne 0) { throw "uninstall exit=$($u.ExitCode)" }
+          & msiexec.exe /x "$($prod.PSChildName)" /qn /norestart | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "uninstall exit=$LASTEXITCODE" }
           Should-BeTrue (-not (Test-Path $dir)) 'dir removed'
           Should-BeTrue (-not (((Get-ItemProperty 'HKCU:\Environment').Path) -like "*$dir*")) 'user PATH cleaned'
