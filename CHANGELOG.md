@@ -15,7 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.12] - 2026-10-10
+
 ### Fixed
+- Windows 上 shell 命令经管道把中文传给外部程序时不再变成问号：此前 PowerShell 对管道文本默认按 US-ASCII 编码，shell 工具、cron 任务、扩展安装等所有命令入口统一修复。
 - Windows 上 `yomi daemon stop` 发完信号会等端口真正不再应答才返回，优雅停机超时后也会升级强杀：此前这两个等待从不生效（该平台上没有可靠的进程活性判定），停机命令发完信号立即报成功，重启可能与旧进程撞端口。
 
 ## [0.11.11] - 2026-10-10
