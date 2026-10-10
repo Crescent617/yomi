@@ -42,35 +42,6 @@ pub async fn try_connect() -> Option<kernel::transport::Stream> {
     kernel::transport::connect(&addr).await.ok()
 }
 
-/// Force-stop the daemon and wait for the process to actually exit.
-#[cfg(not(unix))]
-pub async fn stop_daemon() -> Result<()> {
-    let pid_file = pid_file_path();
-    let pid = match tokio::fs::read_to_string(&pid_file).await {
-        Ok(s) => s.trim().parse::<u32>().ok(),
-        Err(_) => None,
-    };
-
-    if let Some(pid) = pid {
-        tracing::info!("Sending kill signal to daemon (PID {pid})...");
-        let _ = std::process::Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/F"])
-            .output();
-    }
-
-    // 等 socket 不再应答 = 进程真退了、端口已释放，后续 spawn 不会与
-    // 旧进程撞端口。pid 文件缺失/指向已死进程时这里立即返回成功。
-    if !wait_until_down(Duration::from_secs(5), Duration::from_millis(100)).await {
-        anyhow::bail!("daemon is still answering on {} after kill", socket_addr());
-    }
-
-    // Only remove PID file after confirming the daemon is gone.
-    let _ = tokio::fs::remove_file(&pid_file).await;
-
-    tracing::info!("Daemon force-stopped");
-    Ok(())
-}
-
 /// 当前环境对应的 `data_dir`：与 `init_kernel` 同款推导（config 文件
 /// 发现 + env 覆盖 + finalize）。锁探针的键——只按 env 推会让
 /// config.toml 里设了 `data_dir` 的用户探错锁、`daemon stop` 静默空转。
