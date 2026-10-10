@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.11] - 2026-10-10
+
 ### Changed
 - unix 上 `yomi daemon stop`/`status`/restart 交接判定改用单例锁探针，pid 文件从 unix 彻底移除：试抢锁（Free = 没有 cron daemon；Held 时 meta 里的 pid 必是持有者本人——flock 被持有则进程必活、pid 必未回收）比"pid 文件 + 进程活性"硬，杜绝 K8s pod 重建后误杀无关进程。信号只发给锁持有者；持有者信息不可读时拒发信号并给出锁路径。pid 文件仅 Windows 保留（该平台上锁是 no-op）。
 - `yomi daemon stop`/restart 现在同样认配置文件里的 data 目录设置：以前在配置文件（而非环境变量）中改了数据目录的用户，停机命令会探错目录而报"没有 daemon 在跑"。
