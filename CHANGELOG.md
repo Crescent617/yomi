@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Windows 上 `yomi daemon stop` 发完信号会等端口真正不再应答才返回，优雅停机超时后也会升级强杀：此前这两个等待从不生效（该平台上没有可靠的进程活性判定），停机命令发完信号立即报成功，重启可能与旧进程撞端口。
+
 ## [0.11.11] - 2026-10-10
 
 ### Changed

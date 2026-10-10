@@ -17,21 +17,58 @@ const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(90);
 /// Polling interval while waiting for graceful shutdown.
 const GRACEFUL_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-/// Check whether a process with the given PID exists.
-/// 只用于 Windows 停机路径的等待循环；unix 路径一律走锁探针，
-/// 不信任何来源的 pid 活性（pid namespace 复用会让"pid 活着"撒谎）。
+/// Wait until nothing answers on the daemon socket — i.e. the process has
+/// exited and released the port. On Windows this is the only hard exit
+/// criterion: no flock, no reliable pid liveness, so the wire is the
+/// ground truth (same principle as the unix lock-oracle). Returns true
+/// if the socket went silent within `timeout`.
 #[cfg(not(unix))]
-pub fn process_exists(_pid: u32) -> bool {
-    // We cannot reliably detect process liveness on Windows without
-    // adding heavy dependencies (OpenProcess / GetExitCodeProcess).
-    // Callers should use `try_connect()` as the ground-truth signal.
-    false
+async fn wait_until_down(timeout: Duration, interval: Duration) -> bool {
+    let start = tokio::time::Instant::now();
+    loop {
+        if try_connect().await.is_none() {
+            return true;
+        }
+        if start.elapsed() >= timeout {
+            return false;
+        }
+        sleep(interval).await;
+    }
 }
 
 /// Try connecting to the daemon.
 pub async fn try_connect() -> Option<kernel::transport::Stream> {
     let addr = socket_addr();
     kernel::transport::connect(&addr).await.ok()
+}
+
+/// Force-stop the daemon and wait for the process to actually exit.
+#[cfg(not(unix))]
+pub async fn stop_daemon() -> Result<()> {
+    let pid_file = pid_file_path();
+    let pid = match tokio::fs::read_to_string(&pid_file).await {
+        Ok(s) => s.trim().parse::<u32>().ok(),
+        Err(_) => None,
+    };
+
+    if let Some(pid) = pid {
+        tracing::info!("Sending kill signal to daemon (PID {pid})...");
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .output();
+    }
+
+    // 等 socket 不再应答 = 进程真退了、端口已释放，后续 spawn 不会与
+    // 旧进程撞端口。pid 文件缺失/指向已死进程时这里立即返回成功。
+    if !wait_until_down(Duration::from_secs(5), Duration::from_millis(100)).await {
+        anyhow::bail!("daemon is still answering on {} after kill", socket_addr());
+    }
+
+    // Only remove PID file after confirming the daemon is gone.
+    let _ = tokio::fs::remove_file(&pid_file).await;
+
+    tracing::info!("Daemon force-stopped");
+    Ok(())
 }
 
 /// 当前环境对应的 `data_dir`：与 `init_kernel` 同款推导（config 文件
@@ -318,19 +355,13 @@ pub async fn stop_daemon() -> Result<()> {
             .output();
     }
 
-    // Wait for the process to actually exit so a subsequent spawn
-    // doesn't race with the old process holding the socket.
-    if let Some(pid) = pid {
-        let start = tokio::time::Instant::now();
-        while process_exists(pid) && start.elapsed() < Duration::from_secs(2) {
-            sleep(Duration::from_millis(50)).await;
-        }
-        if process_exists(pid) {
-            anyhow::bail!("daemon process {pid} is still running after kill");
-        }
+    // 等 socket 不再应答 = 进程真退了、端口已释放，后续 spawn 不会与
+    // 旧进程撞端口。pid 文件缺失/指向已死进程时这里立即返回成功。
+    if !wait_until_down(Duration::from_secs(5), Duration::from_millis(100)).await {
+        anyhow::bail!("daemon is still answering on {} after kill", socket_addr());
     }
 
-    // Only remove PID file after confirming the process is gone.
+    // Only remove PID file after confirming the daemon is gone.
     let _ = tokio::fs::remove_file(&pid_file).await;
 
     tracing::info!("Daemon force-stopped");
@@ -386,22 +417,17 @@ pub async fn graceful_shutdown() -> Result<()> {
             .output();
     }
 
-    if let Some(pid) = pid {
-        let start = tokio::time::Instant::now();
-        while process_exists(pid) && start.elapsed() < GRACEFUL_SHUTDOWN_TIMEOUT {
-            sleep(GRACEFUL_SHUTDOWN_POLL_INTERVAL).await;
-        }
-    }
-
-    if pid.is_some_and(process_exists) {
-        tracing::warn!("Daemon did not exit gracefully, falling back to kill");
-        stop_daemon().await?;
-    } else {
+    // Windows 锁是 no-op，"进程退了没"只能看 socket 还答不答（同 unix
+    // 锁探针一个原则：活性/退出判据必须硬）。优雅窗口走完仍应答才升级
+    // 强杀；pid 文件缺失/指向已死进程时 taskkill 无效、等待立即成功。
+    if wait_until_down(GRACEFUL_SHUTDOWN_TIMEOUT, GRACEFUL_SHUTDOWN_POLL_INTERVAL).await {
         let _ = tokio::fs::remove_file(&pid_file).await;
         tracing::info!("Daemon shut down gracefully");
+        Ok(())
+    } else {
+        tracing::warn!("Daemon did not exit gracefully, falling back to kill");
+        stop_daemon().await
     }
-
-    Ok(())
 }
 
 /// Restart the daemon.

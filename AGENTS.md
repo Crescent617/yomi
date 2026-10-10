@@ -8,7 +8,7 @@
    sessions; nothing lives off-stream.
 2. **State is cache** — discarded at will, restored at a fold.
 3. **Model is suspect** — bounded by design, not by hope.
-4. **One data dir, one cron kernel** — `daemon_lock`（flock on `<data_dir>/run/daemon.lock`，仅 enable_cron 的 kernel 获取，`Kernel::stop()` 释放）；环境隔离靠不同 `YOMI_DATA_DIR` 天然并行。锁与 `*.meta` 是运行时文件，归拢在 `run/` 子目录。无跨版本兼容负担（不与旧版互斥，升级靠自杀式 restart 原地换版本）。"daemon 是否在跑"的判定以 wire hello 通过为准（`cli::daemon::try_connect_hello`），socket 可连不算数；unix 上停机/持有者的判定一律走锁探针（`daemon_lock::acquire` 试抢：Free = 无 cron daemon，Held 的 meta pid = 持有者本人——flock 被持有则 pid 必然未回收），任何路径不得拿 pid 活性当判据（容器里 pid namespace 复用会让"pid 活着"撒谎）；pid 文件仅 Windows 停机路径使用。取消与归属语义见 `docs/ARCH.md`「取消与归属」。
+4. **One data dir, one cron kernel** — `daemon_lock`（flock on `<data_dir>/run/daemon.lock`，仅 enable_cron 的 kernel 获取，`Kernel::stop()` 释放）；环境隔离靠不同 `YOMI_DATA_DIR` 天然并行。锁与 `*.meta` 是运行时文件，归拢在 `run/` 子目录。无跨版本兼容负担（不与旧版互斥，升级靠自杀式 restart 原地换版本）。"daemon 是否在跑"的判定以 wire hello 通过为准（`cli::daemon::try_connect_hello`），socket 可连不算数；unix 上停机/持有者的判定一律走锁探针（`daemon_lock::acquire` 试抢：Free = 无 cron daemon，Held 的 meta pid = 持有者本人——flock 被持有则 pid 必然未回收），任何路径不得拿 pid 活性当判据（容器里 pid namespace 复用会让"pid 活着"撒谎）；pid 文件仅 Windows 停机路径使用（信号靶标，退出判据以 socket 应答为准——该平台上进程活性无可靠判定）。取消与归属语义见 `docs/ARCH.md`「取消与归属」。
 
 ### Extension: four ports, no fifth
 
