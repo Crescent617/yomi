@@ -165,10 +165,11 @@ async fn powershell_exit_survives_trailing_comment() {
 }
 
 /// $OutputEncoding 实机验证：PowerShell 管道文本传给原生程序按
-/// $OutputEncoding 编码，默认 US-ASCII 会把中文变成 ?；前缀设了
-/// UTF8 后 `"中文" | more.com` 的原生输出必须仍含中文。注意必须
-/// 写 `more.com` 全称：`more` 在 PowerShell 里是函数，会吞掉管道
-/// 输入（进 $input 后被丢弃），测不到编码路径。
+/// $OutputEncoding 编码（PS 5.1 默认 US-ASCII，中文变 ?；pwsh 7 默认
+/// 已是 UTF8，此条同时防回归）。前缀设了 UTF8 后 `$OutputEncoding`
+/// 的 WebName 必须是 utf-8。不断言原生程序回显：管道无换行结尾时
+/// more.com/sort.exe 等 stock 工具行为不定（2026-10-10 两轮实证），
+/// 把机制断言在编码变量本身上。
 #[tokio::test]
 async fn powershell_pipe_chinese_to_native_survives() {
     for path in [
@@ -184,21 +185,17 @@ async fn powershell_pipe_chinese_to_native_survives() {
         }
         let mut cmd = ShellTool::build_command_with_shell(
             &ps,
-            "\"中文\" | more.com",
+            "$OutputEncoding.WebName",
             Path::new("C:\\"),
             "sess_test",
             None,
         );
         let out = cmd.output().await.unwrap();
-        assert!(
-            out.status.success(),
-            "{path}: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
         let stdout = String::from_utf8_lossy(&out.stdout);
         assert!(
-            stdout.contains("中文"),
-            "{path}: $OutputEncoding not UTF-8, Chinese mangled: {stdout:?}"
+            out.status.success() && stdout.trim() == "utf-8",
+            "{path}: $OutputEncoding={stdout:?} (expect utf-8), stderr={:?}",
+            String::from_utf8_lossy(&out.stderr)
         );
     }
 }
