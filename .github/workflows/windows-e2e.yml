@@ -76,7 +76,9 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $msi = Get-ChildItem dist/*.msi | Select-Object -First 1
+          Get-ChildItem dist -Recurse -File | ForEach-Object { "dist: $($_.FullName)" }
+          $msi = Get-ChildItem dist -Recurse -Filter *.msi | Select-Object -First 1
+          if (-not $msi) { throw 'no .msi found under dist/' }
           $dir = "$env:LOCALAPPDATA\Programs\Yomi"
 
           # 装（per-user 免管理员静默装；exit 0 即第一重断言）。
