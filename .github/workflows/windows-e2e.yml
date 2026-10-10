@@ -92,9 +92,16 @@ jobs:
           function Should-BeTrue($cond, $what) { if (-not $cond) { throw "check failed: $what" } }
           Should-BeTrue (Test-Path "$dir\yomi-gui.exe") 'yomi-gui.exe present'
           Should-BeTrue (Test-Path "$dir\yomi.exe") 'sidecar yomi.exe present'
-          $prod = Get-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' |
-            Where-Object { $_.DisplayName -like '*Yomi*' } | Select-Object -First 1
-          Should-BeTrue ($null -ne $prod) 'HKCU uninstall entry'
+          $prod = $null
+          foreach ($root in 'HKCU:', 'HKLM:') {
+            $k = "$root\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+            if (Test-Path $k) {
+              $prod = Get-ItemProperty "$k\*" -ErrorAction SilentlyContinue |
+                Where-Object { $_.DisplayName -like '*Yomi*' } | Select-Object -First 1
+              if ($prod) { "ARP entry: $k\$($prod.PSChildName) ver=$($prod.DisplayVersion)"; break }
+            }
+          }
+          Should-BeTrue ($null -ne $prod) 'ARP uninstall entry (HKCU or HKLM)'
           Should-BeTrue (((Get-ItemProperty 'HKCU:\Environment').Path) -like "*$dir*") 'user PATH contains dir'
           $v = & "$dir\yomi.exe" --version
           Should-BeTrue ("$v" -match 'yomi 0\.') "yomi --version => $v"
