@@ -102,6 +102,18 @@ jobs:
           name: wix-intermediates
           path: target/release/wix/
 
+      # tauri 把 light.exe 的 stderr 吞成一句 "failed to run light.exe"，
+      # ICE/LGHT 错误码不可见。失败时在 runner 上原样重跑一遍 light，
+      # 完整输出留在 job log。
+      - name: Rerun light with visible output
+        if: failure()
+        shell: pwsh
+        working-directory: target/release/wix/x64
+        run: |
+          $wix = "$env:LOCALAPPDATA\tauri\WixTools314"
+          & "$wix\light.exe" -ext WixUIExtension -ext WixUtilExtension `
+            -o repro.msi -cultures:en-us -loc locale.wxl *.wixobj | Out-String -Width 300
+
       - uses: actions/upload-artifact@v6
         with:
           name: gui-windows-installers
