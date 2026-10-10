@@ -271,9 +271,11 @@ fn init_path_validation() {
     assert!(err.to_string().contains("subdirectory path"), "{err}");
 
     // 绝对路径：join 会被整体替换、装到目标位置后必 127，拒。
-    // 用当前平台认的绝对路径——Windows 不认 "/tmp/..." 为绝对。
+    // 用当前平台认的绝对路径——Windows 不认 "/tmp/..." 为绝对；
+    // Windows 侧用正斜杠写法（TOML 基本字符串里反斜杠是转义字符，
+    // 且 Windows API 接受正斜杠）。
     let abs = if cfg!(windows) {
-        "C:\\evil.sh"
+        "C:/evil.sh"
     } else {
         "/tmp/evil.sh"
     };
