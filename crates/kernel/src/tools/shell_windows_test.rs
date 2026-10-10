@@ -166,7 +166,9 @@ async fn powershell_exit_survives_trailing_comment() {
 
 /// $OutputEncoding 实机验证：PowerShell 管道文本传给原生程序按
 /// $OutputEncoding 编码，默认 US-ASCII 会把中文变成 ?；前缀设了
-/// UTF8 后 `"中文" | more` 的原生输出必须仍含中文。
+/// UTF8 后 `"中文" | more.com` 的原生输出必须仍含中文。注意必须
+/// 写 `more.com` 全称：`more` 在 PowerShell 里是函数，会吞掉管道
+/// 输入（进 $input 后被丢弃），测不到编码路径。
 #[tokio::test]
 async fn powershell_pipe_chinese_to_native_survives() {
     for path in [
@@ -182,7 +184,7 @@ async fn powershell_pipe_chinese_to_native_survives() {
         }
         let mut cmd = ShellTool::build_command_with_shell(
             &ps,
-            "\"中文\" | more",
+            "\"中文\" | more.com",
             Path::new("C:\\"),
             "sess_test",
             None,
