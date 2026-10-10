@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.13] - 2026-10-11
+
 ### Changed
 - Windows 安装包改为 per-user：安装不再需要管理员权限，默认装进 `%LOCALAPPDATA%\Programs\Yomi\`（安装界面可改），安装目录写入用户 PATH 而非系统 PATH；此前 per-machine 旧版不会自动迁移，请卸载旧版后再装。
 
