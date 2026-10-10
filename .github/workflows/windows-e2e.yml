@@ -24,6 +24,10 @@ jobs:
       # feishu feature 的 lark-websocket-protobuf 构建需要 protoc
       - name: Install protoc
         uses: arduino/setup-protoc@v3
+        with:
+          # 匿名下载 protoc 常撞 GitHub 共享出口限流（kernel job 三进宫），
+          # 带 token 走认证限额。
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache cargo
         uses: actions/cache@v4
