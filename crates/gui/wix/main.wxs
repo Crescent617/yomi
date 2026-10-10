@@ -193,9 +193,12 @@
             </Component>
             {{#each binaries as |bin| ~}}
             <Component Id="{{ bin.id }}" Guid="{{bin.guid}}" Win64="$(var.Win64)">
-                <!-- per-user ICE38：同上，HKCU 注册表值做 KeyPath -->
+                <!-- per-user ICE38：同上，HKCU 注册表值做 KeyPath。
+                     each 块内上下文是 bin，根级 manufacturer/product_name
+                     必须用 ../ 上溯（参照下方 file_associations 的
+                     {{../../product_name}} 惯例），否则渲染成空串 -->
                 <File Id="Bin_{{ bin.id }}" Source="{{bin.path}}"/>
-                <RegistryValue Root="HKCU" Key="Software\\{{manufacturer}}\\{{product_name}}" Name="Installed {{ bin.id }}" Type="integer" Value="1" KeyPath="yes"/>
+                <RegistryValue Root="HKCU" Key="Software\\{{../manufacturer}}\\{{../product_name}}" Name="Installed {{ bin.id }}" Type="integer" Value="1" KeyPath="yes"/>
             </Component>
             {{/each~}}
             {{#if enable_elevated_update_task}}
