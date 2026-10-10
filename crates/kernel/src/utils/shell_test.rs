@@ -237,6 +237,13 @@ fn leading_args_and_wrapping_per_kind() {
     );
     let ps_wrapped = ps.wrap_command("ls");
     assert!(ps_wrapped.starts_with("[Console]::OutputEncoding="));
+    // 管道文本传给原生程序按 $OutputEncoding 编码（默认 US-ASCII，
+    // 中文变 ?）；stdin 按 InputEncoding 解码。三个都必须设。
+    assert!(
+        ps_wrapped.contains("[Console]::InputEncoding="),
+        "{ps_wrapped}"
+    );
+    assert!(ps_wrapped.contains("$OutputEncoding="), "{ps_wrapped}");
     // -Command 不传播 native 命令退出码：必须显式 exit；exit 另起
     // 一行，命令末行的 `#` 注释吞不掉它。
     assert!(ps_wrapped.ends_with("\nexit $LASTEXITCODE"), "{ps_wrapped}");

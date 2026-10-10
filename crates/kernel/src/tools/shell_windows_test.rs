@@ -164,6 +164,43 @@ async fn powershell_exit_survives_trailing_comment() {
     }
 }
 
+/// $OutputEncoding 实机验证：PowerShell 管道文本传给原生程序按
+/// $OutputEncoding 编码，默认 US-ASCII 会把中文变成 ?；前缀设了
+/// UTF8 后 `"中文" | more` 的原生输出必须仍含中文。
+#[tokio::test]
+async fn powershell_pipe_chinese_to_native_survives() {
+    for path in [
+        r"C:\Program Files\PowerShell\7\pwsh.exe",
+        r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+    ] {
+        let ps = AgentShell {
+            kind: ShellKind::PowerShell,
+            path: PathBuf::from(path),
+        };
+        if !ps.path.is_file() {
+            continue;
+        }
+        let mut cmd = ShellTool::build_command_with_shell(
+            &ps,
+            "\"中文\" | more",
+            Path::new("C:\\"),
+            "sess_test",
+            None,
+        );
+        let out = cmd.output().await.unwrap();
+        assert!(
+            out.status.success(),
+            "{path}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains("中文"),
+            "{path}: $OutputEncoding not UTF-8, Chinese mangled: {stdout:?}"
+        );
+    }
+}
+
 /// 探测选出的 shell 必须通过实战同型验证：执行带内嵌引号的 echo
 /// 成功且输出正确无反斜杠残留（busybox shim 冒名 bash 场景的最终
 /// 防线，2026-09-11 Windows 实测）。

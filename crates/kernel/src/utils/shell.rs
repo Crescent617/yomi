@@ -62,7 +62,11 @@ impl AgentShell {
     }
 
     /// 包装命令文本：Windows 的两个解释器默认输出非 UTF-8 代码页，
-    /// 统一注入 UTF-8 输出前缀；PowerShell 追加 `exit $LASTEXITCODE`
+    /// 统一注入 UTF-8 前缀。PowerShell 要设三个：OutputEncoding 管
+    /// 控制台显示，InputEncoding 管 stdin 解码（无控制台进程上赋值
+    /// 会抛异常，包 try/catch 降噪——收益小不能反噬调用方），
+    /// $`OutputEncoding` 管管道文本传给原生程序的编码（默认
+    /// US-ASCII，中文变 ?）；PowerShell 追加 `exit $LASTEXITCODE`
     /// ——`-Command` 不传播 native 命令的退出码（`git push` 失败
     /// PowerShell 仍退出 0），必须显式 exit。exit 另起一行而非 `;`
     /// 连接：命令末行若以 `#` 注释结尾，同行追加的 exit 会被注释
@@ -72,7 +76,7 @@ impl AgentShell {
         match self.kind {
             ShellKind::Posix => Cow::Borrowed(command),
             ShellKind::PowerShell => Cow::Owned(format!(
-                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; {command}\nexit $LASTEXITCODE"
+                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; try {{ [Console]::InputEncoding=[System.Text.Encoding]::UTF8 }} catch {{}}; $OutputEncoding=[System.Text.Encoding]::UTF8; {command}\nexit $LASTEXITCODE"
             )),
             ShellKind::Cmd => Cow::Owned(format!("chcp 65001 >nul & {command}")),
         }
