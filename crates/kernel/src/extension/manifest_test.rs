@@ -271,7 +271,13 @@ fn init_path_validation() {
     assert!(err.to_string().contains("subdirectory path"), "{err}");
 
     // 绝对路径：join 会被整体替换、装到目标位置后必 127，拒。
-    let dir = write_pkg(&[("ext.toml", &format!("{BASE}init = \"/tmp/evil.sh\"\n"))]);
+    // 用当前平台认的绝对路径——Windows 不认 "/tmp/..." 为绝对。
+    let abs = if cfg!(windows) {
+        "C:\\evil.sh"
+    } else {
+        "/tmp/evil.sh"
+    };
+    let dir = write_pkg(&[("ext.toml", &format!("{BASE}init = \"{abs}\"\n"))]);
     let err = parse_manifest(dir.path()).unwrap_err();
     assert!(err.to_string().contains("package-relative"), "{err}");
 

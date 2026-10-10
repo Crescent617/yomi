@@ -179,14 +179,15 @@ fn inject_child_env_prepends_data_dir_bin_to_path() {
 
     let old_path = std::env::var("PATH").unwrap_or_default();
     let mut cmd = tokio::process::Command::new("true");
-    inject_child_env(
-        &mut cmd,
-        Some(std::path::Path::new("/data")),
-        Some("sess_1"),
-    );
+    let data_dir = std::path::Path::new("/data");
+    inject_child_env(&mut cmd, Some(data_dir), Some("sess_1"));
     let path = get(&cmd, "PATH").expect("PATH injected");
+    // PATH 分隔符平台相关（Windows 是 ';'）；bin 路径用 display 渲染
+    // （Windows 下是 `\` 分隔），不断言字面量。
+    let list_sep = if cfg!(windows) { ';' } else { ':' };
+    let bin = data_dir.join("bin");
     assert!(
-        path.starts_with(&format!("{}/bin:", std::path::Path::new("/data").display())),
+        path.starts_with(&format!("{}{list_sep}", bin.display())),
         "data_dir/bin prepended: {path}"
     );
     assert!(path.contains(&old_path), "original PATH preserved");
