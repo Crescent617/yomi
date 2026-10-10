@@ -86,6 +86,7 @@
     "externalBin": ["binaries/yomi"],
     "windows": {
       "wix": {
+        "template": "wix/main.wxs",
         "fragmentPaths": ["wix/path-env.wxs"],
         "componentGroupRefs": ["InstallDirOnPath"]
       }

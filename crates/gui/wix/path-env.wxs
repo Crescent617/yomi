@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  把 INSTALLDIR 追加到系统 PATH，让 msi 安装后用户 terminal 直接可用
+  把 INSTALLDIR 追加到 PATH，让 msi 安装后用户 terminal 直接可用
   bundle sidecar 的 yomi.exe。Permanent="no" 保证卸载时自动从 PATH 移除。
   经 bundle.windows.wix.fragmentPaths + componentGroupRefs 接入 main.wxs
   的 External feature。
+
+  per-user 包写系统 PATH（System="yes"）会因无管理员权限直接失败，
+  这里写用户 PATH（HKCU\Environment，System="no"）；新开的 terminal
+  生效，已运行的进程不受影响。
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Fragment>
@@ -18,7 +22,7 @@
              ICE18 要求该 Directory/Component 对登记进 CreateFolders 表 -->
         <CreateFolder />
         <Environment Id="InstallDirOnPath" Name="PATH" Action="set"
-                     Permanent="no" Part="last" Separator=";" System="yes"
+                     Permanent="no" Part="last" Separator=";" System="no"
                      Value="[INSTALLDIR]" />
       </Component>
     </DirectoryRef>

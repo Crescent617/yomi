@@ -60,9 +60,10 @@ agent 子进程里的 `yomi`）。
 ### Windows
 
 Download the `.msi` installer from the releases page (unsigned —
-expect a SmartScreen prompt)。安装包内嵌 CLI sidecar，且 msi 会把
-安装目录加进系统 PATH——新开 terminal 即可直接使用 `yomi`（与
-GUI 同版）。
+expect a SmartScreen prompt)。安装为 per-user：免管理员，默认落
+`%LOCALAPPDATA%\Programs\Yomi\`（安装界面可改），安装目录写入
+**用户** PATH——新开的 terminal 即可直接使用 `yomi`（与 GUI 同
+版）。此前装过 per-machine 旧版的机器两者会并存，请自行卸载旧版。
 
 ## First-run setup
 
