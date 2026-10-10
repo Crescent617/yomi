@@ -125,13 +125,16 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
                 }
             }
 
-            // Write PID file so external tools can find and signal us.
-            // 它只是停机信号靶标（daemon stop 按它发信号），不是活性判据。
-            let pid_file = crate::daemon::pid_file_path();
-            if let Some(parent) = pid_file.parent() {
-                tokio::fs::create_dir_all(parent).await?;
+            // Windows 停机路径仍靠 pid 文件定位进程（锁是 no-op）；
+            // unix 一律走锁探针（见 cli::daemon），不再写 pid 文件。
+            #[cfg(not(unix))]
+            {
+                let pid_file = crate::daemon::pid_file_path();
+                if let Some(parent) = pid_file.parent() {
+                    tokio::fs::create_dir_all(parent).await?;
+                }
+                tokio::fs::write(&pid_file, std::process::id().to_string()).await?;
             }
-            tokio::fs::write(&pid_file, std::process::id().to_string()).await?;
 
             let (restart_tx, mut restart_rx) = tokio::sync::mpsc::channel(1);
             let restart_requested = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -195,9 +198,13 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
                 tokio::time::sleep(SHUTDOWN_POLL_INTERVAL).await;
             }
 
-            // Remove PID and socket files so external lifecycle tools
-            // (graceful_shutdown, spawn_daemon, etc.) know we've exited.
+            // Windows 停机路径仍靠 pid 文件定位进程，退出时必须清掉，
+            // 否则下次 stop 会对回收后的无关 pid 发 taskkill（正是本
+            // 改动在 unix 上消灭的误杀，别在 Windows 重新引入）。
+            #[cfg(not(unix))]
             let _ = tokio::fs::remove_file(crate::daemon::pid_file_path()).await;
+            // Remove socket files so external lifecycle tools
+            // (graceful_shutdown, spawn_daemon, etc.) know we've exited.
             for a in std::iter::once(&addr).chain(extra_addr.iter()) {
                 if let kernel::transport::SocketAddr::Unix(path) = a {
                     let _ = tokio::fs::remove_file(path).await;

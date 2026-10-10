@@ -1,7 +1,9 @@
 //! Daemon lifecycle management for yomi.
 
 use anyhow::{Context, Result};
-pub use kernel::transport::{pid_file_path, socket_addr};
+#[cfg(not(unix))]
+pub use kernel::transport::pid_file_path;
+pub use kernel::transport::socket_addr;
 use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
 
@@ -16,7 +18,10 @@ const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(90);
 const GRACEFUL_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Check whether a process with the given PID exists.
+/// 只用于 Windows 停机路径的等待循环；unix 路径一律走锁探针，
+/// 不信任何来源的 pid 活性（pid namespace 复用会让"pid 活着"撒谎）。
 #[cfg(unix)]
+#[allow(dead_code)]
 pub fn process_exists(pid: u32) -> bool {
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_ok()
 }
@@ -29,36 +34,103 @@ pub fn process_exists(_pid: u32) -> bool {
     false
 }
 
-/// Clean up the PID file if it is stale (non-existent process).
-/// Returns `true` if the file was removed, `false` if it is still valid or missing.
-pub async fn cleanup_stale_pid_file() -> bool {
-    let pid_file = pid_file_path();
-    if !pid_file.exists() {
-        return false;
-    }
-    let should_remove = match tokio::fs::read_to_string(&pid_file).await {
-        Ok(s) => match s.trim().parse::<u32>() {
-            Ok(pid) => !process_exists(pid),
-            Err(_) => true,
-        },
-        Err(_) => true,
-    };
-    if should_remove {
-        let _ = tokio::fs::remove_file(&pid_file).await;
-        tracing::info!("Removed stale PID file");
-    }
-    should_remove
-}
-
 /// Try connecting to the daemon.
 pub async fn try_connect() -> Option<kernel::transport::Stream> {
     let addr = socket_addr();
-    match kernel::transport::connect(&addr).await {
-        Ok(stream) => Some(stream),
-        Err(_) => {
-            let _ = cleanup_stale_pid_file().await;
-            None
+    kernel::transport::connect(&addr).await.ok()
+}
+
+/// 当前环境对应的 `data_dir`：与 `init_kernel` 同款推导（config 文件
+/// 发现 + env 覆盖 + finalize）。锁探针的键——只按 env 推会让
+/// config.toml 里设了 `data_dir` 的用户探错锁、`daemon stop` 静默空转。
+#[cfg(unix)]
+fn data_dir() -> Result<PathBuf> {
+    Ok(crate::utils::load_config(None)?.data_dir)
+}
+
+/// 锁探针结果：`data_dir` 有没有 cron daemon 持有。
+#[cfg(unix)]
+enum LockProbe {
+    /// 锁空闲：没有 cron daemon 在跑（探针守卫已即取即放）。
+    Free,
+    /// 锁被持有。owner 为 best-effort 读到的持有者信息，可能 None。
+    Held(Option<kernel::daemon_lock::LockOwner>),
+}
+
+/// 锁探针：非阻塞试抢 `data_dir` 单例锁。
+///
+/// 这是比 pid 文件更硬的活性/身份判据：flock 被持有 ⇒ 持有者进程
+/// 存活 ⇒ 它的 pid 不可能被回收 ⇒ meta 里的 pid 就是持有者本人。pid
+/// 文件做不到——跨 pod 残留的 pid 在新 pid namespace 里早已易主，
+/// 拿它发信号会误杀无关进程。
+#[cfg(unix)]
+fn probe_lock() -> Result<LockProbe> {
+    let data_dir = data_dir()?;
+    match kernel::daemon_lock::acquire(&data_dir) {
+        Ok(guard) => {
+            drop(guard);
+            Ok(LockProbe::Free)
         }
+        Err(kernel::daemon_lock::AcquireError::Contended { owner }) => Ok(LockProbe::Held(owner)),
+        Err(kernel::daemon_lock::AcquireError::Io(e)) => Err(e.into()),
+    }
+}
+
+/// 锁持有者的 pid。只在锁被持有的前提下可信（见 `probe_lock`）；
+/// 锁空闲时 meta 是旧残留，读出来的 pid 可能已经易主。
+#[cfg(unix)]
+fn lock_holder_pid() -> Option<u32> {
+    data_dir()
+        .ok()
+        .and_then(|d| kernel::daemon_lock::read_owner(&d))
+        .map(|o| o.pid)
+}
+
+/// 停机信号的发送对象。
+///
+/// 以 `data_dir` 锁为键：停机找的是"这个 `data_dir` 的 cron 持有者"，
+/// 不是"这个 socket 后面的进程"。socket override 的调用方必须同时
+/// 给出 `YOMI_DATA_DIR`，否则探到的是默认 `data_dir` 的锁。
+#[cfg(unix)]
+enum StopTarget {
+    /// 没有 cron daemon 在跑，无需停机。
+    Nothing,
+    /// 持有者 pid，可发信号。
+    Pid(u32),
+}
+
+/// 解析停机信号目标。锁不可信信息（持有者 meta 不可读）时给出可
+/// 操作的报错——宁可拒发信号，也不盲杀。
+#[cfg(unix)]
+fn stop_target() -> Result<StopTarget> {
+    match probe_lock()? {
+        LockProbe::Free => Ok(StopTarget::Nothing),
+        LockProbe::Held(Some(owner)) => Ok(StopTarget::Pid(owner.pid)),
+        LockProbe::Held(None) => {
+            let dir = data_dir()?;
+            anyhow::bail!(
+                "单例锁被持有但持有者信息不可读（{}），无法定位进程，未发信号以避免误杀；\
+                 请确认占用者后手动处理",
+                kernel::daemon_lock::lock_file_path(&dir).display()
+            )
+        }
+    }
+}
+
+/// 等锁释放（= 持有者退出：进程死则内核释放 flock），超时返回 false。
+#[cfg(unix)]
+async fn wait_lock_free(timeout: Duration, interval: Duration) -> bool {
+    let start = tokio::time::Instant::now();
+    loop {
+        match probe_lock() {
+            Ok(LockProbe::Free) => return true,
+            Ok(LockProbe::Held(_)) => {}
+            Err(e) => tracing::warn!("lock probe failed: {e}"),
+        }
+        if start.elapsed() >= timeout {
+            return false;
+        }
+        sleep(interval).await;
     }
 }
 
@@ -205,6 +277,39 @@ pub async fn spawn_daemon_with_auto_exit(auto_exit: bool) -> Result<()> {
 }
 
 /// Force-stop the daemon and wait for the process to actually exit.
+#[cfg(unix)]
+pub async fn stop_daemon() -> Result<()> {
+    let pid = match stop_target()? {
+        StopTarget::Nothing => {
+            tracing::info!("No daemon found, nothing to stop");
+            return Ok(());
+        }
+        StopTarget::Pid(pid) => pid,
+    };
+
+    tracing::info!("Sending SIGKILL to daemon (PID {pid})...");
+    if let Err(e) = nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(pid as i32),
+        nix::sys::signal::Signal::SIGKILL,
+    ) {
+        // 探针与信号之间持有者可能已完成自行停机：进程已不在（ESRCH）
+        // 但锁随之释放，这是成功收尾而非失败——交由下面的锁等待确认。
+        if e != nix::errno::Errno::ESRCH {
+            anyhow::bail!("failed to kill daemon process {pid}: {e}");
+        }
+    }
+
+    // 等锁释放 = 持有者真死了（进程死则内核释放 flock），比轮询
+    // process_exists 硬：跨 pid namespace 也成立。
+    if !wait_lock_free(Duration::from_secs(2), Duration::from_millis(50)).await {
+        anyhow::bail!("daemon process {pid} is still holding the lock after SIGKILL");
+    }
+    tracing::info!("Daemon force-stopped");
+    Ok(())
+}
+
+/// Force-stop the daemon and wait for the process to actually exit.
+#[cfg(not(unix))]
 pub async fn stop_daemon() -> Result<()> {
     let pid_file = pid_file_path();
     let pid = match tokio::fs::read_to_string(&pid_file).await {
@@ -212,19 +317,6 @@ pub async fn stop_daemon() -> Result<()> {
         Err(_) => None,
     };
 
-    #[cfg(unix)]
-    if let Some(pid) = pid {
-        tracing::info!("Sending SIGKILL to daemon (PID {pid})...");
-        let signal_result = nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(pid as i32),
-            nix::sys::signal::Signal::SIGKILL,
-        );
-        if let Err(error) = signal_result {
-            anyhow::bail!("failed to kill daemon process {pid}: {error}");
-        }
-    }
-
-    #[cfg(windows)]
     if let Some(pid) = pid {
         tracing::info!("Sending kill signal to daemon (PID {pid})...");
         let _ = std::process::Command::new("taskkill")
@@ -240,7 +332,7 @@ pub async fn stop_daemon() -> Result<()> {
             sleep(Duration::from_millis(50)).await;
         }
         if process_exists(pid) {
-            anyhow::bail!("daemon process {pid} is still running after SIGKILL");
+            anyhow::bail!("daemon process {pid} is still running after kill");
         }
     }
 
@@ -253,6 +345,34 @@ pub async fn stop_daemon() -> Result<()> {
 
 /// Gracefully shut down the daemon.
 /// Falls back to `stop_daemon` if the daemon does not exit.
+#[cfg(unix)]
+pub async fn graceful_shutdown() -> Result<()> {
+    let pid = match stop_target()? {
+        StopTarget::Nothing => {
+            tracing::info!("No daemon found, nothing to stop");
+            return Ok(());
+        }
+        StopTarget::Pid(pid) => pid,
+    };
+
+    tracing::info!("Sending SIGTERM to daemon (PID {pid})...");
+    let _ = nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(pid as i32),
+        nix::sys::signal::Signal::SIGTERM,
+    );
+
+    if wait_lock_free(GRACEFUL_SHUTDOWN_TIMEOUT, GRACEFUL_SHUTDOWN_POLL_INTERVAL).await {
+        tracing::info!("Daemon shut down gracefully");
+        Ok(())
+    } else {
+        tracing::warn!("Daemon did not exit gracefully, falling back to kill");
+        stop_daemon().await
+    }
+}
+
+/// Gracefully shut down the daemon.
+/// Falls back to `stop_daemon` if the daemon does not exit.
+#[cfg(not(unix))]
 pub async fn graceful_shutdown() -> Result<()> {
     let pid_file = pid_file_path();
     if !pid_file.exists() {
@@ -265,16 +385,6 @@ pub async fn graceful_shutdown() -> Result<()> {
         Err(_) => None,
     };
 
-    #[cfg(unix)]
-    if let Some(pid) = pid {
-        tracing::info!("Sending SIGTERM to daemon (PID {pid})...");
-        let _ = nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(pid as i32),
-            nix::sys::signal::Signal::SIGTERM,
-        );
-    }
-
-    #[cfg(windows)]
     if let Some(pid) = pid {
         tracing::info!("Sending graceful shutdown to daemon (PID {pid})...");
         let _ = std::process::Command::new("taskkill")
@@ -316,7 +426,7 @@ pub async fn restart_daemon() -> Result<()> {
     const WIRE_RESTART_TIMEOUT: Duration = Duration::from_secs(100);
 
     tracing::info!("Restarting daemon...");
-    let old_pid = read_daemon_pid().await;
+    let old_pid = current_holder_pid().await;
     let wire_result: Result<()> = match connect_strict().await {
         Ok(kernel) => {
             match tokio::time::timeout(
@@ -364,12 +474,21 @@ pub async fn restart_daemon() -> Result<()> {
     Ok(())
 }
 
-/// Read the daemon's pid file (missing/invalid → None).
-async fn read_daemon_pid() -> Option<u32> {
-    tokio::fs::read_to_string(pid_file_path())
-        .await
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
+/// 当前 daemon 持有者的 pid。unix 从锁 meta 读——只在锁被持有的前提
+/// 下可信（flock 被持有 ⇒ 持有者存活 ⇒ pid 未回收），restart 交接判定
+/// 正是在持有语境下用；Windows 锁是 no-op，退回 pid 文件。
+async fn current_holder_pid() -> Option<u32> {
+    #[cfg(unix)]
+    {
+        lock_holder_pid()
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::fs::read_to_string(pid_file_path())
+            .await
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+    }
 }
 
 /// `KernelApi::restart` 的"已重启但配置未生效"错误判定。`KernelError`
@@ -399,9 +518,9 @@ async fn self_restart_settled(old_pid: Option<u32>) -> bool {
     let start = tokio::time::Instant::now();
     while start.elapsed() < SETTLE_GRACE {
         sleep(SETTLE_POLL).await;
-        // 交接完成的判据 = 新 pid 持有 socket 且答 hello；只"能连"
-        // 不算数（残骸 socket 也能连上 transport）。
-        let pid = read_daemon_pid().await;
+        // 交接完成的判据 = 锁换了持有者（meta pid 变化）且答 hello；
+        // 只"能连"不算数（残骸 socket 也能连上 transport）。
+        let pid = current_holder_pid().await;
         if pid.is_some() && pid != Some(old_pid) && try_connect_hello().await.is_some() {
             return true;
         }
@@ -474,29 +593,30 @@ pub async fn select_kernel(
 }
 
 /// Check daemon status.
+///
+/// 只依赖 socket（与 `socket_addr()` 同键）：hello 通 = running；不通
+/// 时看 socket 文件还在不在（unix）——在 = 可能在初始化/关停中，不在 =
+/// 没有 daemon。故意不用锁探针：status 常被只带 `YOMI_SOCKET` 的调用
+/// 使用，那时推导出的 `data_dir` 与 socket 背后的 daemon 可能无关，
+/// 探别人的锁既不准确也侵入。
 pub async fn daemon_status() -> Result<String> {
     let addr = socket_addr();
-    let pid_file = pid_file_path();
-
     // "Running" 的定义：wire hello 通过。transport 可连但答不了
-    // hello 的（残骸 socket / 卡死的进程）不算 running，落到下面的
-    // stale/starting 分支给处置提示。
+    // hello 的（残骸 socket / 卡死的进程）不算 running。
     if let Some(kernel) = try_connect_hello().await {
         drop(kernel);
         tracing::info!("Daemon is running and accepting connections on {addr}");
         return Ok("Daemon is running".to_string());
     }
-
-    let stale = cleanup_stale_pid_file().await;
-
-    if stale {
-        tracing::info!("Daemon is not running, cleaned stale PID file");
-        Ok("Daemon is not running (stale PID cleaned)".to_string())
-    } else if pid_file.exists() {
-        tracing::info!("Daemon may be starting up (PID file exists but not responding yet)");
+    let socket_file_exists = match &addr {
+        kernel::transport::SocketAddr::Unix(p) => p.exists(),
+        _ => false,
+    };
+    if socket_file_exists {
+        tracing::info!("Daemon may be starting up (socket file exists but not responding yet)");
         Ok("Daemon may be starting up".to_string())
     } else {
-        tracing::info!("Daemon is not running (no PID file, no socket)");
+        tracing::info!("Daemon is not running (no hello, no socket file)");
         Ok("Daemon is not running".to_string())
     }
 }

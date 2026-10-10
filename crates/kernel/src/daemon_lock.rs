@@ -214,10 +214,17 @@ mod imp {
                 pid = owner.pid,
                 "daemon singleton lock acquired"
             ),
-            Err(e) => tracing::warn!(
-                meta = %meta_path.display(),
-                "lock acquired but failed to write owner metadata: {e}"
-            ),
+            Err(e) => {
+                // 写失败时清掉旧 meta：文件里可能还是上一任（已死）
+                // 持有者的 pid，被回收后竞争方/停机方会误读持有者身份、
+                // 把信号发给无辜进程。宁可没有 meta（owner=None 走安全
+                // 拒绝路径），不留可能撒谎的旧身份。
+                let _ = std::fs::remove_file(meta_path);
+                tracing::warn!(
+                    meta = %meta_path.display(),
+                    "lock acquired but failed to write owner metadata: {e}"
+                );
+            }
         }
     }
 }

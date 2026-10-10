@@ -10,6 +10,20 @@ cd "$(dirname "$0")/.."
 YOMI="$(pwd)/target/debug/yomi"
 [ -x "$YOMI" ] || { echo "build CLI first: cargo build -p cli"; exit 2; }
 
+# 本机环境怪癖（2026-10-10 实锤）：target/debug/yomi 偶发被还原成 9 月的
+# 旧构建（mtime/版本同时回退，全盘无第二份副本、无网络盘、无同步器，
+# 原因未查明）。e2e 前自检：二进制版本必须与 Cargo.toml 一致，不一致就
+# touch 源文件强制重链——e2e 跑旧二进制的教训已有三起。
+BIN_VER="$("$YOMI" --version 2>/dev/null | awk '{print $2}')"
+CRATE_VER="$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')"
+if [ "$BIN_VER" != "$CRATE_VER" ]; then
+  echo "stale binary ($BIN_VER != $CRATE_VER), forcing relink..."
+  touch crates/cli/src/main.rs
+  cargo build -p cli >/dev/null 2>&1 || { echo "rebuild failed"; exit 2; }
+  BIN_VER="$("$YOMI" --version 2>/dev/null | awk '{print $2}')"
+  [ "$BIN_VER" = "$CRATE_VER" ] || { echo "still stale ($BIN_VER)"; exit 2; }
+fi
+
 E2E="$(mktemp -d /tmp/yomi-lock-e2e.XXXXXX)"
 printf '# e2e isolated config: no channels, no real accounts.\n' > "$E2E/config.toml"
 DA="$E2E/data-a"; mkdir -p "$DA"
@@ -106,12 +120,16 @@ echo "ok"
 echo "── 7. K8s pod 重建场景：残留 pid 文件指向存活但无关的进程，不得挡启动"
 # pid 文件是 socket 同级的 .pid；pod 重建后新 pid namespace 里，旧 pod
 # 留下的 pid 号极易被无关进程占用——若拿它当活性判据会误拒启动。
-# 用本脚本自己的 pid（必活、且不是 daemon）种残留。
-echo $$ > "$E2E/d.pid"
+# 种一个 sleep 进程的 pid（必活、且不是 daemon）；不能用 $$：回归发生
+# 时脚本退出、trap 会按 d.pid 给本脚本自己发 SIGTERM，掩盖 FAIL 输出。
+sleep 60 >/dev/null 2>&1 &
+DECOY=$!
+echo "$DECOY" > "$E2E/d.pid"
 run_daemon "$DA" "$E2E/d.sock" "$E2E/e.log"
-wait_up "$DA" "$E2E/d.sock" || { echo "FAIL: stale-pid/live-process blocked start"; cat "$E2E/e.log"; exit 1; }
+wait_up "$DA" "$E2E/d.sock" || { echo "FAIL: stale-pid/live-process blocked start"; cat "$E2E/e.log"; kill $DECOY 2>/dev/null; exit 1; }
 env YOMI_DATA_DIR="$DA" YOMI_CONFIG="$E2E/config.toml" YOMI_SOCKET="unix://$E2E/d.sock" "$YOMI" daemon stop >/dev/null 2>&1
-wait_down "$E2E/d.sock" || { echo "FAIL: cleanup after stale-pid test"; exit 1; }
+wait_down "$E2E/d.sock" || { echo "FAIL: cleanup after stale-pid test"; kill $DECOY 2>/dev/null; exit 1; }
+kill $DECOY 2>/dev/null
 echo "ok"
 
 echo "PASS: daemon-lock e2e"
