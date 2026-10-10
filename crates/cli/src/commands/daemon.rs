@@ -45,8 +45,9 @@ pub async fn run(cmd: DaemonCommands, global: &GlobalArgs) -> Result<()> {
             //
             // 故意不看 pid 文件："pid 活着"在容器里不可靠（pod 重建后
             // 新 pid namespace 里同号进程一大把，PVC 上残留的 pid 文件
-            // 会让我们把无关进程当成 daemon 拒启动）。pid 文件降级为
-            // 纯粹的停机信号靶标（daemon stop 用），不再是活性判据。
+            // 会让我们把无关进程当成 daemon 拒启动）。unix 上 pid 文件
+            // 已彻底移除（停机走锁探针）；Windows 上它只剩停机信号靶标
+            // 一个职责，同样不再是活性判据。
             if crate::daemon::try_connect_hello().await.is_some() {
                 tracing::info!("Daemon already running, refusing to start");
                 println!("Daemon is already running");

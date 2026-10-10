@@ -302,7 +302,7 @@ pub async fn stop_daemon() -> Result<()> {
     }
 
     // 等锁释放 = 持有者真死了（进程死则内核释放 flock），比轮询
-    // process_exists 硬：跨 pid namespace 也成立。
+    // pid 活性硬：跨 pid namespace 也成立。
     if !wait_lock_free(Duration::from_secs(2), Duration::from_millis(50)).await {
         anyhow::bail!("daemon process {pid} is still holding the lock after SIGKILL");
     }
@@ -456,7 +456,7 @@ pub async fn restart_daemon() -> Result<()> {
 
     graceful_shutdown().await?;
 
-    // graceful_shutdown already waits up to 90s for the PID file to disappear.
+    // graceful_shutdown already waits up to 90s for the lock to release.
     // Give a short extra grace period in case the old process is slow to exit.
     sleep(Duration::from_millis(200)).await;
 
