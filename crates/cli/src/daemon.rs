@@ -20,12 +20,6 @@ const GRACEFUL_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// Check whether a process with the given PID exists.
 /// 只用于 Windows 停机路径的等待循环；unix 路径一律走锁探针，
 /// 不信任何来源的 pid 活性（pid namespace 复用会让"pid 活着"撒谎）。
-#[cfg(unix)]
-#[allow(dead_code)]
-pub fn process_exists(pid: u32) -> bool {
-    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_ok()
-}
-
 #[cfg(not(unix))]
 pub fn process_exists(_pid: u32) -> bool {
     // We cannot reliably detect process liveness on Windows without
