@@ -12,6 +12,9 @@
        改名 InstallDir → InstallDirPerUser：旧 per-machine 安装往同一
        HKCU 键写过 InstallDir=C:\Program Files\Yomi，per-user 包继承
        该默认值会因无写权限直接安装失败。
+    4. ICE38/ICE64（per-user 装用户目录的强制检查）：Path 组件与每个
+       sidecar 二进制组件的 KeyPath 从文件改为 HKCU 注册表值；
+       RegistryEntries 组件补 RemoveFolder 清掉 Programs 中间目录。
     3. 上游模板的 deep-link 协议段（HKLM）只在配置 protocol 时渲染，
        yomi 未配置，天然不涉及；WebView2 引导程序在 per-user 权限下
        装用户级运行时，兼容。
@@ -157,6 +160,8 @@
                 <RegistryKey Root="HKCU" Key="Software\\{{manufacturer}}\\{{product_name}}">
                     <RegistryValue Name="InstallDirPerUser" Type="string" Value="[INSTALLDIR]" KeyPath="yes" />
                 </RegistryKey>
+                <!-- ICE64：用户目录下的中间目录（Programs）卸载时随空目录移除 -->
+                <RemoveFolder Id="YomiProgramsFolder" Directory="YomiProgramsFolder" On="uninstall" />
                 <!-- Change the Root to HKCU for perUser installations -->
                 {{#each deep_link_protocols as |protocol| ~}}
                 <RegistryKey Root="HKLM" Key="Software\Classes\\{{protocol}}">
@@ -172,7 +177,10 @@
                 {{/each~}}
             </Component>
             <Component Id="Path" Guid="{{path_component_guid}}" Win64="$(var.Win64)">
-                <File Id="Path" Source="{{main_binary_path}}" KeyPath="yes" Checksum="yes"/>
+                <!-- per-user ICE38：装到用户目录的组件不许以文件做 KeyPath，
+                     改挂 HKCU 注册表值；File 不再带 KeyPath -->
+                <File Id="Path" Source="{{main_binary_path}}" Checksum="yes"/>
+                <RegistryValue Root="HKCU" Key="Software\\{{manufacturer}}\\{{product_name}}" Name="InstalledGui" Type="integer" Value="1" KeyPath="yes"/>
                 {{#each file_associations as |association| ~}}
                 {{#each association.ext as |ext| ~}}
                 <ProgId Id="{{../../product_name}}.{{ext}}" Advertise="yes" Description="{{association.description}}">
@@ -185,7 +193,9 @@
             </Component>
             {{#each binaries as |bin| ~}}
             <Component Id="{{ bin.id }}" Guid="{{bin.guid}}" Win64="$(var.Win64)">
-                <File Id="Bin_{{ bin.id }}" Source="{{bin.path}}" KeyPath="yes"/>
+                <!-- per-user ICE38：同上，HKCU 注册表值做 KeyPath -->
+                <File Id="Bin_{{ bin.id }}" Source="{{bin.path}}"/>
+                <RegistryValue Root="HKCU" Key="Software\\{{manufacturer}}\\{{product_name}}" Name="Installed {{ bin.id }}" Type="integer" Value="1" KeyPath="yes"/>
             </Component>
             {{/each~}}
             {{#if enable_elevated_update_task}}

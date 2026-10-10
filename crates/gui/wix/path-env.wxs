@@ -19,8 +19,13 @@
     <DirectoryRef Id="INSTALLDIR">
       <Component Id="InstallDirOnPath" Guid="{7E3A5C21-9B4F-4D8E-A6C3-2F1D8B0E5A97}">
         <!-- 无 File/Registry 资源的组件 keypath 落在 INSTALLDIR 目录上，
-             ICE18 要求该 Directory/Component 对登记进 CreateFolders 表 -->
+             ICE18 要求该 Directory/Component 对登记进 CreateFolders 表。
+             per-user ICE38：组件装到用户目录，KeyPath 改挂 HKCU 注册表值
+             （CreateFolder 保留——它仍负责空目录登记）。
+             渲染产物里厂商名是字面值（manufacturer=yomi），fragment 不经
+             handlebars，这里硬编码同一键。 -->
         <CreateFolder />
+        <RegistryValue Root="HKCU" Key="Software\yomi\Yomi" Name="InstallDirOnPath" Type="integer" Value="1" KeyPath="yes" />
         <Environment Id="InstallDirOnPath" Name="PATH" Action="set"
                      Permanent="no" Part="last" Separator=";" System="no"
                      Value="[INSTALLDIR]" />
