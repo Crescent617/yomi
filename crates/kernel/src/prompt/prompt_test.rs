@@ -159,6 +159,11 @@ fn watch_section_states_the_contract() {
     // anchors), and no scripted defaults for when to speak.
     assert!(section.contains("speak via skill"));
     assert!(section.contains("only messages sent through a skill are visible"));
+    // The one format note: mirrored attachments stay undownloaded
+    // references, fetchable via the header's msg_id — comprehension,
+    // not an operational hint.
+    assert!(section.contains("[<platform>_image: KEY]"));
+    assert!(section.contains("msg_id"));
     assert!(!section.contains("[msg_id:"));
     assert!(!section.contains("usually respond"));
     assert!(!section.contains("silence"));

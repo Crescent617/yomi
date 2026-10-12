@@ -62,7 +62,10 @@ pub fn strip_end_turn_marker(text: &str) -> &str {
 /// skill — stated as exclusivity: only skill-sent messages are visible,
 /// 2026-09-21 hrli 要求强调). No operational hints — the skill list is in the prompt
 /// already, and the message headers carry the reply anchors; when to
-/// speak is the agent's own judgement. Appended to the base prompt by
+/// speak is the agent's own judgement. The single format note
+/// (undownloaded `[lark_image: KEY]` / lark-file placeholders, fetchable
+/// via the header's `msg_id`) is message comprehension, not an operation
+/// nudge. Appended to the base prompt by
 /// the conductor at spawn (while the routing row's kind is `watch`), so
 /// it survives context compaction.
 pub(crate) fn watch_section(channel_name: &str, chat_id: &str) -> String {
@@ -73,7 +76,9 @@ pub(crate) fn watch_section(channel_name: &str, chat_id: &str) -> String {
          Nothing you output reaches the chat: your reply text is never posted, and no cards or \
          reactions mark your runs.\n\
          If you think a reply is needed, speak via skill — only messages sent through a \
-         skill are visible to the chat."
+         skill are visible to the chat.\n\
+         Images and files are mirrored undownloaded: `[<platform>_image: KEY]` / \
+         `[file: name (lark_file_key: KEY)]` — fetch via skill using the header's msg_id."
     )
 }
 

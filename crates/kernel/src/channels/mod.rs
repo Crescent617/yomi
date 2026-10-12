@@ -318,6 +318,17 @@ impl PlatformConfig {
         }
     }
 
+    /// Tag prefix for watch-mirror image references (`[{tag}: {key}]`):
+    /// names the platform so the observing agent reads the key as a
+    /// platform image reference (fetchable via its skill), not a local
+    /// file path.
+    pub(crate) fn image_ref_tag(&self) -> &'static str {
+        match self {
+            Self::Feishu { .. } => "lark_image",
+            Self::Telegram { .. } => "telegram_image",
+        }
+    }
+
     /// One-line legend of the bot's message reactions, for `/help` and
     /// the welcome card: gate ack / queue / (Feishu only) settle ✅😭 —
     /// Telegram runs never get settle reactions (no status-card path) —

@@ -123,8 +123,9 @@ pub(crate) async fn mirror_message(
     store: &Arc<dyn ChannelStore>,
     kernel: &Arc<Kernel>,
     msg: &ChannelMessage,
+    image_tag: &str,
 ) {
-    mirror_enqueue(channel_name, store, kernel, msg, BATCH_WINDOW).await;
+    mirror_enqueue(channel_name, store, kernel, msg, image_tag, BATCH_WINDOW).await;
 }
 
 /// Enqueue one message into the chat's pending batch and schedule the
@@ -137,13 +138,14 @@ pub(crate) async fn mirror_enqueue(
     store: &Arc<dyn ChannelStore>,
     kernel: &Arc<Kernel>,
     msg: &ChannelMessage,
+    image_tag: &str,
     window: std::time::Duration,
 ) {
     let chat_id = msg.external_chat_id.clone();
     let key = pending_key(kernel, channel_name, &chat_id);
     let entry = PENDING.entry(key).or_default().clone();
     // 截断+克隆在锁外完成（两遍 O(n) 字符扫描，别占着 entry 锁）。
-    let content = mirror_content(msg);
+    let content = mirror_content(msg, image_tag);
     let mut state = entry.lock().await;
     state.items.push(content);
     let task_alive = state.flush_task.as_ref().is_some_and(|h| !h.is_finished());
@@ -239,9 +241,11 @@ async fn flush_batch(
 /// The mirrored content: the message's own blocks verbatim **modulo
 /// the per-block cap** (see [`MIRROR_TEXT_CAP`]) — the adapter header
 /// already carries `[ts][from][chat][msg_id][thread][root]` — plus
-/// image references as text: opaque platform keys the session can
-/// resolve on demand via its skill.
-fn mirror_content(msg: &ChannelMessage) -> Vec<ContentBlock> {
+/// image references as text: `[{image_tag}: {key}]` (the tag names the
+/// platform, see [`crate::channels::PlatformConfig::image_ref_tag`]) — opaque platform
+/// keys the session can resolve on demand via its skill, explicitly NOT
+/// local file paths.
+fn mirror_content(msg: &ChannelMessage, image_tag: &str) -> Vec<ContentBlock> {
     let mut content = msg.content.clone();
     for block in &mut content {
         if let ContentBlock::Text { text } = block {
@@ -252,7 +256,7 @@ fn mirror_content(msg: &ChannelMessage) -> Vec<ContentBlock> {
         let refs = msg
             .image_keys
             .iter()
-            .map(|key| format!("[image: {key}]"))
+            .map(|key| format!("[{image_tag}: {key}]"))
             .collect::<Vec<_>>()
             .join(" ");
         content.push(ContentBlock::Text { text: refs });

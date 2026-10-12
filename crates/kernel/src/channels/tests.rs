@@ -343,3 +343,22 @@ fn card_action_ext_prefix_bypasses_user_gate() {
         assert!(!action(v.clone()).bypasses_user_gate(), "{v}");
     }
 }
+
+#[test]
+fn image_ref_tag_names_the_platform() {
+    assert_eq!(
+        PlatformConfig::Feishu {
+            app_id: String::new(),
+            app_secret: String::new(),
+        }
+        .image_ref_tag(),
+        "lark_image"
+    );
+    assert_eq!(
+        PlatformConfig::Telegram {
+            token: String::new()
+        }
+        .image_ref_tag(),
+        "telegram_image"
+    );
+}

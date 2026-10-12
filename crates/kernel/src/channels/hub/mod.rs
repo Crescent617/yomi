@@ -547,6 +547,7 @@ impl ChannelHub {
                                 &store_dispatch,
                                 &coord,
                                 &msg,
+                                config_dispatch.platform.image_ref_tag(),
                             )
                             .await;
                         }

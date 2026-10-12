@@ -8267,8 +8267,15 @@ async fn watch_mirror_integration() {
     // watch is off (or gc already ended it); mirroring would resurrect
     // it (or steer into a normal session, answering publicly).
     let w = std::time::Duration::from_millis(200);
-    crate::channels::hub::watch::mirror_enqueue("mock", &store, &kernel, &msg("零", "om_0"), w)
-        .await;
+    crate::channels::hub::watch::mirror_enqueue(
+        "mock",
+        &store,
+        &kernel,
+        &msg("零", "om_0"),
+        "lark_image",
+        w,
+    )
+    .await;
     assert_eq!(
         store.find_mapping("mock", "oc_1").await.unwrap(),
         None,
@@ -8279,8 +8286,15 @@ async fn watch_mirror_integration() {
     crate::channels::hub::watch::set_channel_watch_by_name(&store, &kernel, "mock", "oc_1", true)
         .await
         .unwrap();
-    crate::channels::hub::watch::mirror_enqueue("mock", &store, &kernel, &msg("第一条", "om_1"), w)
-        .await;
+    crate::channels::hub::watch::mirror_enqueue(
+        "mock",
+        &store,
+        &kernel,
+        &msg("第一条", "om_1"),
+        "lark_image",
+        w,
+    )
+    .await;
     let sid = store
         .find_mapping("mock", "oc_1")
         .await
@@ -8294,8 +8308,15 @@ async fn watch_mirror_integration() {
     );
 
     // Second mirror: same session, both messages present.
-    crate::channels::hub::watch::mirror_enqueue("mock", &store, &kernel, &msg("第二条", "om_2"), w)
-        .await;
+    crate::channels::hub::watch::mirror_enqueue(
+        "mock",
+        &store,
+        &kernel,
+        &msg("第二条", "om_2"),
+        "lark_image",
+        w,
+    )
+    .await;
     assert_eq!(
         store.find_mapping("mock", "oc_1").await.unwrap(),
         Some(sid.clone()),
@@ -8325,6 +8346,7 @@ async fn watch_mirror_integration() {
         &store,
         &kernel,
         &msg("off 后", "om_2b"),
+        "lark_image",
         w,
     )
     .await;
@@ -8349,8 +8371,15 @@ async fn watch_mirror_integration() {
         .save_mapping("mock", "oc_1", &sid, "oc_1", None, MappingKind::Watch)
         .await
         .unwrap();
-    crate::channels::hub::watch::mirror_enqueue("mock", &store, &kernel, &msg("第三条", "om_3"), w)
-        .await;
+    crate::channels::hub::watch::mirror_enqueue(
+        "mock",
+        &store,
+        &kernel,
+        &msg("第三条", "om_3"),
+        "lark_image",
+        w,
+    )
+    .await;
     // 攒批时代：heal 发生在窗口 flush（路由锁内 get-or-create），
     // mirror_message 返回时只完成入队——轮询等 mapping 换锚。
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -8445,6 +8474,7 @@ async fn watch_mirror_batches_within_window() {
         &store,
         &kernel,
         &batch_msg("oc_batch", "批一", "om_b1"),
+        "lark_image",
         w,
     )
     .await;
@@ -8453,6 +8483,7 @@ async fn watch_mirror_batches_within_window() {
         &store,
         &kernel,
         &batch_msg("oc_batch", "批二", "om_b2"),
+        "lark_image",
         w,
     )
     .await;
@@ -8497,6 +8528,7 @@ async fn watch_mirror_pending_dropped_when_off_at_flush() {
         &store,
         &kernel,
         &batch_msg("oc_off", "off 前排", "om_c1"),
+        "lark_image",
         std::time::Duration::from_millis(300),
     )
     .await;
@@ -8536,6 +8568,7 @@ async fn watch_mirror_off_on_within_window_still_lands() {
         &store,
         &kernel,
         &batch_msg("oc_cont", "窗口期", "om_k1"),
+        "lark_image",
         std::time::Duration::from_millis(300),
     )
     .await;
@@ -8590,6 +8623,7 @@ async fn watch_mirror_post_cap_message_rides_sleeping_task() {
             &store,
             &kernel,
             &batch_msg("oc_hand", &format!("潮头{i:02}"), &format!("om_h{i:02}")),
+            "lark_image",
             w,
         )
         .await;
@@ -8600,6 +8634,7 @@ async fn watch_mirror_post_cap_message_rides_sleeping_task() {
         &store,
         &kernel,
         &batch_msg("oc_hand", "尾班", "om_h50"),
+        "lark_image",
         w,
     )
     .await;
@@ -8643,6 +8678,7 @@ async fn watch_mirror_enqueue_during_flush_is_not_stranded() {
         &store,
         &kernel,
         &batch_msg("oc_mid", "首条", "om_m1"),
+        "lark_image",
         w,
     )
     .await;
@@ -8654,6 +8690,7 @@ async fn watch_mirror_enqueue_during_flush_is_not_stranded() {
         &store,
         &kernel,
         &batch_msg("oc_mid", "尾条", "om_m2"),
+        "lark_image",
         w,
     )
     .await;
@@ -8707,6 +8744,7 @@ async fn watch_mirror_early_flush_at_batch_cap() {
             &store,
             &kernel,
             &batch_msg("oc_flood", &format!("flood{i:02}"), &format!("om_f{i:02}")),
+            "lark_image",
             long_window,
         )
         .await;
@@ -8773,6 +8811,7 @@ async fn watch_mirror_queued_batch_survives_off() {
         &store,
         &kernel,
         &batch_msg("oc_m1q", "排队批", "om_q1"),
+        "lark_image",
         std::time::Duration::from_millis(200),
     )
     .await;

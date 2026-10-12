@@ -27,33 +27,39 @@ fn mirror_content_keeps_message_blocks_verbatim() {
             "[ts][from_user_id: ou_user][chat_id: oc_chat][msg_id: om_msg][platform: feishu]\nhello"
                 .to_string(),
     }];
-    let out = mirror_content(&msg(blocks.clone(), vec![]));
+    let out = mirror_content(&msg(blocks.clone(), vec![]), "lark_image");
     assert_eq!(out, blocks);
 }
 
 #[test]
 fn mirror_content_appends_image_refs_as_text() {
-    let out = mirror_content(&msg(
-        vec![ContentBlock::Text {
-            text: "header".to_string(),
-        }],
-        vec!["img_k1", "img_k2"],
-    ));
+    let out = mirror_content(
+        &msg(
+            vec![ContentBlock::Text {
+                text: "header".to_string(),
+            }],
+            vec!["img_k1", "img_k2"],
+        ),
+        "lark_image",
+    );
     assert_eq!(out.len(), 2);
     let ContentBlock::Text { text } = &out[1] else {
         panic!("expected text block");
     };
-    assert_eq!(text, "[image: img_k1] [image: img_k2]");
+    assert_eq!(text, "[lark_image: img_k1] [lark_image: img_k2]");
 }
 
 #[test]
 fn mirror_content_truncates_oversized_text_blocks() {
-    let out = mirror_content(&msg(
-        vec![ContentBlock::Text {
-            text: "汉".repeat(5000),
-        }],
-        vec![],
-    ));
+    let out = mirror_content(
+        &msg(
+            vec![ContentBlock::Text {
+                text: "汉".repeat(5000),
+            }],
+            vec![],
+        ),
+        "lark_image",
+    );
     let ContentBlock::Text { text } = &out[0] else {
         panic!("expected text block");
     };
@@ -69,12 +75,15 @@ fn mirror_content_truncates_oversized_text_blocks() {
     // Exactly at the cap: untouched, no marker (multibyte-safe either
     // way — `truncate_chars` works on chars, never bytes).
     let exact = "a".repeat(MIRROR_TEXT_CAP);
-    let out = mirror_content(&msg(
-        vec![ContentBlock::Text {
-            text: exact.clone(),
-        }],
-        vec![],
-    ));
+    let out = mirror_content(
+        &msg(
+            vec![ContentBlock::Text {
+                text: exact.clone(),
+            }],
+            vec![],
+        ),
+        "lark_image",
+    );
     assert_eq!(
         out,
         vec![ContentBlock::Text { text: exact }],
