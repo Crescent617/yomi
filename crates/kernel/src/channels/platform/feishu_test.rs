@@ -747,7 +747,7 @@ fn extract_post_text_includes_title_and_runs() {
     });
 
     assert_eq!(
-        super::FeishuAdapter::extract_post_text(&content),
+        super::FeishuAdapter::extract_post_text(&content, None),
         "周报\n第一行 链接\n第二行"
     );
 }
@@ -760,7 +760,10 @@ fn extract_post_text_falls_back_to_bare_form() {
         "content": [[{ "tag": "text", "text": "body" }]]
     });
 
-    assert_eq!(super::FeishuAdapter::extract_post_text(&content), "t\nbody");
+    assert_eq!(
+        super::FeishuAdapter::extract_post_text(&content, None),
+        "t\nbody"
+    );
 }
 
 #[test]
@@ -783,7 +786,7 @@ fn extract_post_text_prefers_content_v2_raw_markdown() {
     });
 
     assert_eq!(
-        super::FeishuAdapter::extract_post_text(&content),
+        super::FeishuAdapter::extract_post_text(&content, None),
         "**问题**\n[—— 请直接「回复」本条作答](yomi://call_tool/post_message/sess_1)"
     );
 }
@@ -803,7 +806,7 @@ fn extract_post_text_dedups_bare_links() {
     });
 
     assert_eq!(
-        super::FeishuAdapter::extract_post_text(&content),
+        super::FeishuAdapter::extract_post_text(&content, None),
         "见 https://example.com 与 [文档](https://example.com/doc)"
     );
 }
@@ -820,7 +823,7 @@ fn extract_post_text_content_v2_joins_title() {
     });
 
     assert_eq!(
-        super::FeishuAdapter::extract_post_text(&content),
+        super::FeishuAdapter::extract_post_text(&content, None),
         "周报\n**正文**"
     );
 }
@@ -838,7 +841,7 @@ fn extract_post_text_empty_content_v2_falls_back_to_rendered() {
     });
 
     assert_eq!(
-        super::FeishuAdapter::extract_post_text(&content),
+        super::FeishuAdapter::extract_post_text(&content, None),
         "t\nrendered"
     );
 }
@@ -1165,7 +1168,7 @@ fn extract_card_text_includes_header_title() {
 fn extract_post_text_empty_for_unknown_locale() {
     let content = json!({ "ko_kr": { "content": [[{ "tag": "text", "text": "x" }]] } });
 
-    assert_eq!(super::FeishuAdapter::extract_post_text(&content), "");
+    assert_eq!(super::FeishuAdapter::extract_post_text(&content, None), "");
 }
 
 fn receive_event(msg_type: &str, content: &serde_json::Value) -> serde_json::Value {
@@ -1654,6 +1657,49 @@ async fn pure_image_post_is_forwarded() {
 
     let msg = expect_message(rx.try_recv().expect("pure-image post forwarded"));
     assert_eq!(msg.image_keys, vec!["img_ok".to_string()]);
+}
+
+/// Live post mixing an at run, text and an inline image in one
+/// paragraph: the mention must survive as the neutral contract (a
+/// dropped mention reads as an unaddressed plain-text order) and the
+/// image rides along as a key. Payload shape mirrors the real 2026-10-12
+/// delivery: `content_v2` present (structured runs, at run without text),
+/// `user_id` carrying the `@_user_N` placeholder key.
+#[tokio::test]
+async fn post_event_with_at_text_and_image_keeps_mention() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let runs = json!([
+        { "tag": "at", "user_id": "@_user_1", "user_name": "阿祖", "style": [] },
+        { "tag": "text", "text": " 有空接一下update头像这个吧", "style": [] },
+        { "tag": "img", "image_key": "img_p9" }
+    ]);
+    let mut event = receive_event(
+        "post",
+        &json!({
+            "zh_cn": {
+                "content": [runs.clone()],
+                "content_v2": [runs]
+            }
+        }),
+    );
+    event["event"]["message"]["mentions"] = json!([
+        { "key": "@_user_1", "id": { "open_id": "ou_azu" }, "name": "阿祖" },
+    ]);
+
+    let msg_id = adapter.parse_event_json(&event, &tx).await.unwrap();
+
+    assert_eq!(msg_id.as_deref(), Some("om_1"));
+    let msg = expect_message(rx.try_recv().expect("post message forwarded"));
+    let crate::types::ContentBlock::Text { text } = &msg.content[0] else {
+        panic!("expected text block");
+    };
+    assert!(
+        text.contains("<@ou_azu>阿祖 有空接一下update头像这个吧"),
+        "mention survives the at+text+img mix: {text}"
+    );
+    assert_eq!(msg.image_keys, vec!["img_p9".to_string()]);
 }
 
 #[tokio::test]
@@ -2614,12 +2660,38 @@ fn extract_post_text_content_v2_rewrites_at_tags() {
         }
     });
     assert_eq!(
-        super::FeishuAdapter::extract_post_text(&content),
+        super::FeishuAdapter::extract_post_text(&content, None),
         "请 <@ou_alice>爱丽丝 与 <@ou_bob>Bob 看"
     );
 }
 
-/// post 渲染态 fallback：at run（无 text 字段）不再整段丢失。
+/// `content_v2` 的结构化形态（2026-10-12 真机核实：live 事件与新 API
+/// 响应里的 `content_v2` 是渲染态副本——at run 无 text 字段）——只取
+/// text 会把 mention 整段丢掉；经 mentions（get API 的 id-string
+/// 形态）落成中性契约。
+#[test]
+fn extract_post_text_content_v2_structured_at_run_is_kept() {
+    let content = json!({
+        "zh_cn": {
+            "title": "",
+            "content": [[{ "tag": "text", "text": "rendered" }]],
+            "content_v2": [[
+                { "tag": "at", "user_id": "@_user_1", "user_name": "李华儒", "style": [] },
+                { "tag": "text", "text": " 有空接一下update头像这个吧", "style": [] }
+            ]]
+        }
+    });
+    let mentions =
+        vec![json!({ "key": "@_user_1", "id": "ou_hrli", "id_type": "open_id", "name": "李华儒" })];
+    assert_eq!(
+        super::FeishuAdapter::extract_post_text(&content, Some(&mentions)),
+        "<@ou_hrli>李华儒 有空接一下update头像这个吧"
+    );
+}
+
+/// post 渲染态 fallback：at run（无 text 字段）不再整段丢失；真机
+/// payload 的 `user_id` 是 `@_user_N` 占位 key（2026-10-12 核实），
+/// 经 mentions 数组落成真 `open_id`。
 #[test]
 fn extract_post_text_rendered_at_run_is_kept() {
     let content = json!({
@@ -2627,14 +2699,27 @@ fn extract_post_text_rendered_at_run_is_kept() {
             "title": "",
             "content": [[
                 { "tag": "text", "text": "叫 " },
-                { "tag": "at", "user_id": "ou_alice", "user_name": "爱丽丝" },
+                { "tag": "at", "user_id": "@_user_1", "user_name": "爱丽丝" },
                 { "tag": "text", "text": " 看" }
             ]]
         }
     });
+    let mentions =
+        vec![json!({ "key": "@_user_1", "id": { "open_id": "ou_alice" }, "name": "爱丽丝" })];
     assert_eq!(
-        super::FeishuAdapter::extract_post_text(&content),
+        super::FeishuAdapter::extract_post_text(&content, Some(&mentions)),
         "叫 <@ou_alice>爱丽丝 看"
+    );
+
+    // 直接 open_id 的旧形态（mentions 查不到）：原样保留。
+    let legacy = json!({
+        "zh_cn": {
+            "content": [[{ "tag": "at", "user_id": "ou_alice", "user_name": "爱丽丝" }]]
+        }
+    });
+    assert_eq!(
+        super::FeishuAdapter::extract_post_text(&legacy, None),
+        "<@ou_alice>爱丽丝"
     );
 }
 

@@ -114,6 +114,20 @@ fn rewrite_user_mention_keys_single_pass_no_chain_replacement() {
     );
 }
 
+/// get/history API 的 mentions 是 id-string 形态（live 事件才是
+/// `id.open_id` 对象形态，2026-10-12 真机核实）——历史/引用注入的
+/// 改写依赖这一兼容。
+#[test]
+fn rewrite_user_mention_keys_accepts_string_id_form() {
+    let mentions = vec![
+        serde_json::json!({ "key": "@_user_1", "id": "ou_alice", "id_type": "open_id", "name": "爱丽丝" }),
+    ];
+    assert_eq!(
+        super::rewrite_user_mention_keys("@_user_1 好", Some(&mentions)),
+        "<@ou_alice>爱丽丝 好"
+    );
+}
+
 /// 历史命令保持原始形态交给下游过滤器：`@bot /clear` 改写前判定
 /// （2026-09-21 评审 Major——先改写的话 `is_command_text` 失效，
 /// 命令行漏进 `recent_chat_history`，`/bind` 还会带出 session id）。

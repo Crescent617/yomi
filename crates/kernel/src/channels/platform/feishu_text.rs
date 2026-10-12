@@ -36,7 +36,7 @@ impl FeishuAdapter {
                 }
             }
             "post" => {
-                let text = Self::extract_post_text(&content);
+                let text = Self::extract_post_text(&content, item["mentions"].as_array());
                 if text.is_empty() {
                     "[post]".to_string()
                 } else {
@@ -193,15 +193,22 @@ impl FeishuAdapter {
     }
 
     /// Concatenate a post message's title and paragraph text runs (posts
-    /// in other locales degrade to `[post]`).
+    /// in other locales degrade to `[post]`). `mentions` is the message's
+    /// own mentions array — `at` runs carry the `@_user_N` placeholder as
+    /// `user_id`, resolved here to a real `open_id`.
     ///
-    /// Prefers the node's `content_v2` raw-markdown runs when present
-    /// (API-fetched posts): rendered runs drop link hrefs entirely —
-    /// `[t](yomi://…)` degrades to bare `t`, losing the URL — while the
-    /// raw markdown keeps every inline semantic (`[t](url)`, `**`,
-    /// `<at user_id=…>`). Live-event payloads and older API shapes carry
-    /// no `content_v2`; those fall back to rendered runs.
-    pub(crate) fn extract_post_text(content: &serde_json::Value) -> String {
+    /// Prefers the node's `content_v2` when present: historically the
+    /// raw-markdown shape (md runs with inline `<at user_id=…>`), but
+    /// current live events and API responses carry a STRUCTURED copy of
+    /// the rendered runs there instead (verified 2026-10-12 — an `at`
+    /// run has no `text` field, so a text-only extraction drops the
+    /// mention wholesale). Both shapes are handled per run; md text
+    /// keeps every inline semantic (`[t](url)`, `**`) that rendered
+    /// runs drop (link hrefs degrade to bare anchor text).
+    pub(crate) fn extract_post_text(
+        content: &serde_json::Value,
+        mentions: Option<&Vec<serde_json::Value>>,
+    ) -> String {
         let node = Self::post_node(content);
         let title = node["title"]
             .as_str()
@@ -214,7 +221,18 @@ impl FeishuAdapter {
                     para.as_array()
                         .map(|runs| {
                             runs.iter()
-                                .filter_map(|r| r["text"].as_str())
+                                .map(|r| {
+                                    // Structured at run (no text field):
+                                    // neutral contract via mentions; md
+                                    // text runs pass through for the
+                                    // inline-tag rewrite below.
+                                    if r["tag"].as_str() == Some("at")
+                                        && r["text"].as_str().is_none()
+                                    {
+                                        return at_run_text(r, mentions);
+                                    }
+                                    r["text"].as_str().unwrap_or("").to_string()
+                                })
                                 .collect::<String>()
                         })
                         .unwrap_or_default()
@@ -245,12 +263,7 @@ impl FeishuAdapter {
                                 // at run 无 text 字段，按 id+name 落成中
                                 // 性契约（否则渲染态 mention 整段丢失）。
                                 if r["tag"].as_str() == Some("at") {
-                                    let id = r["user_id"].as_str().unwrap_or("");
-                                    let name = r["user_name"].as_str().unwrap_or("");
-                                    if id.is_empty() {
-                                        return name.to_string();
-                                    }
-                                    return format!("<@{id}>{name}");
+                                    return at_run_text(r, mentions);
                                 }
                                 r["text"].as_str().unwrap_or("").to_string()
                             })
@@ -421,6 +434,35 @@ fn sanitize_mention_name(name: &str) -> String {
         .collect()
 }
 
+/// A mentions entry's `open_id`: live events carry the object form
+/// (`id.open_id`), the get/history APIs the string form (`id` directly)
+/// — verified against the real API 2026-10-12.
+fn mention_open_id(mention: &serde_json::Value) -> Option<&str> {
+    mention["id"]["open_id"]
+        .as_str()
+        .or_else(|| mention["id"].as_str())
+}
+
+/// Render one post `at` run as the neutral contract: the run's `user_id`
+/// is the `@_user_N` placeholder key on real payloads (live event AND
+/// get API, 2026-10-12) — resolve it through the mentions array; a
+/// direct `open_id` (older shapes) or a lookup miss stays verbatim
+/// (`<@@_user_1>名字` keeps the readable name at least).
+fn at_run_text(r: &serde_json::Value, mentions: Option<&Vec<serde_json::Value>>) -> String {
+    let user_id = r["user_id"].as_str().unwrap_or("");
+    let name = sanitize_mention_name(r["user_name"].as_str().unwrap_or(""));
+    let resolved = mentions
+        .into_iter()
+        .flatten()
+        .find(|m| m["key"].as_str() == Some(user_id))
+        .and_then(mention_open_id);
+    let id = resolved.unwrap_or(user_id);
+    if id.is_empty() {
+        return name;
+    }
+    format!("<@{id}>{name}")
+}
+
 /// Rewrite Feishu's literal `@_user_N` mention placeholders into the
 /// platform-neutral `<@open_id>名字` contract (name appended when the
 /// payload carries one; bare `<@open_id>` otherwise). Feishu delivers
@@ -442,7 +484,7 @@ pub(crate) fn rewrite_user_mention_keys(
         .flatten()
         .filter_map(|mention| {
             let key = mention["key"].as_str()?;
-            let open_id = mention["id"]["open_id"].as_str()?;
+            let open_id = mention_open_id(mention)?;
             let name = sanitize_mention_name(mention["name"].as_str().unwrap_or(""));
             Some((key, format!("<@{open_id}>{name}")))
         })

@@ -239,7 +239,7 @@ impl FeishuAdapter {
                 Vec::new(),
             ),
             "post" => (
-                Self::extract_post_text(&content_json),
+                Self::extract_post_text(&content_json, message["mentions"].as_array()),
                 Self::extract_post_image_keys(&content_json),
             ),
             "image" => (
