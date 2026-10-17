@@ -20,6 +20,9 @@ export type ActivityGroupExpansionPreference =
   | "latest"
   | "while_running";
 
+/** 伙伴窗默认全局热键（设置页可改/清空）。 */
+export const DEFAULT_COMPANION_HOTKEY = "CmdOrControl+Shift+Y";
+
 export interface GuiPreferences {
   schemaVersion: 1;
   appearance: {
@@ -41,6 +44,11 @@ export interface GuiPreferences {
     enabled: boolean;
     selected_pet_id: string | null;
     scale: number;
+  };
+  companion: {
+    enabled: boolean;
+    /** 全局热键 accelerator（tauri global-shortcut 格式），null = 不注册。 */
+    hotkey: string | null;
   };
   chat: {
     homeModel: string | null;
@@ -95,6 +103,10 @@ export const defaultGuiPreferences: GuiPreferences = {
     selected_pet_id: null,
     scale: 1,
   },
+  companion: {
+    enabled: false,
+    hotkey: DEFAULT_COMPANION_HOTKEY,
+  },
   chat: {
     homeModel: null,
     autoScroll: true,
@@ -130,6 +142,7 @@ function cloneGuiPreferences(value: GuiPreferences): GuiPreferences {
     layout: { ...value.layout },
     notifications: { ...value.notifications },
     desktop_pet: { ...value.desktop_pet },
+    companion: { ...value.companion },
     chat: { ...value.chat },
     connection: { ...value.connection },
     power: { ...value.power },
@@ -215,6 +228,17 @@ function normalizeGuiPreferences(
           : null,
       scale: normalizePetScale(value?.desktop_pet?.scale),
     },
+    companion: {
+      enabled:
+        value?.companion?.enabled ?? defaultGuiPreferences.companion.enabled,
+      // null 是合法值（用户清空热键 = 不注册），不能折回默认值。
+      hotkey:
+        value?.companion?.hotkey === null
+          ? null
+          : typeof value?.companion?.hotkey === "string"
+            ? value.companion.hotkey
+            : defaultGuiPreferences.companion.hotkey,
+    },
     chat: {
       homeModel: value?.chat?.homeModel ?? defaultGuiPreferences.chat.homeModel,
       autoScroll:
@@ -255,6 +279,7 @@ function assignGuiPreferences(value: GuiPreferences): void {
   Object.assign(guiPreferences.layout, value.layout);
   Object.assign(guiPreferences.notifications, value.notifications);
   Object.assign(guiPreferences.desktop_pet, value.desktop_pet);
+  Object.assign(guiPreferences.companion, value.companion);
   Object.assign(guiPreferences.chat, value.chat);
   Object.assign(guiPreferences.connection, value.connection);
   Object.assign(guiPreferences.power, value.power);

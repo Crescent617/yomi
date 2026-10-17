@@ -164,7 +164,12 @@ async function recordSessionCompletion(
   attentionItems.splice(0, attentionItems.length, ...next);
 }
 
-export async function startNotificationListener(): Promise<() => void> {
+export async function startNotificationListener(options?: {
+  /** passive 模式（伙伴窗用）：只同步本地 phase/标题，跳过完成记录、
+   * 未读标记、桌面通知、运行列表刷新等主窗口副作用。 */
+  passive?: boolean;
+}): Promise<() => void> {
+  const passive = options?.passive ?? false;
   const unlisten = await listen(
     "kernel:noti",
     (e: {
@@ -193,25 +198,29 @@ export async function startNotificationListener(): Promise<() => void> {
         const previousStatus = lastKnownSessionStatus.get(session_id);
         lastKnownSessionStatus.set(session_id, status);
         const session = getSession(session_id);
-        const completed = didSessionComplete(previousStatus, status);
-        if (!session_id.startsWith("sub_") && completed) {
-          const completedAt = new Date().toISOString();
-          void recordSessionCompletion(session_id, completedAt);
+        if (!passive) {
+          const completed = didSessionComplete(previousStatus, status);
+          if (!session_id.startsWith("sub_") && completed) {
+            const completedAt = new Date().toISOString();
+            void recordSessionCompletion(session_id, completedAt);
+          }
         }
         if (session) {
           setSessionPhase(session, status);
         }
         if (
+          !passive &&
           status === "idle" &&
           !session_id.startsWith("sub_") &&
           sessionState.activeSessionId !== session_id
         ) {
           unreadSessions[session_id] = true;
         }
-        if (session_id.startsWith("sub_")) refreshSubagentParent(session_id);
-        void refreshRunningSessions();
+        if (!passive && session_id.startsWith("sub_"))
+          refreshSubagentParent(session_id);
+        if (!passive) void refreshRunningSessions();
       }
-      if (payload.mailbox_changed) {
+      if (!passive && payload.mailbox_changed) {
         const { session_id, steer, queued } = payload.mailbox_changed;
         onMailboxChanged(
           session_id,
@@ -222,17 +231,20 @@ export async function startNotificationListener(): Promise<() => void> {
       }
       if (payload.title_updated) {
         const { session_id, title } = payload.title_updated;
-        if (session_id.startsWith("sub_")) refreshSubagentParent(session_id);
+        if (!passive && session_id.startsWith("sub_"))
+          refreshSubagentParent(session_id);
         const session = getSession(session_id);
         if (session) session.alias = title;
       }
-      if (payload.background_tasks_changed?.kind === "shell") {
+      if (!passive && payload.background_tasks_changed?.kind === "shell") {
         void refreshRunningSessions();
       }
       if (payload.connection_lost) {
         lastKnownSessionStatus.clear();
-        runningSessions.splice(0, runningSessions.length);
-        showNotification("Connection lost", "warning");
+        if (!passive) {
+          runningSessions.splice(0, runningSessions.length);
+          showNotification("Connection lost", "warning");
+        }
       }
     },
   );
@@ -241,7 +253,7 @@ export async function startNotificationListener(): Promise<() => void> {
       lastKnownSessionStatus.set(session.id, session.phase);
     }
   }
-  await refreshRunningSessions();
+  if (!passive) await refreshRunningSessions();
   return unlisten;
 }
 

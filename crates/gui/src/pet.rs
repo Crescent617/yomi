@@ -85,6 +85,9 @@ pub struct PetSnapshot {
     pub mood: PetMood,
     pub request: Option<PetRequest>,
     pub notice: Option<PetNotice>,
+    /// Main window's active session, injected by the runtime emit path (not
+    /// tracked by `PetRuntime` itself). Drives the companion's follow mode.
+    pub active_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +151,7 @@ impl PetRuntime {
             mood,
             request,
             notice,
+            active_session_id: None,
         }
     }
 

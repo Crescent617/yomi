@@ -480,6 +480,8 @@
               class="h-4 w-4 accent-primary disabled:opacity-40"
             />
           </label>
+          <!-- Companion panel 的开关与热键入口暂不暴露（功能代码保留、
+               默认关闭），上线时在此恢复两段控件与 syncCompanionPreview。 -->
         </div>
       </section>
 

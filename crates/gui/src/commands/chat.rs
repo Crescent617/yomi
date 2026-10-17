@@ -67,9 +67,29 @@ pub async fn send_message_blocks(
 pub async fn subscribe(
     state: State<'_, AppState>,
     app_handle: AppHandle,
+    window: tauri::WebviewWindow,
     session_id: String,
     after_event_id: Option<String>,
 ) -> Result<(), GuiError> {
+    let subscriber = window.label().to_string();
+
+    // Join the existing pump when one is alive: every window receives the
+    // app-wide broadcast, so a second subscriber only needs to register
+    // its interest to keep the pump running.
+    {
+        let mut subscriptions = state.event_subscriptions.lock().await;
+        if let Some(entry) = subscriptions.get_mut(&session_id) {
+            if !entry.task.is_finished() {
+                entry.subscribers.insert(subscriber.clone());
+                drop(subscriptions);
+                if subscriber == "main" {
+                    *state.active_session.lock().await = Some(session_id);
+                }
+                return Ok(());
+            }
+        }
+    }
+
     let coord = state.kernel_snapshot();
     let sid = SessionId::from(session_id.clone());
     let after = after_event_id.map(kernel::types::EventId::from);
@@ -87,11 +107,10 @@ pub async fn subscribe(
         }
     };
 
-    state.stop_event_task(&session_id).await;
-
+    let generation = state.next_event_generation();
     let sid_cleanup = session_id.clone();
-    let tasks_cleanup = state.event_tasks.clone();
-    let handle = tauri::async_runtime::spawn(async move {
+    let subscriptions_cleanup = state.event_subscriptions.clone();
+    let handle = tokio::spawn(async move {
         while let Some((_, envelope)) = rx.recv().await {
             let event_id = envelope.event_id.to_string();
             let event = envelope.event;
@@ -114,16 +133,41 @@ pub async fn subscribe(
             });
             let _ = app_handle.emit("kernel:event", payload);
         }
-        let mut map = tasks_cleanup.lock().await;
-        map.remove(&sid_cleanup);
+        let mut map = subscriptions_cleanup.lock().await;
+        // A finished pump may already have been replaced by a respawn;
+        // only evict the entry still owned by this generation.
+        if map
+            .get(&sid_cleanup)
+            .is_some_and(|entry| entry.generation == generation)
+        {
+            map.remove(&sid_cleanup);
+        }
     });
 
     {
-        let mut tasks = state.event_tasks.lock().await;
-        tasks.insert(session_id.clone(), handle);
+        let mut subscriptions = state.event_subscriptions.lock().await;
+        match subscriptions.get_mut(&session_id) {
+            // Replace the dead pump in place, keeping existing subscribers.
+            Some(entry) => {
+                // A concurrent subscribe may have won the spawn race while
+                // we awaited the kernel subscription; never leave its live
+                // pump detached (two pumps would double-emit every event).
+                if !entry.task.is_finished() {
+                    entry.task.abort();
+                }
+                entry.task = handle;
+                entry.generation = generation;
+                entry.subscribers.insert(subscriber.clone());
+            }
+            None => {
+                let mut entry = crate::state::EventSubscription::new(handle, generation);
+                entry.subscribers.insert(subscriber.clone());
+                subscriptions.insert(session_id.clone(), entry);
+            }
+        }
     }
 
-    {
+    if subscriber == "main" {
         let mut guard = state.active_session.lock().await;
         *guard = Some(session_id);
     }
@@ -131,9 +175,25 @@ pub async fn subscribe(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn unsubscribe(state: State<'_, AppState>, session_id: String) -> Result<(), GuiError> {
-    state.stop_event_task(&session_id).await;
+pub async fn unsubscribe(
+    state: State<'_, AppState>,
+    window: tauri::WebviewWindow,
+    session_id: String,
+) -> Result<(), GuiError> {
+    let subscriber = window.label().to_string();
     {
+        let mut subscriptions = state.event_subscriptions.lock().await;
+        if let Some(entry) = subscriptions.get_mut(&session_id) {
+            entry.subscribers.remove(&subscriber);
+            if entry.subscribers.is_empty() {
+                let entry = subscriptions
+                    .remove(&session_id)
+                    .expect("entry checked present above");
+                entry.task.abort();
+            }
+        }
+    }
+    if subscriber == "main" {
         let mut guard = state.active_session.lock().await;
         if guard.as_ref() == Some(&session_id) {
             *guard = None;

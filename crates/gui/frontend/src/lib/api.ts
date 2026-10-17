@@ -324,6 +324,7 @@ export interface PetSnapshot {
   mood: PetMood;
   request: PetRequest | null;
   notice: PetNotice | null;
+  active_session_id: string | null;
 }
 
 export interface PetPack {
@@ -371,6 +372,61 @@ export async function getPetState(): Promise<PetSnapshot> {
 
 export async function setPetEnabled(enabled: boolean): Promise<void> {
   return invokeCmd("set_pet_enabled", { enabled });
+}
+
+// ── Companion (floating chat) API ─────────────────────────────────────────
+
+export interface CompanionState {
+  enabled: boolean;
+  open: boolean;
+  pinned_session_id: string | null;
+  hotkey: string | null;
+}
+
+export type CompanionPlacement = "above" | "below";
+
+export interface CompanionOpenChanged {
+  open: boolean;
+  placement: CompanionPlacement | null;
+  /** 转换后精灵的渲染缩放（展开时为配置值的 0.7 倍，收起时还原）。 */
+  sprite_scale: number;
+  /** 精灵中心在展开窗口内的逻辑 x 偏移；精灵按此锚点渲染（不随窗口居中），
+   * 窗口被屏幕边夹紧时精灵不横跳。收起为 null。 */
+  sprite_x: number | null;
+}
+
+export async function getCompanionState(): Promise<CompanionState> {
+  return invokeCmd("get_companion_state");
+}
+
+export async function setCompanionEnabled(enabled: boolean): Promise<void> {
+  return invokeCmd("set_companion_enabled", { enabled });
+}
+
+export async function setCompanionPinnedSession(
+  session_id: string | null,
+): Promise<void> {
+  return invokeCmd("set_companion_pinned_session", { session_id });
+}
+
+export async function setCompanionOpen(open: boolean): Promise<void> {
+  return invokeCmd("set_companion_open", { open });
+}
+
+/** 上报面板内容自然高度（前端测量，Rust 钳区间并重算窗口框架）。 */
+export async function setCompanionPanelHeight(height: number): Promise<void> {
+  return invokeCmd("set_companion_panel_height", { height });
+}
+
+export async function setCompanionHotkey(
+  accelerator: string | null,
+): Promise<void> {
+  return invokeCmd("set_companion_hotkey", { accelerator });
+}
+
+/** Focus the main window and activate the given session there. */
+export async function openSessionInMain(session_id: string): Promise<void> {
+  return invokeCmd("open_session_in_main", { session_id });
 }
 
 export async function getKeepAwake(): Promise<boolean> {

@@ -24,6 +24,9 @@ import * as commandPalette from "../command-palette.svelte";
 import * as searchHighlight from "../components/chat/search-highlight";
 import * as ChatInput from "../components/chat/ChatInput.svelte";
 import * as MessageList from "../components/chat/MessageList.svelte";
+import * as CompanionPanel from "../components/chat/CompanionPanel.svelte";
+import * as CodexPetSprite from "../components/CodexPetSprite.svelte";
+import * as companion from "../companion.svelte";
 import * as QuoteSelectionPopover from "../components/chat/QuoteSelectionPopover.svelte";
 import * as StatusBar from "../components/layout/StatusBar.svelte";
 import * as MermaidBlock from "../components/chat/MermaidBlock.svelte";
@@ -44,6 +47,9 @@ export const api = {
   searchHighlight,
   ChatInput,
   MessageList,
+  CompanionPanel,
+  CodexPetSprite,
+  companion,
   QuoteSelectionPopover,
   StatusBar,
   MermaidBlock,

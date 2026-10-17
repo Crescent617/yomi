@@ -111,7 +111,19 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_store::Builder::default().build());
+        .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        let app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            commands::companion::toggle(&app).await;
+                        });
+                    }
+                })
+                .build(),
+        );
 
     #[cfg(target_os = "macos")]
     let builder = builder.menu(app_menu);
@@ -236,6 +248,13 @@ pub fn run() {
             commands::pet::read_selected_pet_spritesheet,
             commands::pet::get_pet_scale,
             commands::pet::set_pet_scale,
+            commands::companion::get_companion_state,
+            commands::companion::set_companion_enabled,
+            commands::companion::set_companion_pinned_session,
+            commands::companion::set_companion_open,
+            commands::companion::set_companion_hotkey,
+            commands::companion::set_companion_panel_height,
+            commands::companion::open_session_in_main,
             commands::automation::list_cron_jobs,
             commands::automation::create_cron_job,
             commands::automation::update_cron_job,

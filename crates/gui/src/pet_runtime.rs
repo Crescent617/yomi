@@ -160,7 +160,12 @@ async fn emit_current_snapshot(
     app_handle: &AppHandle,
     last_snapshot: &mut Option<PetSnapshot>,
 ) {
-    let snapshot = state.pet_runtime.lock().await.snapshot(Instant::now());
+    let mut snapshot = state.pet_runtime.lock().await.snapshot(Instant::now());
+    state
+        .active_session
+        .lock()
+        .await
+        .clone_into(&mut snapshot.active_session_id);
     if !state.is_pet_enabled() || last_snapshot.as_ref() == Some(&snapshot) {
         return;
     }

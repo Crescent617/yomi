@@ -73,6 +73,16 @@
     await api.setKeepAwake(guiPreferences.power.keep_awake).catch((error) => {
       console.error("Failed to restore keep-awake preference:", error);
     });
+    await api
+      .setCompanionEnabled(guiPreferences.companion.enabled)
+      .catch((error) => {
+        console.error("Failed to restore companion preference:", error);
+      });
+    await api
+      .setCompanionHotkey(guiPreferences.companion.hotkey)
+      .catch((error) => {
+        console.error("Failed to restore companion hotkey:", error);
+      });
 
     const eventFrameBuffer = new EventFrameBuffer(
       ({
@@ -135,6 +145,8 @@
     : 'bg-background'}"
 >
   <slot />
-  {#if !isPetWindow}<ToastContainer /><ImagePreview /><FilePreviewOverlay
-    />{/if}
+  <!-- pet 窗口也要挂 ToastContainer：伙伴面板里的错误反馈（发送失败、
+       open-in-main 失败）走同一个 toast store。 -->
+  <ToastContainer />
+  {#if !isPetWindow}<ImagePreview /><FilePreviewOverlay />{/if}
 </div>

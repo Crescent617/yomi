@@ -13,7 +13,7 @@ const PET_CELL_HEIGHT: f64 = 208.0;
 const MIN_PET_SCALE: f64 = 0.5;
 const MAX_PET_SCALE: f64 = 3.0;
 
-fn pet_window_size(scale: f64) -> tauri::LogicalSize<f64> {
+pub(crate) fn pet_window_size(scale: f64) -> tauri::LogicalSize<f64> {
     tauri::LogicalSize::new(PET_CELL_WIDTH * scale, PET_CELL_HEIGHT * scale)
 }
 
@@ -54,8 +54,17 @@ pub async fn set_pet_scale(
 pub async fn get_pet_state(
     state: State<'_, AppState>,
 ) -> Result<crate::pet::PetSnapshot, GuiError> {
-    let runtime = state.pet_runtime.lock().await;
-    Ok(runtime.snapshot(std::time::Instant::now()))
+    let mut snapshot = state
+        .pet_runtime
+        .lock()
+        .await
+        .snapshot(std::time::Instant::now());
+    state
+        .active_session
+        .lock()
+        .await
+        .clone_into(&mut snapshot.active_session_id);
+    Ok(snapshot)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -173,6 +182,12 @@ pub async fn set_pet_enabled(
         state.set_pet_enabled(true);
         state.pet_runtime_notify.notify_one();
     } else {
+        // Collapse an open companion panel before hiding the window;
+        // otherwise re-enabling resizes the window to the collapsed sprite
+        // size while `companion.open` is still true (desynced geometry).
+        if state.companion.lock().await.open {
+            crate::commands::companion::apply_companion_open(&app_handle, &state, false).await?;
+        }
         if let Some(window) = app_handle.get_webview_window("pet") {
             window.hide().map_err(|error| {
                 GuiError::unknown(format!("failed to hide pet window: {error}"))

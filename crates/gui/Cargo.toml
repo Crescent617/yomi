@@ -12,6 +12,7 @@ tauri-plugin-dialog = { workspace = true }
 tauri-plugin-opener = { workspace = true }
 tauri-plugin-fs = { workspace = true }
 tauri-plugin-store = { workspace = true }
+tauri-plugin-global-shortcut = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

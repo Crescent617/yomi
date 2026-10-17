@@ -1,5 +1,5 @@
-use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
 
 use kernel::client::KernelApi;
@@ -57,6 +57,55 @@ struct ConnectionState {
     mode: ConnectionMode,
 }
 
+/// One kernel event pump per session, shared by every window that
+/// subscribed. The pump stops only when the last subscriber leaves, so the
+/// companion window can follow a session the main window is not viewing
+/// without being cut off when the main window switches tabs.
+#[derive(Debug)]
+pub struct EventSubscription {
+    pub task: tokio::task::JoinHandle<()>,
+    /// Bumped on every (re)spawn; the pump's cleanup removes its map entry
+    /// only when the generation still matches, so a stale cleanup cannot
+    /// evict a freshly respawned pump.
+    pub generation: u64,
+    /// Window labels that want this session's events.
+    pub subscribers: HashSet<String>,
+}
+
+impl EventSubscription {
+    pub fn new(task: tokio::task::JoinHandle<()>, generation: u64) -> Self {
+        Self {
+            task,
+            generation,
+            subscribers: HashSet::new(),
+        }
+    }
+}
+
+/// Companion (floating chat) state for the pet window. `enabled` and the
+/// pinned session mirror what the main window's settings UI persists via
+/// the store plugin; both are replayed into Rust at startup.
+#[derive(Debug, Default)]
+pub struct CompanionState {
+    pub enabled: bool,
+    pub open: bool,
+    /// Registered global shortcut accelerator, if any.
+    pub hotkey: Option<String>,
+    /// Pet frame (logical) captured when the panel opened, restored on
+    /// close.
+    pub collapsed_frame: Option<(tauri::LogicalPosition<f64>, tauri::LogicalSize<f64>)>,
+    /// Content-driven panel height reported by the frontend (clamped);
+    /// remembered across opens so the panel keeps its last size.
+    pub panel_height: Option<f64>,
+    /// Sprite anchor captured at open time (position, size, placement);
+    /// used to reframe the window on panel-height changes.
+    pub open_sprite: Option<(
+        tauri::LogicalPosition<f64>,
+        tauri::LogicalSize<f64>,
+        crate::commands::companion::PanelPlacement,
+    )>,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     connection: Arc<std::sync::RwLock<ConnectionState>>,
@@ -68,13 +117,16 @@ pub struct AppState {
     /// Fixed at GUI startup because the tracing appender cannot be reconfigured.
     pub gui_log_dir: std::path::PathBuf,
     pub active_session: Arc<Mutex<Option<String>>>,
-    pub event_tasks: Arc<Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>>,
+    pub event_subscriptions: Arc<Mutex<HashMap<String, EventSubscription>>>,
+    pub event_subscription_generation: Arc<AtomicU64>,
     pub pet_runtime: Arc<Mutex<PetRuntime>>,
     pub pet_runtime_notify: Arc<Notify>,
     pub pet_runtime_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pub selected_pet_id: Arc<std::sync::RwLock<Option<String>>>,
     pub pet_scale: Arc<std::sync::RwLock<f64>>,
     pet_enabled: Arc<AtomicBool>,
+    pub companion: Arc<Mutex<CompanionState>>,
+    pub companion_pinned_session: Arc<std::sync::RwLock<Option<String>>>,
 }
 
 impl AppState {
@@ -93,21 +145,24 @@ impl AppState {
             data_dir: Arc::new(std::sync::RwLock::new(data_dir)),
             gui_log_dir,
             active_session: Arc::new(Mutex::new(None)),
-            event_tasks: Arc::new(Mutex::new(HashMap::new())),
+            event_subscriptions: Arc::new(Mutex::new(HashMap::new())),
+            event_subscription_generation: Arc::new(AtomicU64::new(0)),
             pet_runtime: Arc::new(Mutex::new(PetRuntime::default())),
             pet_runtime_notify: Arc::new(Notify::new()),
             pet_runtime_task: Arc::new(Mutex::new(None)),
             selected_pet_id: Arc::new(std::sync::RwLock::new(None)),
             pet_scale: Arc::new(std::sync::RwLock::new(1.0)),
             pet_enabled: Arc::new(AtomicBool::new(false)),
+            companion: Arc::new(Mutex::new(CompanionState::default())),
+            companion_pinned_session: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
-    pub async fn stop_event_task(&self, session_id: &str) {
-        let mut tasks = self.event_tasks.lock().await;
-        if let Some(handle) = tasks.remove(session_id) {
-            handle.abort();
-        }
+    /// Allocate the generation id for a freshly spawned event pump.
+    pub fn next_event_generation(&self) -> u64 {
+        self.event_subscription_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1
     }
 
     /// Swap the kernel the GUI talks to (local <-> remote daemon).

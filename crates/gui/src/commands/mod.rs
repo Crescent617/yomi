@@ -2,6 +2,7 @@ pub mod agent_template;
 pub mod automation;
 pub mod chat;
 pub mod checkpoint;
+pub mod companion;
 pub mod debug;
 pub mod favorite;
 pub mod keep_awake;

@@ -6,10 +6,17 @@
     monitorFromPoint,
     primaryMonitor,
   } from "@tauri-apps/api/window";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import * as api from "../../lib/api";
   import type { PetPack, PetSnapshot } from "../../lib/api";
   import CodexPetSprite from "../../lib/components/CodexPetSprite.svelte";
+  import CompanionPanel from "../../lib/components/chat/CompanionPanel.svelte";
+  import {
+    closeCompanion,
+    companionState,
+    initCompanion,
+    toggleCompanionOpen,
+  } from "../../lib/companion.svelte";
   import {
     CODEX_PET_LOOK_DEADZONE,
     getCodexPetFrameDuration,
@@ -53,6 +60,8 @@
   let pet_window_visible = true;
   let last_cursor_x: number | null = null;
   let last_cursor_y: number | null = null;
+  let panel = $state<CompanionPanel | undefined>();
+  let dispose_companion: (() => void) | undefined;
   const look_controller = new CodexPetLookController();
   let movement_timeout: ReturnType<typeof setTimeout> | undefined;
   let drag_watchdog: ReturnType<typeof setTimeout> | undefined;
@@ -79,6 +88,28 @@
     interaction_animation ?? moodToCodexPetAnimation(snapshot?.mood ?? "idle"),
   );
   const play_once = $derived(isPlayOnceInteraction(interaction_animation));
+  const companion_open = $derived(companionState.open);
+  const companion_placement = $derived(companionState.placement);
+  // 展开时 Rust 会把精灵缩到 0.7 倍（dto.sprite_scale），收起还原。
+  const display_scale = $derived(companionState.sprite_scale ?? pet_scale);
+  // 水平夹紧时窗口会偏，精灵必须按 dto.sprite_x 的真实锚点渲染，
+  // 而不是居中于窗口——否则开合瞬间精灵横跳。380 = Rust PANEL_WIDTH。
+  const sprite_shift_x = $derived(
+    companion_open && companionState.sprite_x != null
+      ? companionState.sprite_x -
+          Math.max(380, PET_SIZE.width * display_scale) / 2
+      : 0,
+  );
+  const pending_request = $derived(
+    companion_open ? null : (snapshot?.request ?? null),
+  );
+
+  // 面板展开后把焦点交给输入框。
+  $effect(() => {
+    if (companion_open) {
+      void tick().then(() => panel?.focusInput());
+    }
+  });
 
   function applyLookOutput(output: CodexPetLookOutput) {
     look_index = output.look_index;
@@ -104,6 +135,13 @@
 
   onMount(() => {
     let disposed = false;
+    void initCompanion().then((dispose) => {
+      if (disposed) {
+        dispose();
+        return;
+      }
+      dispose_companion = dispose;
+    });
     let scale_revision = 0;
     let position_revision = 0;
     pet_window = getCurrentWindow();
@@ -421,6 +459,7 @@
 
     return () => {
       disposed = true;
+      dispose_companion?.();
       load_generation += 1;
       window.clearInterval(visibility_interval);
       window.clearInterval(look_interval);
@@ -475,6 +514,8 @@
   }
 
   function startDragging(event: PointerEvent) {
+    // 面板展开时窗口不接受拖拽（拖拽会带走面板，且 collapsed 锚点会失真）。
+    if (companionState.open) return;
     if (event.button !== 0 || !pet_window) return;
     event.preventDefault();
     if (drag_watchdog) window.clearTimeout(drag_watchdog);
@@ -515,7 +556,12 @@
         DRAG_MOVE_THRESHOLD_PX;
     resetDragState();
     if (should_jump) {
-      playInteraction("jumping");
+      // companion 模式下 click = 开合面板；否则保持原来的跳跃互动。
+      if (companionState.dto?.enabled) {
+        void toggleCompanionOpen();
+      } else {
+        playInteraction("jumping");
+      }
     } else {
       syncLookEligibility();
     }
@@ -534,24 +580,89 @@
 
 <svelte:head><title>Yomi Pet</title></svelte:head>
 
+<svelte:window
+  onkeydown={(event) => {
+    if (event.key === "Escape" && companion_open) {
+      event.preventDefault();
+      void closeCompanion();
+    }
+  }}
+/>
+
+{#snippet sprite_area()}
+  <div
+    class="sprite-area"
+    style:height="{PET_SIZE.height * display_scale}px"
+    aria-hidden={companion_open}
+    onpointerup={(event) => {
+      // 展开时点击精灵 = 收起面板。此时 startDragging 早退、dragging 恒
+      // 为 false，finishDragging 不会把这次点击当跳跃处理，所以在这里
+      // 单独接。
+      if (companion_open && event.button === 0) {
+        event.stopPropagation();
+        void toggleCompanionOpen();
+      }
+    }}
+  >
+    <div
+      class="sprite-box"
+      style:width="{PET_SIZE.width * display_scale}px"
+      style:height="{PET_SIZE.height * display_scale}px"
+      style:transform={sprite_shift_x
+        ? `translateX(${sprite_shift_x}px)`
+        : undefined}
+    >
+      {#if spritesheet_url}
+        <CodexPetSprite
+          src={spritesheet_url}
+          {animation}
+          {play_once}
+          {sprite_version_number}
+          {look_index}
+          scale={display_scale}
+          restart_nonce={interaction_revision}
+          on_complete={completeInteraction}
+        />
+      {/if}
+      {#if pending_request}
+        <span
+          class="request-dot {pending_request.kind === 'permission'
+            ? 'bg-error'
+            : 'bg-info'}"
+          title={pending_request.title}
+          aria-label={pending_request.kind === "permission"
+            ? "Permission request pending"
+            : "Question pending"}
+        ></span>
+      {/if}
+    </div>
+  </div>
+{/snippet}
+
 <main
   class="pet-window-root"
+  class:companion-open={companion_open}
   onpointerdown={startDragging}
   onpointerup={finishDragging}
   onpointercancel={cancelDragging}
-  aria-label="Yomi desktop pet. Click to play or drag to move."
+  aria-label={companionState.dto?.enabled
+    ? "Yomi desktop pet. Click to open the companion panel or drag to move."
+    : "Yomi desktop pet. Click to play or drag to move."}
 >
-  {#if spritesheet_url}
-    <CodexPetSprite
-      src={spritesheet_url}
-      {animation}
-      {play_once}
-      {sprite_version_number}
-      {look_index}
-      scale={pet_scale}
-      restart_nonce={interaction_revision}
-      on_complete={completeInteraction}
-    />
+  {#if companion_open && companion_placement === "below"}
+    {@render sprite_area()}
+  {/if}
+  {#if companion_open}
+    <div
+      class="panel-anim"
+      class:closing={companionState.closing}
+      class:from-below={companion_placement === "below"}
+    >
+      <CompanionPanel bind:this={panel} />
+    </div>
+  {/if}
+  {#if !companion_open || companion_placement === "above"}
+    {@render sprite_area()}
   {/if}
 </main>
 
@@ -569,5 +680,124 @@
 
   .pet-window-root:active {
     cursor: grabbing;
+  }
+
+  .pet-window-root.companion-open {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    cursor: default;
+    user-select: auto;
+  }
+
+  .pet-window-root.companion-open:active {
+    cursor: default;
+  }
+
+  .sprite-area {
+    position: relative;
+    display: grid;
+    flex: none;
+    place-items: center;
+  }
+
+  /* 展开时给面板和精灵之间留气口，气泡尾巴有地方落。 */
+  .companion-open .sprite-area {
+    padding-top: 8px;
+    cursor: pointer;
+  }
+
+  .sprite-box {
+    position: relative;
+  }
+
+  .request-dot {
+    position: absolute;
+    top: 6%;
+    right: 10%;
+    width: 10px;
+    height: 10px;
+    border-radius: 9999px;
+    box-shadow: 0 0 0 2px rgb(0 0 0 / 0.35);
+    pointer-events: none;
+  }
+
+  .panel-anim {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .panel-anim:not(.closing) {
+    animation: panel-in 180ms ease-out;
+    transform-origin: bottom center;
+  }
+
+  .panel-anim.from-below:not(.closing) {
+    animation-name: panel-in-below;
+    transform-origin: top center;
+  }
+
+  .panel-anim.closing {
+    animation: panel-out 150ms ease-in forwards;
+    transform-origin: bottom center;
+  }
+
+  .panel-anim.from-below.closing {
+    animation-name: panel-out-below;
+    transform-origin: top center;
+  }
+
+  @keyframes panel-in {
+    from {
+      opacity: 0;
+      transform: translateY(10px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes panel-in-below {
+    from {
+      opacity: 0;
+      transform: translateY(-10px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes panel-out {
+    from {
+      opacity: 1;
+      transform: none;
+    }
+    to {
+      opacity: 0;
+      transform: translateY(8px) scale(0.98);
+    }
+  }
+
+  @keyframes panel-out-below {
+    from {
+      opacity: 1;
+      transform: none;
+    }
+    to {
+      opacity: 0;
+      transform: translateY(-8px) scale(0.98);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .panel-anim,
+    .panel-anim.closing {
+      animation: none;
+    }
   }
 </style>

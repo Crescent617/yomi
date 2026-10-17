@@ -43,6 +43,8 @@ consistently; do not invent per-component variations.
 
 The desktop Pet uses Codex Pets spritesheets; the old procedural status lamps no longer apply. Keep the Pet visually unobtrusive, use animation to communicate aggregate agent state, and do not make animation the only source of critical information. Package details are documented in [`docs/DESKTOP_PETS.md`](../../docs/DESKTOP_PETS.md).
 
+With companion mode enabled, the pet window grows a conversation panel from the sprite anchor: the sprite is the state avatar and entry point (attention dot for pending permission/ask), the panel handles the action (chat, permission, ask-user) and collapses back to the sprite. The panel is a single column, uses the same streaming and status elements as the main chat, and never steals focus on its own — pending requests move the pet, not the panel.
+
 ## Decision Test
 
 Before adding UI, ask:
