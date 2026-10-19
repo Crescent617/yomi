@@ -276,7 +276,10 @@
               />
               <button
                 type="button"
-                onclick={saveRename}
+                onclick={(event) => {
+                  event.stopPropagation();
+                  void saveRename();
+                }}
                 class="h-8 rounded-md border border-primary/30 bg-primary/10 px-2.5 text-xs font-medium text-primary"
                 >Save</button
               >
@@ -284,7 +287,8 @@
           {:else}
             <button
               type="button"
-              onclick={() => {
+              onclick={(event) => {
+                event.stopPropagation();
                 renaming = true;
                 renameValue = session.alias ?? session.id.slice(-8);
               }}

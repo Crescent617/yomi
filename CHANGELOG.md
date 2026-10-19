@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- 桌面端会话切换菜单里点"重命名当前会话"不再误把菜单关掉：此前这次点击被当成"点了菜单外部"，菜单直接关闭，要重新点开才能看到重命名输入框。
+
 ## [0.11.14] - 2026-10-12
 
 ### Changed

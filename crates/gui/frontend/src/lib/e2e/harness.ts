@@ -23,6 +23,7 @@ import * as shareCard from "../share-card";
 import * as commandPalette from "../command-palette.svelte";
 import * as searchHighlight from "../components/chat/search-highlight";
 import * as ChatInput from "../components/chat/ChatInput.svelte";
+import * as HeaderBreadcrumb from "../components/chat/HeaderBreadcrumb.svelte";
 import * as MessageList from "../components/chat/MessageList.svelte";
 import * as CompanionPanel from "../components/chat/CompanionPanel.svelte";
 import * as CodexPetSprite from "../components/CodexPetSprite.svelte";
@@ -46,6 +47,7 @@ export const api = {
   commandPalette,
   searchHighlight,
   ChatInput,
+  HeaderBreadcrumb,
   MessageList,
   CompanionPanel,
   CodexPetSprite,
