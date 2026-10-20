@@ -17,6 +17,7 @@
     guiPreferences,
     applyGuiPreferences,
     scheduleGuiPreferencesSave,
+    DEFAULT_COMPANION_HOTKEY,
     type FontSizePreference,
     type GuiPreferences,
     type ThemePreference,
@@ -67,6 +68,7 @@
 
   let petSync = Promise.resolve();
   let keepAwakeSync = Promise.resolve();
+  let companionSync = Promise.resolve();
 
   // 登录项（macOS SMAppService / Windows Run 键 / Linux XDG autostart）。
   // mobile 与旧后端无此命令，探测失败即隐藏。
@@ -161,6 +163,19 @@
     return keepAwakeSync;
   }
 
+  function syncCompanionPreview(
+    value: GuiPreferences["companion"],
+  ): Promise<void> {
+    const snapshot = { ...value };
+    companionSync = companionSync
+      .catch(() => {})
+      .then(async () => {
+        await api.setCompanionEnabled(snapshot.enabled);
+        await api.setCompanionHotkey(snapshot.hotkey);
+      });
+    return companionSync;
+  }
+
   /**
    * Single write path for every control: mutate the live preferences, apply
    * visual side effects, preview OS/window side effects, and persist
@@ -169,6 +184,7 @@
   function update(mutate: (value: GuiPreferences) => void) {
     const previous_pet = { ...guiPreferences.desktop_pet };
     const previous_keep_awake = guiPreferences.power.keep_awake;
+    const previous_companion = { ...guiPreferences.companion };
     mutate(guiPreferences);
     applyGuiPreferences(guiPreferences);
     scheduleGuiPreferencesSave();
@@ -190,6 +206,15 @@
     if (guiPreferences.power.keep_awake !== previous_keep_awake) {
       void syncKeepAwake(guiPreferences.power.keep_awake).catch((syncError) => {
         error = `Keep-awake preview failed: ${api.errorMessage(syncError)}`;
+      });
+    }
+    const companion = guiPreferences.companion;
+    if (
+      companion.enabled !== previous_companion.enabled ||
+      companion.hotkey !== previous_companion.hotkey
+    ) {
+      void syncCompanionPreview(companion).catch((syncError) => {
+        error = `Companion preview failed: ${api.errorMessage(syncError)}`;
       });
     }
   }
@@ -480,8 +505,56 @@
               class="h-4 w-4 accent-primary disabled:opacity-40"
             />
           </label>
-          <!-- Companion panel 的开关与热键入口暂不暴露（功能代码保留、
-               默认关闭），上线时在此恢复两段控件与 syncCompanionPreview。 -->
+          <label
+            class="flex items-center justify-between gap-4 px-4 py-3.5 {guiPreferences
+              .desktop_pet.enabled
+              ? 'cursor-pointer'
+              : 'cursor-not-allowed opacity-60'}"
+          >
+            <div>
+              <div class="text-sm text-foreground">Conversation panel</div>
+              <div class="text-xs text-muted-foreground">
+                Click the pet to open a floating chat that follows the active
+                session. Pin a session to keep it fixed.
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              checked={guiPreferences.companion.enabled}
+              disabled={!guiPreferences.desktop_pet.enabled}
+              onchange={(event) =>
+                update(
+                  (value) =>
+                    (value.companion.enabled = event.currentTarget.checked),
+                )}
+              class="h-4 w-4 accent-primary disabled:opacity-40"
+            />
+          </label>
+          <div
+            class="flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div>
+              <div class="text-sm text-foreground">Companion hotkey</div>
+              <div class="text-xs text-muted-foreground">
+                Global shortcut that toggles the panel. Clear the field to
+                disable it.
+              </div>
+            </div>
+            <input
+              type="text"
+              value={guiPreferences.companion.hotkey ?? ""}
+              placeholder={DEFAULT_COMPANION_HOTKEY}
+              disabled={!guiPreferences.companion.enabled}
+              onchange={(event) =>
+                update((value) => {
+                  const raw = event.currentTarget.value.trim();
+                  value.companion.hotkey = raw.length > 0 ? raw : null;
+                })}
+              spellcheck="false"
+              class="h-8 min-w-48 rounded-md border border-border bg-background px-2 font-mono text-xs text-foreground outline-none focus:ring-1 focus:ring-ring disabled:opacity-40"
+              aria-label="Companion hotkey"
+            />
+          </div>
         </div>
       </section>
 

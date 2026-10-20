@@ -165,8 +165,9 @@ async function recordSessionCompletion(
 }
 
 export async function startNotificationListener(options?: {
-  /** passive 模式（伙伴窗用）：只同步本地 phase/标题，跳过完成记录、
-   * 未读标记、桌面通知、运行列表刷新等主窗口副作用。 */
+  /** passive 模式（伙伴窗用）：只跳过用户级副作用（完成记录、未读标记、
+   * 断连 toast）；phase/标题/运行列表/mailbox/子代理等窗口本地数据照常
+   * 刷新——否则右缘 activity 气泡（subagents/shells）在伙伴窗缺数据源。 */
   passive?: boolean;
 }): Promise<() => void> {
   const passive = options?.passive ?? false;
@@ -216,11 +217,10 @@ export async function startNotificationListener(options?: {
         ) {
           unreadSessions[session_id] = true;
         }
-        if (!passive && session_id.startsWith("sub_"))
-          refreshSubagentParent(session_id);
-        if (!passive) void refreshRunningSessions();
+        if (session_id.startsWith("sub_")) refreshSubagentParent(session_id);
+        void refreshRunningSessions();
       }
-      if (!passive && payload.mailbox_changed) {
+      if (payload.mailbox_changed) {
         const { session_id, steer, queued } = payload.mailbox_changed;
         onMailboxChanged(
           session_id,
@@ -231,18 +231,17 @@ export async function startNotificationListener(options?: {
       }
       if (payload.title_updated) {
         const { session_id, title } = payload.title_updated;
-        if (!passive && session_id.startsWith("sub_"))
-          refreshSubagentParent(session_id);
+        if (session_id.startsWith("sub_")) refreshSubagentParent(session_id);
         const session = getSession(session_id);
         if (session) session.alias = title;
       }
-      if (!passive && payload.background_tasks_changed?.kind === "shell") {
+      if (payload.background_tasks_changed?.kind === "shell") {
         void refreshRunningSessions();
       }
       if (payload.connection_lost) {
         lastKnownSessionStatus.clear();
+        runningSessions.splice(0, runningSessions.length);
         if (!passive) {
-          runningSessions.splice(0, runningSessions.length);
           showNotification("Connection lost", "warning");
         }
       }
@@ -253,7 +252,7 @@ export async function startNotificationListener(options?: {
       lastKnownSessionStatus.set(session.id, session.phase);
     }
   }
-  if (!passive) await refreshRunningSessions();
+  await refreshRunningSessions();
   return unlisten;
 }
 

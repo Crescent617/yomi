@@ -54,7 +54,7 @@ Yomi renders status-driven animations for both versions and uses the V2 look row
 
 ## Companion panel
 
-The pet window doubles as a floating conversation entry point. The feature ships without a settings entry for now — `companion.enabled` defaults to false and the preference is not exposed in the UI. Once enabled (Settings → Application → Desktop pet → Conversation panel), the global hotkey (default `CmdOrControl+Shift+Y`, configurable in the same section) toggles the panel from anywhere. The hotkey is registered only while companion mode is enabled.
+The pet window doubles as a floating conversation entry point. Enable it from **Settings → Application → Desktop pet → Conversation panel** (off by default); the global hotkey (default `CmdOrControl+Shift+Y`, configurable in the same section) toggles the panel from anywhere. The hotkey is registered only while companion mode is enabled.
 
 - Click the pet to open or close the panel; `Escape` closes it. While open, the window grows from the sprite anchor (panel above the sprite, flipping below when there is no room above, 8 px margins to screen edges) and the sprite keeps its exact screen position (rendered at `sprite_x`, smaller at 0.7× scale); closing restores the collapsed frame. Dragging is disabled while the panel is open.
 - Panel height adapts to content: the frontend measures the natural height (header + messages + bars + input), reports it, and the window is reframed around the open-time sprite anchor (placement kept), clamped to [240, 560] and to the work area. The last height is remembered across opens.
