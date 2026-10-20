@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.16] - 2026-10-20
+
+### Added
+- 桌面宠物新增伙伴悬浮窗：在 设置 → Application → Desktop pet 开启 Conversation panel（默认关闭）后，点击宠物或按全局热键 Companion hotkey（默认 `CmdOrControl+Shift+Y`，可修改或清空）即可从宠物身上展开一个小对话面板，跟随主窗口当前会话收发消息、处理权限与提问，也可以钉住某个会话固定跟随。
+
+### Fixed
+- 伙伴悬浮窗消息流右侧的活动图标（进行中的子代理、后台终端、排队消息徽标）不显示：此前悬浮窗收不到这些状态的刷新，主窗口显示正常。
+
 ## [0.11.15] - 2026-10-19
 
 ### Fixed
