@@ -132,7 +132,7 @@ pub(crate) async fn gate_message(
 /// (normal gating) — a transient sqlite error must not crash message
 /// intake, but the degradation (a watch-on chat answered like a normal
 /// one) must be visible.
-async fn read_watch_on(
+pub(crate) async fn read_watch_on(
     store: &Arc<dyn ChannelStore>,
     config: &ChannelConfig,
     chat_id: &str,

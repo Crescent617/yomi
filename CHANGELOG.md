@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- watch 观察模式下，群成员的表情回复与普通消息同等对待：镜像进观察者会话并攒批投递、空闲不再丢弃，用户白名单未命中者也照常镜像（显式拉黑除外）。
+
 ## [0.11.17] - 2026-10-21
 
 ### Added

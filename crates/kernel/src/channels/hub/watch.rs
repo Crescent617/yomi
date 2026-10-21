@@ -276,6 +276,31 @@ fn truncate_chars(text: &mut String, cap: usize) {
     text.push_str("…(已截断)");
 }
 
+/// Test-only view of a chat's pending mirror batch (flattened text
+/// blocks) — lets handler tests assert an enqueue right after the
+/// enqueueing call returns, without racing the window flush.
+#[cfg(test)]
+pub(crate) async fn pending_texts(
+    kernel: &Kernel,
+    channel_name: &str,
+    chat_id: &str,
+) -> Vec<String> {
+    let key = pending_key(kernel, channel_name, chat_id);
+    let Some(entry) = PENDING.get(&key) else {
+        return Vec::new();
+    };
+    let state = entry.lock().await;
+    state
+        .items
+        .iter()
+        .flatten()
+        .filter_map(|b| match b {
+            ContentBlock::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 #[path = "watch_test.rs"]
 mod tests;

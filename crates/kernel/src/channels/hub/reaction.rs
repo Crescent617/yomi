@@ -1,20 +1,28 @@
 //! Inbound message reactions (Feishu `im.message.reaction.created_v1`):
-//! a user's emoji reaction steered into the session of the reacted
-//! message's conversation — feedback on work in flight, never a
-//! trigger. An idle session is NOT woken (every 👍 spawning a run would
-//! burn a model call per emoji), so reactions arriving after the run
-//! settles are dropped. The whole feature is one
-//! `disabled_events = ["reaction"]` away from silence, and inert on
-//! platforms whose adapter doesn't implement `fetch_reaction_target`
-//! (the default returns `None`).
+//! a user's emoji reaction as session input. Two modes by the target
+//! chat's mapping kind:
+//!
+//! - **Normal chats**: feedback steered into the RUNNING session of the
+//!   reacted message's conversation — never a trigger. An idle session
+//!   is NOT woken (every 👍 spawning a run would burn a model call per
+//!   emoji), so reactions arriving after the run settles are dropped.
+//! - **Watch chats** (`/watch on`, chat-level mapping): reactions are
+//!   observations like any mirrored message — batched into the watch
+//!   mirror queue and delivered on the next window flush, never
+//!   dropped, and the user-allowlist miss bypass applies (a watched
+//!   chat mirrors the whole conversation, same as `gate.rs`).
+//!
+//! The whole feature is one `disabled_events = ["reaction"]` away from
+//! silence, and inert on platforms whose adapter doesn't implement
+//! `fetch_reaction_target` (the default returns `None`).
 //!
 //! No receipts, no obs, no history cursor: a reaction is not a posted
 //! message — recording one as a receipt would falsely trigger mid-run
 //! split (the status card must not freeze because someone added an
-//! emoji). One race is accepted: the run may settle between the
-//! running-check and the steer publish — a steer to a just-idled
-//! session starts a run that sees only the reaction. The window is
-//! milliseconds; the outcome is one cheap no-op turn.
+//! emoji). One race is accepted (normal path only): the run may settle
+//! between the running-check and the steer publish — a steer to a
+//! just-idled session starts a run that sees only the reaction. The
+//! window is milliseconds; the outcome is one cheap no-op turn.
 
 use std::sync::{Arc, Weak};
 use tracing::{debug, info, warn};
@@ -24,7 +32,8 @@ use crate::types::{ContentBlock, SessionId};
 
 use crate::channels::header::{metadata_header, HeaderSender};
 use crate::channels::{
-    ChannelConfig, ChannelStore, PlatformAdapter, ReactionNotice, ReactionTarget,
+    AccessDeniedReason, ChannelConfig, ChannelError, ChannelMessage, ChannelStore, PlatformAdapter,
+    ReactionNotice, ReactionTarget,
 };
 
 /// Handle one reaction event. Runs off the gate loop (spawned): the
@@ -74,11 +83,75 @@ pub(super) async fn handle_message_reaction(
             return;
         }
     };
+    // Watch state is chat-level (mirrors `gate.rs`'s read): a watched
+    // chat mirrors the whole conversation, threads included.
+    let watch_on = super::gate::read_watch_on(store, config, &target.chat_id).await;
     // Same access control as chat messages (no reaction-back: adding a
     // 🙏 on someone else's message would attribute the denial to the
-    // wrong act).
+    // wrong act). Watch parity: a user-allowlist miss still mirrors —
+    // explicit blocks, chat lists and a disabled channel always deny.
     if let Err(e) = config.check_access(&target.chat_id, &notice.operator_open_id) {
-        info!(channel = %channel_name, error = %e, "reaction access denied");
+        let bypass = watch_on
+            && matches!(
+                e,
+                ChannelError::AccessDenied {
+                    reason: AccessDeniedReason::UserNotAllowed,
+                    ..
+                }
+            );
+        if !bypass {
+            info!(channel = %channel_name, error = %e, "reaction access denied");
+            return;
+        }
+    }
+    let Some(kernel) = kernel.upgrade() else {
+        return;
+    };
+    // Watch chats: mirror like any plain message — batched, flushed on
+    // the next window, never dropped for an idle observer. The name
+    // lookup (one uncached contact GET) happens only here, on the path
+    // that actually delivers.
+    if watch_on {
+        let sender_name = adapter.fetch_user_name(&notice.operator_open_id).await;
+        let text = steer_text(
+            &notice,
+            &target,
+            sender_name.as_deref(),
+            config.platform.name(),
+        );
+        let msg = ChannelMessage {
+            external_chat_id: target.chat_id.clone(),
+            external_user_id: notice.operator_open_id.clone(),
+            external_message_id: Some(notice.message_id.clone()),
+            is_mention: false,
+            raw_text: None,
+            content: vec![ContentBlock::Text { text }],
+            image_keys: Vec::new(),
+            thread_id: target.thread_id.clone(),
+            root_id: target.root_id.clone(),
+            parent_id: None,
+            // The mirror path reads only chat id, content and image
+            // keys; the rest of the envelope is inert filler.
+            is_group: true,
+            create_time: notice.action_time,
+            doc_comment: None,
+        };
+        super::watch::mirror_message(
+            channel_name,
+            store,
+            &kernel,
+            &msg,
+            config.platform.image_ref_tag(),
+        )
+        .await;
+        info!(
+            channel = %channel_name,
+            chat_id = %target.chat_id,
+            msg_id = %notice.message_id,
+            emoji = %notice.emoji_type,
+            operator = %notice.operator_open_id,
+            "reaction enqueued for watch mirroring"
+        );
         return;
     }
     // The first mapping hit decides — a less specific key (the chat)
@@ -91,9 +164,6 @@ pub(super) async fn handle_message_reaction(
         );
         return;
     };
-    let Some(kernel) = kernel.upgrade() else {
-        return;
-    };
     if !kernel.is_session_running(&sid) {
         debug!(
             channel = %channel_name,
@@ -103,6 +173,8 @@ pub(super) async fn handle_message_reaction(
         );
         return;
     }
+    // Dropped reactions pay nothing but the routing GET — the name
+    // lookup waits until delivery is certain.
     let sender_name = adapter.fetch_user_name(&notice.operator_open_id).await;
     let text = steer_text(
         &notice,

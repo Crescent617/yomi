@@ -316,3 +316,115 @@ async fn first_mapping_hit_wins() {
         .unwrap();
     assert_eq!(sid, thread_sid);
 }
+
+// ── Watch chats ────────────────────────────────────────────────────
+
+fn target_in(chat_id: &str) -> ReactionTarget {
+    ReactionTarget {
+        chat_id: chat_id.to_string(),
+        ..target()
+    }
+}
+
+async fn watch_setup(
+    chat_id: &str,
+    allowed_users: Vec<String>,
+    blocked_users: Vec<String>,
+) -> (
+    Arc<dyn ChannelStore>,
+    Arc<MockAdapter>,
+    ChannelConfig,
+    Arc<Kernel>,
+    SessionId,
+) {
+    let store = test_store().await;
+    let mock = Arc::new(MockAdapter {
+        target: Mutex::new(Some(target_in(chat_id))),
+        ..Default::default()
+    });
+    let mut config = feishu_config();
+    config.allowed_users = allowed_users;
+    config.blocked_users = blocked_users;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+    let sid = kernel
+        .create_session(crate::kernel::CreateSessionInput {
+            project_id: None,
+            working_dir: None,
+            auto_approve_level: None,
+            tool_blocklist: vec![],
+            model_key: None,
+            context_window: None,
+        })
+        .await
+        .unwrap();
+    store
+        .save_mapping(
+            "mock",
+            chat_id,
+            &sid,
+            chat_id,
+            None,
+            crate::channels::MappingKind::Watch,
+        )
+        .await
+        .unwrap();
+    // `tmp` must outlive the kernel's use below the caller's asserts —
+    // leaking the TempDir is the test-local way (kernel holds the path).
+    std::mem::forget(tmp);
+    (store, mock, config, kernel, sid)
+}
+
+#[tokio::test]
+async fn watch_chat_mirrors_reaction_into_batch() {
+    let (store, mock, config, kernel, _sid) = watch_setup("oc_chat_w1", vec![], vec![]).await;
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let kernel_weak = Arc::downgrade(&kernel);
+    handle_message_reaction("mock", &config, &store, &kernel_weak, &adapter, notice()).await;
+    // The batch is enqueued synchronously; the 3s window flush cannot
+    // have fired — assert without sleeping.
+    let texts = crate::channels::hub_watch::pending_texts(&kernel, "mock", "oc_chat_w1").await;
+    assert_eq!(texts.len(), 1, "one mirrored item, got: {texts:?}");
+    assert!(texts[0].contains("[reaction: THUMBSUP] some answer"));
+    assert!(texts[0].contains("[msg_id: om_target]"));
+}
+
+#[tokio::test]
+async fn watch_chat_bypasses_user_allowlist_miss() {
+    // Watch parity with plain messages: a watched chat mirrors the whole
+    // conversation — a user-allowlist miss still mirrors.
+    let (store, mock, config, kernel, _sid) =
+        watch_setup("oc_chat_w2", vec!["ou_someone_else".to_string()], vec![]).await;
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let kernel_weak = Arc::downgrade(&kernel);
+    handle_message_reaction("mock", &config, &store, &kernel_weak, &adapter, notice()).await;
+    let texts = crate::channels::hub_watch::pending_texts(&kernel, "mock", "oc_chat_w2").await;
+    assert_eq!(texts.len(), 1, "allowlist miss must still mirror");
+}
+
+#[tokio::test]
+async fn watch_chat_blocked_user_still_drops() {
+    let (store, mock, config, kernel, _sid) =
+        watch_setup("oc_chat_w3", vec![], vec!["ou_user".to_string()]).await;
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let kernel_weak = Arc::downgrade(&kernel);
+    handle_message_reaction("mock", &config, &store, &kernel_weak, &adapter, notice()).await;
+    // Positive control in the same batch: a non-blocked user mirrors.
+    let allowed = ReactionNotice {
+        operator_open_id: "ou_other".to_string(),
+        ..notice()
+    };
+    handle_message_reaction("mock", &config, &store, &kernel_weak, &adapter, allowed).await;
+    let texts = crate::channels::hub_watch::pending_texts(&kernel, "mock", "oc_chat_w3").await;
+    assert_eq!(
+        texts.len(),
+        1,
+        "only the non-blocked user's reaction lands, got: {texts:?}"
+    );
+    assert!(texts[0].contains("[from_user_id: ou_other]"));
+}
