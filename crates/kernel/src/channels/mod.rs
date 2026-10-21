@@ -197,6 +197,10 @@ pub(crate) const EVENT_DOC_COMMENT: &str = "doc_comment";
 /// (`im.chat.member.bot.added_v1`).
 pub(crate) const EVENT_WELCOME: &str = "welcome";
 
+/// Event feature: Feishu message reactions (`im.message.reaction.created_v1`)
+/// — a user's emoji reaction steered into the running session as feedback.
+pub(crate) const EVENT_REACTION: &str = "reaction";
+
 fn default_history_context() -> usize {
     20
 }
@@ -347,7 +351,7 @@ impl PlatformConfig {
     /// only warns on unknown names; serde can't reject array contents).
     pub(crate) fn known_event_names(&self) -> &'static [&'static str] {
         match self {
-            Self::Feishu { .. } => &[EVENT_DOC_COMMENT, EVENT_WELCOME],
+            Self::Feishu { .. } => &[EVENT_DOC_COMMENT, EVENT_WELCOME, EVENT_REACTION],
             Self::Telegram { .. } => &[],
         }
     }
@@ -432,6 +436,44 @@ pub enum ChannelEvent {
         /// Chat the bot joined.
         chat_id: String,
     },
+    /// Feishu `im.message.reaction.created_v1`: a user added an emoji
+    /// reaction to a message. Ids only — the target message's chat/thread
+    /// is resolved post-filter (one platform GET, same deferred pattern
+    /// as `ChannelMessage::image_keys`). Reaction removals are not
+    /// forwarded (rarely actionable).
+    MessageReaction(ReactionNotice),
+}
+
+/// A Feishu `im.message.reaction.created_v1` event (ids only). Bot-authored
+/// reactions (`operator_type = "app"` — every ack/settle the bot adds)
+/// are filtered at the adapter and never reach the hub.
+#[derive(Debug, Clone)]
+pub struct ReactionNotice {
+    /// The reacted-to message (the event carries no chat id).
+    pub message_id: String,
+    /// Feishu `emoji_type` (e.g. `THUMBSUP`, `DONE`).
+    pub emoji_type: String,
+    /// The reacting user's open id.
+    pub operator_open_id: String,
+    /// `event.action_time`, unix **milliseconds**.
+    pub action_time: Option<i64>,
+}
+
+/// A reaction target's session-routing info plus a body excerpt — the
+/// reaction event carries only the message id, so one platform GET
+/// resolves where the reaction landed.
+#[derive(Debug, Clone)]
+pub struct ReactionTarget {
+    pub chat_id: String,
+    /// Present when the reacted message lives inside a thread.
+    pub thread_id: Option<String>,
+    /// Thread root message id (the canonical session key for in-thread
+    /// messages), when the platform reports it.
+    pub root_id: Option<String>,
+    /// Short excerpt of the reacted message's body (adapter-truncated;
+    /// empty for non-text bodies) so the steered feedback is
+    /// self-contained.
+    pub excerpt: String,
 }
 
 /// A Feishu `drive.notice.comment_add_v1` event (ids only).
@@ -1164,6 +1206,18 @@ pub trait PlatformAdapter: Send + Sync {
         Ok(None)
     }
 
+    /// Locate a reaction target: which chat/thread the reacted message
+    /// lives in, plus a short body excerpt. One platform API call per
+    /// invocation — the reaction event itself carries only the message
+    /// id. `None` = message gone (deleted). Default: unsupported (the
+    /// reaction feature stays inert on such platforms).
+    async fn fetch_reaction_target(
+        &self,
+        _message_id: &str,
+    ) -> Result<Option<ReactionTarget>, ChannelError> {
+        Ok(None)
+    }
+
     /// The root message id of a platform thread (the message the thread
     /// hangs off). Resolves the canonical thread key (see
     /// `effective_mapping_key`) when the event payload doesn't carry
@@ -1409,8 +1463,8 @@ pub mod store;
 
 pub(crate) use hub::{
     btw as hub_btw, command as hub_command, context as hub_context, deliver as hub_deliver,
-    delivery_pool, gate as hub_gate, handlers as hub_handlers, routing as hub_routing,
-    watch as hub_watch,
+    delivery_pool, gate as hub_gate, handlers as hub_handlers, reaction as hub_reaction,
+    routing as hub_routing, watch as hub_watch,
 };
 
 #[cfg(test)]

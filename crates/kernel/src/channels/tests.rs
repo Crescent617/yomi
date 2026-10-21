@@ -315,6 +315,7 @@ fn known_event_names_covers_registered_features() {
     let names = feishu.known_event_names();
     assert!(names.contains(&EVENT_DOC_COMMENT));
     assert!(names.contains(&EVENT_WELCOME));
+    assert!(names.contains(&EVENT_REACTION));
 }
 
 #[test]

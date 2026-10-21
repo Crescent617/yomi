@@ -84,6 +84,11 @@ const THREAD_ROOT_CAP: NonZeroUsize = DEDUP_CAP;
 /// few and long-lived; a miss just costs one contact API re-fetch.
 const USER_NAME_CAP: NonZeroUsize = DEDUP_CAP;
 
+/// Excerpt length cap (chars) for a reaction target's body — enough for
+/// the agent to recognize which message earned the reaction without
+/// re-fetching; the full text is one `msg_id` away via the lark skill.
+const REACTION_EXCERPT_CAP: usize = 200;
+
 // ── Adapter ─────────────────────────────────────────────────────────
 
 pub struct FeishuAdapter {
@@ -1383,6 +1388,44 @@ impl PlatformAdapter for FeishuAdapter {
             text,
             image_keys,
             parent_id: item["parent_id"].as_str().map(str::to_string),
+        }))
+    }
+
+    /// Locate a reaction target's chat/thread plus a body excerpt (the
+    /// reaction event carries only the message id). Same GET as
+    /// [`fetch_message`](Self::fetch_message); `merge_forward` expansion is
+    /// skipped — the excerpt stays the parent's own body.
+    async fn fetch_reaction_target(
+        &self,
+        message_id: &str,
+    ) -> Result<Option<crate::channels::ReactionTarget>, ChannelError> {
+        let token = self.get_token().await?;
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.api_get(
+                &token,
+                &format!("{}/open-apis/im/v1/messages/{message_id}", self.base_url),
+                &[("card_msg_content_type", "user_card_content".to_string())],
+            ),
+        )
+        .await
+        .map_err(|_| ChannelError::Platform("reaction target fetch timed out".into()))??;
+        let Some(item) = resp["data"]["items"].as_array().and_then(|a| a.first()) else {
+            return Ok(None);
+        };
+        if item["deleted"].as_bool().unwrap_or(false) {
+            return Ok(None);
+        }
+        let chat_id = item["chat_id"].as_str().unwrap_or_default();
+        if chat_id.is_empty() {
+            return Ok(None);
+        }
+        let (text, _) = Self::extract_history_content(item);
+        Ok(Some(crate::channels::ReactionTarget {
+            chat_id: chat_id.to_string(),
+            thread_id: item["thread_id"].as_str().map(str::to_string),
+            root_id: item["root_id"].as_str().map(str::to_string),
+            excerpt: crate::utils::strs::truncate_by_chars(text.trim(), REACTION_EXCERPT_CAP, "…"),
         }))
     }
 

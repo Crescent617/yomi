@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- 飞书通道支持接收表情回复（reaction）：群成员对消息添加的表情会作为反馈注入到该消息所属会话中——仅在该会话有任务正在运行时生效，会话空闲时静默丢弃，不会为表情单独启动任务；机器人自己打的表情不计。需在飞书开放平台订阅 `im.message.reaction.created_v1` 事件；可用通道配置 `disabled_events = ["reaction"]` 整体关闭（默认开启）。
+
 ## [0.11.16] - 2026-10-20
 
 ### Added

@@ -177,6 +177,9 @@ impl FeishuAdapter {
                 Self::forward_bot_added_event(&msg["event"], incoming).await;
                 return Ok(None);
             }
+            "im.message.reaction.created_v1" => {
+                return self.forward_reaction_event(msg, incoming).await;
+            }
             // Card callbacks are normally delivered as `card` data frames,
             // but tolerate delivery as a plain event too.
             "card.action.trigger" => {
@@ -483,6 +486,75 @@ impl FeishuAdapter {
         );
         if incoming
             .send(ChannelEvent::DocCommentAdded(notice))
+            .await
+            .is_err()
+        {
+            return Err(ChannelError::Platform("incoming closed".to_string()));
+        }
+        // Record only after a successful forward (same rule as messages).
+        self.seen_messages.lock().await.put(dedup_key, ());
+        Ok(None)
+    }
+
+    /// Parse an `im.message.reaction.created_v1` event and forward it as
+    /// a [`ChannelEvent::MessageReaction`]. Ids only — the target
+    /// message's chat/thread is resolved by the hub post-filter (same
+    /// deferred pattern as doc comments). The bot's own reactions
+    /// (`operator_type = "app"`: every ack/queue/settle it adds) are
+    /// dropped here unconditionally — they are pure echo, half the
+    /// traffic. Reaction removals (`deleted_v1`) are not subscribed.
+    pub(crate) async fn forward_reaction_event(
+        &self,
+        msg: &serde_json::Value,
+        incoming: &mpsc::Sender<ChannelEvent>,
+    ) -> Result<Option<String>, ChannelError> {
+        let event = &msg["event"];
+        // Redelivery guard (lost ACK → resend), keyed like chat messages.
+        // `header.event_id` is the delivery-unique id; older shapes
+        // without it fall back to the reaction's natural key.
+        let dedup_key = match msg["header"]["event_id"].as_str() {
+            Some(event_id) if !event_id.is_empty() => format!("reaction:{event_id}"),
+            _ => format!(
+                "reaction:{}:{}:{}",
+                event["message_id"].as_str().unwrap_or_default(),
+                event["user_id"]["open_id"].as_str().unwrap_or_default(),
+                event["action_time"].as_str().unwrap_or_default()
+            ),
+        };
+        if self.seen_messages.lock().await.contains(&dedup_key) {
+            info!(dedup_key, "duplicate reaction event delivery, skipped");
+            return Ok(None);
+        }
+        if event["operator_type"].as_str() != Some("user") {
+            debug!(
+                operator_type = event["operator_type"].as_str().unwrap_or(""),
+                "reaction event ignored (not a user reaction)"
+            );
+            return Ok(None);
+        }
+        let message_id = event["message_id"].as_str().unwrap_or_default();
+        let emoji_type = event["reaction_type"]["emoji_type"]
+            .as_str()
+            .unwrap_or_default();
+        let operator = event["user_id"]["open_id"].as_str().unwrap_or_default();
+        if message_id.is_empty() || emoji_type.is_empty() || operator.is_empty() {
+            warn!(payload = %msg, "reaction event missing ids, ignored");
+            return Ok(None);
+        }
+        let notice = crate::channels::ReactionNotice {
+            message_id: message_id.to_string(),
+            emoji_type: emoji_type.to_string(),
+            operator_open_id: operator.to_string(),
+            action_time: event["action_time"]
+                .as_str()
+                .and_then(|s| s.parse::<i64>().ok()),
+        };
+        info!(
+            message_id,
+            emoji_type, operator, "Feishu message reaction event"
+        );
+        if incoming
+            .send(ChannelEvent::MessageReaction(notice))
             .await
             .is_err()
         {

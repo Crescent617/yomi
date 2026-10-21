@@ -172,6 +172,14 @@ fn response_for(method: &str, path: &str) -> Vec<u8> {
                  "sender":{"id":"ou_q","sender_type":"user"},"body":{"content":"{\"text\":\"被引用的内容\"}"}}
             ]}}"#
             .into(),
+            // Reaction target: an in-thread text message — carries the
+            // routing ids the reaction event itself lacks.
+            "/open-apis/im/v1/messages/om_reacted" => r#"{"code":0,"msg":"ok","data":{"items":[
+                {"message_id":"om_reacted","chat_id":"oc_chat","thread_id":"omt_1","root_id":"om_root",
+                 "create_time":"1700000000000","msg_type":"text","deleted":false,
+                 "sender":{"id":"cli_bot","sender_type":"app"},"body":{"content":"{\"text\":\"这是 bot 的回答\"}"}}
+            ]}}"#
+            .into(),
             "/open-apis/im/v1/messages/om_deleted" => r#"{"code":0,"msg":"ok","data":{"items":[
                 {"message_id":"om_deleted","create_time":"1700000000000","msg_type":"text","deleted":true,
                  "sender":{"id":"ou_q","sender_type":"user"},"body":{"content":"{\"text\":\"gone\"}"}}
@@ -578,6 +586,34 @@ async fn fetch_history_edge_cases_and_millisecond_cursor() {
     assert_eq!(out[1].message_id, "e4");
     assert_eq!(out[1].text, "same second later");
     assert_eq!(out[1].create_time, 1_700_000_060_800);
+}
+
+#[tokio::test]
+async fn fetch_reaction_target_returns_routing_and_excerpt() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+
+    let t = adapter
+        .fetch_reaction_target("om_reacted")
+        .await
+        .unwrap()
+        .expect("reaction target found");
+    assert_eq!(t.chat_id, "oc_chat");
+    assert_eq!(t.thread_id.as_deref(), Some("omt_1"));
+    assert_eq!(t.root_id.as_deref(), Some("om_root"));
+    assert_eq!(t.excerpt, "这是 bot 的回答");
+
+    // Deleted and missing messages yield None, not an error.
+    assert!(adapter
+        .fetch_reaction_target("om_deleted")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(adapter
+        .fetch_reaction_target("om_missing")
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]
@@ -1895,6 +1931,94 @@ async fn unknown_event_type_is_ignored() {
     let event = json!({
         "header": { "event_type": "im.chat.updated_v1" },
         "event": {}
+    });
+
+    adapter.parse_event_json(&event, &tx).await.unwrap();
+    assert!(rx.try_recv().is_err(), "nothing forwarded");
+}
+
+// ── Message reaction events ───────────────────────────────────────
+
+fn reaction_event(operator_type: &str) -> serde_json::Value {
+    json!({
+        "header": {
+            "event_id": "evt_1",
+            "event_type": "im.message.reaction.created_v1"
+        },
+        "event": {
+            "message_id": "om_target",
+            "reaction_type": { "emoji_type": "THUMBSUP" },
+            "operator_type": operator_type,
+            "user_id": { "open_id": "ou_user" },
+            "action_time": "1760000000000"
+        }
+    })
+}
+
+#[tokio::test]
+async fn user_reaction_event_is_forwarded() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+
+    adapter
+        .parse_event_json(&reaction_event("user"), &tx)
+        .await
+        .unwrap();
+
+    let crate::channels::ChannelEvent::MessageReaction(notice) =
+        rx.try_recv().expect("reaction event forwarded")
+    else {
+        panic!("expected MessageReaction");
+    };
+    assert_eq!(notice.message_id, "om_target");
+    assert_eq!(notice.emoji_type, "THUMBSUP");
+    assert_eq!(notice.operator_open_id, "ou_user");
+    assert_eq!(notice.action_time, Some(1_760_000_000_000));
+}
+
+#[tokio::test]
+async fn app_reaction_event_is_dropped() {
+    // The bot's own ack/settle reactions echo back as `operator_type =
+    // "app"` events — pure noise, filtered at the adapter.
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+
+    adapter
+        .parse_event_json(&reaction_event("app"), &tx)
+        .await
+        .unwrap();
+    assert!(rx.try_recv().is_err(), "nothing forwarded");
+}
+
+#[tokio::test]
+async fn duplicate_reaction_delivery_is_dropped() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+
+    adapter
+        .parse_event_json(&reaction_event("user"), &tx)
+        .await
+        .unwrap();
+    adapter
+        .parse_event_json(&reaction_event("user"), &tx)
+        .await
+        .unwrap();
+
+    assert!(rx.try_recv().is_ok(), "first delivery forwarded");
+    assert!(rx.try_recv().is_err(), "redelivery deduped by event_id");
+}
+
+#[tokio::test]
+async fn reaction_event_missing_ids_is_ignored() {
+    let stub = StubFeishu::start().await;
+    let adapter = stub_adapter(&stub.base_url);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let event = json!({
+        "header": { "event_id": "evt_2", "event_type": "im.message.reaction.created_v1" },
+        "event": { "operator_type": "user", "user_id": { "open_id": "ou_user" } }
     });
 
     adapter.parse_event_json(&event, &tx).await.unwrap();

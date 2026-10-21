@@ -19,6 +19,7 @@ pub(crate) mod deliver;
 pub(crate) mod delivery_pool;
 pub(crate) mod gate;
 pub(crate) mod handlers;
+pub(crate) mod reaction;
 pub(crate) mod routing;
 pub(crate) mod watch;
 
@@ -470,6 +471,25 @@ impl ChannelHub {
                                 tokio::spawn(async move {
                                     crate::channels::comment::handle_doc_comment_added(
                                         &name, &config, &store, &adapter, &dispatch, notice,
+                                    ).await;
+                                });
+                                continue;
+                            }
+                            // Message reactions: feedback steered into the
+                            // RUNNING session only (never a trigger). The
+                            // target lookup costs one platform GET, so it
+                            // runs off-loop like doc comments.
+                            ChannelEvent::MessageReaction(notice) => {
+                                let (name, config, store, adapter, kernel_w) = (
+                                    name_gate.clone(),
+                                    config_gate.clone(),
+                                    Arc::clone(&store),
+                                    Arc::clone(&adapter_gate),
+                                    kernel.clone(),
+                                );
+                                tokio::spawn(async move {
+                                    crate::channels::hub_reaction::handle_message_reaction(
+                                        &name, &config, &store, &kernel_w, &adapter, notice,
                                     ).await;
                                 });
                                 continue;
