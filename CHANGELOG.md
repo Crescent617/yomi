@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- 注入会话的表情回复文本不再被误读：改为整句说明「这是表情回应事件、不是用户输入的消息」，并附被回应消息的 id 与摘录；此前 `[reaction: X] 摘录` 的紧凑形式容易被当成用户本人发言。
+
 ## [0.11.18] - 2026-10-21
 
 ### Changed

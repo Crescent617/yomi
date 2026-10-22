@@ -122,7 +122,11 @@ fn steer_text_carries_header_emoji_and_excerpt() {
     // The header anchors the REACTED message, not a new user post.
     assert!(header.contains("[msg_id: om_target]"));
     assert!(header.contains("[platform: feishu]"));
-    assert_eq!(body, "[reaction: THUMBSUP] some answer");
+    assert_eq!(
+        body,
+        "[reaction] Emoji-reaction event, not a typed message: 白 水 reacted THUMBSUP \
+         to message om_target. Excerpt of the reacted message: some answer"
+    );
 }
 
 #[test]
@@ -153,7 +157,11 @@ fn steer_text_without_excerpt_or_name() {
     let text = steer_text(&notice(), &t, None, "feishu");
     let (header, body) = text.split_once('\n').unwrap();
     assert!(header.contains("[from_user_id: ou_user]"));
-    assert_eq!(body, "[reaction: THUMBSUP]");
+    assert_eq!(
+        body,
+        "[reaction] Emoji-reaction event, not a typed message: ou_user reacted THUMBSUP \
+         to message om_target."
+    );
 }
 
 #[tokio::test]
@@ -390,8 +398,9 @@ async fn watch_chat_mirrors_reaction_into_batch() {
     // have fired — assert without sleeping.
     let texts = crate::channels::hub_watch::pending_texts(&kernel, "mock", "oc_chat_w1").await;
     assert_eq!(texts.len(), 1, "one mirrored item, got: {texts:?}");
-    assert!(texts[0].contains("[reaction: THUMBSUP] some answer"));
-    assert!(texts[0].contains("[msg_id: om_target]"));
+    assert!(texts[0].contains("not a typed message"));
+    assert!(texts[0].contains("reacted THUMBSUP to message om_target"));
+    assert!(texts[0].contains("some answer"));
 }
 
 #[tokio::test]

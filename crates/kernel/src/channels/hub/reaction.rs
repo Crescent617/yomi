@@ -24,13 +24,14 @@
 //! just-idled session starts a run that sees only the reaction. The
 //! window is milliseconds; the outcome is one cheap no-op turn.
 
+use std::fmt::Write as _;
 use std::sync::{Arc, Weak};
 use tracing::{debug, info, warn};
 
 use crate::kernel::Kernel;
 use crate::types::{ContentBlock, SessionId};
 
-use crate::channels::header::{metadata_header, HeaderSender};
+use crate::channels::header::{metadata_header, sanitize_header_name, HeaderSender};
 use crate::channels::{
     AccessDeniedReason, ChannelConfig, ChannelError, ChannelMessage, ChannelStore, PlatformAdapter,
     ReactionNotice, ReactionTarget,
@@ -243,10 +244,12 @@ fn candidate_keys(notice: &ReactionNotice, target: &ReactionTarget) -> Vec<Strin
     keys
 }
 
-/// The steered feedback text: standard metadata envelope (operator as
-/// sender, the REACTED message's ids as anchors — `[msg_id: …]` is what
-/// earned the reaction, fetchable via the lark skill) over a
-/// `[reaction: …]` body carrying the emoji and the target's excerpt.
+/// The steered/mirrored feedback text: standard metadata envelope
+/// (operator as sender, the REACTED message's ids as anchors —
+/// `[msg_id: …]` is what earned the reaction, fetchable via the lark
+/// skill) over a one-sentence body that says out loud this is a
+/// REACTION EVENT, not a typed message — a bare `[tag] excerpt` run-on
+/// read too much like the operator posting the excerpt themselves.
 fn steer_text(
     notice: &ReactionNotice,
     target: &ReactionTarget,
@@ -271,11 +274,16 @@ fn steer_text(
         target.root_id.as_deref(),
         platform,
     );
-    let body = if target.excerpt.is_empty() {
-        format!("[reaction: {}]", notice.emoji_type)
-    } else {
-        format!("[reaction: {}] {}", notice.emoji_type, target.excerpt)
-    };
+    let who = sender_name
+        .and_then(sanitize_header_name)
+        .unwrap_or_else(|| notice.operator_open_id.clone());
+    let mut body = format!(
+        "[reaction] Emoji-reaction event, not a typed message: {who} reacted {} to message {}.",
+        notice.emoji_type, notice.message_id
+    );
+    if !target.excerpt.is_empty() {
+        let _ = write!(body, " Excerpt of the reacted message: {}", target.excerpt);
+    }
     format!("{header}\n{body}")
 }
 
