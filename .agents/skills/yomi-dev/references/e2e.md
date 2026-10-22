@@ -101,3 +101,6 @@ cargo test -p kernel e2e_feishu -- --ignored --nocapture
 | bot 没反应 | 日志无 `Feishu message` → 事件没到（@ 错人 / 不在群 / 长连接没开） |
 | 答非所问 | session 首条 user 消息根/引用在不在（不在 → 注入逻辑；在 → 模型） |
 | 上下文重复 | 同一内容是否同现 quoted + history 两块（去重失效） |
+| 新代码「不生效」（新功能/新日志串全无） | `target/debug/yomi` 的 mtime——cargo 显示 Compiling ≠ 二进制被替换；陈旧就 rm 后重链。build 只花几秒且无 Compiling 行就是嗅觉信号（2026-10-21 同日两遇） |
+| 测试 daemon 没有 debug 级日志 | `daemon restart` 的替代进程由旧 daemon 拉起、不继承当前 shell 的 RUST_LOG——先 stop，再带变量 start |
+| 加 reaction 触发了 bot 回声过滤/测不到事件 | lark-cli 加 reaction 默认 **bot 身份**（operator_type=app，按设计被过滤）；`--as user` 才是用户身份，且用户令牌需 scope `im:message.reactions:write_only`（device flow 授权） |
