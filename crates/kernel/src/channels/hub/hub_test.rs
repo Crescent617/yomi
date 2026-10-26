@@ -4084,20 +4084,87 @@ fn doc_comment_msg() -> ChannelMessage {
 }
 
 #[test]
-fn mapping_key_doc_comment_keys_by_comment_thread() {
+fn mapping_key_doc_comment_keys_by_document() {
     let msg = doc_comment_msg();
-    // One session per comment thread — regardless of reply_in_thread.
-    assert_eq!(session_mapping_key(&msg, "", false), "doc:docx:tok123:c_1");
-    assert_eq!(session_mapping_key(&msg, "", true), "doc:docx:tok123:c_1");
+    // One session per DOCUMENT — all its comment threads share it,
+    // regardless of reply_in_thread or which comment triggered.
+    assert_eq!(session_mapping_key(&msg, "", false), "doc:docx:tok123");
+    assert_eq!(session_mapping_key(&msg, "", true), "doc:docx:tok123");
 
-    // Whole-document comments (sentinel id, set in comment.rs) share one
-    // session per document.
+    // A different comment thread of the same document still keys the same.
+    let mut msg = doc_comment_msg();
+    msg.doc_comment.as_mut().unwrap().comment_id = "c_2".to_string();
+    assert_eq!(session_mapping_key(&msg, "", false), "doc:docx:tok123");
+
+    // And a whole-document comment (sentinel id, set in comment.rs) too.
     let mut msg = doc_comment_msg();
     msg.doc_comment.as_mut().unwrap().comment_id = crate::channels::WHOLE_COMMENT_ID.to_string();
+    assert_eq!(session_mapping_key(&msg, "", false), "doc:docx:tok123");
+}
+
+#[tokio::test]
+async fn doc_comment_threads_of_one_document_share_a_session() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    // Comment thread c_1 triggers: creates the document's session, target c_1.
+    let (sid1, reused1) = get_or_create_session(
+        "feishu",
+        &store,
+        &kernel,
+        "",
+        "doc:docx:tok123",
+        Some("c_1"),
+        MappingKind::Normal,
+    )
+    .await
+    .unwrap();
+    assert!(!reused1);
+    let r1 = store.find_routing_by_session(&sid1).await.unwrap().unwrap();
+    assert_eq!(r1.doc_comment.as_ref().unwrap().comment_id, "c_1");
+
+    // Comment thread c_2 of the SAME document reuses the session and moves
+    // the delivery target to the thread that triggered this run.
+    let (sid2, reused2) = get_or_create_session(
+        "feishu",
+        &store,
+        &kernel,
+        "",
+        "doc:docx:tok123",
+        Some("c_2"),
+        MappingKind::Normal,
+    )
+    .await
+    .unwrap();
+    assert!(reused2, "one document shares one session");
+    assert_eq!(sid2, sid1);
+    let r2 = store.find_routing_by_session(&sid2).await.unwrap().unwrap();
     assert_eq!(
-        session_mapping_key(&msg, "", false),
-        "doc:docx:tok123:whole"
+        r2.doc_comment.as_ref().unwrap().comment_id,
+        "c_2",
+        "delivery target follows the latest trigger"
     );
+
+    // A different document is a different session.
+    let (sid3, _) = get_or_create_session(
+        "feishu",
+        &store,
+        &kernel,
+        "",
+        "doc:docx:tok999",
+        Some("c_1"),
+        MappingKind::Normal,
+    )
+    .await
+    .unwrap();
+    assert_ne!(sid3, sid1);
 }
 
 #[test]
@@ -4161,8 +4228,12 @@ async fn deliver_reply_doc_comment_goes_to_comment_thread() {
         channel_name: "feishu".to_string(),
         external_chat_id: String::new(),
         reply_msg_id: None,
-        mapping_key: "doc:docx:tok123:c_1".to_string(),
-        doc_comment: crate::channels::parse_doc_comment_mapping_key("doc:docx:tok123:c_1"),
+        mapping_key: "doc:docx:tok123".to_string(),
+        doc_comment: Some(crate::channels::DocCommentRef {
+            file_token: "tok123".to_string(),
+            file_type: "docx".to_string(),
+            comment_id: "c_1".to_string(),
+        }),
         kind: MappingKind::Normal,
     };
 
@@ -4199,8 +4270,12 @@ async fn deliver_reply_doc_comment_chunks_long_text() {
         channel_name: "feishu".to_string(),
         external_chat_id: String::new(),
         reply_msg_id: None,
-        mapping_key: "doc:docx:tok123:c_1".to_string(),
-        doc_comment: crate::channels::parse_doc_comment_mapping_key("doc:docx:tok123:c_1"),
+        mapping_key: "doc:docx:tok123".to_string(),
+        doc_comment: Some(crate::channels::DocCommentRef {
+            file_token: "tok123".to_string(),
+            file_type: "docx".to_string(),
+            comment_id: "c_1".to_string(),
+        }),
         kind: MappingKind::Normal,
     };
     let mut buf = reply::RunReplyBuffer::new();

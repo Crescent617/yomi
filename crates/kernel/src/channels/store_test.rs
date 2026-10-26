@@ -148,15 +148,16 @@ async fn test_find_routing_parses_doc_comment_mapping_key() {
     let store = SqliteChannelStore::new(pool);
 
     let sid = SessionId::new();
-    // Doc-comment sessions store an empty actual chat id; the delivery
-    // target rides the mapping key (see `doc_comment_mapping_key`).
+    // Doc-comment sessions store an empty actual chat id; the mapping key
+    // names the document (`doc_comment_session_key`) and the delivery
+    // target rides the `reply_msg_id` column.
     store
         .save_mapping(
             "feishu",
-            "doc:docx:tok123:c_1",
+            "doc:docx:tok123",
             &sid,
             "",
-            None,
+            Some("c_1"),
             MappingKind::Normal,
         )
         .await
@@ -168,8 +169,9 @@ async fn test_find_routing_parses_doc_comment_mapping_key() {
         Some(SessionRouting {
             channel_name: "feishu".to_string(),
             external_chat_id: String::new(),
+            // Not a chat reply anchor for doc sessions.
             reply_msg_id: None,
-            mapping_key: "doc:docx:tok123:c_1".to_string(),
+            mapping_key: "doc:docx:tok123".to_string(),
             doc_comment: Some(crate::channels::DocCommentRef {
                 file_token: "tok123".to_string(),
                 file_type: "docx".to_string(),
@@ -177,6 +179,33 @@ async fn test_find_routing_parses_doc_comment_mapping_key() {
             }),
             kind: MappingKind::Normal,
         })
+    );
+}
+
+#[tokio::test]
+async fn test_find_routing_doc_comment_without_target_defaults_to_whole() {
+    let pool = create_test_pool().await;
+    let store = SqliteChannelStore::new(pool);
+
+    let sid = SessionId::new();
+    // No delivery target recorded yet (e.g. a command created the session
+    // before any run): fall back to the whole-comment path.
+    store
+        .save_mapping(
+            "feishu",
+            "doc:docx:tok123",
+            &sid,
+            "",
+            None,
+            MappingKind::Normal,
+        )
+        .await
+        .unwrap();
+
+    let found = store.find_routing_by_session(&sid).await.unwrap().unwrap();
+    assert_eq!(
+        found.doc_comment.unwrap().comment_id,
+        crate::channels::WHOLE_COMMENT_ID
     );
 }
 

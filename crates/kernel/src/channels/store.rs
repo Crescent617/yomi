@@ -173,16 +173,35 @@ impl ChannelStore for SqliteChannelStore {
             .map_err(|e| storage_err(format!("Failed to find routing by session: {e}")))?;
 
         Ok(row.map(
-            |(channel_name, actual_chat_id, reply_msg_id, mapping_key, kind)| SessionRouting {
-                channel_name,
-                external_chat_id: actual_chat_id.unwrap_or_default(),
-                reply_msg_id,
-                // A `doc:…` mapping key encodes the doc-comment delivery
-                // target (see `doc_comment_mapping_key`); anything else is
-                // an ordinary chat/thread routing.
-                doc_comment: super::parse_doc_comment_mapping_key(&mapping_key),
-                mapping_key,
-                kind: super::MappingKind::from_str_lossy(&kind),
+            |(channel_name, actual_chat_id, reply_msg_id, mapping_key, kind)| {
+                // A `doc:…` mapping key names the document; the delivery
+                // target (which comment thread the answer goes to, or the
+                // `whole` sentinel for a whole comment) is session state
+                // that moves per trigger — it lives in the `reply_msg_id`
+                // column. Anything else is an ordinary chat/thread routing
+                // whose `reply_msg_id` is a real message id.
+                let doc_comment =
+                    super::parse_doc_comment_mapping_key(&mapping_key).map(|mut dc| {
+                        dc.comment_id = reply_msg_id
+                            .clone()
+                            .unwrap_or_else(|| super::WHOLE_COMMENT_ID.to_string());
+                        dc
+                    });
+                let reply_msg_id = if doc_comment.is_some() {
+                    // Not a chat reply anchor for doc sessions — keep the
+                    // routing field clean.
+                    None
+                } else {
+                    reply_msg_id
+                };
+                SessionRouting {
+                    channel_name,
+                    external_chat_id: actual_chat_id.unwrap_or_default(),
+                    reply_msg_id,
+                    doc_comment,
+                    mapping_key,
+                    kind: super::MappingKind::from_str_lossy(&kind),
+                }
             },
         ))
     }

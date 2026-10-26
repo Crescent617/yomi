@@ -818,6 +818,19 @@ async fn fetch_trigger_files(
     fetch_message_files(adapter, msg_id, content, &dest).await;
 }
 
+/// The value to persist as a mapping row's `reply_msg_id` when binding a
+/// session to a scope. For a chat/thread this is the reply anchor; for a
+/// doc-comment session it is the session's **delivery target** (the
+/// triggering comment thread, or the `whole` sentinel) — writing the chat
+/// anchor (always `None` for doc messages) would clobber it and default
+/// replies to a new whole comment until the next trigger refreshed it.
+fn bind_target<'a>(msg: &'a ChannelMessage, reply_anchor: Option<&'a str>) -> Option<&'a str> {
+    match &msg.doc_comment {
+        Some(dc) => Some(dc.comment_id.as_str()),
+        None => reply_anchor,
+    }
+}
+
 /// `/bind`: show or retarget the current scope's session binding.
 /// Retargeting is admin-only. The scope follows `command_session_key`:
 /// a chat-level command binds the chat itself (its message-id key
@@ -918,7 +931,7 @@ pub(crate) async fn handle_bind(
             scope_key,
             &sid,
             chat_id,
-            reply_msg_id.as_deref(),
+            bind_target(msg, reply_msg_id.as_deref()),
             crate::channels::MappingKind::Normal,
         )
         .await?;

@@ -316,17 +316,18 @@ async fn retries_fetch_until_is_whole_is_visible() {
             .expect("doc_comment set")
             .comment_id,
         super::super::WHOLE_COMMENT_ID,
-        "whole comment routes to the shared per-document session"
+        "whole comment's delivery target is the whole-doc sentinel"
     );
 }
 
 // Real time (not start_paused): sqlx pool connect trips PoolTimedOut
 // under a paused clock — the bounded retries cost ~3.5s.
 #[tokio::test]
-async fn is_whole_staying_unknown_degrades_to_per_thread_key() {
+async fn is_whole_staying_unknown_defaults_to_partial_target() {
     let config = feishu_config();
     // batch_query never catches up: the trigger still dispatches (better
-    // than dropping) but keys per comment thread — the safer split.
+    // than dropping) and the answer targets the triggering thread — the
+    // majority case.
     let mut detail = detail_with_replies(vec![("r_2", "@bot 看看")]);
     detail.is_whole = None;
     let adapter = Arc::new(CommentMockAdapter::new(Some(detail)));
@@ -339,7 +340,7 @@ async fn is_whole_staying_unknown_degrades_to_per_thread_key() {
             .expect("doc_comment set")
             .comment_id,
         "7123456789",
-        "unknown is_whole keys per comment thread"
+        "unknown is_whole targets the triggering comment thread"
     );
     assert_eq!(
         *adapter.fetch_calls.lock().await,
@@ -349,7 +350,7 @@ async fn is_whole_staying_unknown_degrades_to_per_thread_key() {
 }
 
 #[tokio::test]
-async fn whole_comment_keys_session_by_document() {
+async fn whole_comment_targets_new_whole_comment() {
     let config = feishu_config();
     let mut detail = detail_with_replies(vec![("r_2", "@bot 看看全文")]);
     detail.is_whole = Some(true);
@@ -358,8 +359,8 @@ async fn whole_comment_keys_session_by_document() {
     let mut rx = handle(&config, &adapter, notice()).await;
     let (msg, _gate, _watch) = rx.try_recv().expect("trigger dispatched");
 
-    // Routing carries the sentinel — one session per document for whole
-    // comments — while the meta header keeps the real comment id.
+    // The delivery target carries the sentinel (answer as a new whole
+    // comment) while the meta header keeps the real comment id.
     let dc = msg.doc_comment.as_ref().expect("doc_comment set");
     assert_eq!(dc.comment_id, super::super::WHOLE_COMMENT_ID);
     let ContentBlock::Text { text } = msg.content.last().expect("meta block") else {

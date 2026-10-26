@@ -3,6 +3,18 @@
 **Status:** Implemented（2026-08-06，Phase 1–4 完成，端到端闭环已真实验证）
 **Date:** 2026-08-06
 
+> **2026-10-26 修订（会话粒度）**：会话粒度由「每评论组一个 session」改为
+> **「每文档一个 session」**——同一文档的所有评论组（局部/全文）共用同一
+> session。因此 session mapping key 从
+> `doc:{file_type}:{file_token}:{comment_id}` 改为
+> `doc:{file_type}:{file_token}`（`doc_comment_session_key`），**不再**编码
+> 投递目标；投递目标（本次 run 的回复落到哪个评论组，全文评论为
+> `WHOLE_COMMENT_ID` 哨兵 → 新开全文评论）改为承载在 mapping 行的
+> `reply_msg_id` 列上，每次触发时刷新，`find_routing_by_session` 读回。
+> 评论串历史游标仍按评论组隔离（`doc_comment_history_key`，四段键）。
+> 权衡：同一个 run 若被多个评论组的追问 steer，最终回复只投到**最后一次**
+> 触发所在的评论组（与聊天「回复挂最新锚点」同构）。
+
 > **实施偏差**（相对初稿，代码已按此落地）：
 > 1. 「跳过 bot 自发评论」放在 adapter 侧（bot 身份是 adapter 的领域知识；仅 `is_mentioned=true` 的事件才付出一次带缓存的 bot-info 调用），`comment.rs` 保留全部策略过滤。
 > 2. `raw_text` 填裸评论文本（用于 session 标题），命令禁用由 hub 的 `message_command` 对 doc 消息强制返回 `None` 实现（斜杠开头的评论原样发给 agent）。

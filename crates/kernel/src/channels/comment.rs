@@ -153,14 +153,16 @@ pub(super) async fn handle_doc_comment_added(
         commenter = %notice.commenter_open_id,
         "doc comment accepted"
     );
-    // Whole-document comments share ONE session per document: the doc's
-    // bottom comment area is a single conversation, each new whole
-    // comment merely gets a fresh platform thread id. The routing key
-    // therefore carries the WHOLE_COMMENT_ID sentinel instead of the
-    // real comment id (the real id stays in the meta header for
-    // provenance). `is_whole` unknown (fetch degraded) keys per comment
-    // thread — the safer split, partial comments are the majority.
-    let routing_comment_id = match detail.as_ref().and_then(|d| d.is_whole) {
+    // The delivery target: where this run's answer goes. A whole-document
+    // comment (its bottom comment area, no thread replies) is answered by a
+    // NEW whole comment — the WHOLE_COMMENT_ID sentinel — while a partial
+    // (anchored) comment is answered inside its own thread. This is session
+    // state, not the session key: a document's session is shared by all its
+    // comment threads, so the target is persisted per trigger (on the
+    // mapping row) and re-read at delivery time. `is_whole` unknown (fetch
+    // degraded) defaults to the partial path — replying in the triggering
+    // thread, the majority case.
+    let delivery_comment_id = match detail.as_ref().and_then(|d| d.is_whole) {
         Some(true) => super::WHOLE_COMMENT_ID,
         _ => &notice.comment_id,
     };
@@ -181,7 +183,7 @@ pub(super) async fn handle_doc_comment_added(
         doc_comment: Some(DocCommentRef {
             file_token: notice.file_token.clone(),
             file_type: notice.file_type.clone(),
-            comment_id: routing_comment_id.to_string(),
+            comment_id: delivery_comment_id.to_string(),
         }),
     };
     if dispatch_tx
@@ -275,9 +277,9 @@ fn assemble_message(
 /// shows up and `is_whole` is known: the timeline read lags the event by
 /// up to a few seconds (E2E-verified — without the retry we once
 /// injected the *previous* reply's text), and `batch_query` (the only
-/// `is_whole` source) lags too — the session-mapping decision (shared
-/// whole-comment session vs. per-thread) must not race it. Degrading to
-/// the thread's latest reply / a per-thread key after the retries is
+/// `is_whole` source) lags too — the delivery-target decision (answer as
+/// a new whole comment vs. a thread reply) must not race it. Degrading to
+/// the thread's latest reply / the partial path after the retries is
 /// better than dropping the trigger.
 async fn fetch_detail_with_trigger(
     adapter: &dyn PlatformAdapter,
@@ -310,7 +312,7 @@ async fn fetch_detail_with_trigger(
             if !meta_found {
                 warn!(
                     comment_id = %notice.comment_id,
-                    "is_whole still not readable after retries, keying per comment thread"
+                    "is_whole still not readable after retries, treating as a partial comment"
                 );
             }
             return detail;
@@ -334,7 +336,7 @@ async fn build_thread_history(
     detail: &DocCommentDetail,
 ) -> Option<ContentBlock> {
     let container =
-        super::doc_comment_mapping_key(&notice.file_type, &notice.file_token, &notice.comment_id);
+        super::doc_comment_history_key(&notice.file_type, &notice.file_token, &notice.comment_id);
     // Comment timestamps are seconds; cursors are stored in ms (chat
     // convention).
     let cursor = store

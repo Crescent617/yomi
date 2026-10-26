@@ -218,17 +218,12 @@ pub(crate) fn session_mapping_key(
     chat_id: &str,
     reply_in_thread: bool,
 ) -> String {
-    // Doc-comment sessions key by the comment thread — one session per
-    // comment group, except whole-document comments which carry the
-    // WHOLE_COMMENT_ID sentinel (set in comment.rs) and thereby share
-    // one session per document — regardless of chat-oriented rules
-    // (there is no chat).
+    // Doc-comment sessions key by the DOCUMENT — one session per document,
+    // shared by all its comment threads — regardless of chat-oriented rules
+    // (there is no chat). The per-trigger delivery target (which comment
+    // thread the answer goes to) rides the mapping row, not this key.
     if let Some(dc) = &msg.doc_comment {
-        return crate::channels::doc_comment_mapping_key(
-            &dc.file_type,
-            &dc.file_token,
-            &dc.comment_id,
-        );
+        return crate::channels::doc_comment_session_key(&dc.file_type, &dc.file_token);
     }
     if reply_in_thread {
         if msg.thread_id.is_some() {

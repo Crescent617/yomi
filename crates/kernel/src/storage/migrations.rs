@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 25;
+pub const CURRENT_SCHEMA_VERSION: i64 = 27;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -318,6 +318,51 @@ const MIGRATIONS: &[Migration] = &[
         // 旋钮一列。更新走 json_set/json_remove 原子按键写。
         name: "add_session_settings",
         sqls: &[r"ALTER TABLE sessions ADD COLUMN settings TEXT;"],
+    },
+    Migration {
+        // 版本号跳过 26：开发库历史上被一个从未发布的迁移
+        // `add_ext_installs` 盖过 26 的戳（该迁移在发布前被撤，见
+        // bf74c423），生产库的 `_schema_migrations` 停在 26。版本化迁移
+        // 只在 version > 现存最大版本时执行，故必须取 27 才能在那些库上
+        // 真正跑到。
+        version: 27,
+        // 文档评论会话粒度从「每评论组一个 session」改为「每文档一个」：
+        // mapping key 旧为 `doc:{file_type}:{file_token}:{comment_id}`，
+        // 新为 `doc:{file_type}:{file_token}`。存量行重写为文档键，并把
+        // 原 comment_id 段落到 reply_msg_id —— 它现在是该会话的投递目标
+        //（局部评论＝评论组 id，全文评论＝'whole' 哨兵）。同一文档的多行
+        // 折叠为一行（同键 OR REPLACE 后留一），旧行的历史对话不再可达。
+        // 仅动 `doc:` 前缀且恰好四段的行；聊天/话题键不受影响。
+        name: "doc_comment_session_per_document",
+        sqls: &[
+            r"WITH legacy AS (
+                SELECT channel_name, external_chat_id AS old_key, session_id,
+                       actual_chat_id, kind, created_at,
+                       instr(external_chat_id, ':') AS p1
+                FROM channel_session_mappings
+                WHERE external_chat_id LIKE 'doc:%:%:%'
+              ),
+              seg1 AS (
+                SELECT *, substr(old_key, p1 + 1) AS rest1 FROM legacy
+              ),
+              seg2 AS (
+                SELECT *, instr(rest1, ':') AS p2,
+                       substr(rest1, instr(rest1, ':') + 1) AS rest2
+                FROM seg1
+              ),
+              seg3 AS (
+                SELECT *, instr(rest2, ':') AS p3,
+                       substr(rest2, instr(rest2, ':') + 1) AS comment_id
+                FROM seg2
+              )
+              INSERT OR REPLACE INTO channel_session_mappings
+                (channel_name, external_chat_id, session_id, actual_chat_id, reply_msg_id, kind, created_at)
+              SELECT channel_name,
+                     substr(old_key, 1, p1 + p2 + p3 - 1),
+                     session_id, actual_chat_id, comment_id, kind, created_at
+              FROM seg3;",
+            r"DELETE FROM channel_session_mappings WHERE external_chat_id LIKE 'doc:%:%:%';",
+        ],
     },
 ];
 

@@ -284,10 +284,20 @@ pub(crate) async fn prepare_trigger(
         }
         TriggerKind::Normal => {
             let rit = resolve_reply_in_thread(store, config, msg).await;
-            (
-                effective_mapping_key(store, adapter, channel_name, msg, &chat_id, rit).await?,
-                reply_anchor(msg, rit),
-            )
+            let key =
+                effective_mapping_key(store, adapter, channel_name, msg, &chat_id, rit).await?;
+            // Doc-comment sessions have no chat reply anchor: the mapping
+            // row's `reply_msg_id` column instead carries the session's
+            // current delivery target — the triggering comment thread (or
+            // the `whole` sentinel for a whole-document comment). It is
+            // refreshed on every trigger, since one document's session is
+            // shared by all its comment threads and the answer must land in
+            // the thread that raised it.
+            let anchor = match &msg.doc_comment {
+                Some(dc) => Some(dc.comment_id.clone()),
+                None => reply_anchor(msg, rit),
+            };
+            (key, anchor)
         }
     };
     let (sid, root_in_session) = get_or_create_session(

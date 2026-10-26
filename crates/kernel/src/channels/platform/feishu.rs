@@ -988,8 +988,8 @@ impl PlatformAdapter for FeishuAdapter {
     /// refer: <https://open.feishu.cn/document/server-docs/docs/CommentAPI/reply>
     /// Whole comments take no thread replies (platform error 1069302) —
     /// the answer goes out as a new whole comment. The
-    /// [`crate::channels::WHOLE_COMMENT_ID`] sentinel (the shared whole-comment
-    /// session's delivery target) skips the doomed reply attempt and
+    /// [`crate::channels::WHOLE_COMMENT_ID`] sentinel (a whole-comment
+    /// trigger's delivery target) skips the doomed reply attempt and
     /// creates the new comment directly.
     async fn reply_doc_comment(
         &self,

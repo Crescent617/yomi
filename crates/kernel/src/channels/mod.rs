@@ -497,15 +497,17 @@ pub struct DocCommentNotice {
     pub create_time: Option<i64>,
 }
 
-/// Doc-comment provenance/routing: which comment thread a message came
-/// from and where the session's replies go. (The triggering reply id
-/// lives only on `DocCommentNotice` and in the meta header — delivery
-/// always targets the comment thread.)
+/// Doc-comment provenance/routing: which document and comment thread a
+/// message came from, and where the session's replies go. (The triggering
+/// reply id lives only on `DocCommentNotice` and in the meta header —
+/// delivery always targets the comment thread, not the individual reply.)
 ///
-/// For **whole-document comments** the `comment_id` is the
-/// [`WHOLE_COMMENT_ID`] sentinel instead of a real id: every whole
-/// comment of one document shares a single session (the doc's bottom
-/// comment area behaves like one conversation).
+/// `comment_id` is the **delivery target**: the real comment thread id for
+/// a partial (anchored) comment, or the [`WHOLE_COMMENT_ID`] sentinel for a
+/// whole-document comment (whose answer posts as a new whole comment). It
+/// is session state: a document's session is shared by all its comment
+/// threads, so the target moves with each trigger and is persisted on the
+/// mapping row (its `reply_msg_id` column), not baked into the session key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocCommentRef {
     pub file_token: String,
@@ -542,22 +544,32 @@ pub struct DocCommentReplyLite {
     pub is_from_bot: bool,
 }
 
-/// Sentinel `comment_id` segment for the shared whole-document-comment
-/// session: whole comments (the doc's bottom comment area) each get a
-/// fresh platform comment thread, but they belong to ONE session per
-/// document. Platform comment ids are numeric, so "whole" never
-/// collides. Delivery resolves it to posting a new whole comment (whole
-/// comments take no thread replies — platform error 1069302).
+/// Sentinel delivery target for a whole-document comment: whole comments
+/// (the doc's bottom comment area) take no thread replies — the reply API
+/// rejects them (platform error 1069302) — so the answer posts as a NEW
+/// whole comment. Platform comment ids are numeric, so `"whole"` never
+/// collides. Stored as the session's current delivery target for a
+/// whole-comment trigger.
 pub(crate) const WHOLE_COMMENT_ID: &str = "whole";
 
 /// The session mapping key for a doc-comment session:
-/// `doc:{file_type}:{file_token}:{comment_id}` — one session per comment
-/// thread, or per **document** for whole comments (the `comment_id`
-/// segment is then the [`WHOLE_COMMENT_ID`] sentinel). The key doubles
-/// as the persisted delivery target: `find_routing_by_session` parses it
-/// back (no extra schema column). None of the segments can contain `:`
-/// (platform ids are alphanumeric).
-pub(crate) fn doc_comment_mapping_key(
+/// `doc:{file_type}:{file_token}` — **one session per document**, shared by
+/// every comment thread of that document. The delivery target (which
+/// comment thread the current run's answer goes to, or [`WHOLE_COMMENT_ID`]
+/// for a whole comment) is deliberately NOT in the key: it changes per
+/// triggering comment, so it rides the mapping row's `reply_msg_id` column
+/// instead and [`parse_doc_comment_mapping_key`] callers read it back. None
+/// of the segments can contain `:` (platform ids are alphanumeric).
+pub(crate) fn doc_comment_session_key(file_type: &str, file_token: &str) -> String {
+    format!("doc:{file_type}:{file_token}")
+}
+
+/// The thread-history cursor container for one doc comment thread:
+/// `doc:{file_type}:{file_token}:{comment_id}`. Distinct from the session
+/// key — history dedup stays **per comment thread** even though the session
+/// is per document. Only ever names a `channel_history_cursors` row; never
+/// parsed as a mapping key.
+pub(crate) fn doc_comment_history_key(
     file_type: &str,
     file_token: &str,
     comment_id: &str,
@@ -565,28 +577,25 @@ pub(crate) fn doc_comment_mapping_key(
     format!("doc:{file_type}:{file_token}:{comment_id}")
 }
 
-/// Parse a doc-comment mapping key back into the delivery target. Strict
-/// four-segment shape; anything else is a plain chat/thread key → `None`.
-/// The `comment_id` may be the [`WHOLE_COMMENT_ID`] sentinel (the shared
-/// whole-comment session) — delivery handles it.
+/// Parse a doc-comment session mapping key (`doc:{file_type}:{file_token}`)
+/// into its [`DocCommentRef`]. Strict three-segment shape; anything else is
+/// a plain chat/thread key → `None`. The `comment_id` is left empty — the
+/// store fills it from the row's persisted delivery target (see
+/// `SqliteChannelStore::find_routing_by_session`).
 pub(crate) fn parse_doc_comment_mapping_key(key: &str) -> Option<DocCommentRef> {
     let mut parts = key.split(':');
-    let (Some("doc"), Some(file_type), Some(file_token), Some(comment_id), None) = (
-        parts.next(),
-        parts.next(),
-        parts.next(),
-        parts.next(),
-        parts.next(),
-    ) else {
+    let (Some("doc"), Some(file_type), Some(file_token), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
         return None;
     };
-    if file_type.is_empty() || file_token.is_empty() || comment_id.is_empty() {
+    if file_type.is_empty() || file_token.is_empty() {
         return None;
     }
     Some(DocCommentRef {
         file_token: file_token.to_string(),
         file_type: file_type.to_string(),
-        comment_id: comment_id.to_string(),
+        comment_id: String::new(),
     })
 }
 
@@ -698,11 +707,12 @@ pub struct SessionRouting {
     pub reply_msg_id: Option<String>,
     /// The session's mapping key (the conversation-scope key the mapping is
     /// stored under): the chat id for chat-level sessions, the thread
-    /// root/thread id for thread sessions, the `doc:…` comment-thread key
+    /// root/thread id for thread sessions, the `doc:…` document key
     /// for doc-comment sessions. Used to match run subscriptions.
     pub mapping_key: String,
-    /// Delivery target for doc-comment sessions (parsed from
-    /// `mapping_key`); `None` for ordinary chat-routed sessions.
+    /// Delivery target for doc-comment sessions (the document from
+    /// `mapping_key` plus the comment thread recorded on the row's
+    /// `reply_msg_id`); `None` for ordinary chat-routed sessions.
     pub doc_comment: Option<DocCommentRef>,
     /// Normal conversation session or watch observer (see [`MappingKind`]).
     pub kind: MappingKind,

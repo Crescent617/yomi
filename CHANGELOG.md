@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- 飞书云文档评论的会话粒度改为按文档：同一文档下所有评论（划词局部评论与文档底部全文评论）现在共用一个会话，上下文连贯；回复仍投递回触发它的那条评论（局部评论回到该评论组内、全文评论新开一条全文评论）。
+
 ## [0.11.19] - 2026-10-22
 
 ### Fixed

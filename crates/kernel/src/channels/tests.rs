@@ -186,31 +186,28 @@ fn test_blocks_to_text_empty() {
 
 #[test]
 fn doc_comment_mapping_key_round_trip() {
-    let key = doc_comment_mapping_key("docx", "tok123", "c_1");
-    assert_eq!(key, "doc:docx:tok123:c_1");
+    // One session per document.
+    let key = doc_comment_session_key("docx", "tok123");
+    assert_eq!(key, "doc:docx:tok123");
     let parsed = parse_doc_comment_mapping_key(&key).expect("parses");
     assert_eq!(parsed.file_type, "docx");
     assert_eq!(parsed.file_token, "tok123");
-    assert_eq!(parsed.comment_id, "c_1");
-
-    // The shared whole-document-comment session keys by document.
-    let key = doc_comment_mapping_key("docx", "tok123", WHOLE_COMMENT_ID);
-    assert_eq!(key, "doc:docx:tok123:whole");
-    let parsed = parse_doc_comment_mapping_key(&key).expect("parses");
-    assert_eq!(parsed.comment_id, WHOLE_COMMENT_ID);
+    // The delivery target is session state (the mapping row), not the key.
+    assert_eq!(parsed.comment_id, "");
 }
 
 #[test]
 fn doc_comment_mapping_key_rejects_non_doc_keys() {
-    // Chat ids, thread ids, message ids — none parse as doc keys.
+    // Chat ids, thread ids, message ids, and the four-segment thread-history
+    // container — none parse as session keys.
     for key in [
         "oc_abc",
         "omt_1",
         "om_x",
-        "doc:docx:tok",
-        "doc:docx:tok:c:extra",
-        "doc::tok:c",
-        "docx:tok:c_1",
+        "doc:docx",
+        "doc:docx:tok:c_1",
+        "doc::tok",
+        "docx:tok",
     ] {
         assert!(parse_doc_comment_mapping_key(key).is_none(), "{key}");
     }

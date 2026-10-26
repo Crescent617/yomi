@@ -114,6 +114,110 @@ async fn test_migrations_table_tracks_versions() {
 }
 
 #[tokio::test]
+async fn migration_27_collapses_doc_comment_keys_by_document() {
+    let pool = create_test_pool().await;
+
+    // 模拟「生产库」状态：_schema_migrations 停在 26（一个从未发布的
+    // dev 迁移盖的戳），mappings 里是旧的每评论组 doc 键。验证 v27 迁移
+    // 在这种情况下仍会执行（版本号 26 会被跳过，故本迁移取 27）。
+    sqlx::query(
+        r"CREATE TABLE _schema_migrations (
+            version INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO _schema_migrations (version, name) VALUES (26, 'add_ext_installs')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        r"CREATE TABLE channel_session_mappings (
+            channel_name TEXT NOT NULL,
+            external_chat_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            actual_chat_id TEXT,
+            reply_msg_id TEXT,
+            kind TEXT NOT NULL DEFAULT 'normal',
+            PRIMARY KEY (channel_name, external_chat_id)
+        );",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // 同一文档的三个评论组（两个局部 + 一个全文）+ 另一文档一个 + 一行聊天。
+    for (key, sid, anchor, kind) in [
+        ("doc:docx:tokA:1001", "sessA", "", "normal"),
+        ("doc:docx:tokA:1002", "sessB", "", "normal"),
+        ("doc:docx:tokA:whole", "sessC", "", "normal"),
+        ("doc:docx:tokB:2001", "sessD", "", "normal"),
+        ("oc_chat1", "sessX", "oc_chat1", "normal"),
+    ] {
+        sqlx::query(
+            "INSERT INTO channel_session_mappings
+               (channel_name, external_chat_id, session_id, actual_chat_id, reply_msg_id, kind)
+             VALUES ('feishu', ?, ?, ?, NULL, ?)",
+        )
+        .bind(key)
+        .bind(sid)
+        .bind(anchor)
+        .bind(kind)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    run_migrations(&pool).await.unwrap();
+
+    // 旧四段 doc 键全部消失。
+    let legacy: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM channel_session_mappings WHERE external_chat_id LIKE 'doc:%:%:%'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(legacy, 0, "no legacy four-segment doc keys remain");
+
+    // 每个文档恰好一行；投递目标落到 reply_msg_id（保留折叠时所留行的那条）。
+    let docs: Vec<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT external_chat_id, session_id, reply_msg_id FROM channel_session_mappings
+         WHERE external_chat_id LIKE 'doc:%' ORDER BY external_chat_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(docs.len(), 2, "one mapping row per document");
+    assert_eq!(docs[0].0, "doc:docx:tokA");
+    assert_eq!(docs[1].0, "doc:docx:tokB");
+    assert_eq!(docs[1].2.as_deref(), Some("2001"), "single-doc target kept");
+    // tokA collapsed three rows into one; the kept target matches its session.
+    let expected = match docs[0].1.as_str() {
+        "sessA" => "1001",
+        "sessB" => "1002",
+        "sessC" => "whole",
+        other => panic!("unexpected kept session {other}"),
+    };
+    assert_eq!(docs[0].2.as_deref(), Some(expected));
+
+    // 聊天行不受影响。
+    let chat: (String, Option<String>) = sqlx::query_as(
+        "SELECT session_id, reply_msg_id FROM channel_session_mappings WHERE external_chat_id = 'oc_chat1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(chat, ("sessX".to_string(), None));
+
+    let version = get_current_version(&pool).await.unwrap();
+    assert_eq!(version, CURRENT_SCHEMA_VERSION);
+}
+
+#[tokio::test]
 async fn migration_19_dedupes_cron_job_names() {
     let pool = create_test_pool().await;
 
