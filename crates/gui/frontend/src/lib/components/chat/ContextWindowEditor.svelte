@@ -65,7 +65,7 @@
 
   // 切换 session：收起并重置本地态（info 由父组件重置）。
   $effect(() => {
-    session_id;
+    void session_id;
     open = false;
     error = null;
     custom = "";

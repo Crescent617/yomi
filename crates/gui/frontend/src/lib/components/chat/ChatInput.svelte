@@ -113,7 +113,7 @@
   let ctxInfoSid = $state<string | null>(null);
   $effect(() => {
     const sid = activeSession?.id;
-    selectorWindow; // track: model switch invalidates ctxInfo
+    void selectorWindow; // track: model switch invalidates ctxInfo
     if (!sid) {
       ctxInfo = null;
       ctxInfoSid = null;
