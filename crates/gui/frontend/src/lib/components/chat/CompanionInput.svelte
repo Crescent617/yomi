@@ -56,7 +56,7 @@
 
 <div class="border-t border-subtle p-2">
   <div
-    class="flex items-end gap-2 rounded-md border border-subtle bg-code-bg px-2 py-1.5 focus-within:border-primary"
+    class="flex items-center gap-2 rounded-md border border-subtle bg-code-bg px-2 py-1.5 focus-within:border-primary"
   >
     <textarea
       bind:this={textarea}

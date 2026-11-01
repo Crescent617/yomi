@@ -104,7 +104,7 @@
       </span>
       <span class="flex min-w-0 flex-1 items-center gap-2">
         <span
-          class="hidden min-w-0 items-center gap-2 text-muted-foreground sm:flex"
+          class="flex min-w-0 items-center gap-1.5 overflow-hidden text-muted-foreground"
         >
           {#each stats.badges as badge (badge.label)}
             <span

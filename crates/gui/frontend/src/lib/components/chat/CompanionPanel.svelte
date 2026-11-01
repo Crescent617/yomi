@@ -159,22 +159,20 @@
       class="group flex items-center gap-1 border-b border-subtle px-2 py-1.5"
       data-tauri-drag-region={false}
     >
-      <div class="min-w-0 flex-1 leading-tight">
-        <div class="truncate text-xs font-medium">
-          {title ?? "No session"}
-        </div>
-        <div class="micro-label text-muted-foreground">
+      <div class="min-w-0 flex-1 truncate text-xs font-medium">
+        {title ?? "No session"}
+      </div>
+      {#if disconnected || session_id}
+        <span class="micro-label shrink-0 text-muted-foreground">
           {#if disconnected}
-            daemon disconnected
-          {:else if !session_id}
-            follow the active session
+            disconnected
           {:else if running}
             working
           {:else}
             idle
           {/if}
-        </div>
-      </div>
+        </span>
+      {/if}
       <button
         type="button"
         onclick={() => void togglePinnedSession()}
