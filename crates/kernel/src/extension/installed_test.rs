@@ -2,7 +2,7 @@
 
 use super::{
     list_installed, lockfile_path, read_installed, read_lockfile, write_lockfile, ExtLockfile,
-    LockEntry, Resources,
+    ExtensionHealth, ExtensionInfo, LockEntry, Resources,
 };
 
 fn pkg() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -181,4 +181,75 @@ fn lockfile_is_single_toml_with_all_fields() {
     assert_eq!(exts[0]["content_hash"].as_str(), Some("abc123"));
     assert!(exts[0]["resources"].is_table());
     assert!(exts[0]["installed_at"].is_str());
+}
+
+#[test]
+fn extension_info_serializes_snake_case_and_omits_absent_meta() {
+    let full = ExtensionInfo {
+        name: "demo".to_string(),
+        version: "0.1.0".to_string(),
+        description: "t".to_string(),
+        dir: "/data/extensions/demo".to_string(),
+        health: ExtensionHealth::Ok,
+        source: Some("owner/repo@main".to_string()),
+        rev: Some("1a2b3c4d".to_string()),
+        content_hash: Some("hash".to_string()),
+        installed_at: Some("2026-11-01T00:00:00Z".parse().unwrap()),
+        resources: Some(Resources::default()),
+    };
+    let v = serde_json::to_value(&full).unwrap();
+    assert_eq!(v["health"], "ok");
+    assert_eq!(v["name"], "demo");
+    assert!(v["source"].is_string());
+    assert!(v["rev"].is_string());
+    // Wire delta vs the old `Value` shape: timestamps render with a `Z` suffix.
+    assert!(v["installed_at"].as_str().unwrap().ends_with('Z'));
+    assert!(v["resources"].is_object());
+    // Round-trips through the remote client path (`call_json` deserializes).
+    let back: ExtensionInfo = serde_json::from_value(v).unwrap();
+    assert_eq!(back.health, ExtensionHealth::Ok);
+    assert_eq!(back.source.as_deref(), Some("owner/repo@main"));
+    assert!(back.resources.is_some());
+
+    // foreign row: registry entry absent → optional fields omitted,
+    // health remains a snake_case string, and the omitted fields
+    // deserialize back to None.
+    let foreign = ExtensionInfo {
+        health: ExtensionHealth::Unreadable,
+        source: None,
+        rev: None,
+        content_hash: None,
+        installed_at: None,
+        resources: None,
+        ..full
+    };
+    let v = serde_json::to_value(&foreign).unwrap();
+    assert_eq!(v["health"], "unreadable");
+    assert!(v.get("source").is_none());
+    assert!(v.get("rev").is_none());
+    assert!(v.get("installed_at").is_none());
+    assert!(v.get("resources").is_none());
+    let back: ExtensionInfo = serde_json::from_value(v).unwrap();
+    assert_eq!(back.health, ExtensionHealth::Unreadable);
+    assert!(back.source.is_none());
+    assert!(back.resources.is_none());
+}
+
+#[test]
+fn extension_health_as_str_matches_serde() {
+    for h in [
+        ExtensionHealth::Ok,
+        ExtensionHealth::Modified,
+        ExtensionHealth::Foreign,
+        ExtensionHealth::Unreadable,
+        ExtensionHealth::Oversized,
+    ] {
+        // CLI column and `doctor` print `as_str()`; the wire uses serde.
+        // They must never diverge.
+        assert_eq!(
+            serde_json::to_value(h).unwrap(),
+            serde_json::Value::String(h.as_str().to_string()),
+            "as_str/serde mismatch for {h:?}"
+        );
+    }
 }

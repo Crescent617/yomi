@@ -2388,40 +2388,44 @@ impl Kernel {
     /// 配注册表 ext.lock）。health：foreign = 目录在手但注册表
     /// 无条目（用户手放，或 ext.toml 损坏）；modified = 内容与
     /// 安装时不一致（本地改动）；ok = 一致。
-    pub async fn extension_list(&self) -> Result<Vec<serde_json::Value>> {
+    pub async fn extension_list(&self) -> Result<Vec<crate::extension::ExtensionInfo>> {
+        use crate::extension::{ExtensionHealth, ExtensionInfo};
         let data_dir = self.data_dir().await;
         let mut out = Vec::new();
         for installed in crate::extension::list_installed(&data_dir).await {
             let health = match &installed.meta {
-                None => "foreign",
+                None => ExtensionHealth::Foreign,
                 Some(meta) => match crate::extension::package_hash(&installed.dir) {
-                    Ok(h) if h == meta.content_hash => "ok",
-                    Ok(_) => "modified",
+                    Ok(h) if h == meta.content_hash => ExtensionHealth::Ok,
+                    Ok(_) => ExtensionHealth::Modified,
                     // 区分"读不了"与"内容超限"：用户往包里丢了个大文件，
                     // 该看到 oversized 而不是像权限/损坏一样的 unreadable。
-                    Err(crate::extension::ExtError::Oversized(_)) => "oversized",
-                    Err(_) => "unreadable",
+                    Err(crate::extension::ExtError::Oversized(_)) => ExtensionHealth::Oversized,
+                    Err(_) => ExtensionHealth::Unreadable,
                 },
             };
-            let mut v = serde_json::json!({
-                "name": installed.manifest.ext.name,
-                "version": installed.manifest.ext.version,
-                "description": installed.manifest.ext.description,
-                "dir": installed.dir,
-                "health": health,
+            let (source, rev, content_hash, installed_at, resources) = match &installed.meta {
+                Some(meta) => (
+                    Some(meta.source.clone()),
+                    meta.rev.clone(),
+                    Some(meta.content_hash.clone()),
+                    Some(meta.installed_at),
+                    Some(meta.resources.clone()),
+                ),
+                None => (None, None, None, None, None),
+            };
+            out.push(ExtensionInfo {
+                name: installed.manifest.ext.name,
+                version: installed.manifest.ext.version,
+                description: installed.manifest.ext.description,
+                dir: installed.dir.to_string_lossy().into_owned(),
+                health,
+                source,
+                rev,
+                content_hash,
+                installed_at,
+                resources,
             });
-            if let Some(meta) = &installed.meta {
-                v["source"] = serde_json::Value::String(meta.source.clone());
-                v["rev"] = meta
-                    .rev
-                    .clone()
-                    .map_or(serde_json::Value::Null, serde_json::Value::String);
-                v["content_hash"] = serde_json::Value::String(meta.content_hash.clone());
-                v["installed_at"] = serde_json::Value::String(meta.installed_at.to_rfc3339());
-                v["resources"] =
-                    serde_json::to_value(&meta.resources).unwrap_or(serde_json::Value::Null);
-            }
-            out.push(v);
         }
         Ok(out)
     }

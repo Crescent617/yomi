@@ -185,11 +185,8 @@ pub async fn run(global: &GlobalArgs) -> Result<()> {
             Ok(exts) => {
                 let unhealthy: Vec<String> = exts
                     .iter()
-                    .filter(|e| e["health"].as_str() != Some("ok"))
-                    .filter_map(|e| match (e["name"].as_str(), e["health"].as_str()) {
-                        (Some(n), Some(h)) => Some(format!("{n} ({h})")),
-                        _ => None,
-                    })
+                    .filter(|e| e.health != kernel::extension::ExtensionHealth::Ok)
+                    .map(|e| format!("{} ({})", e.name, e.health.as_str()))
                     .collect();
                 if unhealthy.is_empty() {
                     checks.push(check(

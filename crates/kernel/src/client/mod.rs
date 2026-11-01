@@ -311,7 +311,7 @@ pub trait KernelApi: Send + Sync {
 
     // ── Extension packages（扩展包；设计 docs/design/ext-packages.md）──
     async fn extension_install(&self, source: String) -> Result<crate::extension::InstallReport>;
-    async fn extension_list(&self) -> Result<Vec<serde_json::Value>>;
+    async fn extension_list(&self) -> Result<Vec<crate::extension::ExtensionInfo>>;
     async fn extension_remove(&self, name: String) -> Result<crate::extension::RemoveReport>;
     /// 预览某工作目录（None = daemon 默认 workspace）新会话将获得的
     /// 完整 system prompt（与 spawn 同装配路径，调试/装扩展后验收）。

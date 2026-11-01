@@ -93,6 +93,61 @@ pub struct Resources {
     pub snippets: Vec<String>,
 }
 
+/// 扩展健康态（`extension list` 与 `doctor` 消费）。
+///
+/// - `ok`：注册表有条目且内容 hash 与目录一致。
+/// - `modified`：注册表有条目但 hash 对不上（本地手改过包内容）。
+/// - `foreign`：目录在但注册表无条目——用户手放，或 ext.toml 损坏。
+/// - `unreadable`：hash 重算时包文件读不了（权限/损坏）。
+/// - `oversized`：包内单文件超上限（hash 拒绝计算）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtensionHealth {
+    Ok,
+    Modified,
+    Foreign,
+    Unreadable,
+    Oversized,
+}
+
+impl ExtensionHealth {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExtensionHealth::Ok => "ok",
+            ExtensionHealth::Modified => "modified",
+            ExtensionHealth::Foreign => "foreign",
+            ExtensionHealth::Unreadable => "unreadable",
+            ExtensionHealth::Oversized => "oversized",
+        }
+    }
+}
+
+/// `extension list` 的一行（GUI 与 CLI 共用）。形状与旧 JSON 一致：
+/// 注册表条目缺失（foreign）时 source/rev/... 字段序列化省略。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtensionInfo {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    /// 已装目录绝对路径（`extensions/<名>`）。
+    pub dir: String,
+    pub health: ExtensionHealth,
+    /// 安装来源（用户给的原始字符串：GitHub URL 或本地路径）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// git 源的 resolved commit sha（本地源无此字段）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
+    /// 安装时刻的包内容 hash（blake3 十六进制）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// 本次安装收编的资源清单（注册表条目缺失时无）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resources: Option<Resources>,
+}
+
 /// install 时写入 lock 的溯源信息（调用面）。
 #[derive(Debug, Clone)]
 pub struct Provenance {

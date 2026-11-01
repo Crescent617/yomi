@@ -1221,3 +1221,90 @@ export async function deleteCronJob(job_id: string): Promise<void> {
 export async function triggerCronJob(job_id: string): Promise<void> {
   return invokeCmd("trigger_cron_job", { job_id: job_id });
 }
+
+// ─── Extensions (extension packages) ────────────────────
+
+/** Health of an installed package (`yomi extension list`). */
+export type ExtensionHealth =
+  | "ok"
+  | "modified"
+  | "foreign"
+  | "unreadable"
+  | "oversized";
+
+/** Resource manifest recorded at install time. */
+export interface ConfiguredResources {
+  cron: string[];
+  hooks: string[];
+  bins: string[];
+  snippets: string[];
+}
+
+/**
+ * One installed package. `source`/`rev`/`content_hash`/`installed_at`/
+ * `resources` are absent for `foreign` (no registry entry).
+ */
+export interface ExtensionInfo {
+  name: string;
+  version: string;
+  description: string;
+  dir: string;
+  health: ExtensionHealth;
+  source?: string;
+  rev?: string;
+  content_hash?: string;
+  installed_at?: string;
+  resources?: ConfiguredResources;
+}
+
+export interface CronAdoptReport {
+  name: string;
+  status: "created" | "updated" | "untouched";
+}
+
+export interface MountReport {
+  path: string;
+  status: "linked" | "already";
+}
+
+export interface InitReport {
+  path: string;
+  output: string;
+}
+
+export interface InstallReport {
+  name: string;
+  version: string;
+  content_hash: string;
+  cron: CronAdoptReport[];
+  hooks: MountReport[];
+  bins: MountReport[];
+  init?: InitReport | null;
+  snippets: string[];
+}
+
+export interface RemoveReport {
+  name: string;
+  cron_removed: string[];
+  mounts_left: string[];
+  mounts_removed: string[];
+  ext_dir_removed: boolean;
+}
+
+export async function listExtensions(): Promise<ExtensionInfo[]> {
+  return invokeCmd("list_extensions");
+}
+
+/**
+ * Install or update a package. `source` is a GitHub shorthand/URL
+ * (`owner/repo[/subdir][@ref]`) or a local directory path. Clone can take
+ * up to 3 minutes, so use a longer timeout than the default.
+ */
+export async function installExtension(source: string): Promise<InstallReport> {
+  const promise = invoke<InstallReport>("install_extension", { source });
+  return withTimeout(promise, 240_000, "install_extension");
+}
+
+export async function removeExtension(name: string): Promise<RemoveReport> {
+  return invokeCmd("remove_extension", { name });
+}

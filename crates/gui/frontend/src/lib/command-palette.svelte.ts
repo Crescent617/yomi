@@ -7,6 +7,7 @@
 import type { ComponentType, SvelteComponent } from "svelte";
 import {
   BarChart3,
+  Blocks,
   Bot,
   Bug,
   CalendarClock,
@@ -28,6 +29,7 @@ import {
   requestActivePanel,
   sessionState,
   showNotification,
+  appState,
   type SessionState,
 } from "./state.svelte";
 import {
@@ -247,6 +249,7 @@ export function paletteCommands(): PaletteCommand[] {
       keywords: "config kernel 配置 内核",
       icon: Settings,
       run: () => {
+        appState.configSection = "kernel";
         requestActivePanel("config");
       },
     },
@@ -276,6 +279,17 @@ export function paletteCommands(): PaletteCommand[] {
       icon: Bug,
       run: () => {
         requestActivePanel("debug");
+      },
+    },
+    {
+      id: "extensions",
+      group: "内核",
+      title: "扩展",
+      keywords: "extension extensions plugin package 扩展 插件 包",
+      icon: Blocks,
+      run: () => {
+        appState.configSection = "extensions";
+        requestActivePanel("config");
       },
     },
     {

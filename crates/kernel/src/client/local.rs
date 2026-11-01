@@ -419,7 +419,7 @@ impl KernelApi for Kernel {
         Self::extension_install(self, source).await
     }
 
-    async fn extension_list(&self) -> Result<Vec<serde_json::Value>> {
+    async fn extension_list(&self) -> Result<Vec<crate::extension::ExtensionInfo>> {
         Self::extension_list(self).await
     }
 

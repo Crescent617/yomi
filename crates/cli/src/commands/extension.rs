@@ -84,26 +84,26 @@ pub async fn list(_global: &GlobalArgs) -> Result<()> {
         ]);
     table.load_preset(comfy_table::presets::NOTHING);
     for row in &rows {
-        let resources = row["resources"]
-            .as_object()
+        let resources = row
+            .resources
+            .as_ref()
             .map(|r| {
-                let n = |k: &str| r[k].as_array().map_or(0, Vec::len);
                 format!(
                     "{} cron, {} hooks, {} bins, {} snippets",
-                    n("cron"),
-                    n("hooks"),
-                    n("bins"),
-                    n("snippets")
+                    r.cron.len(),
+                    r.hooks.len(),
+                    r.bins.len(),
+                    r.snippets.len()
                 )
             })
             .unwrap_or_default();
-        let desc = truncate_chars(row["description"].as_str().unwrap_or(""), 24);
+        let desc = truncate_chars(&row.description, 24);
         table.add_row(vec![
-            row["name"].as_str().unwrap_or("?"),
-            row["version"].as_str().unwrap_or("?"),
-            row["health"].as_str().unwrap_or("?"),
+            row.name.as_str(),
+            row.version.as_str(),
+            row.health.as_str(),
             &desc,
-            row["source"].as_str().unwrap_or("?"),
+            row.source.as_deref().unwrap_or("?"),
             &resources,
         ]);
     }

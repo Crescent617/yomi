@@ -28,7 +28,8 @@ pub use install::{
 };
 pub use installed::{
     list_installed, lockfile_path, read_installed, read_lockfile, read_lockfile_strict,
-    write_lockfile, ExtLockfile, InstalledExt, LockEntry, Provenance, Resources,
+    write_lockfile, ExtLockfile, ExtensionHealth, ExtensionInfo, InstalledExt, LockEntry,
+    Provenance, Resources,
 };
 pub use manifest::{parse_manifest, CronEntry, ExtManifest, ExtMeta};
 pub use snippets::{load_snippets, Snippet, SnippetLoader};

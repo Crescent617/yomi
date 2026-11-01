@@ -4,6 +4,7 @@ pub mod chat;
 pub mod checkpoint;
 pub mod companion;
 pub mod debug;
+pub mod extension;
 pub mod favorite;
 pub mod keep_awake;
 pub mod pet;

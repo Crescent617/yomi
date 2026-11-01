@@ -8,6 +8,8 @@
     message: string;
     confirmText?: string;
     cancelText?: string;
+    /** Disable both buttons (e.g. an in-flight action owns the dialog). */
+    disabled?: boolean;
     onConfirm: () => void;
     onCancel: () => void;
   }
@@ -18,6 +20,7 @@
     message,
     confirmText = "Confirm",
     cancelText = "Cancel",
+    disabled = false,
     onConfirm,
     onCancel,
   }: Props = $props();
@@ -47,14 +50,16 @@
     <button
       type="button"
       onclick={onCancel}
-      class="px-4 py-2 rounded-lg text-sm border border-input text-foreground hover:bg-secondary transition-colors"
+      {disabled}
+      class="px-4 py-2 rounded-lg text-sm border border-input text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
     >
       {cancelText}
     </button>
     <button
       type="button"
       onclick={onConfirm}
-      class="px-4 py-2 rounded-lg text-sm bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
+      {disabled}
+      class="px-4 py-2 rounded-lg text-sm bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors disabled:opacity-50"
     >
       {confirmText}
     </button>

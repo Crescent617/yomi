@@ -590,6 +590,9 @@ export type ActivePanel =
   | "favorites"
   | "agents";
 
+/** Config panel sections (the sub-view within `activePanel === "config"`). */
+export type ConfigSection = "application" | "themes" | "extensions" | "kernel";
+
 export const appState = $state({
   connectionStatus: "disconnected" as
     | "connected"
@@ -599,6 +602,8 @@ export const appState = $state({
   sidebarCollapsed: false,
   rightPanelCollapsed: true,
   activePanel: "chat" as ActivePanel,
+  /** Selected Config section; lets other surfaces deep-link (e.g. palette). */
+  configSection: "application" as ConfigSection,
   config_dirty: false,
   config_restart_required: false,
   config_applied: false,

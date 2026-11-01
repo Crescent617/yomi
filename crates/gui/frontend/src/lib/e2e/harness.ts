@@ -33,6 +33,7 @@ import * as StatusBar from "../components/layout/StatusBar.svelte";
 import * as MermaidBlock from "../components/chat/MermaidBlock.svelte";
 import * as CodeBlock from "../components/chat/CodeBlock.svelte";
 import * as CommandPalette from "../components/ui/CommandPalette.svelte";
+import * as ExtensionsPanel from "../components/extensions/ExtensionsPanel.svelte";
 
 export const api = {
   svelte,
@@ -57,6 +58,7 @@ export const api = {
   MermaidBlock,
   CodeBlock,
   CommandPalette,
+  ExtensionsPanel,
 };
 
 (window as unknown as { __e2e: typeof api }).__e2e = api;

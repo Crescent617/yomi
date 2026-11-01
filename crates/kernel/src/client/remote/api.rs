@@ -746,7 +746,7 @@ impl KernelApi for RemoteKernel {
         self.call_json(ReqMethod::ExtensionInstall { source }).await
     }
 
-    async fn extension_list(&self) -> Result<Vec<serde_json::Value>> {
+    async fn extension_list(&self) -> Result<Vec<crate::extension::ExtensionInfo>> {
         self.call_json(ReqMethod::ExtensionList).await
     }
 
