@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.21] - 2026-11-01
+
+### Added
+- 图形界面配置区新增「Extensions」一节，管理扩展包（extension package）：列出已安装扩展的名称、版本、来源、健康状态与所含资源（定时任务、命令、提示片段），并可安装、重装（更新）与卸载；卸载前列出将删除的内容，残留项（被手工改过的挂载、未删的目录）会明确提示。
+- 扩展包安装来源支持 GitHub 简写/URL 与本地文件夹，安装对话框内含文件夹选择器、来源示例与说明；侧栏命令面板新增「扩展」入口。
+
 ## [0.11.20] - 2026-10-27
 
 ### Changed
