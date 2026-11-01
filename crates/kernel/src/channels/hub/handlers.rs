@@ -74,6 +74,30 @@ enum Delivery {
     Queue,
 }
 
+/// The refusal text for a chat-scoped command run in a doc-comment
+/// session, or `None` when the command is fine there.
+///
+/// A doc comment has no chat. These commands act on a *chat*'s state or
+/// render a chat panel — run here they would use an empty chat id, which
+/// (a) creates a bogus empty-key mapping row and (b) fans out onto every
+/// doc-comment session of the channel (whose chat id is also empty). So
+/// they are refused. Everything session-scoped (or rendered as plain text)
+/// works in a doc comment and is deliberately not listed. `/model` is
+/// session-scoped for doc comments (see the `SwitchModel` arm) and so is
+/// not listed either.
+fn doc_comment_chat_scope_refusal(cmd: &ChannelCommand) -> Option<&'static str> {
+    match cmd {
+        ChannelCommand::Mention(_)
+        | ChannelCommand::Threads(_)
+        | ChannelCommand::Watch(_)
+        | ChannelCommand::Settings
+        | ChannelCommand::Cron => {
+            Some("This command applies to a chat and is not available for doc comment sessions.")
+        }
+        _ => None,
+    }
+}
+
 pub(crate) async fn handle_incoming_message(
     channel_name: &str,
     config: &ChannelConfig,
@@ -98,6 +122,17 @@ pub(crate) async fn handle_incoming_message(
         mapping_key = %mapping_key,
         "session mapping"
     );
+
+    // 文档评论没有 chat：一批"chat 级"命令（免@开关、话题模式、watch、
+    // 设置/定时面板）本应作用于某个 chat，对文档评论无意义——直接拒绝，
+    // 否则它们会拿着空 chat_id 落到本渠道所有文档评论会话上（`/model` 的
+    // 扇出曾如此，见 `doc_comment_chat_scope_refusal`）。`/model` 是例外：
+    // 它会话级作用于当前文档会话（见 `SwitchModel` 分支），故不在此列。
+    if msg.doc_comment.is_some() {
+        if let Some(refusal) = doc_comment_chat_scope_refusal(&cmd) {
+            return Ok(Some(refusal.to_string()));
+        }
+    }
 
     match cmd {
         ChannelCommand::Help => {
@@ -315,7 +350,12 @@ pub(crate) async fn handle_incoming_message(
             // thread_root_id lookup anchors to the thread_id key; the
             // conversation self-heals on the root key and gc reclaims
             // the orphan.
-            if msg.thread_id.is_none() {
+            //
+            // A doc comment has no chat, so it takes the thread-style
+            // session-scoped path below: switch *the document's session*
+            // only. The chat path would fan out to every doc-comment
+            // session (they all share the empty chat id).
+            if msg.thread_id.is_none() && msg.doc_comment.is_none() {
                 set_chat_model(channel_name, store, &kernel, &chat_id, Some(&key)).await?;
                 // 行为一致（DM 里 fan-out 只有 chat session 一个目
                 // 标），ack 按是否有 threads 可言区分措辞。

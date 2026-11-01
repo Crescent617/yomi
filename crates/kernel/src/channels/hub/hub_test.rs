@@ -4167,6 +4167,172 @@ async fn doc_comment_threads_of_one_document_share_a_session() {
     assert_ne!(sid3, sid1);
 }
 
+/// Chat-scoped commands (`/mention` `/threads` `/watch` `/settings`
+/// `/cron`) are refused in a doc-comment session — they have no chat to act
+/// on, and running them would create a bogus empty-key session and leak
+/// onto every doc-comment session of the channel.
+#[tokio::test]
+async fn doc_comment_chat_scoped_commands_are_refused() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram {
+            token: "fake".into(),
+        },
+        admin_users: vec!["ou_admin".to_string()],
+        ..Default::default()
+    };
+    let doc = |raw: &str| ChannelMessage {
+        external_chat_id: String::new(),
+        external_user_id: "ou_admin".to_string(),
+        external_message_id: None,
+        is_mention: true,
+        raw_text: Some(raw.to_string()),
+        content: vec![],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: false,
+        create_time: None,
+        doc_comment: Some(crate::channels::DocCommentRef {
+            file_token: "tok".to_string(),
+            file_type: "docx".to_string(),
+            comment_id: "c_1".to_string(),
+        }),
+    };
+
+    for cmd in ["/mention", "/threads", "/watch", "/settings", "/cron"] {
+        let reply = handle_incoming_message(
+            "mock",
+            &config,
+            &store,
+            Arc::clone(&kernel),
+            doc(cmd),
+            &obs,
+            &adapter,
+        )
+        .await
+        .unwrap()
+        .expect("a refusal reply");
+        assert!(
+            reply.contains("not available for doc comment sessions"),
+            "{cmd} -> {reply}"
+        );
+    }
+    // None of them created the bogus empty-key session.
+    assert_eq!(store.find_mapping("mock", "").await.unwrap(), None);
+}
+
+/// `/model` in a doc comment switches *that document's session* only — no
+/// chat fan-out (which would hit every doc-comment session) and no bogus
+/// empty-key session.
+#[tokio::test]
+async fn doc_comment_model_switch_is_session_scoped() {
+    let (_pool, store) = create_test_pool().await;
+    let store: Arc<dyn ChannelStore> = store;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut kconfig = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        models: vec![
+            crate::provider::ModelConfig {
+                name: "m1".into(),
+                ..Default::default()
+            },
+            crate::provider::ModelConfig {
+                name: "m2".into(),
+                ..Default::default()
+            },
+        ],
+        ..crate::config::Config::default()
+    };
+    kconfig.finalize();
+    let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
+
+    let mock = Arc::new(MockAdapter::new("mock"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let obs = Arc::new(ObsTracker::new());
+    let config = ChannelConfig {
+        name: "mock".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram {
+            token: "fake".into(),
+        },
+        ..Default::default()
+    };
+    let doc = |raw: &str, tok: &str| ChannelMessage {
+        external_chat_id: String::new(),
+        external_user_id: "ou_a".to_string(),
+        external_message_id: None,
+        is_mention: true,
+        raw_text: Some(raw.to_string()),
+        content: vec![],
+        image_keys: vec![],
+        thread_id: None,
+        root_id: None,
+        parent_id: None,
+        is_group: false,
+        create_time: None,
+        doc_comment: Some(crate::channels::DocCommentRef {
+            file_token: tok.to_string(),
+            file_type: "docx".to_string(),
+            comment_id: "c_1".to_string(),
+        }),
+    };
+    let call = |msg: ChannelMessage| {
+        handle_incoming_message(
+            "mock",
+            &config,
+            &store,
+            Arc::clone(&kernel),
+            msg,
+            &obs,
+            &adapter,
+        )
+    };
+
+    // Two documents, both on m1.
+    for tok in ["tokA", "tokB"] {
+        call(doc("/model m1", tok)).await.unwrap().unwrap();
+    }
+    let a = store
+        .find_mapping("mock", "doc:docx:tokA")
+        .await
+        .unwrap()
+        .unwrap();
+    let b = store
+        .find_mapping("mock", "doc:docx:tokB")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(kernel.get_session_model(&a).await, "m1");
+
+    // Switch doc A only.
+    let reply = call(doc("/model m2", "tokA")).await.unwrap().unwrap();
+    assert!(reply.contains("Switched to `m2`"), "{reply}");
+    assert_eq!(kernel.get_session_model(&a).await, "m2");
+    assert_eq!(
+        kernel.get_session_model(&b).await,
+        "m1",
+        "other doc-comment sessions must not be switched"
+    );
+    // No bogus empty-key session.
+    assert_eq!(store.find_mapping("mock", "").await.unwrap(), None);
+}
+
 #[test]
 fn doc_comment_messages_parse_commands() {
     // Commands work in doc comments; the reply routes into the comment
