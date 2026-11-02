@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.22] - 2026-11-02
+
+### Added
+- 图形界面会话右侧新增附件气泡：汇总本会话中模型交付过的文件与图片，点开列表可直接预览或打开。
+
 ## [0.11.21] - 2026-11-01
 
 ### Added
