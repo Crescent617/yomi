@@ -8,6 +8,7 @@
     Copy,
     ListChecks,
     Loader2,
+    Paperclip,
     Terminal,
   } from "lucide-svelte";
   import { onDestroy, onMount } from "svelte";
@@ -22,8 +23,10 @@
   import { clock } from "../../clock.svelte";
   import { elapsedLabel } from "../layout/status-activity";
   import PopoverPanel from "../ui/PopoverPanel.svelte";
+  import AttachmentChips from "./AttachmentChips.svelte";
   import RunningSubagents from "./RunningSubagents.svelte";
   import { loadedSkills } from "./loaded-skills";
+  import { sessionAttachments } from "./session-attachments";
   import {
     runningSubagents,
     runningSubagentsSummary,
@@ -44,6 +47,18 @@
       ...(streamingMessages[activeSession?.id ?? ""] ?? []),
     ]),
   );
+  // Split so only the streaming buffer is re-parsed per chunk: the settled
+  // history is re-scanned only when the message list itself changes
+  // (DESIGN "streaming costs O(delta)").
+  const settledAttachmentPaths = $derived(
+    sessionAttachments(activeSession?.messages ?? []),
+  );
+  const streamingAttachmentPaths = $derived(
+    sessionAttachments(streamingMessages[activeSession?.id ?? ""] ?? []),
+  );
+  const sessionAttachmentPaths = $derived([
+    ...new Set([...settledAttachmentPaths, ...streamingAttachmentPaths]),
+  ]);
   const totalCount = $derived(todoItems.length);
   const completedCount = $derived(
     todoItems.filter((item) => item.status === "completed").length,
@@ -57,9 +72,12 @@
   const showAgents = $derived(activeSubagents.length > 0);
   const showShells = $derived(activeShells.length > 0);
   const showSkills = $derived(loadedSkillList.length > 0);
-  const showAny = $derived(showTodos || showAgents || showShells || showSkills);
+  const showAttachments = $derived(sessionAttachmentPaths.length > 0);
+  const showAny = $derived(
+    showTodos || showAgents || showShells || showSkills || showAttachments,
+  );
 
-  type BubbleKind = "todos" | "agents" | "shells" | "skills";
+  type BubbleKind = "todos" | "agents" | "shells" | "skills" | "attachments";
   let expanded = $state<BubbleKind | null>(null);
 
   // Progress ring geometry (r=6 in a 16×16 viewBox).
@@ -72,6 +90,7 @@
     if (expanded === "agents" && !showAgents) expanded = null;
     if (expanded === "shells" && !showShells) expanded = null;
     if (expanded === "skills" && !showSkills) expanded = null;
+    if (expanded === "attachments" && !showAttachments) expanded = null;
   });
 
   function toggle(kind: BubbleKind) {
@@ -416,6 +435,48 @@
                     </span>
                   </div>
                 {/each}
+              </div>
+            </PopoverPanel>
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    {#if showAttachments}
+      <div class="relative" transition:fly={{ x: 14, duration: 140 }}>
+        <button
+          type="button"
+          class="{bubbleClass} gap-1"
+          data-bubble="attachments"
+          onclick={() => toggle("attachments")}
+          aria-expanded={expanded === "attachments"}
+          aria-label="Delivered attachments details"
+          title="{sessionAttachmentPaths.length} attachment{sessionAttachmentPaths.length >
+          1
+            ? 's'
+            : ''} delivered this session (may have left the context since)"
+        >
+          <Paperclip class="size-3.5 shrink-0 text-info" aria-hidden="true" />
+          <span class="text-[10px] tabular-nums text-muted-foreground">
+            {sessionAttachmentPaths.length}
+          </span>
+        </button>
+        {#if expanded === "attachments"}
+          <div
+            class={panelClass}
+            transition:scale={{ start: 0.9, duration: 130 }}
+          >
+            <PopoverPanel title="Attachments delivered">
+              {#snippet headerActions()}
+                <span class="text-[10px] tabular-nums text-muted-foreground">
+                  {sessionAttachmentPaths.length}
+                </span>
+              {/snippet}
+              <div class="px-3 pb-2.5 pt-1">
+                <AttachmentChips
+                  paths={sessionAttachmentPaths}
+                  session_id={activeSession?.id ?? ""}
+                />
               </div>
             </PopoverPanel>
           </div>
