@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.23] - 2026-11-10
+
+### Added
+- 桌面宠物小窗的对话输入框支持斜杠命令：输入 `/` 弹出命令补全，回车即可执行会话命令（如 `/clear`、`/cancel`、`/steer`），与主窗口一致。
+
+### Fixed
+- 桌面宠物小窗现在跟随主窗口的主题切换（明暗模式与配色主题）。
+- 桌面宠物小窗用中文输入法按回车确认候选词时不再误发送消息。
+
 ## [0.11.22] - 2026-11-02
 
 ### Added
