@@ -31,6 +31,10 @@
     type CodexPetLookOutput,
   } from "../../lib/codex-pet-look";
   import { PET_SIZE, type PetSpriteVersion } from "../../lib/pet";
+  import {
+    initSettings,
+    startThemeSyncListener,
+  } from "../../lib/settings.svelte";
 
   let snapshot = $state<PetSnapshot | null>(null);
   let spritesheet_url = $state<string | null>(null);
@@ -135,6 +139,12 @@
 
   onMount(() => {
     let disposed = false;
+    // 小窗是独立 webview：按持久化偏好应用外观（app.html 的预绘缓存只
+    // 覆盖首帧，且不假设与主窗共享 localStorage），并跟随主窗的主题切换
+    // （跨窗口的 DOM 事件到不了这里，见 settings.svelte.ts）。监听先注册，
+    // 避免启动瞬间漏掉主窗的广播。
+    const stopThemeSync = startThemeSyncListener();
+    void initSettings();
     void initCompanion().then((dispose) => {
       if (disposed) {
         dispose();
@@ -472,6 +482,7 @@
       void unlisten_scale_changed.then((stop) => stop());
       void unlisten_scale.then((stop) => stop());
       void unlisten_moved.then((stop) => stop());
+      stopThemeSync();
     };
   });
 

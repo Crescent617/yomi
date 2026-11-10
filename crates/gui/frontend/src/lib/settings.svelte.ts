@@ -1,4 +1,5 @@
 import type { Store } from "@tauri-apps/plugin-store";
+import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { PermissionLevel } from "./permission";
 import { getSettingsStore } from "./settings-store";
 import {
@@ -433,7 +434,15 @@ export function applyGuiPreferences(value: GuiPreferences): void {
   applyFontSize(value.appearance.fontSize);
 }
 
-export function applyTheme(theme: ThemePreference): void {
+/** 跨窗口主题同步事件名：伙伴窗是独立 webview，收不到主窗口的 DOM 事件。 */
+export const THEME_SYNC_EVENT = "gui:theme-changed";
+
+export interface ThemeSyncPayload {
+  theme: ThemePreference;
+  theme_id: string;
+}
+
+function applyThemeMode(theme: ThemePreference, theme_id: string): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
   const dark =
@@ -442,8 +451,44 @@ export function applyTheme(theme: ThemePreference): void {
       window.matchMedia("(prefers-color-scheme: dark)").matches);
   root.classList.toggle("dark", dark);
   // Re-apply the active color theme so its palette matches the new mode.
-  applyColorThemeById(guiPreferences.appearance.theme_id, dark);
+  applyColorThemeById(theme_id, dark);
   window.dispatchEvent(new CustomEvent("theme-changed", { detail: { theme } }));
+}
+
+function broadcastTheme(): void {
+  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
+    return;
+  }
+  void emit(THEME_SYNC_EVENT, {
+    theme: guiPreferences.appearance.theme,
+    theme_id: guiPreferences.appearance.theme_id,
+  } satisfies ThemeSyncPayload).catch(() => {});
+}
+
+export function applyTheme(theme: ThemePreference): void {
+  applyThemeMode(theme, guiPreferences.appearance.theme_id);
+  broadcastTheme();
+}
+
+/**
+ * 伙伴窗侧：应用主窗口广播过来的主题（只同步深浅与配色，字号留给
+ * applyGuiPreferences 在小窗 initSettings 时应用）。本函数不做广播，
+ * 因此不会与主窗口形成回环。
+ */
+export function startThemeSyncListener(): () => void {
+  if (typeof window === "undefined") return () => {};
+  let unlisten: UnlistenFn | undefined;
+  void listen<ThemeSyncPayload>(THEME_SYNC_EVENT, (event) => {
+    const { theme, theme_id } = event.payload;
+    guiPreferences.appearance.theme = theme;
+    guiPreferences.appearance.theme_id = theme_id;
+    applyThemeMode(theme, theme_id);
+  })
+    .then((fn) => {
+      unlisten = fn;
+    })
+    .catch(() => {});
+  return () => unlisten?.();
 }
 
 export function applyFontSize(fontSize: FontSizePreference): void {

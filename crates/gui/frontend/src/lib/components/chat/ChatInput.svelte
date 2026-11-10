@@ -2,7 +2,6 @@
   import { onDestroy } from "svelte";
   import {
     ArrowUp,
-    Command,
     Square,
     Clock,
     Paperclip,
@@ -20,10 +19,10 @@
     inputDrafts,
   } from "../../state.svelte";
   import { enqueue, queueHead, steerQueueHead } from "../../mailbox.svelte";
-  import { forkSession, textFromBlocks } from "../../session";
+  import { textFromBlocks } from "../../session";
   import { isActiveSessionPhase } from "../../session-phase";
-  import { SLASH_COMMANDS } from "../../commands";
-  import { askBtw } from "../../btw.svelte";
+  import { runSessionCommand } from "../../slash-commands";
+  import { createSlashCompletion } from "../../slash-completion.svelte";
   import { sanitizeControlPuaPaste } from "../../utils";
   import { open } from "@tauri-apps/plugin-dialog";
   import { readFile } from "@tauri-apps/plugin-fs";
@@ -32,6 +31,7 @@
   import ModelSelector from "./ModelSelector.svelte";
   import PermissionSelector from "./PermissionSelector.svelte";
   import ContextWindowEditor from "./ContextWindowEditor.svelte";
+  import SlashCommandMenu from "./SlashCommandMenu.svelte";
   import { composeOutgoingText, formatQuoteText } from "./quote";
 
   let content = $state("");
@@ -40,10 +40,7 @@
   let ignoreNextEnter = $state(false);
 
   // ── command completion ──
-  let showCommands = $state(false);
-  let commandFilter = $state("");
-  let selectedCommandIdx = $state(0);
-  let commandListRef: HTMLDivElement | null = $state(null);
+  const slashCompletion = createSlashCompletion();
 
   // ── skill completion (/skill:) ──
   let showSkills = $state(false);
@@ -160,7 +157,7 @@
 
     // ── skill: starts with /skill: ──
     if (content.startsWith("/skill:")) {
-      showCommands = false;
+      slashCompletion.close();
       const query = content.slice(7);
       const valid = /^[a-zA-Z0-9_\-:]*$/.test(query);
       if (valid) {
@@ -177,19 +174,7 @@
     skillFilter = "";
 
     // ── command: starts with / ──
-    if (content.startsWith("/")) {
-      const query = content.slice(1);
-      const valid = /^[a-zA-Z0-9_\-:]*$/.test(query);
-      if (valid) {
-        showCommands = true;
-        commandFilter = query;
-        selectedCommandIdx = 0;
-      } else {
-        showCommands = false;
-      }
-    } else {
-      showCommands = false;
-    }
+    slashCompletion.detect(content);
   }
 
   async function loadSkillsForActiveSession() {
@@ -206,11 +191,6 @@
       availableSkills = [];
     }
   }
-
-  const filteredCommands = $derived.by(() => {
-    const q = commandFilter.toLowerCase();
-    return SLASH_COMMANDS.filter(([cmd]) => cmd.toLowerCase().includes(q));
-  });
 
   const filteredSkills = $derived.by(() => {
     const q = skillFilter.toLowerCase();
@@ -320,12 +300,12 @@
   function acceptCommand(cmd: string) {
     if (cmd === "/history") {
       openHistoryPicker();
-      showCommands = false;
+      slashCompletion.close();
       textareaRef?.focus();
       return;
     }
     content = cmd + " ";
-    showCommands = false;
+    slashCompletion.close();
     textareaRef?.focus();
     requestAnimationFrame(autoResize);
   }
@@ -338,152 +318,35 @@
     requestAnimationFrame(autoResize);
   }
 
-  async function runNotificationDebug() {
-    const types = ["info", "success", "warning", "error"] as const;
-
-    for (let index = 1; index <= 10; index += 1) {
-      if (index > 1) {
-        const delay = 100 + Math.floor(Math.random() * 351);
-        await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
-      }
-
-      const type = types[Math.floor(Math.random() * types.length)];
-      showNotification(`Debug notification ${index}/10`, type);
-    }
-  }
-
   async function handleCommand(text: string): Promise<boolean> {
     const session_id = sessionState.activeSessionId;
     if (!session_id) return false;
 
-    const parts = text.split(/\s+/);
-    const cmd = parts[0].toLowerCase();
+    const outcome = await runSessionCommand(
+      {
+        session_id,
+        composeText: composeOutgoingWithAttachments,
+        steerBlocks: (value) => buildContentBlocks(value, inlineImages),
+        steerImageCount: inlineImages.length,
+        onHistory: openHistoryPicker,
+      },
+      text,
+    );
 
-    try {
-      switch (cmd) {
-        case "/debug":
-          if (parts[1]?.toLowerCase() !== "noti") {
-            showNotification(
-              "Unknown debug command. Try /debug noti",
-              "warning",
-            );
-            return false;
-          }
-          void runNotificationDebug();
-          break;
-        case "/cancel":
-          await api.cancelSession(session_id);
-          showNotification("Session cancelled", "info");
-          break;
-        case "/clear":
-          await api.clearSession(session_id);
-          showNotification("Session context cleared", "info");
-          break;
-        case "/yolo":
-          await api.setPermissionLevel(session_id, "dangerous");
-          showNotification(
-            "YOLO mode enabled — all tools will be auto-approved",
-            "info",
-          );
-          break;
-        case "/undo":
-          {
-            const checkpoints = await api.getCheckpoints(session_id);
-            if (checkpoints.length < 1) {
-              showNotification("No checkpoint to undo", "error");
-              return false;
-            }
-            const target = checkpoints[checkpoints.length - 1];
-            await api.rewind(session_id, target.message_id);
-            showNotification("Undo last turn", "info");
-          }
-          break;
-        case "/safe":
-          await api.setPermissionLevel(session_id, "safe");
-          showNotification("Permission level set to Safe", "info");
-          break;
-        case "/caution":
-          await api.setPermissionLevel(session_id, "caution");
-          showNotification("Permission level set to Caution", "info");
-          break;
-        case "/compact":
-          await api.compactSession(session_id);
-          showNotification("Session compaction requested", "info");
-          break;
-        case "/steer":
-          {
-            const steerText = composeOutgoingWithAttachments(
-              parts.slice(1).join(" ").trim(),
-            );
-            if (!steerText && inlineImages.length === 0) {
-              showNotification(
-                "Please provide steer content: /steer <content>",
-                "error",
-              );
-              return false;
-            }
-            const blocks = buildContentBlocks(steerText, inlineImages);
-            await api.sendSteer(session_id, blocks);
-            clearInlineImages();
-            clearQuotes();
-            showNotification("Steer message queued for next step", "info");
-          }
-          break;
-        case "/fork":
-          {
-            try {
-              const fork = await forkSession(session_id);
-              showNotification(`Forked session: ${fork.id}`, "success");
-            } catch (e) {
-              showNotification(
-                `Fork failed: ${e instanceof Error ? e.message : String(e)}`,
-                "error",
-              );
-              return false;
-            }
-          }
-          break;
-        case "/continue":
-          {
-            try {
-              await api.continueSession(session_id);
-              showNotification("Agent continuing...", "info");
-            } catch (e) {
-              showNotification(
-                `Continue failed: ${e instanceof Error ? e.message : String(e)}`,
-                "error",
-              );
-              return false;
-            }
-          }
-          break;
-        case "/history":
-          openHistoryPicker();
-          break;
-        case "/btw":
-          {
-            const question = parts.slice(1).join(" ").trim();
-            if (!question) {
-              showNotification("用法：/btw <问题>", "error");
-              return false;
-            }
-            await askBtw(session_id, question);
-          }
-          break;
-        default:
-          // Unknown command — treat as normal message
-          await api.sendMessage(
-            session_id,
-            composeOutgoingWithAttachments(text),
-          );
+    if (outcome === "message") {
+      // 不是本模块认识的命令——按普通消息发送（与原 handleCommand 的
+      // default 分支同义）。
+      try {
+        await api.sendMessage(session_id, composeOutgoingWithAttachments(text));
+        return true;
+      } catch (e: unknown) {
+        const msg = api.errorMessage(e);
+        console.error(`Failed to send message for command ${text}:`, msg);
+        showNotification(`Command failed: ${msg}`, "error");
+        return false;
       }
-      return true;
-    } catch (e: unknown) {
-      const msg = api.errorMessage(e);
-      console.error(`Failed to execute command ${cmd}:`, msg);
-      showNotification(`Command failed: ${msg}`, "error");
-      return false;
     }
+    return outcome === "handled";
   }
 
   async function handleSubmit() {
@@ -771,31 +634,10 @@
     }
 
     // Command picker navigation
-    if (showCommands) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        if (filteredCommands.length === 0) return;
-        selectedCommandIdx = (selectedCommandIdx + 1) % filteredCommands.length;
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        if (filteredCommands.length === 0) return;
-        selectedCommandIdx =
-          (selectedCommandIdx - 1 + filteredCommands.length) %
-          filteredCommands.length;
-        return;
-      }
-      if (e.key === "Tab" || e.key === "Enter") {
-        e.preventDefault();
-        const match = filteredCommands[selectedCommandIdx];
-        if (match) acceptCommand(match[0]);
-        return;
-      }
-      if (e.key === "Escape") {
-        showCommands = false;
-        return;
-      }
+    const commandKey = slashCompletion.keydown(e);
+    if (commandKey.consumed) {
+      if (commandKey.accept) acceptCommand(commandKey.accept);
+      return;
     }
 
     // History picker navigation
@@ -884,16 +726,6 @@
   }
 
   $effect(() => {
-    if (showCommands && commandListRef) {
-      const buttons = commandListRef.querySelectorAll("button");
-      const selected = buttons[selectedCommandIdx];
-      if (selected) {
-        selected.scrollIntoView({ block: "nearest", inline: "nearest" });
-      }
-    }
-  });
-
-  $effect(() => {
     if (showSkills && skillListRef) {
       const buttons = skillListRef.querySelectorAll("button");
       const selected = buttons[selectedSkillIdx];
@@ -944,7 +776,7 @@
   function handleFocusOut(e: FocusEvent) {
     const container = e.currentTarget as HTMLElement;
     if (!container.contains(e.relatedTarget as Node)) {
-      showCommands = false;
+      slashCompletion.close();
       showSkills = false;
       showHistory = false;
     }
@@ -956,25 +788,12 @@
   onfocusout={handleFocusOut}
 >
   <!-- Command completion dropdown -->
-  {#if showCommands && filteredCommands.length > 0}
-    <div
-      bind:this={commandListRef}
-      class="absolute bottom-full left-0 right-0 mb-1 mx-3 max-h-48 overflow-y-auto rounded-lg border border-border bg-background shadow-lg z-50"
-    >
-      {#each filteredCommands as [cmd, desc], i (cmd)}
-        <button
-          class="flex items-center gap-2 w-full px-3 py-2 text-left text-sm transition-colors {i ===
-          selectedCommandIdx
-            ? 'bg-secondary'
-            : 'hover:bg-secondary/50'}"
-          onclick={() => acceptCommand(cmd)}
-        >
-          <Command size={14} class="text-muted-foreground shrink-0" />
-          <span class="font-mono text-primary shrink-0">{cmd}</span>
-          <span class="text-muted-foreground text-xs truncate">{desc}</span>
-        </button>
-      {/each}
-    </div>
+  {#if slashCompletion.show && slashCompletion.commands.length > 0}
+    <SlashCommandMenu
+      commands={slashCompletion.commands}
+      selected={slashCompletion.selected}
+      onSelect={acceptCommand}
+    />
   {/if}
 
   <!-- Skill completion dropdown -->

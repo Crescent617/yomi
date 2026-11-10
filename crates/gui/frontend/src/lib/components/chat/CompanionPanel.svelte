@@ -214,6 +214,7 @@
       <AskUserBar />
       <CompanionInput
         bind:this={input}
+        {session_id}
         disabled={disconnected}
         placeholder={running
           ? "Queue a message…"
