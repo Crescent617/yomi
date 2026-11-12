@@ -227,20 +227,24 @@ fn output_text(out: &crate::types::ToolOutput) -> String {
 }
 
 /// 驱动一次 sync spawn 直到拿到 subagent id，随后用 Completed 事件收尾。
-async fn run_spawn(f: TemplateFixture, parent_id: SessionId, template: &str) -> SessionId {
-    let template = template.to_string();
+/// `template` 传 `Some` 会带上该键，`None` 表示完全不传该键。
+async fn run_spawn_opt(
+    f: TemplateFixture,
+    parent_id: SessionId,
+    template: Option<&str>,
+) -> SessionId {
     let mut input_subscriber = f.input_bus.subscribe_all();
+    let mut args = serde_json::json!({
+        "description": "templated spawn",
+        "prompt": "do the thing",
+        "wait_for_completion": true,
+    });
+    if let Some(t) = template {
+        args["template"] = serde_json::Value::String(t.to_string());
+    }
     let exec = tokio::spawn(async move {
         f.tool
-            .exec(
-                serde_json::json!({
-                    "description": "templated spawn",
-                    "prompt": "do the thing",
-                    "wait_for_completion": true,
-                    "template": template,
-                }),
-                ToolExecCtx::new("call_1", ".", parent_id.as_str()),
-            )
+            .exec(args, ToolExecCtx::new("call_1", ".", parent_id.as_str()))
             .await
     });
 
@@ -266,6 +270,10 @@ async fn run_spawn(f: TemplateFixture, parent_id: SessionId, template: &str) -> 
         .unwrap();
     exec.await.unwrap().unwrap();
     subagent_id
+}
+
+async fn run_spawn(f: TemplateFixture, parent_id: SessionId, template: &str) -> SessionId {
+    run_spawn_opt(f, parent_id, Some(template)).await
 }
 
 #[tokio::test]
@@ -300,6 +308,33 @@ async fn spawn_with_workspace_template_records_name_and_inherits_model() {
 }
 
 #[tokio::test]
+async fn spawn_without_template_spawns_plain_and_inherits_model() {
+    let (f, parent_id) = template_fixture(None).await;
+    let store = Arc::clone(&f.session_store);
+    let subagent_id = run_spawn_opt(f, parent_id, None).await;
+
+    let child = store.get(&subagent_id).await.unwrap().unwrap();
+    assert_eq!(child.template, None);
+    assert_eq!(child.model_key.as_deref(), Some("parent-model"));
+}
+
+#[tokio::test]
+async fn empty_or_blank_template_acts_like_none() {
+    for blank in ["", "   ", "\t\n"] {
+        let (f, parent_id) = template_fixture(None).await;
+        let store = Arc::clone(&f.session_store);
+        let subagent_id = run_spawn_opt(f, parent_id, Some(blank)).await;
+
+        let child = store.get(&subagent_id).await.unwrap().unwrap();
+        assert_eq!(
+            child.template, None,
+            "blank template {blank:?} should mean no role"
+        );
+        assert_eq!(child.model_key.as_deref(), Some("parent-model"));
+    }
+}
+
+#[tokio::test]
 async fn unknown_template_errors_with_available_list() {
     let (f, parent_id) = template_fixture(None).await;
     let out = f
@@ -318,6 +353,8 @@ async fn unknown_template_errors_with_available_list() {
     let text = output_text(&out);
     assert!(text.contains("unknown template 'no-such-role'"));
     assert!(text.contains("verifier (builtin)"));
+    // 找不到时提示 template 可选、可省略
+    assert!(text.contains("optional"));
 }
 
 /// 事件流捕获最终答案（2026-08-21 e2e 实锤的既有 bug：Stopped 后读

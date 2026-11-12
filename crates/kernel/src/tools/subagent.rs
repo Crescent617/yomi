@@ -328,6 +328,7 @@ Brief the agent like a smart colleague who just walked in — it has no context.
 
 ## Templates
 - `template`: name of a reusable role; the role file becomes the subagent's system prompt.
+- Optional: omit it (or pass an empty string) to spawn a plain subagent with no role.
 - Where roles live: builtins (no file needed) — `planner`, `verifier`, `explorer`, `reviewer`; custom — `<name>/ROLE.md` under `~/.yomi/agents/` (global) or `.yomi/agents/` (workspace, wins on name clash).
 - Choosing: usually obvious from the name; otherwise glob the directory and read the file — the first line is the role statement.
 - Creating: pure markdown, first line = one-line role statement; default to the workspace dir (global only when the user asks).
@@ -353,7 +354,7 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                 },
                 "template": {
                     "type": "string",
-                    "description": "Optional role template name (builtin: planner/verifier/explorer, or a name under ~/.yomi/agents/ or .yomi/agents/ — convention详见工具描述)"
+                    "description": "Optional role template name (builtin: planner/verifier/explorer, or a name under ~/.yomi/agents/ or .yomi/agents/ — convention详见工具描述). Omit or pass an empty string to spawn without a role."
                 }
             },
             "required": ["description", "prompt"]
@@ -378,7 +379,13 @@ Brief the agent like a smart colleague who just walked in — it has no context.
             SubAgentMode::Async
         };
 
-        let template_name = args["template"].as_str().map(str::to_string);
+        // `template` 是可选参数：缺省、空串与纯空白一律归一为「无角色」，
+        // 走裸 base prompt（不报错），与 schema 里 required 只有两项一致。
+        let template_name = args["template"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
 
         tracing::info!("spawning sub-agent");
 
@@ -433,7 +440,9 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                             crate::agent_tmpl::available_summary(&agents_dir, Some(dir.as_path()))
                                 .await;
                         return Ok(ToolOutput::error(format!(
-                            "unknown template '{name}'. Available: {available}"
+                            "unknown template '{name}'. Available: {available}. \
+                             The 'template' argument is optional — omit it to spawn a \
+                             subagent without a role."
                         )));
                     }
                 }
