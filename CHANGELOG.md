@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.24] - 2026-11-12
+
 ### Changed
 - `agent` 工具的 `template` 参数为可选：不传或传空字符串都按「无角色」处理，不再因空字符串报错；名字不存在时的报错也会提示该参数可省略。
 
