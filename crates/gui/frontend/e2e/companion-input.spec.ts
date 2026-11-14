@@ -43,29 +43,36 @@ async function stubTauri(page: Page) {
   });
 }
 
-async function mountCompanionInput(page: Page) {
+async function mountCompanionInput(
+  page: Page,
+  options: { placeholder?: string; host_width?: number } = {},
+) {
   await page.goto("/e2e");
   await page.waitForFunction(() => window.__e2e);
-  await page.evaluate(async () => {
-    const { mount, tick } = window.__e2e.svelte;
-    const { default: CompanionInput } = window.__e2e.CompanionInput;
-    const w = window as unknown as E2EWindow;
-    const host = document.createElement("div");
-    host.id = "companion-input-host";
-    document.body.appendChild(host);
-    (window as unknown as { __cmp: unknown }).__cmp = mount(CompanionInput, {
-      target: host,
-      props: {
-        session_id: "companion-e2e",
-        disabled: false,
-        placeholder: "Message…",
-        onSend: async (text: string) => {
-          w.__companionSent.push(text);
+  await page.evaluate(
+    async ({ options: opts }) => {
+      const { mount, tick } = window.__e2e.svelte;
+      const { default: CompanionInput } = window.__e2e.CompanionInput;
+      const w = window as unknown as E2EWindow;
+      const host = document.createElement("div");
+      host.id = "companion-input-host";
+      if (opts.host_width) host.style.width = `${opts.host_width}px`;
+      document.body.appendChild(host);
+      (window as unknown as { __cmp: unknown }).__cmp = mount(CompanionInput, {
+        target: host,
+        props: {
+          session_id: "companion-e2e",
+          disabled: false,
+          placeholder: opts.placeholder ?? "Message…",
+          onSend: async (text: string) => {
+            w.__companionSent.push(text);
+          },
         },
-      },
-    });
-    await tick();
-  });
+      });
+      await tick();
+    },
+    { options },
+  );
 }
 
 function sent(page: Page) {
@@ -273,4 +280,39 @@ test("Enter during IME composition does not send", async ({ page }) => {
   await page.waitForTimeout(150);
   await page.locator(TEXTAREA).press("Enter");
   await expect.poll(() => sent(page)).toEqual(["拼音"]);
+});
+
+test("a long placeholder stays on one line, even after the draft is cleared", async ({
+  page,
+}) => {
+  await stubTauri(page);
+  await mountCompanionInput(page, {
+    // A newline plus a long CJK-ish tail: the placeholder must collapse to a
+    // single line instead of wrapping and growing the box.
+    placeholder:
+      "Message line one\nand a very long session name that would wrap in a narrow field…",
+    host_width: 280,
+  });
+  const textarea = page.locator(TEXTAREA);
+  const metrics = () =>
+    textarea.evaluate((el) => ({
+      sh: el.scrollHeight,
+      ch: el.clientHeight,
+      placeholder: el.placeholder,
+    }));
+
+  // Empty draft: the placeholder renders on one line (no wrapped second line).
+  const empty = await metrics();
+  expect(empty.ch).toBeGreaterThan(0);
+  expect(empty.sh).toBeLessThanOrEqual(empty.ch + 1);
+  // Newlines/extra whitespace are collapsed out of the placeholder.
+  expect(empty.placeholder).not.toContain("\n");
+
+  // Clearing a draft fires a native input with an empty value; resize() must
+  // not size the box to a wrapped placeholder (the reported two-line bug).
+  // resize() sets height = scrollHeight, so compare heights, not scrollHeight.
+  await textarea.fill("hello");
+  await textarea.fill("");
+  const cleared = await metrics();
+  expect(cleared.ch).toBeLessThanOrEqual(empty.ch + 1);
 });

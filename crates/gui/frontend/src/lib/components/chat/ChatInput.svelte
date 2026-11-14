@@ -784,7 +784,7 @@
 </script>
 
 <div
-  class="relative mb-2 rounded-md bg-card px-2 py-0 transition-shadow focus-within:ring-1 focus-within:ring-border"
+  class="relative mb-2 rounded-md bg-card px-2 py-0 transition-shadow focus-within:ring-1 focus-within:ring-primary/50"
   onfocusout={handleFocusOut}
 >
   <!-- Command completion dropdown -->
@@ -1045,7 +1045,7 @@
                         ? 'bg-error'
                         : context_display_percent >= 70
                           ? 'bg-warning'
-                          : 'bg-muted-foreground'}"
+                          : 'bg-primary/60'}"
                   ></span>
                 {/each}
               </span>

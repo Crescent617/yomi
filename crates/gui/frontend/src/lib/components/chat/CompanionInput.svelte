@@ -3,7 +3,7 @@
   // 不用完整 ChatInput——附件/模型选择等 chrome 留在主窗口；命令补全只
   // 提示斜杠命令（不含 /skill:）。命令执行与补全均复用主窗口同一份实现
   // （slash-commands / slash-completion / SlashCommandMenu）。
-  import { ArrowUp } from "lucide-svelte";
+  import { ArrowUp, Loader2 } from "lucide-svelte";
   import { showNotification } from "../../state.svelte";
   import { runSessionCommand } from "../../slash-commands";
   import { createSlashCompletion } from "../../slash-completion.svelte";
@@ -33,6 +33,9 @@
 
   const slashCompletion = createSlashCompletion();
   const can_send = $derived(!disabled && !sending && text.trim().length > 0);
+  // 占位提示永远单行：折叠换行/连续空白（会话名可能来自渠道、未经归一），
+  // 超宽由 ::placeholder 的省略号截断。
+  const placeholder_text = $derived(placeholder.replace(/\s+/g, " ").trim());
 
   function acceptCommand(cmd: string) {
     text = cmd + " ";
@@ -140,7 +143,7 @@
       />
     {/if}
     <div
-      class="flex items-center gap-2 rounded-md border border-subtle bg-code-bg px-2 py-1.5 focus-within:border-primary"
+      class="flex items-center gap-2 rounded-md border border-subtle bg-code-bg px-2 py-1.5 transition-shadow focus-within:ring-1 focus-within:ring-primary/50"
     >
       <textarea
         bind:this={textarea}
@@ -158,7 +161,7 @@
           setTimeout(() => (ignoreNextEnter = false), 100);
         }}
         {disabled}
-        {placeholder}
+        placeholder={placeholder_text}
         rows="1"
         aria-label="Companion message input"
         class="max-h-[120px] flex-1 resize-none bg-transparent text-sm outline-none placeholder:text-muted-foreground disabled:opacity-50"
@@ -171,8 +174,23 @@
         aria-label="Send message"
         class="rounded-full bg-primary/10 p-1.5 text-primary transition-colors hover:bg-primary/20 disabled:bg-transparent disabled:text-muted-foreground"
       >
-        <ArrowUp size={14} />
+        {#if sending}
+          <Loader2 size={14} class="animate-spin motion-reduce:animate-none" />
+        {:else}
+          <ArrowUp size={14} />
+        {/if}
       </button>
     </div>
   </div>
 </div>
+
+<style>
+  /* 占位提示固定单行：长会话名不折行、超出以省略号截断。否则 WebKit 会把
+     placeholder 撑成两行高度，resize() 在输入框清空那一次按 scrollHeight
+     设高，就让空输入框自己长成两行。 */
+  textarea::placeholder {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+</style>

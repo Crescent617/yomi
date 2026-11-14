@@ -2,7 +2,7 @@
   // 伙伴窗对话面板：标题栏（绑定 session + 操作）+ 消息流 + 权限/提问条
   // + slim 输入。消息与权限状态全部来自本窗口的 session store，绑定切换
   // 由 companion.svelte.ts 驱动。
-  import { ExternalLink, Pin, PinOff, X } from "lucide-svelte";
+  import { ExternalLink, MessagesSquare, Pin, PinOff, X } from "lucide-svelte";
   import * as api from "../../api";
   import { showNotification } from "../../state.svelte";
   import { isActiveSessionPhase } from "../../session-phase";
@@ -31,6 +31,10 @@
 
   let input = $state<CompanionInput | undefined>();
   let wrap_el = $state<HTMLDivElement | undefined>();
+
+  // 标题栏图标按钮共用的样式：hover/focus 一致，键盘聚焦有环。
+  const header_btn =
+    "rounded p-1 text-muted-foreground transition hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-40";
 
   export function focusInput() {
     input?.focus();
@@ -159,11 +163,20 @@
       class="group flex items-center gap-1 border-b border-subtle px-2 py-1.5"
       data-tauri-drag-region={false}
     >
-      <div class="min-w-0 flex-1 truncate text-xs font-medium">
+      <div
+        class="min-w-0 flex-1 truncate text-xs font-medium"
+        title={title ?? undefined}
+      >
         {title ?? "No session"}
       </div>
       {#if disconnected || session_id}
-        <span class="micro-label shrink-0 text-muted-foreground">
+        <span
+          class="micro-label shrink-0 {disconnected
+            ? 'text-warning'
+            : running
+              ? 'text-primary'
+              : 'text-muted-foreground'}"
+        >
           {#if disconnected}
             disconnected
           {:else if running}
@@ -179,9 +192,9 @@
         disabled={!session_id && !pinned}
         title={pinned ? "Unpin session" : "Pin this session"}
         aria-label={pinned ? "Unpin session" : "Pin this session"}
-        class="rounded p-1 text-muted-foreground transition-opacity hover:text-foreground disabled:opacity-40 {pinned
+        class="{header_btn} {pinned
           ? ''
-          : 'opacity-0 group-hover:opacity-100'}"
+          : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'}"
       >
         {#if pinned}<PinOff size={13} />{:else}<Pin size={13} />{/if}
       </button>
@@ -191,7 +204,7 @@
         disabled={!session_id}
         title="Open in main window"
         aria-label="Open in main window"
-        class="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40"
+        class={header_btn}
       >
         <ExternalLink size={13} />
       </button>
@@ -200,7 +213,7 @@
         onclick={() => void closeCompanion()}
         title="Close panel"
         aria-label="Close panel"
-        class="rounded p-1 text-muted-foreground hover:text-foreground"
+        class={header_btn}
       >
         <X size={13} />
       </button>
@@ -222,7 +235,10 @@
         onSend={send}
       />
     {:else}
-      <div class="flex flex-1 items-center justify-center p-4 text-center">
+      <div
+        class="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center"
+      >
+        <MessagesSquare class="text-muted-foreground/50" size={20} />
         <p class="text-xs text-muted-foreground">
           Nothing to follow yet. Activate a session in the main window, then
           click the pet again.
