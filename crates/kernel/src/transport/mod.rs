@@ -575,7 +575,7 @@ pub async fn connect_with_token(addr: &SocketAddr, token: Option<&str>) -> io::R
         }
         SocketAddr::Wss(addr_str) => {
             let request = ws_client_request(&format!("wss://{addr_str}"), token)?;
-            let (ws_stream, _) = tokio_tungstenite::connect_async(request)
+            let ws_stream = crate::utils::http::connect_wss(request)
                 .await
                 .map_err(map_client_handshake_err)?;
             Ok(Stream::Wss(ws_stream))

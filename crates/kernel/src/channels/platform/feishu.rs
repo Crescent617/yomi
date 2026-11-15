@@ -747,11 +747,11 @@ impl PlatformAdapter for FeishuAdapter {
                 }
             };
 
-            let (ws_stream, _resp) = match tokio_tungstenite::connect_async(&url).await {
-                Ok(pair) => {
+            let ws_stream = match crate::utils::http::connect_wss(&url).await {
+                Ok(stream) => {
                     info!("Feishu ws connected");
                     retry = std::time::Duration::from_secs(5);
-                    pair
+                    stream
                 }
                 Err(e) => {
                     error!(error = %e, "ws connect failed, retrying");
