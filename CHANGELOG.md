@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.26] - 2026-11-16
+
+### Added
+- 飞书长连接（WebSocket）遵循标准代理环境变量：设置 `HTTPS_PROXY`（或 `https_proxy`、`ALL_PROXY`）后与 REST 请求一样经该 HTTP 代理，`NO_PROXY` 列出的主机直连；都未设置时行为不变。
+
 ## [0.11.25] - 2026-11-14
 
 ### Changed
