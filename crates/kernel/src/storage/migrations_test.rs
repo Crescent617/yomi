@@ -114,6 +114,50 @@ async fn test_migrations_table_tracks_versions() {
 }
 
 #[tokio::test]
+async fn migration_28_defaults_existing_sessions_to_user() {
+    let pool = create_test_pool().await;
+
+    // 模拟「停在 v27、sessions 里已有数据」的库：迁移 v28 加列必须既
+    // 建得起来（NOT NULL 需要默认值），又让存量行落到 'user'。
+    sqlx::query(
+        r"CREATE TABLE _schema_migrations (
+            version INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO _schema_migrations (version, name) VALUES (27, 'doc_comment_session_per_document')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        r"CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO sessions (id) VALUES ('sess_legacy')")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    run_migrations(&pool).await.unwrap();
+
+    let origin: String = sqlx::query_scalar("SELECT origin FROM sessions WHERE id = 'sess_legacy'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(origin, "user", "存量会话一律落在 user，不进折叠组");
+}
+
+#[tokio::test]
 async fn migration_27_collapses_doc_comment_keys_by_document() {
     let pool = create_test_pool().await;
 

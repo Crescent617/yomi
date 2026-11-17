@@ -45,6 +45,15 @@ pub enum SessionOrigin {
 }
 
 impl SessionOrigin {
+    /// 全部取值（`from_db` 反查用，也防止新增变体时漏改映射）。
+    const ALL: [Self; 5] = [
+        Self::User,
+        Self::Channel,
+        Self::Cron,
+        Self::Ext,
+        Self::Subagent,
+    ];
+
     /// 落库值（同时也是 wire / 前端看到的字符串）。
     pub fn as_str(self) -> &'static str {
         match self {
@@ -59,18 +68,10 @@ impl SessionOrigin {
     /// 从落库值还原。未知值（手工改库或旧版本写入）一律按 `User`
     /// 处理——宁可多显示一行，也不能把会话从列表里弄丢。
     pub fn from_db(raw: &str) -> Self {
-        match raw {
-            "channel" => Self::Channel,
-            "cron" => Self::Cron,
-            "ext" => Self::Ext,
-            "subagent" => Self::Subagent,
-            _ => Self::User,
-        }
-    }
-
-    /// 机器产生、默认收进折叠组的来源。
-    pub fn is_automation(self) -> bool {
-        matches!(self, Self::Cron | Self::Ext)
+        Self::ALL
+            .into_iter()
+            .find(|origin| origin.as_str() == raw)
+            .unwrap_or(Self::User)
     }
 }
 

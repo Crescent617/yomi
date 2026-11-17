@@ -80,9 +80,18 @@ const AUTOMATION = [
   ),
 ];
 
-async function boot(page: Page) {
+async function boot(
+  page: Page,
+  opts: { activeSessionId?: string; automationPageSize?: number } = {},
+) {
   await page.addInitScript(
-    ({ project, conversations, automation }) => {
+    ({
+      project,
+      conversations,
+      automation,
+      activeSessionId,
+      automationPageSize,
+    }) => {
       const w = window as unknown as {
         __invokeLog: { cmd: string; args?: Record<string, unknown> }[];
         __TAURI_INTERNALS__: Record<string, unknown>;
@@ -98,10 +107,24 @@ async function boot(page: Page) {
               return [];
             case "list_sessions": {
               const origins = args?.origins as string[] | undefined;
-              const rows = [...conversations, ...automation].filter(
+              const automationOnly =
+                origins?.length === 2 && origins.includes("cron");
+              const limit = automationOnly
+                ? automationPageSize
+                : ((args?.limit as number | undefined) ?? 50);
+              const before = args?.before as string | undefined;
+              let rows = [...conversations, ...automation].filter(
                 (r) => !origins || origins.includes(r.origin),
               );
-              return { sessions: rows, next_cursor: null };
+              // 与 kernel 同语义：先按 updated_at 倒序过滤游标，再截 limit。
+              rows = rows.sort((a, b) =>
+                a.updated_at < b.updated_at ? 1 : -1,
+              );
+              if (before) rows = rows.filter((r) => r.updated_at < before);
+              const page = rows.slice(0, limit);
+              const next_cursor =
+                rows.length > limit ? page[page.length - 1].updated_at : null;
+              return { sessions: page, next_cursor };
             }
             case "list_running_sessions":
               return [];
@@ -115,22 +138,37 @@ async function boot(page: Page) {
         },
       };
     },
-    { project: PROJECT, conversations: CONVERSATIONS, automation: AUTOMATION },
+    {
+      project: PROJECT,
+      conversations: CONVERSATIONS,
+      automation: AUTOMATION,
+      activeSessionId: opts.activeSessionId ?? null,
+      automationPageSize: opts.automationPageSize ?? 10,
+    },
   );
 
   await page.goto("/e2e");
   await page.waitForFunction(() => window.__e2e);
-  await page.evaluate(async () => {
+  await page.evaluate(async (activeSessionId) => {
     const { mount, tick } = window.__e2e.svelte;
     const settings = window.__e2e.settings;
+    const state = window.__e2e.state;
+    const sessionLib = window.__e2e.sessionLib;
     settings.guiPreferences.layout.sidebar_view = "sessions";
+    if (activeSessionId) {
+      // 打开的就是一次 cron 运行：状态里带上来源，组件据此强制展开。
+      state.sessionState.sessions.push(
+        sessionLib.createSessionState({ id: activeSessionId, origin: "cron" }),
+      );
+      state.sessionState.activeSessionId = activeSessionId;
+    }
     document.body.innerHTML =
       '<div id="sidebar-host" style="width:260px;height:100vh;display:flex;flex-direction:column;overflow:hidden"></div>';
     const target = document.querySelector<HTMLDivElement>("#sidebar-host");
     if (!target) throw new Error("missing sidebar host");
     mount(window.__e2e.ProjectSidebar.default, { target, props: {} });
     await tick();
-  });
+  }, opts.activeSessionId ?? null);
 }
 
 test("machine-produced sessions live in a collapsed Automation group", async ({
@@ -150,7 +188,7 @@ test("machine-produced sessions live in a collapsed Automation group", async ({
   await expect(header).toHaveAttribute("aria-expanded", "false");
   await page.screenshot({ path: `${OUT_DIR}/01-collapsed.png` });
 
-  // 第一次展开才拉取内容
+  // 展开显示（第一页在进视图时就拉好了）
   await header.click();
   await expect(header).toHaveAttribute("aria-expanded", "true");
   await expect(
@@ -172,4 +210,44 @@ test("machine-produced sessions live in a collapsed Automation group", async ({
   // 再点收起
   await header.click();
   await expect(header).toHaveAttribute("aria-expanded", "false");
+});
+
+test("group auto-expands when the open session is an automation session", async ({
+  page,
+}) => {
+  await boot(page, { activeSessionId: "sess_cron_1" });
+
+  const header = page.getByRole("button", { name: "Automation" });
+  await expect(header).toHaveAttribute("aria-expanded", "true");
+  await expect(
+    page.getByText("daily-task-recap-baishui · 2026-11-17 08:00:00"),
+  ).toBeVisible();
+  await page.waitForTimeout(250);
+  await page.screenshot({ path: `${OUT_DIR}/03-auto-expanded.png` });
+
+  // 显式收起：即便当前会话仍是自动任务，也应服从用户的点击。
+  await header.click();
+  await expect(header).toHaveAttribute("aria-expanded", "false");
+});
+
+test("a full first page shows a count badge and loads more on demand", async ({
+  page,
+}) => {
+  await boot(page, { automationPageSize: 3 });
+
+  const header = page.getByRole("button", { name: "Automation" });
+  // 4 条里只装了 3 条：徽标带 "+" 表示还有更多
+  await expect(header).toContainText("3+");
+
+  await header.click();
+  const loadMore = page.getByRole("button", { name: "Load more" });
+  await expect(loadMore).toBeVisible();
+  await loadMore.click();
+
+  await expect(
+    page.getByText("daily-task-recap-baishui · 2026-11-16 08:00:00"),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Load more" })).toHaveCount(0);
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: `${OUT_DIR}/04-load-more.png` });
 });

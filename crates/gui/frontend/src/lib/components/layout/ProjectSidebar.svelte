@@ -120,14 +120,12 @@
     return origin === "cron" || origin === "ext";
   }
 
-  let automationExpanded = $state(false);
+  /** null = 跟随（当前会话是自动任务就展开）；true/false = 用户显式开/关。 */
+  let automationOverride = $state<boolean | null>(null);
   let automationSessions = $state<SessionState[]>([]);
   let automationCursor = $state<string | null>(null);
   let automationLoading = $state(false);
-  let automationLoaded = $state(false);
-  let automationHasAny = $state(false);
 
-  /** 当前打开的会话本身就是自动任务时强制展开，否则侧栏里看不到它。 */
   const activeIsAutomation = $derived(
     isAutomationOrigin(
       sessionState.sessions.find(
@@ -135,14 +133,19 @@
       )?.origin,
     ),
   );
-  const automationOpen = $derived(automationExpanded || activeIsAutomation);
-  const automationVisible = $derived(
-    automationHasAny || automationSessions.length > 0,
+  const automationOpen = $derived(automationOverride ?? activeIsAutomation);
+
+  /** 缓存里仍在的自动任务会话：被删掉的（单删/项目级删）自然从组里消失。 */
+  const automationList = $derived(
+    automationSessions.filter((session) =>
+      sessionState.sessions.some((entry) => entry.id === session.id),
+    ),
   );
+  const automationVisible = $derived(automationList.length > 0);
 
   /**
    * 拉第一页自动任务会话：折叠行据此决定出现与否、并显示条数徽标。
-   * 只有一页（10 条）的量，展开即用，不必等点击。
+   * 一页 10 条，展开即用。
    */
   async function refreshAutomation() {
     if (automationLoading) return;
@@ -159,8 +162,6 @@
         mergeSessionInfo(session),
       );
       automationCursor = result.next_cursor;
-      automationHasAny = automationSessions.length > 0;
-      automationLoaded = true;
     } catch (e: unknown) {
       console.error(
         "Failed to load automation sessions:",
@@ -188,7 +189,6 @@
         ? [...automationSessions, ...batch]
         : batch;
       automationCursor = result.next_cursor;
-      automationLoaded = true;
     } catch (e: unknown) {
       console.error(
         "Failed to load automation sessions:",
@@ -200,7 +200,10 @@
   }
 
   function toggleAutomation() {
-    automationExpanded = !automationExpanded;
+    const next = !automationOpen;
+    automationOverride = next;
+    // 展开即刷新：看到的是最新一次运行，而不是进视图那一刻的快照。
+    if (next) void refreshAutomation();
   }
 
   /**
@@ -448,6 +451,15 @@
     }
   }
 
+  // 切到另一个自动任务会话时，清掉用户的显式折叠：新会话照样要看得见。
+  let lastActiveSessionId: string | null = null;
+  $effect(() => {
+    const id = sessionState.activeSessionId;
+    if (id === lastActiveSessionId) return;
+    lastActiveSessionId = id;
+    if (activeIsAutomation) automationOverride = null;
+  });
+
   $effect(() => {
     if (sidebarView !== "sessions") return;
     // untrack：两个 refresh 会读写 loading/列表状态，若被 effect 追踪会自激
@@ -521,7 +533,13 @@
       try {
         if (!load_more) delete sessionCursors[project_id];
         const cursor = load_more ? sessionCursors[project_id] : undefined;
-        const result = await api.listSessions(project_id, "all", cursor, 5);
+        const result = await api.listSessions(
+          project_id,
+          "all",
+          cursor,
+          5,
+          CONVERSATION_ORIGINS,
+        );
         for (const s of result.sessions) mergeSessionInfo(s);
         loadedProjects.add(project_id);
         if (result.next_cursor) {
@@ -1288,6 +1306,42 @@
           </section>
         {/each}
 
+        {#if allSessionsLoading}
+          <div class="px-3 py-3 text-center text-xs text-muted-foreground">
+            Loading sessions...
+          </div>
+        {:else if allSessionsError}
+          <button
+            type="button"
+            class="w-full px-3 py-3 text-center text-xs text-error transition-colors hover:text-foreground"
+            onclick={() =>
+              loadAllSessions(allSessionsLoaded && Boolean(allSessionsCursor))}
+          >
+            Couldn’t load all sessions — retry
+          </button>
+        {:else if allSessionsLoaded && allSessions.length === 0 && !automationVisible}
+          <div class="px-3 py-6 text-center">
+            <MessageSquare
+              size={18}
+              class="mx-auto mb-2 text-muted-foreground"
+            />
+            <p class="text-xs font-medium text-foreground">No sessions yet</p>
+            <p class="mt-0.5 text-[11px] text-muted-foreground">
+              Start a new chat to see it here.
+            </p>
+          </div>
+        {/if}
+
+        {#if allSessionsCursor && !allSessionsLoading}
+          <button
+            type="button"
+            class="w-full rounded-sm px-3 py-2 text-center text-xs text-foreground transition-colors hover:bg-secondary/40 hover:text-foreground"
+            onclick={() => loadAllSessions(true)}
+          >
+            Load more
+          </button>
+        {/if}
+
         {#if automationVisible}
           <section
             aria-label="Automation"
@@ -1308,11 +1362,11 @@
                   : ''}"
               />
               <span class="min-w-0 flex-1 truncate text-left">Automation</span>
-              {#if automationSessions.length > 0}
+              {#if automationList.length > 0}
                 <span
                   class="shrink-0 rounded-full bg-secondary/70 px-1.5 py-0.5 text-[10px] font-normal leading-none text-muted-foreground"
                 >
-                  {automationSessions.length}{automationCursor ? "+" : ""}
+                  {automationList.length}{automationCursor ? "+" : ""}
                 </span>
               {/if}
             </button>
@@ -1322,7 +1376,7 @@
                 class="space-y-0.5"
                 transition:slide={{ duration: 160 }}
               >
-                {#if automationLoading && automationSessions.length === 0}
+                {#if automationLoading && automationList.length === 0}
                   <div
                     class="flex h-11 items-center gap-2 pl-2 pr-1 text-[11px] text-muted-foreground"
                   >
@@ -1330,7 +1384,7 @@
                     Loading…
                   </div>
                 {/if}
-                {#each automationSessions as session (session.id)}
+                {#each automationList as session (session.id)}
                   <div
                     class="group relative flex min-h-11 w-full items-center gap-2 rounded-sm border-l-2 py-1.5 pl-2 pr-0.5 transition-colors {session.id ===
                     sessionState.activeSessionId
@@ -1515,42 +1569,6 @@
               </div>
             {/if}
           </section>
-        {/if}
-
-        {#if allSessionsLoading}
-          <div class="px-3 py-3 text-center text-xs text-muted-foreground">
-            Loading sessions...
-          </div>
-        {:else if allSessionsError}
-          <button
-            type="button"
-            class="w-full px-3 py-3 text-center text-xs text-error transition-colors hover:text-foreground"
-            onclick={() =>
-              loadAllSessions(allSessionsLoaded && Boolean(allSessionsCursor))}
-          >
-            Couldn’t load all sessions — retry
-          </button>
-        {:else if allSessionsLoaded && allSessions.length === 0 && !automationVisible}
-          <div class="px-3 py-6 text-center">
-            <MessageSquare
-              size={18}
-              class="mx-auto mb-2 text-muted-foreground"
-            />
-            <p class="text-xs font-medium text-foreground">No sessions yet</p>
-            <p class="mt-0.5 text-[11px] text-muted-foreground">
-              Start a new chat to see it here.
-            </p>
-          </div>
-        {/if}
-
-        {#if allSessionsCursor && !allSessionsLoading}
-          <button
-            type="button"
-            class="w-full rounded-sm px-3 py-2 text-center text-xs text-foreground transition-colors hover:bg-secondary/40 hover:text-foreground"
-            onclick={() => loadAllSessions(true)}
-          >
-            Load more
-          </button>
         {/if}
       </div>
     {:else}

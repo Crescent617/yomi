@@ -161,6 +161,8 @@ pub struct SessionResponse {
     pub model_key: Option<String>,
     /// subagent 角色模板名（创建时刻记录；普通 session 为 None）
     pub template: Option<String>,
+    /// 出生来源（`user` / `channel` / `cron` / `ext` / `subagent`）
+    pub origin: crate::storage::SessionOrigin,
 }
 
 /// Rules in effect for one session: the chat-scoped channel rules (when
@@ -221,6 +223,7 @@ impl Default for SessionResponse {
             auto_approve_level: None,
             model_key: None,
             template: None,
+            origin: crate::storage::SessionOrigin::User,
         }
     }
 }

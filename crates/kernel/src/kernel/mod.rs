@@ -1615,6 +1615,7 @@ impl Kernel {
             updated_at: info.updated_at,
             auto_approve_level: info.auto_approve_level,
             model_key: info.model_key,
+            origin: info.origin,
             template: info.template,
         }
     }

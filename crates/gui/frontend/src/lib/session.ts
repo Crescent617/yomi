@@ -216,6 +216,7 @@ async function hydrateSession(sessionId: string, session: SessionState) {
   session.project_id = info.project_id ?? session.project_id;
   session.alias = info.title ?? session.alias;
   session.parent_session_id = info.parent_id ?? undefined;
+  session.origin = info.origin ?? session.origin;
   session.permission_level =
     info.auto_approve_level ?? session.permission_level;
   // 服务端返回 null = 未钉（跟随默认），必须清掉本地值而不是保留旧钉。
@@ -331,6 +332,8 @@ export function refreshSessions() {
               updated_at: s.created_at,
               permission_level: s.auto_approve_level,
               model_key: s.model_key,
+              // 来源跟着落下来：侧栏主列表按它把自动任务挑出去。
+              origin: s.origin,
             }),
           );
         } else {
@@ -339,6 +342,7 @@ export function refreshSessions() {
           current.permission_level =
             s.auto_approve_level ?? current.permission_level;
           current.model_key = s.model_key ?? undefined;
+          current.origin = s.origin ?? current.origin;
           current.todos ??= [];
         }
       }

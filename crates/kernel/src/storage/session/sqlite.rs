@@ -40,6 +40,8 @@ impl SessionStore for SqliteSessionStore {
     }
 
     async fn fork(&self, parent_id: &SessionId) -> Result<SessionId> {
+        // `origin` 刻意不复制：fork 是人发起的动作，副本按 `user` 落库
+        // （默认值），不会跟着父会话在折叠组里一起隐身。
         let new_id = SessionId::new();
         sqlx::query(
             "INSERT INTO sessions (id, project_id, working_dir, auto_approve_level, model_key, template, settings)

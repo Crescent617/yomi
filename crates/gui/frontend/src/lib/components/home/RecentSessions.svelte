@@ -56,6 +56,7 @@
             updated_at: s.updated_at ?? s.created_at,
             permission_level: s.auto_approve_level ?? "caution",
             model_key: s.model_key,
+            origin: s.origin,
           }),
         );
       }

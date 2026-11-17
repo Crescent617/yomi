@@ -609,6 +609,7 @@ export async function getSession(session_id: string): Promise<{
   auto_approve_level: string | null;
   model_key: string | null;
   template: string | null;
+  origin: SessionOrigin;
 }> {
   return invokeCmd("get_session", { session_id: session_id });
 }
