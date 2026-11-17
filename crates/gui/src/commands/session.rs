@@ -11,6 +11,7 @@ pub async fn list_sessions(
     state: State<'_, AppState>,
     project_id: Option<String>,
     scope: kernel::storage::session::SessionListScope,
+    origins: Option<Vec<kernel::storage::SessionOrigin>>,
     before: Option<String>,
     limit: Option<usize>,
 ) -> Result<PaginatedSessions, GuiError> {
@@ -28,7 +29,7 @@ pub async fn list_sessions(
     let limit = limit.unwrap_or(50);
 
     let result = coord
-        .list_sessions(pid.as_ref(), scope, before_dt, limit)
+        .list_sessions(pid.as_ref(), scope, origins.as_deref(), before_dt, limit)
         .await
         .map_err(GuiError::kernel)?;
 
@@ -75,6 +76,7 @@ pub async fn create_session(
         tool_blocklist: vec![],
         model_key,
         context_window: None,
+        origin: kernel::storage::SessionOrigin::User,
     };
     let session_id = coord
         .create_session(input)

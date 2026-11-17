@@ -31,6 +31,7 @@ import * as CodexPetSprite from "../components/CodexPetSprite.svelte";
 import * as companion from "../companion.svelte";
 import * as QuoteSelectionPopover from "../components/chat/QuoteSelectionPopover.svelte";
 import * as StatusBar from "../components/layout/StatusBar.svelte";
+import * as ProjectSidebar from "../components/layout/ProjectSidebar.svelte";
 import * as MermaidBlock from "../components/chat/MermaidBlock.svelte";
 import * as CodeBlock from "../components/chat/CodeBlock.svelte";
 import * as CommandPalette from "../components/ui/CommandPalette.svelte";
@@ -57,6 +58,7 @@ export const api = {
   companion,
   QuoteSelectionPopover,
   StatusBar,
+  ProjectSidebar,
   MermaidBlock,
   CodeBlock,
   CommandPalette,

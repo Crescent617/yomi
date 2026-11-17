@@ -406,6 +406,8 @@ export interface SessionState {
   created_at?: string;
   message_count?: number;
   template?: string;
+  /** 会话出生来源（`user` / `channel` / `cron` / `ext` / `subagent`）。 */
+  origin?: string;
   token_usage?: {
     prompt_tokens: number;
     completion_tokens: number;

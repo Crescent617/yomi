@@ -177,6 +177,7 @@ pub async fn spawn_run_session(
             project_id: template.and_then(|t| t.project_id.clone()),
             working_dir: template.and_then(|t| t.working_dir.clone()),
             auto_approve_level: Some(auto_approve_level),
+            origin: crate::storage::SessionOrigin::Cron,
             ..crate::storage::NewSession::new(id.clone())
         })
         .await

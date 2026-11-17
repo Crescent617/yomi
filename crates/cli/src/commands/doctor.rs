@@ -234,6 +234,7 @@ pub async fn run(global: &GlobalArgs) -> Result<()> {
                         None,
                         kernel::storage::session::SessionListScope::All,
                         None,
+                        None,
                         500,
                     )
                     .await

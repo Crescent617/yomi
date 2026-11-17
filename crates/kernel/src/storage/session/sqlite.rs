@@ -23,7 +23,7 @@ impl SqliteSessionStore {
 #[async_trait]
 impl SessionStore for SqliteSessionStore {
     async fn create(&self, input: NewSession) -> Result<()> {
-        sqlx::query("INSERT INTO sessions (id, project_id, working_dir, auto_approve_level, parent_id, model_key, template, settings) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        sqlx::query("INSERT INTO sessions (id, project_id, working_dir, auto_approve_level, parent_id, model_key, template, origin, settings) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
             .bind(&*input.id.0)
             .bind(input.project_id.as_ref().map(|p| &*p.0))
             .bind(input.working_dir.as_deref())
@@ -31,6 +31,7 @@ impl SessionStore for SqliteSessionStore {
             .bind(input.parent_id.as_ref().map(|p| &*p.0))
             .bind(input.model_key.as_deref())
             .bind(input.template.as_deref())
+            .bind(input.origin.as_str())
             .bind(input.settings.as_ref().and_then(super::SessionOverrides::to_storage))
             .execute(&self.pool)
             .await
@@ -120,7 +121,7 @@ impl SessionStore for SqliteSessionStore {
 
     async fn get(&self, id: &SessionId) -> Result<Option<SessionInfo>> {
         let row = sqlx::query_as::<_, SessionRow>(
-            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template, settings
+            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template, origin, settings
              FROM sessions WHERE id = ?",
         )
         .bind(&*id.0)
@@ -152,11 +153,12 @@ impl SessionStore for SqliteSessionStore {
         &self,
         project_id: Option<&crate::types::ProjectId>,
         scope: crate::storage::session::SessionListScope,
+        origins: Option<&[super::SessionOrigin]>,
         before: Option<chrono::DateTime<chrono::Utc>>,
         limit: usize,
     ) -> Result<(Vec<SessionInfo>, Option<String>)> {
         let mut builder = sqlx::QueryBuilder::new(
-            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template, settings
+            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template, origin, settings
              FROM sessions WHERE id NOT LIKE 'sub_%'",
         );
 
@@ -166,6 +168,19 @@ impl SessionStore for SqliteSessionStore {
         }
         if matches!(scope, SessionListScope::Assigned) {
             builder.push(" AND project_id IS NOT NULL");
+        }
+
+        if let Some(origins) = origins {
+            if origins.is_empty() {
+                // 空集合 = 什么都不要：直接返回空页，别退化成「不过滤」。
+                return Ok((Vec::new(), None));
+            }
+            builder.push(" AND origin IN (");
+            let mut sep = builder.separated(", ");
+            for origin in origins {
+                sep.push_bind(origin.as_str());
+            }
+            sep.push_unseparated(")");
         }
 
         if let Some(before) = before {
@@ -195,7 +210,7 @@ impl SessionStore for SqliteSessionStore {
 
     async fn list_subagents(&self, parent_id: &SessionId) -> Result<Vec<SessionInfo>> {
         let rows = sqlx::query_as::<_, SessionRow>(
-            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template, settings
+            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key, template, origin, settings
              FROM sessions
              WHERE parent_id = ? AND id LIKE 'sub_%'
              ORDER BY updated_at DESC",
@@ -408,6 +423,7 @@ struct SessionRow {
     auto_approve_level: Option<String>,
     model_key: Option<String>,
     template: Option<String>,
+    origin: String,
     settings: Option<String>,
 }
 
@@ -425,6 +441,7 @@ impl From<SessionRow> for SessionInfo {
             auto_approve_level: row.auto_approve_level,
             model_key: row.model_key,
             template: row.template,
+            origin: super::SessionOrigin::from_db(&row.origin),
             settings: super::SessionOverrides::from_storage(row.settings.as_deref()),
         }
     }

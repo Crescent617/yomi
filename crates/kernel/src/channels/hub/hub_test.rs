@@ -327,6 +327,7 @@ async fn settings_card_cfg_ctx_callback_and_reset_all() {
     // 32_768）。
     let chat_sid = kernel
         .create_session(crate::kernel::CreateSessionInput {
+            origin: crate::storage::SessionOrigin::User,
             project_id: None,
             working_dir: None,
             auto_approve_level: None,
@@ -463,6 +464,7 @@ async fn settings_card_thread_scope() {
     // 承生效值。
     let chat_sid = kernel
         .create_session(crate::kernel::CreateSessionInput {
+            origin: crate::storage::SessionOrigin::User,
             project_id: None,
             working_dir: None,
             auto_approve_level: None,
@@ -719,6 +721,7 @@ async fn settings_card_cfg_watch_callback() {
 
     let chat_sid = kernel
         .create_session(crate::kernel::CreateSessionInput {
+            origin: crate::storage::SessionOrigin::User,
             project_id: None,
             working_dir: None,
             auto_approve_level: None,
@@ -926,6 +929,7 @@ async fn chat_scope_switches_skip_stale_thread_sessions() {
     let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
 
     let new_session = || crate::kernel::CreateSessionInput {
+        origin: crate::storage::SessionOrigin::User,
         project_id: None,
         working_dir: None,
         auto_approve_level: None,
@@ -1989,6 +1993,7 @@ async fn bind_command_show_adopt_and_guards() {
     // An unrouted (e.g. GUI/CLI-created) session to adopt.
     let sid = kernel
         .create_session(crate::kernel::CreateSessionInput {
+            origin: crate::storage::SessionOrigin::User,
             project_id: None,
             working_dir: None,
             auto_approve_level: Some(crate::permission::Level::Dangerous),
@@ -2106,6 +2111,7 @@ async fn bind_command_move_and_bind_back() {
         )
     };
     let new_session = || crate::kernel::CreateSessionInput {
+        origin: crate::storage::SessionOrigin::User,
         project_id: None,
         working_dir: None,
         auto_approve_level: Some(crate::permission::Level::Dangerous),
@@ -2244,6 +2250,7 @@ impl ChatLevelRig {
     async fn new_session(&self) -> SessionId {
         self.kernel
             .create_session(crate::kernel::CreateSessionInput {
+                origin: crate::storage::SessionOrigin::User,
                 project_id: None,
                 working_dir: None,
                 auto_approve_level: Some(crate::permission::Level::Dangerous),
@@ -6299,6 +6306,7 @@ async fn settings_card_thread_clear_semantics() {
     // 效，跟随配置默认。
     let chat_sid = kernel
         .create_session(crate::kernel::CreateSessionInput {
+            origin: crate::storage::SessionOrigin::User,
             project_id: None,
             working_dir: None,
             auto_approve_level: None,

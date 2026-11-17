@@ -542,6 +542,7 @@ mod tests {
             parent_id: None,
             title: None,
             message_count: 0,
+            origin: crate::storage::SessionOrigin::User,
             working_dir: Some("/repo/demo".into()),
             project_id: Some(crate::types::ProjectId::from("proj_1")),
             auto_approve_level: None,

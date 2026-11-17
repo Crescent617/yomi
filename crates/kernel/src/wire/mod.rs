@@ -131,6 +131,9 @@ pub enum ReqMethod {
     ListSessions {
         project_id: Option<String>,
         scope: crate::storage::session::SessionListScope,
+        /// `None` 不过滤；`Some([...])` 只返回这些来源的会话。
+        #[serde(default)]
+        origins: Option<Vec<crate::storage::SessionOrigin>>,
         before: Option<DateTime<Utc>>,
         limit: usize,
     },

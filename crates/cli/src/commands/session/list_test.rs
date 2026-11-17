@@ -13,6 +13,7 @@ fn info(dir: Option<&str>) -> kernel::storage::session::SessionInfo {
         auto_approve_level: None,
         model_key: None,
         template: None,
+        origin: kernel::storage::session::SessionOrigin::User,
         settings: None,
     }
 }

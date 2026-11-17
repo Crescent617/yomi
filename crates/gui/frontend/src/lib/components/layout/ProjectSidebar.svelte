@@ -15,7 +15,7 @@
 </script>
 
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import {
     Plus,
     MessageSquarePlus,
@@ -28,6 +28,9 @@
     Copy,
     Pin,
     PinOff,
+    ChevronRight,
+    Clock,
+    Loader2,
   } from "lucide-svelte";
   import * as api from "../../api";
   import ConfirmDialog from "../ui/ConfirmDialog.svelte";
@@ -107,6 +110,99 @@
   let allSessionsError = $state(false);
   let allSessionsCursor = $state<string | null>(null);
 
+  // ── Automation（机器产生的会话）折叠组 ────────────────────────────
+  /** 主列表只要人聊出来的；cron / ext 收进列表末尾的 Automation 组。 */
+  const CONVERSATION_ORIGINS: api.SessionOrigin[] = ["user", "channel"];
+  const AUTOMATION_ORIGINS: api.SessionOrigin[] = ["cron", "ext"];
+  const AUTOMATION_PAGE_SIZE = 10;
+
+  function isAutomationOrigin(origin?: string): boolean {
+    return origin === "cron" || origin === "ext";
+  }
+
+  let automationExpanded = $state(false);
+  let automationSessions = $state<SessionState[]>([]);
+  let automationCursor = $state<string | null>(null);
+  let automationLoading = $state(false);
+  let automationLoaded = $state(false);
+  let automationHasAny = $state(false);
+
+  /** 当前打开的会话本身就是自动任务时强制展开，否则侧栏里看不到它。 */
+  const activeIsAutomation = $derived(
+    isAutomationOrigin(
+      sessionState.sessions.find(
+        (session) => session.id === sessionState.activeSessionId,
+      )?.origin,
+    ),
+  );
+  const automationOpen = $derived(automationExpanded || activeIsAutomation);
+  const automationVisible = $derived(
+    automationHasAny || automationSessions.length > 0,
+  );
+
+  /**
+   * 拉第一页自动任务会话：折叠行据此决定出现与否、并显示条数徽标。
+   * 只有一页（10 条）的量，展开即用，不必等点击。
+   */
+  async function refreshAutomation() {
+    if (automationLoading) return;
+    automationLoading = true;
+    try {
+      const result = await api.listSessions(
+        undefined,
+        "all",
+        undefined,
+        AUTOMATION_PAGE_SIZE,
+        AUTOMATION_ORIGINS,
+      );
+      automationSessions = result.sessions.map((session) =>
+        mergeSessionInfo(session),
+      );
+      automationCursor = result.next_cursor;
+      automationHasAny = automationSessions.length > 0;
+      automationLoaded = true;
+    } catch (e: unknown) {
+      console.error(
+        "Failed to load automation sessions:",
+        e instanceof Error ? e.message : e,
+      );
+    } finally {
+      automationLoading = false;
+    }
+  }
+
+  /** 展开后的 "Load more"：按 cursor 追加下一页。 */
+  async function loadAutomation(load_more = false) {
+    if (automationLoading) return;
+    automationLoading = true;
+    try {
+      const result = await api.listSessions(
+        undefined,
+        "all",
+        load_more ? (automationCursor ?? undefined) : undefined,
+        AUTOMATION_PAGE_SIZE,
+        AUTOMATION_ORIGINS,
+      );
+      const batch = result.sessions.map((session) => mergeSessionInfo(session));
+      automationSessions = load_more
+        ? [...automationSessions, ...batch]
+        : batch;
+      automationCursor = result.next_cursor;
+      automationLoaded = true;
+    } catch (e: unknown) {
+      console.error(
+        "Failed to load automation sessions:",
+        e instanceof Error ? e.message : e,
+      );
+    } finally {
+      automationLoading = false;
+    }
+  }
+
+  function toggleAutomation() {
+    automationExpanded = !automationExpanded;
+  }
+
   /**
    * Force-refetch the first page of sessions, ignoring the loaded cache.
    * Runs silently whenever the sessions view is entered: failures only
@@ -123,7 +219,13 @@
       allSessionsError = false;
     }
     allSessionsLoadPromise[scope] = (async () => {
-      const result = await api.listSessions(undefined, scope, undefined, 30);
+      const result = await api.listSessions(
+        undefined,
+        scope,
+        undefined,
+        30,
+        CONVERSATION_ORIGINS,
+      );
       for (const session of result.sessions) mergeSessionInfo(session);
       allSessionsCursorShared[scope] = result.next_cursor;
       allSessionsLoadedShared[scope] = true;
@@ -229,7 +331,9 @@
     return sessionState.sessions
       .filter(
         (session) =>
-          session.project_id === project_id && !session.parent_session_id,
+          session.project_id === project_id &&
+          !session.parent_session_id &&
+          !isAutomationOrigin(session.origin),
       )
       .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
   }
@@ -242,6 +346,7 @@
       .filter(
         (session) =>
           !session.parent_session_id &&
+          !isAutomationOrigin(session.origin) &&
           (sessionListScope === "all" || Boolean(session.project_id)),
       )
       .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? "")),
@@ -265,6 +370,7 @@
         created_at: s.created_at,
         message_count: s.message_count,
         template: s.template,
+        origin: s.origin,
       });
       sessionState.sessions.push(session);
     } else {
@@ -278,6 +384,7 @@
       session.created_at = s.created_at ?? session.created_at;
       session.message_count = s.message_count ?? session.message_count;
       session.template = s.template ?? session.template;
+      session.origin = s.origin ?? session.origin;
     }
     return session;
   }
@@ -313,7 +420,13 @@
       ? (allSessionsCursorShared[scope] ?? undefined)
       : undefined;
     allSessionsLoadPromise[scope] = (async () => {
-      const result = await api.listSessions(undefined, scope, cursor, 30);
+      const result = await api.listSessions(
+        undefined,
+        scope,
+        cursor,
+        30,
+        CONVERSATION_ORIGINS,
+      );
       for (const session of result.sessions) mergeSessionInfo(session);
       allSessionsCursorShared[scope] = result.next_cursor;
       allSessionsLoadedShared[scope] = true;
@@ -336,7 +449,13 @@
   }
 
   $effect(() => {
-    if (sidebarView === "sessions") void refreshAllSessions();
+    if (sidebarView !== "sessions") return;
+    // untrack：两个 refresh 会读写 loading/列表状态，若被 effect 追踪会自激
+    // 成环（effect → 写 state → 重跑）。
+    untrack(() => {
+      void refreshAllSessions();
+      void refreshAutomation();
+    });
   });
 
   function switchSidebarView(view: SidebarViewPreference) {
@@ -463,6 +582,7 @@
       await api.unsubscribe(id);
       await api.deleteSession(id);
       sessionState.sessions = sessionState.sessions.filter((s) => s.id !== id);
+      automationSessions = automationSessions.filter((s) => s.id !== id);
       removeSessionAttentionItems(new Set([id]));
       purgeSessionLocalState(id);
       loadPinnedSessions();
@@ -1168,6 +1288,235 @@
           </section>
         {/each}
 
+        {#if automationVisible}
+          <section
+            aria-label="Automation"
+            class="mt-1.5 border-t border-border/60 pt-1"
+          >
+            <button
+              type="button"
+              class="flex h-8 w-full min-w-0 items-center gap-1.5 rounded-sm px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-secondary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              aria-expanded={automationOpen}
+              aria-controls="automation-sessions"
+              title="Automation"
+              onclick={toggleAutomation}
+            >
+              <ChevronRight
+                size={12}
+                class="shrink-0 transition-transform duration-150 ease-out motion-reduce:transition-none {automationOpen
+                  ? 'rotate-90'
+                  : ''}"
+              />
+              <span class="min-w-0 flex-1 truncate text-left">Automation</span>
+              {#if automationSessions.length > 0}
+                <span
+                  class="shrink-0 rounded-full bg-secondary/70 px-1.5 py-0.5 text-[10px] font-normal leading-none text-muted-foreground"
+                >
+                  {automationSessions.length}{automationCursor ? "+" : ""}
+                </span>
+              {/if}
+            </button>
+            {#if automationOpen}
+              <div
+                id="automation-sessions"
+                class="space-y-0.5"
+                transition:slide={{ duration: 160 }}
+              >
+                {#if automationLoading && automationSessions.length === 0}
+                  <div
+                    class="flex h-11 items-center gap-2 pl-2 pr-1 text-[11px] text-muted-foreground"
+                  >
+                    <Loader2 size={12} class="animate-spin" />
+                    Loading…
+                  </div>
+                {/if}
+                {#each automationSessions as session (session.id)}
+                  <div
+                    class="group relative flex min-h-11 w-full items-center gap-2 rounded-sm border-l-2 py-1.5 pl-2 pr-0.5 transition-colors {session.id ===
+                    sessionState.activeSessionId
+                      ? 'border-primary bg-primary/8 text-foreground'
+                      : 'border-transparent text-muted-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground'}"
+                  >
+                    <div class="min-w-0 flex-1">
+                      {#if renamingSessionId === session.id}
+                        <input
+                          type="text"
+                          use:focusAndSelect
+                          data-rename
+                          bind:value={renameValue}
+                          onkeydown={(e: KeyboardEvent) => {
+                            e.stopPropagation();
+                            if (e.key === "Enter")
+                              confirmRenameSession(session.id);
+                            if (e.key === "Escape") renamingSessionId = null;
+                            // WKWebView 的 blur.relatedTarget 不可靠：Tab
+                            // 离开主动武装，避免被当成幽灵 blur 反复抢焦。
+                            if (e.key === "Tab") renamePointerDismiss = true;
+                          }}
+                          onclick={(e: MouseEvent) => e.stopPropagation()}
+                          onblur={(e) =>
+                            renameBlur(e, () =>
+                              confirmRenameSession(session.id),
+                            )}
+                          class="w-full min-w-0 rounded border border-border bg-background px-1 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                        />
+                      {:else}
+                        <button
+                          type="button"
+                          class="block w-full text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          onclick={() => activateSession(session.id)}
+                        >
+                          <span class="flex min-w-0 items-center gap-1.5">
+                            <Clock
+                              size={11}
+                              class="shrink-0 text-muted-foreground/60"
+                              aria-hidden="true"
+                            />
+                            <span
+                              class="min-w-0 flex-1 truncate text-sm font-normal"
+                              title={session.alias ?? "Untitled"}
+                            >
+                              {session.alias ?? "Untitled"}
+                            </span>
+                          </span>
+                          <span
+                            class="mt-0.5 flex min-w-0 items-center gap-1 pl-[18px] text-[10px] text-muted-foreground"
+                          >
+                            {#if session.project_id}
+                              <span class="truncate"
+                                >{projectName(session.project_id)}</span
+                              >
+                              {#if session.updated_at}
+                                <span aria-hidden="true">·</span>
+                              {/if}
+                            {/if}
+                            {#if session.updated_at}
+                              <span
+                                class="shrink-0"
+                                title={new Date(
+                                  session.updated_at,
+                                ).toLocaleString()}
+                              >
+                                {formatTimeAgo(session.updated_at, clock.now)}
+                              </span>
+                            {/if}
+                          </span>
+                        </button>
+                      {/if}
+                    </div>
+                    <div class="relative h-5 min-w-5 shrink-0">
+                      <div
+                        class="flex h-5 items-center justify-center gap-1 transition-opacity {projectMenu?.session_id ===
+                        session.id
+                          ? 'opacity-0'
+                          : 'group-hover:opacity-0'}"
+                      >
+                        {#if unreadSessions[session.id]}
+                          <span
+                            class="h-1.5 w-1.5 rounded-full bg-primary"
+                            aria-label="Unread"
+                            title="Unread"
+                          ></span>
+                        {/if}
+                        <QueuedIndicator session_id={session.id} />
+                        <StatusDot phase={session.phase} />
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="Session actions"
+                        title="Session actions"
+                        class="absolute inset-0 flex items-center justify-center rounded opacity-0 transition-opacity hover:bg-secondary/80 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring {projectMenu?.session_id ===
+                        session.id
+                          ? 'opacity-100'
+                          : 'group-hover:opacity-100'}"
+                        onclick={(e: MouseEvent) =>
+                          openMenu(e, "session", session.id)}
+                      >
+                        <MoreVertical size={13} />
+                      </button>
+                    </div>
+                    {#if projectMenu?.session_id === session.id}
+                      <div
+                        class="fixed z-50 w-36 rounded-md border border-border bg-popover py-1 shadow-md"
+                        style="top: {projectMenu.y}px; left: {projectMenu.x}px; transform: translateX(-100%);"
+                      >
+                        <button
+                          class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none"
+                          onclick={(e: Event) => {
+                            e.stopPropagation();
+                            togglePin(session.id);
+                            projectMenu = null;
+                          }}
+                        >
+                          {#if session.is_pinned}
+                            <PinOff size={12} /> Unpin
+                          {:else}
+                            <Pin size={12} /> Pin to top
+                          {/if}
+                        </button>
+                        <button
+                          class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none"
+                          onclick={(e: Event) => {
+                            e.stopPropagation();
+                            renamingSessionId = session.id;
+                            renameValue = session.alias ?? "Untitled";
+                            projectMenu = null;
+                          }}
+                        >
+                          <Pencil size={12} /> Rename
+                        </button>
+                        <SessionForkMenuItem
+                          session_id={session.id}
+                          disabled={forkingSessionId !== null}
+                          onfork={(id) => void forkSession(id)}
+                        />
+                        <button
+                          class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none"
+                          onclick={(e: Event) => {
+                            e.stopPropagation();
+                            copySessionId(session.id);
+                            projectMenu = null;
+                          }}
+                        >
+                          <Copy size={12} /> Copy ID
+                        </button>
+                        <button
+                          class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none"
+                          onclick={(e: Event) => {
+                            e.stopPropagation();
+                            void createFromSession(session.id);
+                          }}
+                        >
+                          <MessageSquarePlus size={12} /> Create from
+                        </button>
+                        <button
+                          class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-destructive transition-colors hover:bg-destructive hover:text-destructive-foreground focus-visible:bg-destructive focus-visible:text-destructive-foreground focus-visible:outline-none"
+                          onclick={(e: Event) => {
+                            e.stopPropagation();
+                            requestDeleteSession(session.id);
+                            projectMenu = null;
+                          }}
+                        >
+                          <Trash2 size={12} /> Delete
+                        </button>
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+                {#if automationCursor}
+                  <button
+                    type="button"
+                    class="flex h-8 w-full items-center justify-center rounded-sm text-[11px] text-muted-foreground transition-colors hover:bg-secondary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    onclick={() => loadAutomation(true)}
+                  >
+                    {automationLoading ? "Loading…" : "Load more"}
+                  </button>
+                {/if}
+              </div>
+            {/if}
+          </section>
+        {/if}
+
         {#if allSessionsLoading}
           <div class="px-3 py-3 text-center text-xs text-muted-foreground">
             Loading sessions...
@@ -1181,7 +1530,7 @@
           >
             Couldn’t load all sessions — retry
           </button>
-        {:else if allSessionsLoaded && allSessions.length === 0}
+        {:else if allSessionsLoaded && allSessions.length === 0 && !automationVisible}
           <div class="px-3 py-6 text-center">
             <MessageSquare
               size={18}

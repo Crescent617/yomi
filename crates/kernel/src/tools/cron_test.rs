@@ -81,6 +81,7 @@ async fn create_send_message_without_session_is_per_run() {
             None,
             crate::storage::session::SessionListScope::All,
             None,
+            None,
             10,
         )
         .await

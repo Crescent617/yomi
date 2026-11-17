@@ -492,12 +492,14 @@ impl KernelApi for RemoteKernel {
         &self,
         project_id: Option<&ProjectId>,
         scope: SessionListScope,
+        origins: Option<&[crate::storage::SessionOrigin]>,
         before: Option<DateTime<Utc>>,
         limit: usize,
     ) -> Result<PaginatedSessions> {
         self.call_json(ReqMethod::ListSessions {
             project_id: project_id.map(|p| p.0.to_string()),
             scope,
+            origins: origins.map(<[crate::storage::SessionOrigin]>::to_vec),
             before,
             limit,
         })

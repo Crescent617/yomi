@@ -389,6 +389,7 @@ async fn test_session_context_window_wire_round_trip() {
     let (client, _tmp, shutdown) = setup().await;
     let sid = client
         .create_session(crate::kernel::CreateSessionInput {
+            origin: crate::storage::SessionOrigin::User,
             project_id: None,
             working_dir: None,
             auto_approve_level: None,
@@ -449,6 +450,7 @@ async fn run_starting_methods_rejected_after_intake_close() {
 
     let sid = client
         .create_session(crate::kernel::CreateSessionInput {
+            origin: crate::storage::SessionOrigin::User,
             project_id: None,
             working_dir: Some(tmp.path().to_path_buf()),
             auto_approve_level: None,

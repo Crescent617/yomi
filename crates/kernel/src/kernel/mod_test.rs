@@ -149,6 +149,7 @@ async fn create_session_inherits_project_dir_when_working_dir_absent() {
     let project = kernel.create_project(proj_dir.clone(), None).await.unwrap();
 
     let new_session = |project_id, working_dir| crate::kernel::CreateSessionInput {
+        origin: crate::storage::SessionOrigin::User,
         project_id,
         working_dir,
         auto_approve_level: None,
@@ -347,7 +348,7 @@ async fn cron_fire_per_run_spawns_fresh_session_and_clamps_level() {
 
     let store = kernel.session_store().await;
     let (sessions, _) = store
-        .list(None, SessionListScope::All, None, 10)
+        .list(None, SessionListScope::All, None, None, 10)
         .await
         .unwrap();
     assert_eq!(sessions.len(), 2, "each fire spawns one fresh session");
@@ -365,7 +366,7 @@ async fn cron_fire_per_run_spawns_fresh_session_and_clamps_level() {
     });
     kernel.execute_cron_action(&bound).await.unwrap();
     let (sessions, _) = store
-        .list(None, SessionListScope::All, None, 10)
+        .list(None, SessionListScope::All, None, None, 10)
         .await
         .unwrap();
     assert_eq!(sessions.len(), 2, "bound fire spawns nothing");
@@ -530,6 +531,7 @@ async fn session_context_window_override_roundtrip() {
     let kernel = crate::build_kernel(&config, false).await.unwrap();
 
     let new_session = |context_window| crate::kernel::CreateSessionInput {
+        origin: crate::storage::SessionOrigin::User,
         project_id: None,
         working_dir: None,
         auto_approve_level: None,
@@ -617,6 +619,7 @@ async fn set_session_model_default_clears_pin() {
 
     let sid = kernel
         .create_session(crate::kernel::CreateSessionInput {
+            origin: crate::storage::SessionOrigin::User,
             project_id: None,
             working_dir: None,
             auto_approve_level: None,
@@ -652,6 +655,7 @@ async fn set_session_model_default_clears_pin() {
     // 创建时传配置默认视同未指定（存储 NULL，不钉）。
     let created = kernel
         .create_session(crate::kernel::CreateSessionInput {
+            origin: crate::storage::SessionOrigin::User,
             project_id: None,
             working_dir: None,
             auto_approve_level: None,
@@ -765,6 +769,7 @@ async fn preview_system_prompt_matches_spawn() {
     kernel.start();
     let sid = kernel
         .create_session(super::CreateSessionInput {
+            origin: crate::storage::SessionOrigin::User,
             project_id: None,
             working_dir: Some(tmp.path().to_path_buf()),
             auto_approve_level: None,
@@ -930,6 +935,7 @@ async fn stop_winds_down_active_run_before_shutdown() {
 
     let sid = kernel
         .create_session(super::CreateSessionInput {
+            origin: crate::storage::SessionOrigin::User,
             project_id: None,
             working_dir: Some(tmp.path().to_path_buf()),
             auto_approve_level: None,
@@ -1049,6 +1055,7 @@ async fn intake_closed_blocks_new_spawns() {
 
     let sid = kernel
         .create_session(super::CreateSessionInput {
+            origin: crate::storage::SessionOrigin::User,
             project_id: None,
             working_dir: Some(tmp.path().to_path_buf()),
             auto_approve_level: None,
@@ -1128,6 +1135,7 @@ async fn stop_does_not_respawn_queued_run() {
 
     let sid = kernel
         .create_session(super::CreateSessionInput {
+            origin: crate::storage::SessionOrigin::User,
             project_id: None,
             working_dir: Some(tmp.path().to_path_buf()),
             auto_approve_level: None,

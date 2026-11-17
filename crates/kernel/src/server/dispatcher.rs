@@ -168,7 +168,8 @@ impl KernelServer {
                     auto_approve_level,
                     tool_blocklist: Vec::new(),
                     model_key,
-                context_window: None,
+                    context_window: None,
+                    origin: crate::storage::SessionOrigin::User,
                 };
                 rpc_body(
                     "create_session_failed",
@@ -369,13 +370,14 @@ impl KernelServer {
             ReqMethod::ListSessions {
                 project_id,
                 scope,
+                origins,
                 before,
                 limit,
             } => {
                 let pid = project_id.as_ref().map(|p| ProjectId::from(p.clone()));
                 let result = self
                     .kernel
-                    .list_sessions(pid.as_ref(), scope, before, limit)
+                    .list_sessions(pid.as_ref(), scope, origins.as_deref(), before, limit)
                     .await;
                 rpc_body("list_sessions_failed", result)
             }

@@ -536,6 +536,7 @@ impl Model {
                                 None,
                                 kernel::storage::session::SessionListScope::All,
                                 None,
+                                None,
                                 200,
                             )
                             .await;

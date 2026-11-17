@@ -146,6 +146,7 @@ async fn test_kernel() -> Arc<crate::kernel::Kernel> {
 async fn btw_session(kernel: &crate::kernel::Kernel) -> SessionId {
     kernel
         .create_session(crate::kernel::CreateSessionInput {
+            origin: crate::storage::SessionOrigin::User,
             project_id: None,
             working_dir: None,
             auto_approve_level: None,

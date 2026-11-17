@@ -275,10 +275,11 @@ impl KernelApi for Kernel {
         &self,
         project_id: Option<&ProjectId>,
         scope: SessionListScope,
+        origins: Option<&[crate::storage::SessionOrigin]>,
         before: Option<DateTime<Utc>>,
         limit: usize,
     ) -> Result<PaginatedSessions> {
-        Self::list_sessions(self, project_id, scope, before, limit).await
+        Self::list_sessions(self, project_id, scope, origins, before, limit).await
     }
 
     async fn list_running_sessions(&self) -> Result<Vec<crate::types::RunningSessionResponse>> {

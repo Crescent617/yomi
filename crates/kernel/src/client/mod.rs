@@ -238,6 +238,7 @@ pub trait KernelApi: Send + Sync {
         &self,
         project_id: Option<&ProjectId>,
         scope: crate::storage::session::SessionListScope,
+        origins: Option<&[crate::storage::SessionOrigin]>,
         before: Option<DateTime<Utc>>,
         limit: usize,
     ) -> Result<PaginatedSessions>;

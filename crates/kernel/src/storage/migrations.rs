@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 27;
+pub const CURRENT_SCHEMA_VERSION: i64 = 28;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -362,6 +362,17 @@ const MIGRATIONS: &[Migration] = &[
                      session_id, actual_chat_id, comment_id, kind, created_at
               FROM seg3;",
             r"DELETE FROM channel_session_mappings WHERE external_chat_id LIKE 'doc:%:%:%';",
+        ],
+    },
+    Migration {
+        version: 28,
+        // 出生来源（user / channel / cron / ext / subagent）。建列即带
+        // 默认值：存量行一律 'user'，不做历史回填——旧的 cron 会话仍留在
+        // 主列表里，可手动删。
+        name: "add_session_origin",
+        sqls: &[
+            r"ALTER TABLE sessions ADD COLUMN origin TEXT NOT NULL DEFAULT 'user';",
+            r"CREATE INDEX IF NOT EXISTS idx_sessions_origin ON sessions(origin);",
         ],
     },
 ];

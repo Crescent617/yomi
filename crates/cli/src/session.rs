@@ -114,6 +114,7 @@ pub async fn resolve_session(
         tool_blocklist: vec![],
         model_key,
         context_window: None,
+        origin: kernel::storage::SessionOrigin::User,
     };
 
     // When not launching (e.g., creating new session mid-run), ignore --resume/--fork args

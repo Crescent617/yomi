@@ -156,7 +156,11 @@ export interface SessionInfo {
   parent_id?: string;
   message_count?: number;
   template?: string;
+  origin?: SessionOrigin;
 }
+
+/** 会话出生来源（kernel `SessionOrigin` 的 wire 取值）。 */
+export type SessionOrigin = "user" | "channel" | "cron" | "ext" | "subagent";
 
 export interface BackgroundShellTask {
   task_id: string;
@@ -216,11 +220,18 @@ export async function listSessions(
   scope: "all" | "assigned" = "all",
   before?: string,
   limit?: number,
+  origins?: SessionOrigin[],
 ): Promise<PaginatedSessions> {
   const result = await invokeCmd<{
     sessions: unknown[];
     next_cursor: string | null;
-  }>("list_sessions", { project_id: project_id, scope, before, limit });
+  }>("list_sessions", {
+    project_id: project_id,
+    scope,
+    before,
+    limit,
+    origins,
+  });
   return {
     sessions: result.sessions.map((s: unknown) => {
       const session = s as Record<string, unknown>;
@@ -241,6 +252,9 @@ export async function listSessions(
             ? session.message_count
             : undefined,
         template: session.template ? String(session.template) : undefined,
+        origin: session.origin
+          ? (String(session.origin) as SessionOrigin)
+          : undefined,
       };
     }),
     next_cursor: result.next_cursor,

@@ -1,7 +1,7 @@
 use super::*;
 
 use crate::storage::migrations::run_migrations;
-use crate::storage::session::{SessionListScope, SessionStore};
+use crate::storage::session::{SessionListScope, SessionOrigin, SessionStore};
 
 async fn create_test_store() -> SqliteSessionStore {
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
@@ -180,11 +180,73 @@ async fn test_list_ordering() {
     store.update_message_count(&id1, 1).await.unwrap();
 
     let (list, _) = store
-        .list(None, SessionListScope::All, None, 100)
+        .list(None, SessionListScope::All, None, None, 100)
         .await
         .unwrap();
     assert_eq!(list[0].id.0, id1.0);
     assert_eq!(list[1].id.0, id2.0);
+}
+
+#[tokio::test]
+async fn test_list_filter_by_origin() {
+    let store = create_test_store().await;
+
+    let user = SessionId::new();
+    store.create(NewSession::new(user.clone())).await.unwrap();
+    let cron = SessionId::new();
+    store
+        .create(NewSession {
+            origin: SessionOrigin::Cron,
+            ..NewSession::new(cron.clone())
+        })
+        .await
+        .unwrap();
+
+    // 不过滤：两条都在
+    let (all, _) = store
+        .list(None, SessionListScope::All, None, None, 100)
+        .await
+        .unwrap();
+    assert_eq!(all.len(), 2);
+    assert_eq!(
+        store.get(&cron).await.unwrap().unwrap().origin,
+        SessionOrigin::Cron
+    );
+
+    // 只看人聊出来的
+    let (conversations, _) = store
+        .list(
+            None,
+            SessionListScope::All,
+            Some(&[SessionOrigin::User, SessionOrigin::Channel]),
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+    assert_eq!(conversations.len(), 1);
+    assert_eq!(conversations[0].id.0, user.0);
+
+    // 只看自动任务
+    let (automation, _) = store
+        .list(
+            None,
+            SessionListScope::All,
+            Some(&[SessionOrigin::Cron, SessionOrigin::Ext]),
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+    assert_eq!(automation.len(), 1);
+    assert_eq!(automation[0].id.0, cron.0);
+
+    // 空集合 = 什么都不要（不退化成「不过滤」）
+    let (none, _) = store
+        .list(None, SessionListScope::All, Some(&[]), None, 100)
+        .await
+        .unwrap();
+    assert!(none.is_empty());
 }
 
 #[tokio::test]
@@ -220,7 +282,7 @@ async fn test_list_filter_by_project_id() {
         .unwrap();
 
     let (list, _) = store
-        .list(Some(&pid), SessionListScope::All, None, 100)
+        .list(Some(&pid), SessionListScope::All, None, None, 100)
         .await
         .unwrap();
     assert_eq!(list.len(), 2);
@@ -258,7 +320,7 @@ async fn test_list_assigned_scope_filters_before_pagination() {
         .unwrap();
 
     let (assigned_list, assigned_cursor) = store
-        .list(None, SessionListScope::Assigned, None, 1)
+        .list(None, SessionListScope::Assigned, None, None, 1)
         .await
         .unwrap();
     assert_eq!(assigned_list.len(), 1);
@@ -266,7 +328,7 @@ async fn test_list_assigned_scope_filters_before_pagination() {
     assert!(assigned_cursor.is_none());
 
     let (all_list, _) = store
-        .list(None, SessionListScope::All, None, 10)
+        .list(None, SessionListScope::All, None, None, 10)
         .await
         .unwrap();
     assert_eq!(all_list.len(), 2);
@@ -300,7 +362,7 @@ async fn test_list_limit_and_next_cursor() {
 
     // Test limit
     let (list, cursor) = store
-        .list(None, SessionListScope::All, None, 2)
+        .list(None, SessionListScope::All, None, None, 2)
         .await
         .unwrap();
     assert_eq!(list.len(), 2);
@@ -309,7 +371,7 @@ async fn test_list_limit_and_next_cursor() {
     // Get next page using cursor
     let before = list.last().unwrap().updated_at;
     let (next_list, next_cursor) = store
-        .list(None, SessionListScope::All, Some(before), 2)
+        .list(None, SessionListScope::All, None, Some(before), 2)
         .await
         .unwrap();
     assert_eq!(next_list.len(), 2);
@@ -317,7 +379,7 @@ async fn test_list_limit_and_next_cursor() {
 
     // Full list for comparison
     let (full_list, full_cursor) = store
-        .list(None, SessionListScope::All, None, 100)
+        .list(None, SessionListScope::All, None, None, 100)
         .await
         .unwrap();
     assert_eq!(full_list.len(), 5);
@@ -472,7 +534,7 @@ async fn test_list_expired_empty_when_no_old_sessions() {
 
     // Verify all sessions still exist
     let (all, _) = store
-        .list(None, SessionListScope::All, None, 100)
+        .list(None, SessionListScope::All, None, None, 100)
         .await
         .unwrap();
     assert_eq!(all.len(), 2);
@@ -687,7 +749,7 @@ async fn test_list_excludes_subagent_sessions() {
         .unwrap();
 
     let (list, _) = store
-        .list(None, SessionListScope::All, None, 100)
+        .list(None, SessionListScope::All, None, None, 100)
         .await
         .unwrap();
     assert_eq!(list.len(), 1);

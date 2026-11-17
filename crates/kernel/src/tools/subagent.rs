@@ -503,6 +503,7 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                     parent_id: Some(self.parent_session_id.clone()),
                     model_key: parent_model_key,
                     template: template.map(|t| t.name),
+                    origin: crate::storage::SessionOrigin::Subagent,
                     ..crate::storage::NewSession::new(session_id.clone())
                 })
                 .await

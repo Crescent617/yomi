@@ -61,6 +61,7 @@ pub async fn list(global: &GlobalArgs, all: bool) -> Result<()> {
             None,
             kernel::storage::session::SessionListScope::All,
             None,
+            None,
             200,
         )
         .await?;

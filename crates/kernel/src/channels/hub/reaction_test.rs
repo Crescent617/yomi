@@ -256,6 +256,7 @@ async fn idle_session_drops_without_steer() {
     let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
     let sid = kernel
         .create_session(crate::kernel::CreateSessionInput {
+            origin: crate::storage::SessionOrigin::User,
             project_id: None,
             working_dir: None,
             auto_approve_level: None,
@@ -362,6 +363,7 @@ async fn watch_setup(
     let kernel = crate::build_kernel(&kconfig, false).await.unwrap();
     let sid = kernel
         .create_session(crate::kernel::CreateSessionInput {
+            origin: crate::storage::SessionOrigin::User,
             project_id: None,
             working_dir: None,
             auto_approve_level: None,

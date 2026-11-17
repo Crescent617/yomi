@@ -360,6 +360,7 @@ pub async fn run(
                 None,
                 kernel::storage::session::SessionListScope::All,
                 None,
+                None,
                 1000,
             )
             .await

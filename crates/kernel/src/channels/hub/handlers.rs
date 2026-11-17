@@ -1560,6 +1560,7 @@ async fn collect_session_entries(
             .list_sessions(
                 None,
                 crate::storage::session::SessionListScope::All,
+                None,
                 before,
                 SESSIONS_SCAN_LIMIT,
             )

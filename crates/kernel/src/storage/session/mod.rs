@@ -13,6 +13,67 @@ pub enum SessionListScope {
     Assigned,
 }
 
+/// 会话出生来源：创建时定型、之后不可改。
+///
+/// 列表侧据此区分「人聊出来的」与「机器跑出来的」（GUI 侧栏把它们收进
+/// 末尾折叠组）。子 agent 会话另有 `parent_id` 为真源，这里只负责让
+/// 每一行都能自答「我是谁建的」。
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionOrigin {
+    /// 人建的（TUI / GUI / CLI）
+    #[default]
+    User,
+    /// IM 渠道会话（chat / thread 绑定）
+    Channel,
+    /// cron 每次运行新建的会话
+    Cron,
+    /// `ext_route` 外部路由（hook 轮询、外部系统按键映射）
+    Ext,
+    /// subagent 子会话
+    Subagent,
+}
+
+impl SessionOrigin {
+    /// 落库值（同时也是 wire / 前端看到的字符串）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Channel => "channel",
+            Self::Cron => "cron",
+            Self::Ext => "ext",
+            Self::Subagent => "subagent",
+        }
+    }
+
+    /// 从落库值还原。未知值（手工改库或旧版本写入）一律按 `User`
+    /// 处理——宁可多显示一行，也不能把会话从列表里弄丢。
+    pub fn from_db(raw: &str) -> Self {
+        match raw {
+            "channel" => Self::Channel,
+            "cron" => Self::Cron,
+            "ext" => Self::Ext,
+            "subagent" => Self::Subagent,
+            _ => Self::User,
+        }
+    }
+
+    /// 机器产生、默认收进折叠组的来源。
+    pub fn is_automation(self) -> bool {
+        matches!(self, Self::Cron | Self::Ext)
+    }
+}
+
 /// Session metadata for listing and display
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -29,6 +90,8 @@ pub struct SessionInfo {
     pub model_key: Option<String>,
     /// subagent spawn 时使用的角色模板名；普通 session 为 None
     pub template: Option<String>,
+    /// 出生来源（创建时定型，不可改）
+    pub origin: SessionOrigin,
     /// session 级覆盖袋（`settings` 列 JSON 的 typed 视图）；`None` =
     /// 无任何覆盖（列 NULL 或空袋）
     pub settings: Option<SessionOverrides>,
@@ -96,6 +159,8 @@ pub struct NewSession {
     pub parent_id: Option<SessionId>,
     pub model_key: Option<String>,
     pub template: Option<String>,
+    /// 出生来源；`NewSession::new` 默认 `User`。
+    pub origin: SessionOrigin,
     /// 建行即写入的覆盖袋（thread 继承等场景）；`None` = 无覆盖。
     pub settings: Option<SessionOverrides>,
 }
@@ -110,6 +175,7 @@ impl NewSession {
             parent_id: None,
             model_key: None,
             template: None,
+            origin: SessionOrigin::User,
             settings: None,
         }
     }
@@ -171,12 +237,15 @@ pub trait SessionStore: Send + Sync {
 
     /// List sessions with cursor-based pagination.
     /// `project_id` = None returns all sessions (including independent ones).
+    /// `origins` = None 不过滤；`Some(&[...])` 只返回这些来源的会话
+    /// （`Some(&[])` 返回空页）。
     /// Returns `(sessions, next_cursor)` where `next_cursor` is the `updated_at` of the last
     /// session if there are more pages, or None if this is the last page.
     async fn list(
         &self,
         project_id: Option<&crate::types::ProjectId>,
         scope: SessionListScope,
+        origins: Option<&[SessionOrigin]>,
         before: Option<chrono::DateTime<chrono::Utc>>,
         limit: usize,
     ) -> Result<(Vec<SessionInfo>, Option<String>)>;

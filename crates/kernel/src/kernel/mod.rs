@@ -57,6 +57,22 @@ pub struct CreateSessionInput {
     /// Initial per-session context-window override（写入 settings 袋；
     /// thread session 继承 chat session 的显式值走这里）。
     pub context_window: Option<u32>,
+    /// 出生来源（落库定型）。缺省 `User`；渠道与外部路由各自打自己的标。
+    pub origin: crate::storage::SessionOrigin,
+}
+
+impl Default for CreateSessionInput {
+    fn default() -> Self {
+        Self {
+            project_id: None,
+            working_dir: None,
+            auto_approve_level: None,
+            tool_blocklist: vec![],
+            model_key: None,
+            context_window: None,
+            origin: crate::storage::SessionOrigin::User,
+        }
+    }
 }
 
 pub struct Kernel {
@@ -184,6 +200,7 @@ impl Kernel {
                 .list_sessions(
                     None,
                     crate::storage::session::SessionListScope::All,
+                    None,
                     before,
                     50,
                 )
@@ -367,12 +384,8 @@ impl Kernel {
         }
         let sid = self
             .create_session(CreateSessionInput {
-                project_id: None,
-                working_dir: None,
-                auto_approve_level: None,
-                tool_blocklist: vec![],
-                model_key: None,
-                context_window: None,
+                origin: crate::storage::SessionOrigin::Ext,
+                ..CreateSessionInput::default()
             })
             .await?;
         self.ext_routes
@@ -1128,6 +1141,7 @@ impl Kernel {
                         context_window: Some(cw),
                     }
                 }),
+                origin: input.origin,
                 ..crate::storage::NewSession::new(id.clone())
             })
             .await?;
@@ -1259,13 +1273,14 @@ impl Kernel {
         &self,
         project_id: Option<&ProjectId>,
         scope: crate::storage::session::SessionListScope,
+        origins: Option<&[crate::storage::SessionOrigin]>,
         before: Option<DateTime<Utc>>,
         limit: usize,
     ) -> Result<crate::client::PaginatedSessions> {
         let (sessions, next_cursor) = self
             .session_store()
             .await
-            .list(project_id, scope, before, limit)
+            .list(project_id, scope, origins, before, limit)
             .await?;
         Ok(crate::client::PaginatedSessions {
             sessions,

@@ -436,6 +436,13 @@ pub(crate) async fn get_or_create_session_locked(
             tool_blocklist: vec![],
             model_key,
             context_window,
+            // `ext:<source>` 是 ext_route 的伪渠道：同样自动产生会话，
+            // 但与 IM 渠道分开记账。
+            origin: if channel_name.starts_with("ext:") {
+                crate::storage::SessionOrigin::Ext
+            } else {
+                crate::storage::SessionOrigin::Channel
+            },
         })
         .await?;
     store

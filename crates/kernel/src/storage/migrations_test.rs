@@ -134,6 +134,17 @@ async fn migration_27_collapses_doc_comment_keys_by_document() {
         .execute(&pool)
         .await
         .unwrap();
+    // 后续迁移会碰 sessions 表（v28 加 origin 列）；假库里给一张最小表。
+    sqlx::query(
+        r"CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query(
         r"CREATE TABLE channel_session_mappings (
             channel_name TEXT NOT NULL,
