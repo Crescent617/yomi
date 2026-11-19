@@ -92,12 +92,18 @@
   let expanded = $state<Record<string, boolean>>({});
   let loading = $state<Record<string, boolean>>({});
   let showMenu = $state<string | null>(null);
-  let pinnedMenu = $state<{ session_id: string; x: number; y: number } | null>(
-    null,
-  );
-  let projectMenu = $state<{ session_id: string; x: number; y: number } | null>(
-    null,
-  );
+  let pinnedMenu = $state<{
+    session_id: string;
+    x: number;
+    y: number;
+    flip: boolean;
+  } | null>(null);
+  let projectMenu = $state<{
+    session_id: string;
+    x: number;
+    y: number;
+    flip: boolean;
+  } | null>(null);
   let renamingProjectId = $state<string | null>(null);
   let renamingSessionId = $state<string | null>(null);
   let forkingSessionId = $state<string | null>(null);
@@ -125,6 +131,7 @@
   let automationSessions = $state<SessionState[]>([]);
   let automationCursor = $state<string | null>(null);
   let automationLoading = $state(false);
+  let automationHeaderEl = $state<HTMLButtonElement | null>(null);
 
   const activeIsAutomation = $derived(
     isAutomationOrigin(
@@ -201,9 +208,18 @@
 
   function toggleAutomation() {
     const next = !automationOpen;
+    // 收起会卸载列表：焦点若在其中（行按钮 / Load more）会掉到 body，
+    // 先把它接回标题按钮。
+    const list = document.getElementById("automation-sessions");
+    const hadFocus = Boolean(
+      list && list.contains(document.activeElement as Node | null),
+    );
     automationOverride = next;
     // 展开即刷新：看到的是最新一次运行，而不是进视图那一刻的快照。
     if (next) void refreshAutomation();
+    if (!next && hadFocus) {
+      automationHeaderEl?.focus();
+    }
   }
 
   /**
@@ -854,6 +870,9 @@
     }
   }
 
+  /** 会话操作菜单的估算高度（Pin / Rename / Fork / Copy / Create from / Delete）。 */
+  const SESSION_MENU_HEIGHT = 220;
+
   function openMenu(
     e: MouseEvent,
     target: "pinned" | "session",
@@ -861,7 +880,15 @@
   ) {
     e.stopPropagation();
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const menu = { session_id, x: rect.right, y: rect.bottom + 4 };
+    // 底部固定的 Automation 组里，行就在窗口边缘：向下弹会被切掉，改用
+    // 向上弹（translateY(-100%)）。
+    const flip = rect.bottom + 4 + SESSION_MENU_HEIGHT > window.innerHeight;
+    const menu = {
+      session_id,
+      x: rect.right,
+      y: flip ? rect.top - 4 : rect.bottom + 4,
+      flip,
+    };
     if (target === "pinned") {
       pinnedMenu = menu;
       projectMenu = null;
@@ -983,7 +1010,9 @@
                 {#if pinnedMenu?.session_id === session_id}
                   <div
                     class="fixed z-50 w-36 rounded-md border border-border bg-popover shadow-md py-1"
-                    style="top: {pinnedMenu.y}px; left: {pinnedMenu.x}px; transform: translateX(-100%);"
+                    style="top: {pinnedMenu.y}px; left: {pinnedMenu.x}px; transform: translate(-100%, {pinnedMenu.flip
+                      ? '-100%'
+                      : '0'});"
                   >
                     <button
                       class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none text-left"
@@ -1237,7 +1266,9 @@
                   {#if projectMenu?.session_id === session.id}
                     <div
                       class="fixed z-50 w-36 rounded-md border border-border bg-popover py-1 shadow-md"
-                      style="top: {projectMenu.y}px; left: {projectMenu.x}px; transform: translateX(-100%);"
+                      style="top: {projectMenu.y}px; left: {projectMenu.x}px; transform: translate(-100%, {projectMenu.flip
+                        ? '-100%'
+                        : '0'});"
                     >
                       <button
                         class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none"
@@ -1541,7 +1572,9 @@
                       {#if projectMenu?.session_id === session.id}
                         <div
                           class="fixed z-50 w-36 rounded-md border border-border bg-popover shadow-md py-1"
-                          style="top: {projectMenu.y}px; left: {projectMenu.x}px; transform: translateX(-100%);"
+                          style="top: {projectMenu.y}px; left: {projectMenu.x}px; transform: translate(-100%, {projectMenu.flip
+                            ? '-100%'
+                            : '0'});"
                         >
                           <button
                             class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none text-left"
@@ -1639,13 +1672,14 @@
 
   {#if !collapsed && sidebarView === "sessions" && automationVisible}
     <div
-      class="shrink-0 border-t border-border/60 bg-card/95 pb-1 backdrop-blur-sm"
+      class="flex max-h-[45%] shrink-0 flex-col border-t border-border/60 bg-card/95 pb-1 backdrop-blur-sm"
     >
       <button
         type="button"
+        bind:this={automationHeaderEl}
         class="flex h-8 w-full min-w-0 items-center gap-1.5 rounded-sm px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-secondary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         aria-expanded={automationOpen}
-        aria-controls="automation-sessions"
+        aria-controls={automationOpen ? "automation-sessions" : undefined}
         title="Automation"
         onclick={toggleAutomation}
       >
@@ -1667,7 +1701,7 @@
       {#if automationOpen}
         <div
           id="automation-sessions"
-          class="scrollbar-hidden max-h-[45vh] space-y-0.5 overflow-y-auto overscroll-y-contain px-2 py-1"
+          class="scrollbar-hidden min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-y-contain px-2 py-1"
           transition:slide={{ duration: 160 }}
         >
           {#if automationLoading && automationList.length === 0}
@@ -1781,7 +1815,9 @@
               {#if projectMenu?.session_id === session.id}
                 <div
                   class="fixed z-50 w-36 rounded-md border border-border bg-popover py-1 shadow-md"
-                  style="top: {projectMenu.y}px; left: {projectMenu.x}px; transform: translateX(-100%);"
+                  style="top: {projectMenu.y}px; left: {projectMenu.x}px; transform: translate(-100%, {projectMenu.flip
+                    ? '-100%'
+                    : '0'});"
                 >
                   <button
                     class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none"

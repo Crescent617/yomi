@@ -82,8 +82,30 @@ const AUTOMATION = [
 
 async function boot(
   page: Page,
-  opts: { activeSessionId?: string; automationPageSize?: number } = {},
+  opts: {
+    activeSessionId?: string;
+    automationPageSize?: number;
+    extraConversations?: number;
+    extraAutomation?: number;
+  } = {},
 ) {
+  const extraConversations = Array.from(
+    { length: opts.extraConversations ?? 0 },
+    (_, i) =>
+      row(
+        `sess_extra_conv_${i}`,
+        `older conversation ${i}`,
+        "user",
+        2000 + i * 30,
+        PROJECT.id,
+      ),
+  );
+  const extraAutomation = Array.from(
+    { length: opts.extraAutomation ?? 0 },
+    (_, i) =>
+      row(`sess_extra_cron_${i}`, `cron run ${i}`, "cron", 1500 + i * 60),
+  );
+
   await page.addInitScript(
     ({
       project,
@@ -140,8 +162,8 @@ async function boot(
     },
     {
       project: PROJECT,
-      conversations: CONVERSATIONS,
-      automation: AUTOMATION,
+      conversations: [...CONVERSATIONS, ...extraConversations],
+      automation: [...AUTOMATION, ...extraAutomation],
       activeSessionId: opts.activeSessionId ?? null,
       automationPageSize: opts.automationPageSize ?? 10,
     },
@@ -250,4 +272,60 @@ test("a full first page shows a count badge and loads more on demand", async ({
   await expect(page.getByRole("button", { name: "Load more" })).toHaveCount(0);
   await page.waitForTimeout(300);
   await page.screenshot({ path: `${OUT_DIR}/04-load-more.png` });
+});
+
+test("the dock stays pinned to the sidebar bottom while lists scroll", async ({
+  page,
+}) => {
+  await boot(page, { extraConversations: 30, extraAutomation: 15 });
+
+  const header = page.getByRole("button", { name: "Automation" });
+  await expect(header).toBeVisible();
+
+  const dockBottom = async () =>
+    page.evaluate(() => {
+      const host = document.querySelector("#sidebar-host") as HTMLElement;
+      const btn = [...document.querySelectorAll("button")].find((b) =>
+        b.textContent?.includes("Automation"),
+      );
+      return {
+        host: host.getBoundingClientRect().bottom,
+        btn: btn?.getBoundingClientRect().bottom,
+      };
+    });
+
+  const before = await dockBottom();
+  expect(before.btn).toBeGreaterThan(before.host - 40);
+
+  // 会话列表滚到底：Automation 仍贴在底部、位置不动
+  await page.evaluate(() => {
+    const scroller = document.querySelector(
+      "#sidebar-host .scrollbar-hidden.flex-1",
+    ) as HTMLElement | null;
+    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+  });
+  await page.waitForTimeout(150);
+  await expect(header).toBeVisible();
+  const after = await dockBottom();
+  expect(after.btn).toBeCloseTo(before.btn ?? 0, 0);
+
+  // 展开后：内容区有内部滚动，且整块不超过侧栏高度的 45%
+  await header.click();
+  await page.waitForTimeout(250);
+  const group = await page.evaluate(() => {
+    const host = document.querySelector("#sidebar-host") as HTMLElement;
+    const el = document.querySelector("#automation-sessions") as HTMLElement;
+    const btn = [...document.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Automation"),
+    ) as HTMLElement;
+    return {
+      inner: el.scrollHeight > el.clientHeight,
+      dockHeight:
+        host.getBoundingClientRect().bottom - btn.getBoundingClientRect().top,
+      hostHeight: host.getBoundingClientRect().height,
+    };
+  });
+  expect(group.inner).toBe(true);
+  expect(group.dockHeight).toBeLessThanOrEqual(group.hostHeight * 0.46);
+  await page.screenshot({ path: `${OUT_DIR}/05-docked-scroll.png` });
 });
