@@ -1341,235 +1341,6 @@
             Load more
           </button>
         {/if}
-
-        {#if automationVisible}
-          <section
-            aria-label="Automation"
-            class="mt-1.5 border-t border-border/60 pt-1"
-          >
-            <button
-              type="button"
-              class="flex h-8 w-full min-w-0 items-center gap-1.5 rounded-sm px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-secondary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              aria-expanded={automationOpen}
-              aria-controls="automation-sessions"
-              title="Automation"
-              onclick={toggleAutomation}
-            >
-              <ChevronRight
-                size={12}
-                class="shrink-0 transition-transform duration-150 ease-out motion-reduce:transition-none {automationOpen
-                  ? 'rotate-90'
-                  : ''}"
-              />
-              <span class="min-w-0 flex-1 truncate text-left">Automation</span>
-              {#if automationList.length > 0}
-                <span
-                  class="shrink-0 rounded-full bg-secondary/70 px-1.5 py-0.5 text-[10px] font-normal leading-none text-muted-foreground"
-                >
-                  {automationList.length}{automationCursor ? "+" : ""}
-                </span>
-              {/if}
-            </button>
-            {#if automationOpen}
-              <div
-                id="automation-sessions"
-                class="space-y-0.5"
-                transition:slide={{ duration: 160 }}
-              >
-                {#if automationLoading && automationList.length === 0}
-                  <div
-                    class="flex h-11 items-center gap-2 pl-2 pr-1 text-[11px] text-muted-foreground"
-                  >
-                    <Loader2 size={12} class="animate-spin" />
-                    Loading…
-                  </div>
-                {/if}
-                {#each automationList as session (session.id)}
-                  <div
-                    class="group relative flex min-h-11 w-full items-center gap-2 rounded-sm border-l-2 py-1.5 pl-2 pr-0.5 transition-colors {session.id ===
-                    sessionState.activeSessionId
-                      ? 'border-primary bg-primary/8 text-foreground'
-                      : 'border-transparent text-muted-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground'}"
-                  >
-                    <div class="min-w-0 flex-1">
-                      {#if renamingSessionId === session.id}
-                        <input
-                          type="text"
-                          use:focusAndSelect
-                          data-rename
-                          bind:value={renameValue}
-                          onkeydown={(e: KeyboardEvent) => {
-                            e.stopPropagation();
-                            if (e.key === "Enter")
-                              confirmRenameSession(session.id);
-                            if (e.key === "Escape") renamingSessionId = null;
-                            // WKWebView 的 blur.relatedTarget 不可靠：Tab
-                            // 离开主动武装，避免被当成幽灵 blur 反复抢焦。
-                            if (e.key === "Tab") renamePointerDismiss = true;
-                          }}
-                          onclick={(e: MouseEvent) => e.stopPropagation()}
-                          onblur={(e) =>
-                            renameBlur(e, () =>
-                              confirmRenameSession(session.id),
-                            )}
-                          class="w-full min-w-0 rounded border border-border bg-background px-1 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-                        />
-                      {:else}
-                        <button
-                          type="button"
-                          class="block w-full text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                          onclick={() => activateSession(session.id)}
-                        >
-                          <span class="flex min-w-0 items-center gap-1.5">
-                            <Clock
-                              size={11}
-                              class="shrink-0 text-muted-foreground/60"
-                              aria-hidden="true"
-                            />
-                            <span
-                              class="min-w-0 flex-1 truncate text-sm font-normal"
-                              title={session.alias ?? "Untitled"}
-                            >
-                              {session.alias ?? "Untitled"}
-                            </span>
-                          </span>
-                          <span
-                            class="mt-0.5 flex min-w-0 items-center gap-1 pl-[18px] text-[10px] text-muted-foreground"
-                          >
-                            {#if session.project_id}
-                              <span class="truncate"
-                                >{projectName(session.project_id)}</span
-                              >
-                              {#if session.updated_at}
-                                <span aria-hidden="true">·</span>
-                              {/if}
-                            {/if}
-                            {#if session.updated_at}
-                              <span
-                                class="shrink-0"
-                                title={new Date(
-                                  session.updated_at,
-                                ).toLocaleString()}
-                              >
-                                {formatTimeAgo(session.updated_at, clock.now)}
-                              </span>
-                            {/if}
-                          </span>
-                        </button>
-                      {/if}
-                    </div>
-                    <div class="relative h-5 min-w-5 shrink-0">
-                      <div
-                        class="flex h-5 items-center justify-center gap-1 transition-opacity {projectMenu?.session_id ===
-                        session.id
-                          ? 'opacity-0'
-                          : 'group-hover:opacity-0'}"
-                      >
-                        {#if unreadSessions[session.id]}
-                          <span
-                            class="h-1.5 w-1.5 rounded-full bg-primary"
-                            aria-label="Unread"
-                            title="Unread"
-                          ></span>
-                        {/if}
-                        <QueuedIndicator session_id={session.id} />
-                        <StatusDot phase={session.phase} />
-                      </div>
-                      <button
-                        type="button"
-                        aria-label="Session actions"
-                        title="Session actions"
-                        class="absolute inset-0 flex items-center justify-center rounded opacity-0 transition-opacity hover:bg-secondary/80 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring {projectMenu?.session_id ===
-                        session.id
-                          ? 'opacity-100'
-                          : 'group-hover:opacity-100'}"
-                        onclick={(e: MouseEvent) =>
-                          openMenu(e, "session", session.id)}
-                      >
-                        <MoreVertical size={13} />
-                      </button>
-                    </div>
-                    {#if projectMenu?.session_id === session.id}
-                      <div
-                        class="fixed z-50 w-36 rounded-md border border-border bg-popover py-1 shadow-md"
-                        style="top: {projectMenu.y}px; left: {projectMenu.x}px; transform: translateX(-100%);"
-                      >
-                        <button
-                          class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none"
-                          onclick={(e: Event) => {
-                            e.stopPropagation();
-                            togglePin(session.id);
-                            projectMenu = null;
-                          }}
-                        >
-                          {#if session.is_pinned}
-                            <PinOff size={12} /> Unpin
-                          {:else}
-                            <Pin size={12} /> Pin to top
-                          {/if}
-                        </button>
-                        <button
-                          class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none"
-                          onclick={(e: Event) => {
-                            e.stopPropagation();
-                            renamingSessionId = session.id;
-                            renameValue = session.alias ?? "Untitled";
-                            projectMenu = null;
-                          }}
-                        >
-                          <Pencil size={12} /> Rename
-                        </button>
-                        <SessionForkMenuItem
-                          session_id={session.id}
-                          disabled={forkingSessionId !== null}
-                          onfork={(id) => void forkSession(id)}
-                        />
-                        <button
-                          class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none"
-                          onclick={(e: Event) => {
-                            e.stopPropagation();
-                            copySessionId(session.id);
-                            projectMenu = null;
-                          }}
-                        >
-                          <Copy size={12} /> Copy ID
-                        </button>
-                        <button
-                          class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none"
-                          onclick={(e: Event) => {
-                            e.stopPropagation();
-                            void createFromSession(session.id);
-                          }}
-                        >
-                          <MessageSquarePlus size={12} /> Create from
-                        </button>
-                        <button
-                          class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-destructive transition-colors hover:bg-destructive hover:text-destructive-foreground focus-visible:bg-destructive focus-visible:text-destructive-foreground focus-visible:outline-none"
-                          onclick={(e: Event) => {
-                            e.stopPropagation();
-                            requestDeleteSession(session.id);
-                            projectMenu = null;
-                          }}
-                        >
-                          <Trash2 size={12} /> Delete
-                        </button>
-                      </div>
-                    {/if}
-                  </div>
-                {/each}
-                {#if automationCursor}
-                  <button
-                    type="button"
-                    class="flex h-8 w-full items-center justify-center rounded-sm text-[11px] text-muted-foreground transition-colors hover:bg-secondary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    onclick={() => loadAutomation(true)}
-                  >
-                    {automationLoading ? "Loading…" : "Load more"}
-                  </button>
-                {/if}
-              </div>
-            {/if}
-          </section>
-        {/if}
       </div>
     {:else}
       <div in:fly={{ x: 8, duration: 160, opacity: 0.3 }}>
@@ -1865,6 +1636,229 @@
       </div>
     {/if}
   </div>
+
+  {#if !collapsed && sidebarView === "sessions" && automationVisible}
+    <div
+      class="shrink-0 border-t border-border/60 bg-card/95 pb-1 backdrop-blur-sm"
+    >
+      {#if automationOpen}
+        <div
+          id="automation-sessions"
+          class="scrollbar-hidden max-h-[45vh] space-y-0.5 overflow-y-auto overscroll-y-contain px-2 py-1"
+          transition:slide={{ duration: 160 }}
+        >
+          {#if automationLoading && automationList.length === 0}
+            <div
+              class="flex h-11 items-center gap-2 pl-2 pr-1 text-[11px] text-muted-foreground"
+            >
+              <Loader2 size={12} class="animate-spin" />
+              Loading…
+            </div>
+          {/if}
+          {#each automationList as session (session.id)}
+            <div
+              class="group relative flex min-h-11 w-full items-center gap-2 rounded-sm border-l-2 py-1.5 pl-2 pr-0.5 transition-colors {session.id ===
+              sessionState.activeSessionId
+                ? 'border-primary bg-primary/8 text-foreground'
+                : 'border-transparent text-muted-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground'}"
+            >
+              <div class="min-w-0 flex-1">
+                {#if renamingSessionId === session.id}
+                  <input
+                    type="text"
+                    use:focusAndSelect
+                    data-rename
+                    bind:value={renameValue}
+                    onkeydown={(e: KeyboardEvent) => {
+                      e.stopPropagation();
+                      if (e.key === "Enter") confirmRenameSession(session.id);
+                      if (e.key === "Escape") renamingSessionId = null;
+                      // WKWebView 的 blur.relatedTarget 不可靠：Tab
+                      // 离开主动武装，避免被当成幽灵 blur 反复抢焦。
+                      if (e.key === "Tab") renamePointerDismiss = true;
+                    }}
+                    onclick={(e: MouseEvent) => e.stopPropagation()}
+                    onblur={(e) =>
+                      renameBlur(e, () => confirmRenameSession(session.id))}
+                    class="w-full min-w-0 rounded border border-border bg-background px-1 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                  />
+                {:else}
+                  <button
+                    type="button"
+                    class="block w-full text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    onclick={() => activateSession(session.id)}
+                  >
+                    <span class="flex min-w-0 items-center gap-1.5">
+                      <Clock
+                        size={11}
+                        class="shrink-0 text-muted-foreground/60"
+                        aria-hidden="true"
+                      />
+                      <span
+                        class="min-w-0 flex-1 truncate text-sm font-normal"
+                        title={session.alias ?? "Untitled"}
+                      >
+                        {session.alias ?? "Untitled"}
+                      </span>
+                    </span>
+                    <span
+                      class="mt-0.5 flex min-w-0 items-center gap-1 pl-[18px] text-[10px] text-muted-foreground"
+                    >
+                      {#if session.project_id}
+                        <span class="truncate"
+                          >{projectName(session.project_id)}</span
+                        >
+                        {#if session.updated_at}
+                          <span aria-hidden="true">·</span>
+                        {/if}
+                      {/if}
+                      {#if session.updated_at}
+                        <span
+                          class="shrink-0"
+                          title={new Date(session.updated_at).toLocaleString()}
+                        >
+                          {formatTimeAgo(session.updated_at, clock.now)}
+                        </span>
+                      {/if}
+                    </span>
+                  </button>
+                {/if}
+              </div>
+              <div class="relative h-5 min-w-5 shrink-0">
+                <div
+                  class="flex h-5 items-center justify-center gap-1 transition-opacity {projectMenu?.session_id ===
+                  session.id
+                    ? 'opacity-0'
+                    : 'group-hover:opacity-0'}"
+                >
+                  {#if unreadSessions[session.id]}
+                    <span
+                      class="h-1.5 w-1.5 rounded-full bg-primary"
+                      aria-label="Unread"
+                      title="Unread"
+                    ></span>
+                  {/if}
+                  <QueuedIndicator session_id={session.id} />
+                  <StatusDot phase={session.phase} />
+                </div>
+                <button
+                  type="button"
+                  aria-label="Session actions"
+                  title="Session actions"
+                  class="absolute inset-0 flex items-center justify-center rounded opacity-0 transition-opacity hover:bg-secondary/80 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring {projectMenu?.session_id ===
+                  session.id
+                    ? 'opacity-100'
+                    : 'group-hover:opacity-100'}"
+                  onclick={(e: MouseEvent) =>
+                    openMenu(e, "session", session.id)}
+                >
+                  <MoreVertical size={13} />
+                </button>
+              </div>
+              {#if projectMenu?.session_id === session.id}
+                <div
+                  class="fixed z-50 w-36 rounded-md border border-border bg-popover py-1 shadow-md"
+                  style="top: {projectMenu.y}px; left: {projectMenu.x}px; transform: translateX(-100%);"
+                >
+                  <button
+                    class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none"
+                    onclick={(e: Event) => {
+                      e.stopPropagation();
+                      togglePin(session.id);
+                      projectMenu = null;
+                    }}
+                  >
+                    {#if session.is_pinned}
+                      <PinOff size={12} /> Unpin
+                    {:else}
+                      <Pin size={12} /> Pin to top
+                    {/if}
+                  </button>
+                  <button
+                    class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none"
+                    onclick={(e: Event) => {
+                      e.stopPropagation();
+                      renamingSessionId = session.id;
+                      renameValue = session.alias ?? "Untitled";
+                      projectMenu = null;
+                    }}
+                  >
+                    <Pencil size={12} /> Rename
+                  </button>
+                  <SessionForkMenuItem
+                    session_id={session.id}
+                    disabled={forkingSessionId !== null}
+                    onfork={(id) => void forkSession(id)}
+                  />
+                  <button
+                    class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none"
+                    onclick={(e: Event) => {
+                      e.stopPropagation();
+                      copySessionId(session.id);
+                      projectMenu = null;
+                    }}
+                  >
+                    <Copy size={12} /> Copy ID
+                  </button>
+                  <button
+                    class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none"
+                    onclick={(e: Event) => {
+                      e.stopPropagation();
+                      void createFromSession(session.id);
+                    }}
+                  >
+                    <MessageSquarePlus size={12} /> Create from
+                  </button>
+                  <button
+                    class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-destructive transition-colors hover:bg-destructive hover:text-destructive-foreground focus-visible:bg-destructive focus-visible:text-destructive-foreground focus-visible:outline-none"
+                    onclick={(e: Event) => {
+                      e.stopPropagation();
+                      requestDeleteSession(session.id);
+                      projectMenu = null;
+                    }}
+                  >
+                    <Trash2 size={12} /> Delete
+                  </button>
+                </div>
+              {/if}
+            </div>
+          {/each}
+          {#if automationCursor}
+            <button
+              type="button"
+              class="flex h-8 w-full items-center justify-center rounded-sm text-[11px] text-muted-foreground transition-colors hover:bg-secondary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              onclick={() => loadAutomation(true)}
+            >
+              {automationLoading ? "Loading…" : "Load more"}
+            </button>
+          {/if}
+        </div>
+      {/if}
+      <button
+        type="button"
+        class="flex h-8 w-full min-w-0 items-center gap-1.5 rounded-sm px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-secondary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        aria-expanded={automationOpen}
+        aria-controls="automation-sessions"
+        title="Automation"
+        onclick={toggleAutomation}
+      >
+        <ChevronRight
+          size={12}
+          class="shrink-0 transition-transform duration-150 ease-out motion-reduce:transition-none {automationOpen
+            ? 'rotate-90'
+            : ''}"
+        />
+        <span class="min-w-0 flex-1 truncate text-left">Automation</span>
+        {#if automationList.length > 0}
+          <span
+            class="shrink-0 rounded-full bg-secondary/70 px-1.5 py-0.5 text-[10px] font-normal leading-none text-muted-foreground"
+          >
+            {automationList.length}{automationCursor ? "+" : ""}
+          </span>
+        {/if}
+      </button>
+    </div>
+  {/if}
 </div>
 
 <ConfirmDialog
