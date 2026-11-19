@@ -1641,6 +1641,29 @@
     <div
       class="shrink-0 border-t border-border/60 bg-card/95 pb-1 backdrop-blur-sm"
     >
+      <button
+        type="button"
+        class="flex h-8 w-full min-w-0 items-center gap-1.5 rounded-sm px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-secondary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        aria-expanded={automationOpen}
+        aria-controls="automation-sessions"
+        title="Automation"
+        onclick={toggleAutomation}
+      >
+        <ChevronRight
+          size={12}
+          class="shrink-0 transition-transform duration-150 ease-out motion-reduce:transition-none {automationOpen
+            ? 'rotate-90'
+            : ''}"
+        />
+        <span class="min-w-0 flex-1 truncate text-left">Automation</span>
+        {#if automationList.length > 0}
+          <span
+            class="shrink-0 rounded-full bg-secondary/70 px-1.5 py-0.5 text-[10px] font-normal leading-none text-muted-foreground"
+          >
+            {automationList.length}{automationCursor ? "+" : ""}
+          </span>
+        {/if}
+      </button>
       {#if automationOpen}
         <div
           id="automation-sessions"
@@ -1834,29 +1857,6 @@
           {/if}
         </div>
       {/if}
-      <button
-        type="button"
-        class="flex h-8 w-full min-w-0 items-center gap-1.5 rounded-sm px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-secondary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        aria-expanded={automationOpen}
-        aria-controls="automation-sessions"
-        title="Automation"
-        onclick={toggleAutomation}
-      >
-        <ChevronRight
-          size={12}
-          class="shrink-0 transition-transform duration-150 ease-out motion-reduce:transition-none {automationOpen
-            ? 'rotate-90'
-            : ''}"
-        />
-        <span class="min-w-0 flex-1 truncate text-left">Automation</span>
-        {#if automationList.length > 0}
-          <span
-            class="shrink-0 rounded-full bg-secondary/70 px-1.5 py-0.5 text-[10px] font-normal leading-none text-muted-foreground"
-          >
-            {automationList.length}{automationCursor ? "+" : ""}
-          </span>
-        {/if}
-      </button>
     </div>
   {/if}
 </div>
