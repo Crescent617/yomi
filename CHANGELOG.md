@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.28] - 2026-11-19
+
+### Changed
+- 侧栏的 `Automation` 组改为固定在侧栏底部（不再排在会话列表末尾、需要滚到底才看得到）：标题常驻，展开后列表显示在标题下方，最多占侧栏 45% 高度、超出在组内滚动。
+- `Automation` 组默认收起；当前打开的会话属于该组时自动展开，手动收起后保持收起。
+
+### Fixed
+- 侧栏靠近窗口底部的会话，操作菜单改为向上弹出，不再被窗口边缘切掉。
+
 ## [0.11.27] - 2026-11-18
 
 ### Added
