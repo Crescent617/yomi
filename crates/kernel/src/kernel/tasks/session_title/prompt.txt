@@ -1,4 +1,4 @@
-Write a concise title for a chat session from the user's first prompt.
+Write a concise title for a chat session from the user's prompt.
 
 Rules:
 - Use the same language as the prompt. If it mixes languages, use its predominant language.

@@ -1195,10 +1195,17 @@ impl Kernel {
             .await
             .update_auto_approve_level(&new_id, auto_approve_level.as_str())
             .await?;
-        // Set title: "Forked: <parent_title>"
-        let parent_title = parent_info.title.as_deref().unwrap_or("Untitled");
-        let new_title = format!("Forked: {parent_title}");
-        self.rename_session(&new_id, new_title).await?;
+        // Set title: "Forked: <parent_title>"。父会话没有标题时留空——标题只在
+        // 为空时生成一次，写一个 "Forked: Untitled" 会让副本永远顶这个名字。
+        if let Some(parent_title) = parent_info
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+        {
+            let new_title = format!("Forked: {parent_title}");
+            self.rename_session(&new_id, new_title).await?;
+        }
         tracing::info!("forked session {}", new_id.0);
 
         // Copy message history from parent to child
@@ -1710,7 +1717,7 @@ impl Kernel {
                     .get(&session_id)
                     .await?
                     .and_then(|session| session.title);
-                if current_title.is_some() {
+                if !tasks::session_title::needs_title(current_title.as_deref()) {
                     return Result::<()>::Ok(());
                 }
                 let fallback = normalize_session_title(&query);

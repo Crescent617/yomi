@@ -160,7 +160,8 @@ impl std::fmt::Display for ModelProvider {
 pub struct FeaturesConfig {
     /// Enable all features unless a feature is explicitly overridden.
     pub all: bool,
-    /// Generate a session title with a model after receiving a user message.
+    /// Generate a session title with a model, once, while the session still has
+    /// no title (existing titles are never regenerated or overwritten).
     pub update_session_title: Option<bool>,
     /// Expose the cron tool to agents (create/list/update/delete/trigger jobs).
     pub cron_tool: Option<bool>,

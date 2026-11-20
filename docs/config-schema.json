@@ -220,7 +220,7 @@
           ]
         },
         "update_session_title": {
-          "description": "Generate a session title with a model after receiving a user message.",
+          "description": "Generate a session title with a model, once, while the session still has\nno title (existing titles are never regenerated or overwritten).",
           "type": [
             "boolean",
             "null"

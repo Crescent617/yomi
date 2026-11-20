@@ -1242,3 +1242,146 @@ async fn ext_route_concurrent_same_key_single_winner() {
     assert_eq!(s4, s1);
     assert!(!c4);
 }
+
+// ── 会话标题：只在没有标题时生成一次 ─────────────────────────────
+
+/// 标题一次性生成：已有标题（自动生成或用户改名）时，后续消息既不调
+/// 模型也不覆盖；标题为空时生成一次，之后同样不再重复。
+#[tokio::test]
+async fn session_title_is_generated_only_while_missing() {
+    use crate::provider::ModelConfig;
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // 记录请求体的 mock LLM（回一个 "ok" 标题）。
+    let bodies: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    {
+        let bodies = Arc::clone(&bodies);
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let bodies = Arc::clone(&bodies);
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut chunk = [0u8; 8192];
+                    let header_end = loop {
+                        let n = sock.read(&mut chunk).await.unwrap_or(0);
+                        if n == 0 {
+                            return;
+                        }
+                        buf.extend_from_slice(&chunk[..n]);
+                        if let Some(pos) =
+                            buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
+                        {
+                            break pos;
+                        }
+                    };
+                    let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
+                    let content_length: usize = headers
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .and_then(|v| v.trim().parse().ok())
+                        })
+                        .unwrap_or(0);
+                    while buf.len() - header_end < content_length {
+                        let n = sock.read(&mut chunk).await.unwrap_or(0);
+                        if n == 0 {
+                            break;
+                        }
+                        buf.extend_from_slice(&chunk[..n]);
+                    }
+                    bodies
+                        .lock()
+                        .unwrap()
+                        .push(String::from_utf8_lossy(&buf[header_end..]).to_string());
+                    let body = "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"stub\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"stub\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n{body}"
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                });
+            }
+        });
+    }
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = crate::config::Config {
+        data_dir: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    config.models.clear();
+    config.models.push(ModelConfig {
+        name: "stub".to_string(),
+        model_id: "stub".to_string(),
+        endpoint: format!("http://{addr}"),
+        api_key: "stub".to_string(),
+        context_window: 128_000,
+        ..ModelConfig::default()
+    });
+    config.agent.default_model = "stub".to_string();
+    // 生成路径由这个开关决定；显式打开，避免默认值把测试落到兜底分支。
+    config.features.update_session_title = Some(true);
+    config.finalize();
+
+    let kernel = crate::build_kernel(&config, false).await.unwrap();
+    kernel.start();
+    let sid = kernel
+        .create_session(super::CreateSessionInput {
+            project_id: None,
+            working_dir: Some(tmp.path().to_path_buf()),
+            ..super::CreateSessionInput::default()
+        })
+        .await
+        .unwrap();
+
+    let title = || {
+        let kernel = &kernel;
+        let sid = sid.clone();
+        async move {
+            kernel
+                .session_store()
+                .await
+                .get(&sid)
+                .await
+                .unwrap()
+                .unwrap()
+                .title
+        }
+    };
+
+    // ① 空标题 → 生成一次
+    kernel.update_session_title_after_message(sid.clone(), "第一个问题".to_string());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while title().await.is_none() {
+        assert!(std::time::Instant::now() < deadline, "标题生成没有落库");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(title().await.as_deref(), Some("ok"));
+    let calls_after_first = bodies.lock().unwrap().len();
+    assert_eq!(calls_after_first, 1, "第一次应当只调一次模型");
+
+    // ② 已有标题 → 再发消息不调模型、不改标题
+    kernel.update_session_title_after_message(sid.clone(), "第二个问题".to_string());
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        bodies.lock().unwrap().len(),
+        calls_after_first,
+        "已有标题时不应再调用标题模型"
+    );
+    assert_eq!(title().await.as_deref(), Some("ok"));
+
+    // ③ 用户改名后同样不被覆盖
+    kernel
+        .rename_session(&sid, "用户改名".to_string())
+        .await
+        .unwrap();
+    kernel.update_session_title_after_message(sid.clone(), "第三个问题".to_string());
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(title().await.as_deref(), Some("用户改名"));
+    assert_eq!(bodies.lock().unwrap().len(), calls_after_first);
+
+    kernel.stop().await;
+}
