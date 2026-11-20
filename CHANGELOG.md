@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.30] - 2026-11-20
+
+### Fixed
+- macOS 上最小化 Yomi 窗口后点 Dock 图标，窗口现在会被还原并聚焦（此前开启桌宠时点图标没有任何反应）。
+
 ## [0.11.29] - 2026-11-20
 
 ### Changed
