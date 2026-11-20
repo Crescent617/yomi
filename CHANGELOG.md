@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.29] - 2026-11-20
+
+### Changed
+- 会话标题改为只在标题为空时自动生成一次：之后的新消息不再重写标题，手动改过的名字也不会被自动覆盖。
+- 从未命名会话 fork 出来的副本不再固定显示「Forked: Untitled」。
+
 ## [0.11.28] - 2026-11-19
 
 ### Changed
