@@ -1,9 +1,8 @@
-Update the concise title of a chat session using its current title and the user's latest prompt.
+Write a concise title for a chat session from the user's first prompt.
 
 Rules:
-- Treat the current title as context. Preserve its useful topic while incorporating important new intent from the latest user prompt.
-- Write the title in the same language as the latest user prompt. If it mixes languages, use its predominant language.
-- Capture the session's evolving primary intent accurately and clearly; do not merely copy the latest prompt when the current title remains relevant.
+- Use the same language as the prompt. If it mixes languages, use its predominant language.
+- Capture the session's primary intent accurately and clearly.
 - Prefer a witty, playful, or lively phrasing when it feels natural, but never sacrifice clarity.
 - Keep the title within 20 characters, including spaces and punctuation.
 - Do not answer the prompt.

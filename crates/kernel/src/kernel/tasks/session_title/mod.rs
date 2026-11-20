@@ -30,6 +30,12 @@ pub(in crate::kernel) fn should_generate(update_session_title: bool) -> bool {
     update_session_title
 }
 
+/// 标题只在「还没有标题」时生成一次：已有非空标题（自动生成的或用户改的）
+/// 一律不动。
+pub(in crate::kernel) fn needs_title(existing: Option<&str>) -> bool {
+    existing.is_none_or(|title| title.trim().is_empty())
+}
+
 impl Kernel {
     pub(in crate::kernel) fn spawn_session_title_generation(
         &self,
@@ -57,21 +63,14 @@ impl Kernel {
                 return;
             };
             let result = async {
-                let current_title = session_store
+                // 只生成一次：已有非空标题就什么都不做（后续消息不再触发
+                // 生成，也不再覆盖用户手动改过的标题）。
+                let existing_title = session_store
                     .get(&session_id)
                     .await?
                     .and_then(|session| session.title);
-                if current_title.is_none() {
-                    let fallback = normalize_session_title(&query);
-                    if !fallback.is_empty() {
-                        session_store.update_title(&session_id, &fallback).await?;
-                        let _ = notification_bus.send(
-                            crate::notification::Notification::TitleUpdated {
-                                session_id: session_id.clone(),
-                                title: fallback,
-                            },
-                        );
-                    }
+                if !needs_title(existing_title.as_deref()) {
+                    return Result::<()>::Ok(());
                 }
                 let generated_title = async {
                     let (provider, model_config) = match fast_model {
@@ -97,7 +96,7 @@ impl Kernel {
                             .map_err(KernelError::Agent)?,
                     };
 
-                    generate(provider, &model_config, current_title.as_deref(), &query).await
+                    generate(provider, &model_config, &query).await
                 }
                 .await;
 
@@ -138,10 +137,9 @@ impl Kernel {
 async fn generate(
     provider: Arc<dyn Provider>,
     model_config: &ModelConfig,
-    current_title: Option<&str>,
     query: &str,
 ) -> Result<String> {
-    let input = generation_input(current_title, query);
+    let input = generation_input(query);
     let messages = vec![
         Arc::new(Message::system(PROMPT)),
         Arc::new(Message::user(input)),
@@ -186,15 +184,8 @@ fn title_model_config(model_config: &ModelConfig) -> ModelConfig {
     }
 }
 
-fn generation_input(current_title: Option<&str>, query: &str) -> String {
-    match current_title.filter(|title| !title.trim().is_empty()) {
-        Some(title) => format!(
-            "Current title:\n{}\n\nLatest user prompt:\n{}",
-            title.trim(),
-            query
-        ),
-        None => format!("Latest user prompt:\n{query}"),
-    }
+fn generation_input(query: &str) -> String {
+    format!("Latest user prompt:\n{query}")
 }
 
 fn clean_generated_title(output: &str) -> String {

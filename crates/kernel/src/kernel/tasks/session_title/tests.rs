@@ -44,13 +44,17 @@ fn generation_requires_only_the_feature_flag() {
 }
 
 #[test]
-fn generation_input_includes_current_title_and_latest_prompt() {
+fn title_is_generated_only_while_missing() {
+    assert!(needs_title(None));
+    assert!(needs_title(Some("   ")));
+    // 已有标题（自动生成或用户改过的）不再触发生成。
+    assert!(!needs_title(Some("自动化页 load more")));
+}
+
+#[test]
+fn generation_input_is_the_latest_prompt() {
     assert_eq!(
-        generation_input(Some("代码高亮"), "复制按钮只在 hover 显示"),
-        "Current title:\n代码高亮\n\nLatest user prompt:\n复制按钮只在 hover 显示"
-    );
-    assert_eq!(
-        generation_input(None, "设计代码高亮"),
+        generation_input("设计代码高亮"),
         "Latest user prompt:\n设计代码高亮"
     );
 }
