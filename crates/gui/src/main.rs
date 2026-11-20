@@ -13,6 +13,7 @@ mod pet_runtime;
 #[cfg(test)]
 mod pet_test;
 mod state;
+mod window;
 
 use state::AppState;
 use tauri::Emitter;
@@ -333,6 +334,16 @@ pub fn run() {
         {
             if let Some(window) = app_handle.get_webview_window("pet") {
                 let _ = window.destroy();
+            }
+        }
+        // macOS：点 Dock 图标时得自己把主窗口拉回来。系统在
+        // `applicationShouldHandleReopen` 里不会还原被最小化的窗口（
+        // tao 把 `has_visible_windows` 原样返回，桌宠窗口在屏上时它还是
+        // true），所以没有这段处理就会表现为「最小化后点图标没反应」。
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => {
+            if let Err(error) = window::reveal_main(app_handle) {
+                tracing::warn!("failed to reveal main window on reopen: {error}");
             }
         }
         tauri::RunEvent::Exit => {

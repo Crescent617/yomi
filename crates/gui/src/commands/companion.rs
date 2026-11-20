@@ -424,18 +424,8 @@ pub async fn open_session_in_main(
     app_handle: AppHandle,
     session_id: String,
 ) -> Result<(), GuiError> {
-    let window = app_handle
-        .get_webview_window("main")
-        .ok_or_else(|| GuiError::unknown("main window is not available".to_string()))?;
-    window
-        .show()
-        .map_err(|error| GuiError::unknown(format!("failed to show main window: {error}")))?;
-    window
-        .unminimize()
-        .map_err(|error| GuiError::unknown(format!("failed to unminimize main window: {error}")))?;
-    window
-        .set_focus()
-        .map_err(|error| GuiError::unknown(format!("failed to focus main window: {error}")))?;
+    crate::window::reveal_main(&app_handle)
+        .map_err(|error| GuiError::unknown(format!("failed to reveal main window: {error}")))?;
     let _ = app_handle.emit_to(
         "main",
         "app:open_session",
