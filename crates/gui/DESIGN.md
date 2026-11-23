@@ -24,6 +24,7 @@ Yomi is a focused agent workspace: calm, dense, and direct. The interface should
 
 - Typography: Space Grotesk for UI prose and labels; IBM Plex Mono for code, paths, commands, IDs, tool names, and data readouts.
 - Surfaces: `background` for work areas, subtle semantic tints for selected or pending states, `code-bg` for machine-readable content.
+- Text selection: `primary` at 25% everywhere — the global `::selection` in `app.css` covers plain text, and `lib/editor/theme.ts` re-states it for CodeMirror using CodeMirror's own base selector shape (its light-theme focused-selection rule outranks a bare `.cm-selectionBackground`, which is how the dark editor once ended up with a bright lavender band).
 - Borders: use pane dividers and light outlines; avoid double borders and card-inside-card layouts.
 - Radius: modest and consistent. Panels and dialogs may be rounded; editors and full-size workspaces should usually meet their pane edges.
 - Icons: use Lucide consistently. Do not mix emoji with interface icons.

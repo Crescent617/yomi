@@ -28,10 +28,16 @@ export const appTheme = EditorView.theme({
     borderLeftColor: "var(--color-foreground)",
   },
 
-  /* Selection (drawSelection layer + native ::selection fallback). */
-  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, &.cm-focused ::selection":
+  /* Selection. The long first selector mirrors CodeMirror's own base rule
+     (`&light.cm-focused > .cm-scroller > .cm-selectionLayer
+     .cm-selectionBackground`), which is more specific than a bare
+     `.cm-selectionBackground` and otherwise wins — it is why the dark
+     editor showed a bright lavender band (#d7d4f0). Themes mount after the
+     base sheet, so matching its shape is enough to take over. The other two
+     terms cover the unfocused layer and the native fallback. */
+  "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, &.cm-focused ::selection":
     {
-      backgroundColor: "hsl(var(--primary) / 0.2)",
+      backgroundColor: "hsl(var(--primary) / 0.25)",
     },
   ".cm-selectionMatch": {
     backgroundColor: "hsl(var(--primary) / 0.12)",

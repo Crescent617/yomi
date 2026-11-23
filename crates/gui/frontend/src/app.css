@@ -230,6 +230,13 @@ body.pet-window {
   border-radius: 0.5rem;
 }
 
+/* Text selection outside CodeMirror (read-only panes, prose). Same persimmon
+   wash as the editor's selection so both stay legible in the dark palettes
+   instead of falling back to the platform default. */
+::selection {
+  background-color: hsl(var(--primary) / 0.25);
+}
+
 /* CodeMirror: line flagged by a config save diagnostic (lib/editor/error-line.ts). */
 .cm-error-line {
   background-color: hsl(var(--error) / 0.12);
