@@ -1201,6 +1201,7 @@ async fn test_start_and_shutdown() {
             allowed_users: vec![],
             blocked_chats: vec![],
             blocked_users: vec![],
+            chat_users: std::collections::HashMap::new(),
             require_mention: false,
             reply_in_thread: false,
             auto_approve_level: crate::permission::Level::Safe,
@@ -1222,6 +1223,7 @@ async fn test_start_and_shutdown() {
             allowed_users: vec![],
             blocked_chats: vec![],
             blocked_users: vec![],
+            chat_users: std::collections::HashMap::new(),
             require_mention: false,
             reply_in_thread: false,
             auto_approve_level: crate::permission::Level::Safe,
@@ -7576,6 +7578,37 @@ async fn gate_stays_silent_for_blocked_user() {
         Gate::Denied
     );
     assert!(mock.reactions.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn gate_thread_message_inherits_chat_users_grant() {
+    // `chat_users["chat-1"]` authorizes user-2 in that chat; a thread
+    // message carries the group's chat_id, so the grant applies inside
+    // threads unchanged — and nowhere else.
+    let mock = Arc::new(MockAdapter::new("fs"));
+    let adapter: Arc<dyn PlatformAdapter> = mock.clone();
+    let config = ChannelConfig {
+        chat_users: std::collections::HashMap::from([(
+            "chat-1".to_string(),
+            vec!["user-2".to_string()],
+        )]),
+        ..feishu_gate_config()
+    };
+
+    let mut thread_msg = channel_message(Some("omt_1"), true, true);
+    thread_msg.external_user_id = "user-2".to_string();
+    assert_eq!(
+        gate_with_reaction(&adapter, &config, &gate_store().await, &thread_msg).await,
+        Gate::Allow
+    );
+
+    let mut elsewhere = channel_message(None, true, true);
+    elsewhere.external_user_id = "user-2".to_string();
+    elsewhere.external_chat_id = "chat-2".to_string();
+    assert_eq!(
+        gate_with_reaction(&adapter, &config, &gate_store().await, &elsewhere).await,
+        Gate::Denied
+    );
 }
 
 #[tokio::test]

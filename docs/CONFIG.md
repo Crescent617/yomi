@@ -171,6 +171,7 @@ app_secret = "..."
 | `platform` | 平台配置：`telegram` 需 `token`；`feishu` 需 `app_id` + `app_secret` | 必填 |
 | `allowed_chats` / `allowed_users` | 允许名单；名单外 @ 机器人收到 🙏 婉拒，无回复 | `[]` |
 | `blocked_chats` / `blocked_users` | 屏蔽名单；完全静默 | `[]` |
+| `chat_users` | 按群追加允许名单（`chat_id → 用户列表`，`"*"` = 该群对所有人开放）：名单内用户仅在这些群（含群内 thread）可用，其余群与私聊仍按全局名单判定；屏蔽名单优先 | `{}` |
 | `require_mention` | 群聊需 @ 触发（斜杠命令任何模式下都要 @，不受此开关影响） | `true` |
 | `reply_in_thread` | 群聊回复锚定触发消息的 thread（飞书话题 / Telegram 引用） | `false` |
 | `context_window`（`[[models]]` 内） | 模型上下文窗口（压缩触发点等）；session 级覆盖：GUI ctx 仪表 / TUI `/ctx` / `yomi session ctx` / channel `/settings` 卡 | 必填 |

@@ -20,7 +20,7 @@ cron_`；无前缀归审批）。名字约束：字母开头、仅 `[a-zA-Z0-9_-
 路径）——名字拼进文件路径，此校验挡路径穿越。点击未注册/非法名字回
 一条 "Unknown card trigger"（非法名不 echo 原文）。无 reload：每次
 点击实时解析，`chmod ±x` 即时生效。点击不过 channel 用户闸
-（`blocked_users`/`allowed_users` 不拦 `ext_`）：权限策略归脚本，
+（`blocked_users`/`allowed_users`/`chat_users` 不拦 `ext_`）：权限策略归脚本，
 拿 `operator_open_id` 自行判断。
 
 发卡不用 yomi 参与：同一 bot 任意方式发卡（lark-cli、OpenAPI），

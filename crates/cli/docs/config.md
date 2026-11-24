@@ -18,6 +18,7 @@
 - `[env]` 段：启动时注入进程环境且**覆盖宿主同名变量**；改与删都须 `daemon restart` 才生效——重启子进程会先清掉旧注入值再重读 `[env]`。
 - GUI 另从 `~/.env`（Windows 为 `%USERPROFILE%\.env`）读环境变量，改后重启 GUI。
 - 出站连接遵循标准代理环境变量：`[env]` 里设 `HTTPS_PROXY`（大小写皆可，`ALL_PROXY` 兜底）后，飞书长连接与 REST 调用一起走该 HTTP 代理；`NO_PROXY` 列出的主机直连。都未设时全部直连。
+- 通道访问控制：`allowed_*`/`blocked_*` 是全局名单；`chat_users` 按群追加授权（`chat_id → 用户列表`，`"*"` = 该群全员开放，thread 继承，blocked 优先）。
 - 字段全量参考：仓库 `docs/CONFIG.md`；搜索类 env（SearXNG/Kimi/Serper/Brave）见 `yomi doc websearch`。
 
 ## socket 鉴权（ws 远端 attach）

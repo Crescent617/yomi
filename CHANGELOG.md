@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- 新增通道配置 `chat_users`（默认 `{}`）：按群给指定用户单独开权限（`chat_id → 用户列表`，`"*"` 表示该群对所有人开放），只在这些群及其话题内生效，不影响全局允许名单；屏蔽名单仍然优先。
+
 ## [0.11.30] - 2026-11-20
 
 ### Fixed

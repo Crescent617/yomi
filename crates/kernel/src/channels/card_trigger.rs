@@ -8,8 +8,8 @@
 //!
 //! 触发：卡片按钮 value 带 `{"action":"ext_<名>", ...}` 时由 hub 路由
 //! 到此，value 全文 opaque 透传给脚本。非法名/未知名回一条拒绝提示。
-//! 点击不过 channel 用户闸（`blocked_users`/`allowed_users` 不拦
-//! `ext_`）——权限归脚本自管，拿 stdin 里的 `operator_open_id` 自查。
+//! 点击不过 channel 用户闸（`blocked_users`/`allowed_users`/`chat_users`
+//! 不拦 `ext_`）——权限归脚本自管，拿 stdin 里的 `operator_open_id` 自查。
 //!
 //! stdin 契约（单行 JSON）：
 //! ```json

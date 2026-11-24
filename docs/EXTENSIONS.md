@@ -197,7 +197,7 @@ OpenAPI 调用。`value` 全文透传——发卡时塞进去的 id、状态都�
 at-least-once，有副作用的脚本自行幂等。
 
 **权限与安全**：点击不过 channel 用户闸（`blocked_users` /
-`allowed_users` 不拦 `ext_`）——权限归触发器脚本自管，拿
+`allowed_users` / `chat_users` 不拦 `ext_`）——权限归触发器脚本自管，拿
 `operator_open_id` 自行判断。`value` 是聊天成员可影响的输入，脚本
 把它当不可信数据（别直接拼进 shell 命令 / SQL）。
 

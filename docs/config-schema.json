@@ -106,6 +106,16 @@
           },
           "type": "array"
         },
+        "chat_users": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "Per-chat extra user allowlist (`chat_id` → user ids): a listed\npair is authorized in that chat even when the global allowlists\nwould refuse it — the \"only in this group\" grant. `\"*\"` in the\nlist opens the chat to everyone. Thread messages carry the\ngroup's `chat_id`, so threads inherit the entry. Blocklists\nstill win. Empty map = no per-chat grants.",
+          "type": "object"
+        },
         "disabled_events": {
           "description": "Runtime kill-switch for platform event features (the vocabulary is\nper-platform, see [`PlatformConfig::known_event_names`]); unset =\nall enabled. Event delivery itself requires console-side\nsubscription — this disables *reacting* without a console trip.",
           "items": {

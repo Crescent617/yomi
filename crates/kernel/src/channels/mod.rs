@@ -137,6 +137,14 @@ pub struct ChannelConfig {
     /// User blocklist
     #[serde(default)]
     pub blocked_users: Vec<String>,
+    /// Per-chat extra user allowlist (`chat_id` → user ids): a listed
+    /// pair is authorized in that chat even when the global allowlists
+    /// would refuse it — the "only in this group" grant. `"*"` in the
+    /// list opens the chat to everyone. Thread messages carry the
+    /// group's `chat_id`, so threads inherit the entry. Blocklists
+    /// still win. Empty map = no per-chat grants.
+    #[serde(default)]
+    pub chat_users: std::collections::HashMap<String, Vec<String>>,
     /// In group chats, require @mention to trigger the bot
     #[serde(default = "default_require_mention")]
     pub require_mention: bool,
@@ -233,6 +241,7 @@ impl Default for ChannelConfig {
             allowed_users: Vec::new(),
             blocked_chats: Vec::new(),
             blocked_users: Vec::new(),
+            chat_users: std::collections::HashMap::new(),
             require_mention: true,
             reply_in_thread: false,
             auto_approve_level: Level::Safe,
@@ -1392,11 +1401,23 @@ impl HistoryMessage {
 /// message gate entirely, so its user rule is re-applied at the hub's
 /// card-action router for every button — blocked users are refused;
 /// when `allowed_users` is set the operator must be in it (empty
-/// allowlist = open). Admin-gated surfaces stack `check_admin` in their
-/// handlers. Returns the denial text on refusal.
-pub(crate) fn check_user_access(config: &ChannelConfig, user_id: &str) -> Option<String> {
+/// allowlist = open). A `chat_users` entry for the action's chat
+/// (`chat_id`, when the platform provides it) authorizes the operator
+/// regardless of `allowed_users` — same grant as the message gate.
+/// Admin-gated surfaces stack `check_admin` in their handlers. Returns
+/// the denial text on refusal.
+pub(crate) fn check_user_access(
+    config: &ChannelConfig,
+    user_id: &str,
+    chat_id: Option<&str>,
+) -> Option<String> {
     if config.blocked_users.iter().any(|u| u == user_id) {
         return Some("Permission denied: blocked user.".to_string());
+    }
+    if let Some(chat_id) = chat_id {
+        if config.chat_users_grant(chat_id, user_id) {
+            return None;
+        }
     }
     if !config.allowed_users.is_empty() && !config.allowed_users.iter().any(|u| u == user_id) {
         return Some("Permission denied: not in allowed_users.".to_string());
@@ -1405,6 +1426,16 @@ pub(crate) fn check_user_access(config: &ChannelConfig, user_id: &str) -> Option
 }
 
 impl ChannelConfig {
+    /// Whether `chat_users` grants `user_id` access to `chat_id` (the
+    /// per-chat extra allowlist; `"*"` in the list = everyone). Shared
+    /// by the message gate (`check_access`) and the card-action gate
+    /// (`check_user_access`).
+    fn chat_users_grant(&self, chat_id: &str, user_id: &str) -> bool {
+        self.chat_users
+            .get(chat_id)
+            .is_some_and(|users| users.iter().any(|u| u == "*" || u == user_id))
+    }
+
     pub fn check_access(&self, chat_id: &str, user_id: &str) -> Result<(), ChannelError> {
         if !self.enabled {
             return Err(ChannelError::Disabled(self.name.clone()));
@@ -1424,6 +1455,14 @@ impl ChannelConfig {
                 user_id: user_id.to_string(),
                 reason: AccessDeniedReason::BlockedUser,
             });
+        }
+
+        // Per-chat grant: a pair listed in `chat_users` is authorized
+        // outright — the global allowlists below don't apply to it.
+        // Thread messages carry the group's chat_id, so threads
+        // inherit the entry.
+        if self.chat_users_grant(chat_id, user_id) {
+            return Ok(());
         }
 
         // If allowlist is specified, check it

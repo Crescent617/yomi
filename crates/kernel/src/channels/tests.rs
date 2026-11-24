@@ -224,18 +224,31 @@ fn test_check_user_access_button_gate() {
         ..Default::default()
     };
     // Empty allowlist = open to anyone not blocked.
-    assert!(super::check_user_access(&base, "anyone").is_none());
+    assert!(super::check_user_access(&base, "anyone", None).is_none());
 
     // Allowlist set: operator must be in it.
     let config = ChannelConfig {
         allowed_users: vec!["alice".to_string()],
         ..base.clone()
     };
-    assert!(super::check_user_access(&config, "alice").is_none());
+    assert!(super::check_user_access(&config, "alice", None).is_none());
     assert_eq!(
-        super::check_user_access(&config, "bob").as_deref(),
+        super::check_user_access(&config, "bob", None).as_deref(),
         Some("Permission denied: not in allowed_users.")
     );
+
+    // A chat_users entry for the action's chat authorizes the operator
+    // there; without the chat (or in another chat) the allowlist rules.
+    let config = ChannelConfig {
+        chat_users: std::collections::HashMap::from([(
+            "chat1".to_string(),
+            vec!["bob".to_string()],
+        )]),
+        ..config
+    };
+    assert!(super::check_user_access(&config, "bob", Some("chat1")).is_none());
+    assert!(super::check_user_access(&config, "bob", None).is_some());
+    assert!(super::check_user_access(&config, "bob", Some("chat2")).is_some());
 
     // Blocklist wins even over an allowlist entry.
     let config = ChannelConfig {
@@ -243,9 +256,153 @@ fn test_check_user_access_button_gate() {
         ..config
     };
     assert_eq!(
-        super::check_user_access(&config, "alice").as_deref(),
+        super::check_user_access(&config, "alice", None).as_deref(),
         Some("Permission denied: blocked user.")
     );
+}
+
+#[test]
+fn test_check_access_chat_users() {
+    let config = ChannelConfig {
+        name: "test".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram {
+            token: String::new(),
+        },
+        allowed_users: vec!["alice".to_string()],
+        chat_users: std::collections::HashMap::from([(
+            "group1".to_string(),
+            vec!["bob".to_string()],
+        )]),
+        ..Default::default()
+    };
+    // The listed pair passes although bob is not in allowed_users…
+    assert!(config.check_access("group1", "bob").is_ok());
+    // …but only in the listed chat.
+    let err = config.check_access("group2", "bob").unwrap_err();
+    assert!(matches!(
+        err,
+        ChannelError::AccessDenied {
+            reason: AccessDeniedReason::UserNotAllowed,
+            ..
+        }
+    ));
+    // Global allowlist members are unaffected.
+    assert!(config.check_access("group1", "alice").is_ok());
+    assert!(config.check_access("group2", "alice").is_ok());
+}
+
+#[test]
+fn test_check_access_chat_users_bypasses_chat_allowlist() {
+    // A chat_users hit authorizes the pair outright: the chat need not
+    // be in allowed_chats either.
+    let config = ChannelConfig {
+        name: "test".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram {
+            token: String::new(),
+        },
+        allowed_chats: vec!["group1".to_string()],
+        chat_users: std::collections::HashMap::from([(
+            "group2".to_string(),
+            vec!["bob".to_string()],
+        )]),
+        ..Default::default()
+    };
+    assert!(config.check_access("group2", "bob").is_ok());
+    let err = config.check_access("group2", "alice").unwrap_err();
+    assert!(matches!(
+        err,
+        ChannelError::AccessDenied {
+            reason: AccessDeniedReason::ChatNotAllowed,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_check_access_chat_users_wildcard() {
+    let config = ChannelConfig {
+        name: "test".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram {
+            token: String::new(),
+        },
+        allowed_users: vec!["alice".to_string()],
+        chat_users: std::collections::HashMap::from([(
+            "group1".to_string(),
+            vec!["*".to_string()],
+        )]),
+        ..Default::default()
+    };
+    // "*" opens the listed chat to everyone…
+    assert!(config.check_access("group1", "anyone").is_ok());
+    // …but only that chat.
+    let err = config.check_access("group2", "anyone").unwrap_err();
+    assert!(matches!(
+        err,
+        ChannelError::AccessDenied {
+            reason: AccessDeniedReason::UserNotAllowed,
+            ..
+        }
+    ));
+    // Blocklist still wins over the wildcard.
+    let config = ChannelConfig {
+        blocked_users: vec!["bad".to_string()],
+        ..config
+    };
+    let err = config.check_access("group1", "bad").unwrap_err();
+    assert!(matches!(
+        err,
+        ChannelError::AccessDenied {
+            reason: AccessDeniedReason::BlockedUser,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_check_access_blocklist_wins_over_chat_users() {
+    let config = ChannelConfig {
+        name: "test".to_string(),
+        enabled: true,
+        platform: PlatformConfig::Telegram {
+            token: String::new(),
+        },
+        blocked_users: vec!["bob".to_string()],
+        chat_users: std::collections::HashMap::from([(
+            "group1".to_string(),
+            vec!["bob".to_string()],
+        )]),
+        ..Default::default()
+    };
+    let err = config.check_access("group1", "bob").unwrap_err();
+    assert!(matches!(
+        err,
+        ChannelError::AccessDenied {
+            reason: AccessDeniedReason::BlockedUser,
+            ..
+        }
+    ));
+
+    let config = ChannelConfig {
+        name: "test".to_string(),
+        enabled: true,
+        blocked_chats: vec!["group1".to_string()],
+        chat_users: std::collections::HashMap::from([(
+            "group1".to_string(),
+            vec!["bob".to_string()],
+        )]),
+        ..Default::default()
+    };
+    let err = config.check_access("group1", "bob").unwrap_err();
+    assert!(matches!(
+        err,
+        ChannelError::AccessDenied {
+            reason: AccessDeniedReason::BlockedChat,
+            ..
+        }
+    ));
 }
 
 #[test]
