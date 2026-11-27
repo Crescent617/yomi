@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.32] - 2026-11-27
+
 ### Added
 
 - 图形界面输入框支持直接粘贴 Finder 里复制的文件：Cmd+V 即把文件加为附件（与回形针按钮选择效果一致，图片带缩略图），一次复制多个文件会全部加入；新建会话的首页输入框同样支持。
