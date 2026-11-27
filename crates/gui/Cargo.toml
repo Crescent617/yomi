@@ -63,8 +63,11 @@ tauri-build = { workspace = true, features = [] }
 nix = { version = "0.31", features = ["process", "signal"] }
 
 # Login item (系统设置 → 通用 → 登录项，标准 SMAppService 机制)
+# NSPasteboard: Finder 文件粘贴（get_clipboard_file_paths）
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-service-management = "0.3"
+objc2-app-kit = { version = "0.3", features = ["NSPasteboard"] }
+objc2-foundation = { version = "0.3", features = ["NSURL"] }
 
 # 登录项（Windows Run 注册表键）
 [target.'cfg(target_os = "windows")'.dependencies]

@@ -200,22 +200,49 @@
   }
 
   async function handleHomePaste(e: ClipboardEvent) {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-    for (const item of items) {
-      if (item.type.startsWith("image/")) {
+    const dt = e.clipboardData;
+    if (!dt) return;
+
+    // 同步快照（同 ChatInput.handlePaste）：DataTransfer 派发结束后
+    // 即不可读，await 原生剪贴板之前先把 files/text 取出来。
+    const files = Array.from(dt.files);
+    const hasText = !!dt.getData("text/plain");
+
+    // 与 ChatInput.handlePaste 同一约定：无文本 flavor 的粘贴先问原生
+    // 剪贴板要文件路径（mac Finder Cmd+C 的文件），命中则加附件 chips；
+    // 必须排在图片分支之前，否则 Finder 复制的图片文件会双份出现。
+    if (!hasText) {
+      let paths: string[] = [];
+      try {
+        paths = await api.getClipboardFilePaths();
+      } catch {
+        // 读取失败按无文件处理，落回下面的图片路径。
+      }
+      if (paths.length > 0) {
         e.preventDefault();
-        const file = item.getAsFile();
-        if (file) {
-          try {
-            const base64Url = await readHomeFileAsBase64(file);
-            addHomeInlineImage(base64Url);
-          } catch (err) {
-            console.error("Failed to read clipboard image:", err);
-          }
+        addHomeFileAttachments(paths);
+        return;
+      }
+    }
+
+    for (const file of files) {
+      if (file.type.startsWith("image/")) {
+        e.preventDefault();
+        try {
+          const base64Url = await readHomeFileAsBase64(file);
+          addHomeInlineImage(base64Url);
+        } catch (err) {
+          console.error("Failed to read clipboard image:", err);
         }
       }
     }
+  }
+
+  /** Append paths as home attachment chips, deduped. */
+  function addHomeFileAttachments(paths: string[]) {
+    const newPaths = paths.filter((p) => !homeFileAttachments.includes(p));
+    if (newPaths.length === 0) return;
+    homeFileAttachments = [...homeFileAttachments, ...newPaths];
   }
 
   async function attachHomeFiles() {
@@ -223,9 +250,7 @@
       const selected = await open({ multiple: true });
       if (!selected) return;
       const paths = Array.isArray(selected) ? selected : [selected];
-      const newPaths = paths.filter((p) => !homeFileAttachments.includes(p));
-      if (newPaths.length === 0) return;
-      homeFileAttachments = [...homeFileAttachments, ...newPaths];
+      addHomeFileAttachments(paths);
     } catch (e) {
       console.error("Failed to attach files:", e);
     }

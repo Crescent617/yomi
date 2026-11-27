@@ -554,20 +554,31 @@
   // ChatInput unmounts when the session switches to a non-chat tab —
   // revoke pending previews too. Emptying fileAttachments also makes any
   // in-flight read self-revoke via its includes() guard when it lands.
-  onDestroy(clearFileAttachments);
+  // `destroyed` additionally stops async paste handlers from re-adding
+  // attachments (and fresh preview URLs) to the dead component.
+  let destroyed = false;
+  onDestroy(() => {
+    destroyed = true;
+    clearFileAttachments();
+  });
+
+  /** Append paths as attachment chips (deduped), loading image previews. */
+  function addFileAttachments(paths: string[]) {
+    const newPaths = paths.filter((p) => !fileAttachments.includes(p));
+    if (newPaths.length === 0) return;
+    fileAttachments = [...fileAttachments, ...newPaths];
+    for (const p of newPaths.filter((p) => imageExt(p) !== null))
+      void loadImagePreview(p);
+    requestAnimationFrame(autoResize);
+    textareaRef?.focus();
+  }
 
   async function attachFiles() {
     try {
       const selected = await open({ multiple: true });
       if (!selected) return;
       const paths = Array.isArray(selected) ? selected : [selected];
-      const newPaths = paths.filter((p) => !fileAttachments.includes(p));
-      if (newPaths.length === 0) return;
-      fileAttachments = [...fileAttachments, ...newPaths];
-      for (const p of newPaths.filter((p) => imageExt(p) !== null))
-        void loadImagePreview(p);
-      requestAnimationFrame(autoResize);
-      textareaRef?.focus();
+      addFileAttachments(paths);
     } catch (e) {
       console.error("Failed to attach files:", e);
     }
@@ -579,19 +590,44 @@
   }
 
   async function handlePaste(e: ClipboardEvent) {
-    const items = e.clipboardData?.items;
-    if (!items) return;
+    const dt = e.clipboardData;
+    if (!dt) return;
+
+    // 同步快照：DataTransfer 只在事件派发期间可读——WKWebView 与
+    // Chromium 都在派发结束后清空 files/items，await 之后再读必为空。
+    // 同步取出的 File 引用不受此限（Blob 快照，派发后仍可读）。
+    const files = Array.from(dt.files);
+    const hasText = !!dt.getData("text/plain");
+
+    // Finder 里 Cmd+C 复制的文件粘贴时不带文本 flavor：先问原生剪贴板
+    // 要文件路径，命中则加附件 chips——与回形针选择同一效果。这个检查
+    // 必须排在内联图片分支之前：在 Finder 里复制图片文件时 clipboardData
+    // 也带 image/* File，否则同一文件会既变 chips 又变内联图。
+    if (!hasText) {
+      let paths: string[] = [];
+      try {
+        paths = await api.getClipboardFilePaths();
+      } catch {
+        // 读取失败按无文件处理，落回下面的文本/图片路径。
+      }
+      if (destroyed) return;
+      if (paths.length > 0) {
+        // preventDefault 在 await 之后已拦不住默认行为，但无文本
+        // flavor 时默认行为本就是空操作（textarea 只插入 text/plain）。
+        e.preventDefault();
+        addFileAttachments(paths);
+        return;
+      }
+    }
 
     let imageHandled = false;
-    for (const item of items) {
-      if (item.type.startsWith("image/")) {
-        const file = item.getAsFile();
-        // 取不出 file 时不接管——否则这次粘贴连文本部分也一起丢掉。
-        if (file) {
-          e.preventDefault();
-          imageHandled = true;
-          await handleClipboardImage(file);
-        }
+    for (const file of files) {
+      if (file.type.startsWith("image/")) {
+        // 有文本 flavor 时上面的 await 不会发生，这里的 preventDefault
+        // 仍是同步调用、拦得住默认插入；无文本时默认行为本为空操作。
+        e.preventDefault();
+        imageHandled = true;
+        await handleClipboardImage(file);
       }
     }
     // 图片已接管这次粘贴（preventDefault 已调）—— 不再消毒文本，

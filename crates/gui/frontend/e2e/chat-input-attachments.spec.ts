@@ -20,6 +20,7 @@ const THUMBS = `${HOST} img[src^="blob:"]`;
 
 type E2EWindow = Window & {
   __dialogResult: string[] | null;
+  __clipboardPaths: string[];
   __fsBytes: Record<string, number[]>;
   __fsRejected: string[];
   __urlStats: { created: number; revoked: number };
@@ -37,6 +38,9 @@ async function stubTauri(page: Page) {
     };
     // Dialog staging: null = cancelled.
     w.__dialogResult = null;
+    // Native clipboard staging: what get_clipboard_file_paths reports
+    // (mac Finder Cmd+C files). Empty = no files on the pasteboard.
+    w.__clipboardPaths = [];
     // fs staging: paths absent from this map fail the read (outside the
     // fs scope / unreadable); rejections are logged for assertions.
     w.__fsRejected = [];
@@ -73,6 +77,7 @@ async function stubTauri(page: Page) {
           return null;
         }
         if (cmd === "plugin:dialog|open") return w.__dialogResult;
+        if (cmd === "get_clipboard_file_paths") return w.__clipboardPaths;
         if (cmd === "send_message") {
           w.__sentMessages.push(
             args as { session_id: string; content: string },
@@ -131,6 +136,45 @@ function setDialogResult(page: Page, paths: string[] | null) {
     },
     paths as string[] | null,
   );
+}
+
+function setClipboardPaths(page: Page, paths: string[]) {
+  return page.evaluate((p) => {
+    (window as unknown as E2EWindow).__clipboardPaths = p;
+  }, paths);
+}
+
+/**
+ * Dispatch a paste on the ChatInput textarea carrying the given
+ * clipboard flavors. A Finder file copy reaches the webview with no
+ * text flavor — pass neither text nor imageBase64 for that shape.
+ */
+function dispatchPaste(
+  page: Page,
+  init: { text?: string; imageBase64?: string },
+) {
+  return page.evaluate((i) => {
+    const ta = document.querySelector<HTMLTextAreaElement>(
+      "#chatinput-host textarea",
+    );
+    if (!ta) throw new Error("ChatInput textarea not found");
+    ta.focus();
+    const dt = new DataTransfer();
+    if (i.text !== undefined) dt.setData("text/plain", i.text);
+    if (i.imageBase64) {
+      const bytes = Uint8Array.from(atob(i.imageBase64), (c) =>
+        c.charCodeAt(0),
+      );
+      dt.items.add(new File([bytes], "shot.png", { type: "image/png" }));
+    }
+    ta.dispatchEvent(
+      new ClipboardEvent("paste", {
+        clipboardData: dt,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  }, init);
 }
 
 async function mountChatInput(page: Page, phase = "idle") {
@@ -419,4 +463,96 @@ test("unknown commands treated as messages keep file attachments", async ({
         content: "/nosuchcmd hello\n[File: /tmp/e2e/notes.txt]",
       },
     ]);
+});
+
+test("pasting Finder-copied files attaches them as chips", async ({ page }) => {
+  await stubTauri(page);
+  await mountChatInput(page);
+
+  // No text flavor — the shape a mac Finder file copy pastes with. The
+  // native clipboard read is the only source of paths.
+  await setClipboardPaths(page, ["/tmp/e2e/cat.png", "/tmp/e2e/notes.txt"]);
+  await dispatchPaste(page, {});
+  // A second identical paste dedupes onto the same two chips.
+  await dispatchPaste(page, {});
+
+  // The image file gets a thumbnail chip like the picker flow; the text
+  // file stays a plain chip.
+  await expect(page.locator(THUMBS)).toHaveCount(1);
+  await expect(
+    page.locator(`${HOST} span`, { hasText: "cat.png" }),
+  ).toHaveCount(1);
+  await expect(
+    page.locator(`${HOST} span`, { hasText: "notes.txt" }),
+  ).toHaveCount(1);
+
+  // Chips ride the outgoing text exactly like picker-attached files.
+  const textarea = page.locator(`${HOST} textarea`);
+  await textarea.fill("look at these");
+  await textarea.press("Enter");
+  await expect
+    .poll(() => sentMessages(page))
+    .toEqual([
+      {
+        session_id: "attach-e2e",
+        content:
+          "look at these\n[File: /tmp/e2e/cat.png]\n[File: /tmp/e2e/notes.txt]",
+      },
+    ]);
+});
+
+test("text paste never turns staged clipboard files into chips", async ({
+  page,
+}) => {
+  await stubTauri(page);
+  await mountChatInput(page);
+
+  await setClipboardPaths(page, ["/tmp/e2e/cat.png"]);
+  // A control char makes sanitizeControlPuaPaste insert the cleaned text
+  // itself — synthetic paste events get no native insertion.
+  await dispatchPaste(page, { text: "a\u0007b" });
+
+  const textarea = page.locator(`${HOST} textarea`);
+  await expect(textarea).toHaveValue("ab");
+  await expect(
+    page.locator(`${HOST} span`, { hasText: "cat.png" }),
+  ).toHaveCount(0);
+});
+
+test("image-data paste still inlines when the clipboard has no files", async ({
+  page,
+}) => {
+  await stubTauri(page);
+  await mountChatInput(page);
+
+  // Screenshot-style paste: image bytes, no file URLs on the pasteboard.
+  // Note: a synthetic ClipboardEvent's DataTransfer never goes dead, so
+  // this cannot falsify the dispatch-scoped DataTransfer lifetime (real
+  // WKWebView/Chromium clear files/items after dispatch — the handler
+  // snapshots files synchronously for exactly that reason).
+  await dispatchPaste(page, { imageBase64: PNG_BASE64 });
+
+  // Inline base64 image, not an attachment chip.
+  await expect(page.locator(`${HOST} img[src^="data:image"]`)).toHaveCount(1);
+  await expect(page.locator(THUMBS)).toHaveCount(0);
+});
+
+test("a Finder-copied image file becomes a chip, never an inline image", async ({
+  page,
+}) => {
+  await stubTauri(page);
+  await mountChatInput(page);
+
+  // Both signals at once, exactly what WKWebView exposes for a Finder
+  // image-file copy: the native pasteboard read reports the path AND the
+  // DataTransfer carries an image/* File. The chip must win — the
+  // inline-image branch must never see this paste.
+  await setClipboardPaths(page, ["/tmp/e2e/cat.png"]);
+  await dispatchPaste(page, { imageBase64: PNG_BASE64 });
+
+  await expect(page.locator(THUMBS)).toHaveCount(1);
+  await expect(
+    page.locator(`${HOST} span`, { hasText: "cat.png" }),
+  ).toHaveCount(1);
+  await expect(page.locator(`${HOST} img[src^="data:image"]`)).toHaveCount(0);
 });

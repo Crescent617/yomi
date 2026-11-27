@@ -311,6 +311,7 @@ pub fn run() {
             commands::system::get_git_info,
             commands::system::get_git_diff_summary,
             commands::system::get_git_file_diff_raw,
+            commands::system::get_clipboard_file_paths,
         ]);
 
     #[cfg(debug_assertions)]

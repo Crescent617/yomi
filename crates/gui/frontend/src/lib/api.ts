@@ -462,6 +462,11 @@ export async function setLoginItem(enabled: boolean): Promise<boolean> {
   return invokeCmd("set_login_item", { enabled });
 }
 
+/** 系统剪贴板里复制的文件路径（mac Finder Cmd+C）。无文件/非 macOS 返回空数组。 */
+export async function getClipboardFilePaths(): Promise<string[]> {
+  return invokeCmd("get_clipboard_file_paths");
+}
+
 export async function getCwd(): Promise<string> {
   return invokeCmd("get_cwd");
 }

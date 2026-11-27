@@ -977,6 +977,57 @@ pub async fn set_login_item(enabled: bool) -> Result<bool, GuiError> {
     Ok(login_item_status())
 }
 
+/// 系统剪贴板里复制的文件路径列表（mac 上 Finder Cmd+C 的文件）。
+/// 仅 macOS 读 `NSPasteboard` 的 file URL；其余平台返回空——前端的
+/// 「粘贴即附件」只在这些平台生效，空列表让前端落回文本/图片粘贴。
+/// 同步命令：Tauri 同步命令跑在主线程，AppKit 访问天然安全。
+#[tauri::command(rename_all = "snake_case")]
+pub fn get_clipboard_file_paths() -> Vec<String> {
+    #[cfg(target_os = "macos")]
+    {
+        clipboard_file_paths_macos()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Vec::new()
+    }
+}
+
+/// `NSPasteboard` 逐项取 file URL 转 POSIX 路径。Finder 复制多个文件时
+/// 每个文件一个 pasteboard item，各带一个 public.file-url。
+#[cfg(target_os = "macos")]
+fn clipboard_file_paths_macos() -> Vec<String> {
+    clipboard_file_paths(&objc2_app_kit::NSPasteboard::generalPasteboard())
+}
+
+#[cfg(target_os = "macos")]
+fn clipboard_file_paths(pasteboard: &objc2_app_kit::NSPasteboard) -> Vec<String> {
+    use objc2_app_kit::NSPasteboardTypeFileURL;
+    use objc2_foundation::NSURL;
+
+    let Some(items) = pasteboard.pasteboardItems() else {
+        return Vec::new();
+    };
+    // extern static：读取需 unsafe；AppKit 常量初始化后不变。
+    let file_url_type = unsafe { NSPasteboardTypeFileURL };
+    let mut paths = Vec::new();
+    for item in &items {
+        let Some(url_string) = item.stringForType(file_url_type) else {
+            continue;
+        };
+        let Some(url) = NSURL::URLWithString(&url_string) else {
+            continue;
+        };
+        if !url.isFileURL() {
+            continue;
+        }
+        if let Some(path) = url.path() {
+            paths.push(path.to_string());
+        }
+    }
+    paths
+}
+
 #[cfg(test)]
 #[path = "system_test.rs"]
 mod tests;

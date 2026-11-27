@@ -148,3 +148,35 @@ fn autostart_desktop_entry_contains_exec() {
         "{spaced}"
     );
 }
+
+// 真实 NSPasteboard 往返（仅 macOS 编译）：自建具名 pasteboard 写入
+// file URL，验证逐项读取与路径转换。不碰用户的通用剪贴板；具名
+// pasteboard 是系统级轻量对象，此 API 版本无删除接口，测试遗留可忽略。
+#[cfg(target_os = "macos")]
+#[test]
+fn clipboard_file_paths_reads_file_urls_from_pasteboard() {
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypeString};
+    use objc2_foundation::{NSString, NSURL};
+
+    let name = NSString::from_str("yomi-test-clipboard-file-paths");
+    let pasteboard = NSPasteboard::pasteboardWithName(&name);
+
+    // file URL item（含空格与非 ASCII，验证百分号解码）→ 读出 POSIX 路径。
+    pasteboard.clearContents();
+    let file_url =
+        NSURL::fileURLWithPath(&NSString::from_str("/private/tmp/yomi pasteboard 测试.txt"));
+    let url_string = file_url.absoluteString().expect("file URL has a string");
+    // extern static 读取需 unsafe；AppKit 常量初始化后不变。
+    let file_url_type = unsafe { NSPasteboardTypeFileURL };
+    assert!(pasteboard.setString_forType(&url_string, file_url_type));
+    assert_eq!(
+        clipboard_file_paths(&pasteboard),
+        vec!["/private/tmp/yomi pasteboard 测试.txt".to_string()]
+    );
+
+    // 纯文本 item（无 file URL）→ 空列表，前端据此落回文本粘贴。
+    pasteboard.clearContents();
+    let text_type = unsafe { NSPasteboardTypeString };
+    assert!(pasteboard.setString_forType(&NSString::from_str("plain text"), text_type));
+    assert!(clipboard_file_paths(&pasteboard).is_empty());
+}
